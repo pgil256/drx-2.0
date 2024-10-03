@@ -1,9 +1,8 @@
 import sys
 import os
 import csv
-import config
 import RPi.GPIO as GPIO
-from time import sleep
+import time
 from datetime import datetime, timedelta
 from PyQt5 import QtWidgets, uic, QtCore
 from PyQt5.QtCore import Qt, QTimer, QThread, QObject
@@ -16,10 +15,23 @@ from PyQt5.QtWidgets import (
     QVBoxLayout,
     QLabel,
     QCheckBox,
+    QDateTime,
+    QTime,
+    QElapsedTimer,
 )
-from Arduino import comm
-from video.video_player import VideoPlayerDialog
-from Protocols import preconfigured_protocols
+from Arduino import comm, config
+from UI.video_player import VideoPlayer
+from UI.timer_dialog import TimerDialog
+from UI.pressure_dialog import PressureDialog
+from Protocols import (
+    AProtocols,
+    BProtocols,
+    CProtocols,
+    DProtocols,
+    ABProtocols,
+    ACProtocols,
+    ADProtocols,
+)
 
 
 # Constants
@@ -32,7 +44,11 @@ EXTRAFORWARD = 27
 EXTRABACKWARD = 22
 EXTRAENABLE = 17
 
-AC_PROTOCOL_MAPPING = {
+degreeList = {0: 5, -5: 4, -10: 3, -15: 2, -20: 1, -25: 0, -30: 0}
+CdegreeList = {-20: 0, -10: 0.5, 0: 1, 10: 1.5, 20: 2}
+BDegreeList = {0: 5, 5: 4, 10: 3, 15: 2, 20: 1, 25: 0, 30: 0}
+
+PROTOCOL_MAPPING = {
     1: "AC1",
     2: "AC2",
     3: "AC3",
@@ -50,55 +66,63 @@ os.chdir("/home/pi/kneespa")
 
 DEGREES = "\u00b0"
 
-# Define worker signals
-class WorkerSignals(QObject):
-    """Defines the signals available from a running worker thread."""
-
-    finished = QtCore.pyqtSignal()
-    stopped = QtCore.pyqtSignal()
-    error = QtCore.pyqtSignal(tuple)
-    result = QtCore.pyqtSignal(object)
-    progress = QtCore.pyqtSignal(str)
-    APressure = QtCore.pyqtSignal(str)
-    statusEmit = QtCore.pyqtSignal(int, int, int, float)
-    AstatusEmit = QtCore.pyqtSignal(int, int, int, float)
-
-# Optional Dialog Boxes
-class TimerDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        print("Initializing TimerDialog")
-        self.setWindowTitle("Protocol Timer")
-        self.layout = QVBoxLayout()
-        self.timer_label = QLabel("Estimated time remaining: ")
-        self.layout.addWidget(self.timer_label)
-        self.setLayout(self.layout)
-
-    def update_time(self, time_remaining):
-        print(f"Updating time in TimerDialog: {time_remaining}")
-        self.timer_label.setText(f"Estimated time remaining: {time_remaining}")
-
-class PressureDialog(QDialog):
-    def __init__(self, parent=None):
-        super().__init__(parent)
-        print("Initializing PressureDialog")
-        self.setWindowTitle("Current Pressure")
-        self.layout = QVBoxLayout()
-        self.pressure_label = QLabel("Current pressure: ")
-        self.layout.addWidget(self.pressure_label)
-        self.setLayout(self.layout)
-
-    def update_pressure(self, pressure):
-        print(f"Updating pressure in PressureDialog: {pressure}")
-        self.pressure_label.setText(f"Current pressure: {pressure} lbs")
 
 # Main Python class
 class KneeSpaApp(QMainWindow):
     """Main application class for KneeSpa."""
 
+    ### Static methods ###
+
+    def shutdown_app(self):
+        GPIO.cleanup()  # clean up GPIO on normal exit
+        os.system("sudo shutdown -h now")
+        os._exit(1)
+
+    def exit_app(self):
+        GPIO.cleanup()  # clean up GPIO on normal exit
+        os._exit(1)
+
+    def set_to_distance(self, inches, actuator, factor):
+        position = int(inches * (factor / 8.0))
+        print(" positioned to {} in. {} pos {}".format(inches, position, actuator))
+        if self.newC:
+            command = "A{}{}".format(actuator, inches)
+        else:
+            if actuator == self.actuatorC:
+                command = "K{}".format(position)
+            else:
+                command = "A{}{}".format(actuator, inches)
+        self.arduino.send(command)
+        print("cmd {}".format(command.strip()))
+        self.I2C_status = False
+        print("end")
+
+    def set_to_distance(self, degrees):
+
+        position = self.config.CMarks["{:.1f}".format(degrees)]
+
+        print(" positioned to {} degrees pos {}".format(degrees, position))
+        command = "K{}".format(position)
+        self.arduino.send(command)
+        print("cmd {}".format(command.strip()))
+
+        self.I2C_status = False
+        print("end")
+
+    ### App Initialization ####
+
     def __init__(self):
         super().__init__()
         print("Initializing KneeSpaApp")
+
+        # Backend initialization
+        self.newC = True
+        self.task = None
+        self.I2C_status = 0
+        self.config = config.Configuration()
+        self.config.getConfig()
+
+        # Monitor setup
         try:
             self.ui = uic.loadUi("UI/kneespa.ui", self)
         except FileNotFoundError:
@@ -106,9 +130,52 @@ class KneeSpaApp(QMainWindow):
             QMessageBox.critical(self, "Error", "UI file 'kneespa.ui' not found.")
             sys.exit(1)
 
-        self.newC = True
         self.ui.showFullScreen()
         self.setWindowFlags(Qt.FramelessWindowHint)
+
+        # Timer setup
+        def setup_timer(self):
+            self.elapsed_timer = QTimer(self)
+            self.elapsed_timer.timeout.connect(self.update_time)
+
+            self.hour_format = "24"
+            self.ui.time_mm_lbl.setText("")
+            self.ui.time_colon_lbl.setText("")
+            self.ui.time_ss_lbl.setText("")
+
+            self.protocol_timer = QElapsedTimer()
+            self.protocol_timer.clockType = QElapsedTimer.SystemTime
+
+            self.ui.time_group.hide()
+
+            self.complete_timer = QTimer(self)
+            self.complete_timer.timeout.connect(self.blink_complete)
+            self.blinking_complete = False
+            self.blinking_complete_count = 0
+
+            self.go_timer = QTimer(self)
+            self.go_timer.timeout.connect(self.blink_go)
+            self.blinking_go = True
+
+            self.stop_timer = QTimer(self)
+            self.stop_timer.timeout.connect(self.blink_stop)
+            self.blinking_stop = True
+
+            self.reset_timer = QTimer(self)
+            self.reset_timer.timeout.connect(self.blink_reset)
+            self.blinking_reset = False
+
+            self.logger = False
+
+            self.slider_go_btn = None
+            self.slider_timer = QTimer(self)
+            self.slider_timer.timeout.connect(
+                lambda: self.blink_slider(self.slider_go_btn)
+            )
+            self.slider_go = True
+
+            self.status_timer = QTimer(self)
+            self.status_timer.timeout.connect(self.clear_status)
 
         # Finding and assigning central widget
         print("Finding central widget 'central_widget'")
@@ -145,6 +212,7 @@ class KneeSpaApp(QMainWindow):
         self.setup_pressure_controls()
         self.setup_leg_length_controls()
         self.setup_dialogs()
+        self.connect_slider_signals()
 
         self.timer_dialog = TimerDialog(self)
         self.pressure_dialog = PressureDialog(self)
@@ -152,11 +220,9 @@ class KneeSpaApp(QMainWindow):
         self.threadpool = QtCore.QThreadPool()
         print(f"Multithreading with maximum {self.threadpool.maxThreadCount()} threads")
         self.worker = None
+
         self.setup_arduino()
         self.setup_timers()
-
-        self.config = config.Configuration()
-        self.config.getConfig()
 
         self.CMarks = {}
         for i in range(16):
@@ -165,10 +231,228 @@ class KneeSpaApp(QMainWindow):
             print(f"Mark {i}: angle {angle}, value {u}")
             self.CMarks[angle] = u
 
-        QTimer.singleShot(2000, self.sendCalibration)
-        QTimer.singleShot(5000, self.sendZeroMark)
+        print(self.config.AMarks)
+        print(self.config.BMarks)
+        print(self.config.CMarks)
+
+        QTimer.singleShot(2000, self.send_calibration)
+        QTimer.singleShot(5000, self.send_zero_ark)
 
         QTimer.singleShot(1000, self.show_arduino_info_dialog)
+
+        ### UI Methods ###
+
+    def connect_slider_signals(self):
+        self.ui.axial_pressure_slider.valueChanged.connect(self.axial_pressure_changed)
+        self.ui.minus_horizontal_flexion_slider.valueChanged.connect(
+            self.minus_horizontal_flexion_changed
+        )
+        self.ui.plus_horizontal_flexion_slider.valueChanged.connect(
+            self.plus_horizontal_flexion_changed
+        )
+        self.ui.left_lat_flexion_slider.valueChanged.connect(
+            self.left_lat_flexion_changed
+        )
+        self.ui.right_lat_flexion_slider.valueChanged.connect(
+            self.right_lat_flexion_changed
+        )
+        self.ui.cycles_slider.valueChanged.connect(self.cycles_changed)
+        self.ui.ab_axial_pressure_slider.valueChanged.connect(
+            self.ab_axial_pressure_changed
+        )
+        self.ui.minus_ab_horizontal_flexion_slider.valueChanged.connect(
+            self.minus_ab_horizontal_flexion_changed
+        )
+        self.ui.plus_ab_horizontal_flexion_slider.valueChanged.connect(
+            self.plus_ab_horizontal_flexion_changed
+        )
+        self.ui.acd_axial_pressure_slider.valueChanged.connect(
+            self.acd_axial_pressure_changed
+        )
+        self.ui.acd_left_lat_flexion_slider.valueChanged.connect(
+            self.acd_left_lat_flexion_changed
+        )
+        self.ui.acd_right_lat_flexion_slider.valueChanged.connect(
+            self.acd_right_lat_flexion_changed
+        )
+        self.ui.forward_axial_flexion_btn.clicked.connect(
+            lambda: self.forward_flexion_btn(self.actuator_a, 0.065, "04")
+        )
+        self.ui.reverse_axial_flexion_btn.clicked.connect(
+            lambda: self.reverse_flexion_btn(self.actuator_a, 0.065, "04")
+        )
+        self.ui.forward_fast_axial_flexion_btn.clicked.connect(
+            lambda: self.forward_flexion_btn(self.actuator_a, 0.065, "20")
+        )
+        self.ui.reverse_fast_axial_flexion_btn.clicked.connect(
+            lambda: self.reverse_flexion_btn(self.actuator_a, 0.065, "20")
+        )
+        self.ui.reset_axial_flexion_btn.clicked.connect(
+            lambda: self.reset_flexion_btn(self.actuator_a)
+        )
+        self.axial_flexion_position = 0
+        self.ui.axial_flexion_position_slider.valueChanged.connect(
+            self.axial_flexion_position_changed
+        )
+        self.ui.axial_flexion_position_lbl.setText("0 in")
+        self.ui.axial_flexion_position_btn.clicked.connect(
+            lambda: self.move_position_flexion_btn(self.actuator_a)
+        )
+        self.ui.axial_flexion_position_stop_btn.clicked.connect(
+            lambda: self.stop_position_flexion_btn(self.actuator_a)
+        )
+        self.ui.axial_flexion_pressure_slider.valueChanged.connect(
+            self.axial_flexion_pressure_changed
+        )
+        self.ui.axial_flexion_pressure_lbl.setText("0 lb")
+        self.ui.axial_flexion_pressure_btn.clicked.connect(
+            self.axial_flexion_pressure_btn
+        )
+        self.ui.axial_flexion_pressure_stop_btn.clicked.connect(
+            lambda: self.stop_position_flexion_btn(self.actuator_a)
+        )
+        self.ui.axial_pressure_up_lbl.mousePressEvent = self.axial_pressure_up
+        self.ui.axial_pressure_down_lbl.mousePressEvent = self.axial_pressure_down
+        self.ui.ab_axial_pressure_up_lbl.mousePressEvent = self.ab_axial_pressure_up
+        self.ui.ab_axial_pressure_down_lbl.mousePressEvent = self.ab_axial_pressure_down
+        self.ui.minus_ab_horizontal_flexion_up_lbl.mousePressEvent = (
+            self.minus_ab_horizontal_flexion_up
+        )
+        self.ui.minus_ab_horizontal_flexion_down_lbl.mousePressEvent = (
+            self.minus_ab_horizontal_flexion_down
+        )
+        self.ui.plus_ab_horizontal_flexion_up_lbl.mousePressEvent = (
+            self.plus_ab_horizontal_flexion_up
+        )
+        self.ui.plus_ab_horizontal_flexion_down_lbl.mousePressEvent = (
+            self.plus_ab_horizontal_flexion_down
+        )
+        self.ui.minus_horizontal_up_lbl.mousePressEvent = self.minus_horizontal_up
+        self.ui.minus_horizontal_down_lbl.mousePressEvent = self.minus_horizontal_down
+        self.ui.plus_horizontal_up_lbl.mousePressEvent = self.plus_horizontal_up
+        self.ui.plus_horizontal_down_lbl.mousePressEvent = self.plus_horizontal_down
+        self.ui.left_lat_up_lbl.mousePressEvent = self.left_lat_up
+        self.ui.left_lat_down_lbl.mousePressEvent = self.left_lat_down
+        self.ui.right_lat_up_lbl.mousePressEvent = self.right_lat_up
+        self.ui.right_lat_down_lbl.mousePressEvent = self.right_lat_down
+        self.ui.acd_axial_pressure_up_lbl.mousePressEvent = self.acd_axial_pressure_up
+        self.ui.acd_axial_pressure_down_lbl.mousePressEvent = (
+            self.acd_axial_pressure_down
+        )
+        self.ui.acd_left_lat_up_lbl.mousePressEvent = self.acd_left_lat_up
+        self.ui.acd_left_lat_down_lbl.mousePressEvent = self.acd_left_lat_down
+        self.ui.acd_right_lat_up_lbl.mousePressEvent = self.acd_right_lat_up
+        self.ui.acd_right_lat_down_lbl.mousePressEvent = self.acd_right_lat_down
+        self.ui.forward_horizontal_flexion_btn.clicked.connect(
+            lambda: self.forward_flexion_btn(self.actuator_b, 0.065, "04")
+        )
+        self.ui.reverse_horizontal_flexion_btn.clicked.connect(
+            lambda: self.reverse_flexion_btn(self.actuator_b, 0.065, "04")
+        )
+        self.ui.forward_fast_horizontal_flexion_btn.clicked.connect(
+            lambda: self.forward_flexion_btn(self.actuator_b, 0.065, "20")
+        )
+        self.ui.reverse_fast_horizontal_flexion_btn.clicked.connect(
+            lambda: self.reverse_flexion_btn(self.actuator_b, 0.065, "20")
+        )
+        self.ui.reset_horizontal_flexion_btn.clicked.connect(
+            lambda: self.reset_flexion_btn(self.actuator_b)
+        )
+        self.horizontal_flexion_position = -15
+        self.ui.horizontal_position_flexion_slider.valueChanged.connect(
+            self.horizontal_position_flexion_changed
+        )
+        self.ui.horizontal_position_flexion_lbl.setText("-15" + DEGREES)
+        self.ui.horizontal_position_flexion_btn.clicked.connect(
+            lambda: self.move_position_flexion_btn(self.actuator_b)
+        )
+        self.ui.horizontal_position_flexion_stop_btn.clicked.connect(
+            lambda: self.stop_position_flexion_btn(self.actuator_b)
+        )
+        self.ui.forward_lateral_flexion_btn.clicked.connect(
+            lambda: self.forward_flexion_btn(self.actuator_c, 0.0328, "04")
+        )
+        self.ui.reverse_lateral_flexion_btn.clicked.connect(
+            lambda: self.reverse_flexion_btn(self.actuator_c, 0.0328, "04")
+        )
+        self.ui.forward_fast_lateral_flexion_btn.clicked.connect(
+            lambda: self.forward_flexion_btn(self.actuator_c, 0.0328, "20")
+        )
+        self.ui.reverse_fast_lateral_flexion_btn.clicked.connect(
+            lambda: self.reverse_flexion_btn(self.actuator_c, 0.0328, "20")
+        )
+        self.ui.reset_lateral_flexion_btn.clicked.connect(
+            lambda: self.reset_flexion_btn(self.actuator_c)
+        )
+        self.lateral_flexion_position = 0
+        self.ui.lateral_flexion_position_slider.valueChanged.connect(
+            self.lateral_flexion_position_changed
+        )
+        self.ui.lateral_flexion_position_lbl.setText("0" + DEGREES)
+        self.ui.lateral_flexion_position_btn.clicked.connect(
+            lambda: self.move_position_flexion_btn(self.actuator_c)
+        )
+        self.ui.lateral_flexion_position_stop_btn.clicked.connect(
+            lambda: self.stop_position_flexion_btn(self.actuator_c)
+        )
+        self.ui.cycles_slider.sliderMoved.connect(self.cycles_slider_moved)
+        self.ui.axial_pressure_slider.sliderMoved.connect(
+            self.axial_pressure_slider_moved
+        )
+        self.ui.minus_horizontal_flexion_slider.sliderMoved.connect(
+            self.minus_horizontal_flexion_slider_moved
+        )
+        self.ui.plus_horizontal_flexion_slider.sliderMoved.connect(
+            self.plus_horizontal_flexion_slider_moved
+        )
+        self.ui.left_lat_flexion_slider.sliderMoved.connect(
+            self.left_lat_flexion_slider_moved
+        )
+        self.ui.right_lat_flexion_slider.sliderMoved.connect(
+            self.right_lat_flexion_slider_moved
+        )
+        self.ui.ab_axial_pressure_slider.sliderMoved.connect(
+            self.ab_axial_pressure_slider_moved
+        )
+        self.ui.acd_axial_pressure_slider.sliderMoved.connect(
+            self.acd_axial_pressure_slider_moved
+        )
+        self.ui.minus_ab_horizontal_flexion_slider.sliderMoved.connect(
+            self.minus_ab_horizontal_flexion_slider_moved
+        )
+        self.ui.plus_ab_horizontal_flexion_slider.sliderMoved.connect(
+            self.plus_ab_horizontal_flexion_slider_moved
+        )
+        self.ui.acd_left_lat_flexion_slider.sliderMoved.connect(
+            self.acd_left_lat_flexion_slider_moved
+        )
+        self.ui.acd_right_lat_flexion_slider.sliderMoved.connect(
+            self.acd_right_lat_flexion_slider_moved
+        )
+        self.ui.axial_flexion_pressure_slider.sliderMoved.connect(
+            self.axial_flexion_pressure_slider_moved
+        )
+        self.ui.horizontal_position_flexion_slider.sliderMoved.connect(
+            self.horizontal_position_flexion_slider_moved
+        )
+        self.ui.lateral_flexion_position_slider.sliderMoved.connect(
+            self.lateral_flexion_slider_moved
+        )
+        self.ui.forward_extra_btn.clicked.connect(self.forward_extra_btn_clicked)
+        self.ui.reverse_extra_btn.clicked.connect(self.reverse_extra_btn_clicked)
+        self.ui.forward_fast_extra_btn.clicked.connect(
+            self.forward_fast_extra_btn_clicked
+        )
+        self.ui.reverse_fast_extra_btn.clicked.connect(
+            self.reverse_fast_extra_btn_clicked
+        )
+        self.ui.reset_extra_btn.clicked.connect(self.reset_extra_btn_clicked)
+        # self.ui.measure_weight_btn.clicked.connect(self.measure_weight_btn_clicked)
+        # self.ui.measure_location_btn.clicked.connect(self.measure_location_btn_clicked)
+        # self.ui.reset_arduino_btn.clicked.connect(self.reset_arduino_btn)
+        # self.ui.reset_arduino_2_btn.clicked.connect(self.reset_arduino_btn)
+        # self.ui.emergency_stop_lbl.mousePressEvent = self.emergency_stop_lbl
+        # self.ui.emergency_stop_2_lbl.mousePressEvent = self.emergency_stop_lbl
 
     def setup_buttons_and_labels(self):
         """Setup buttons and label elements."""
@@ -314,47 +598,28 @@ class KneeSpaApp(QMainWindow):
         self.ui.video_player_dialog = None
         self.arduino_info_dialog = None
 
-    # Arduino methods
-    def setup_arduino(self):
-        """Setup Arduino interface."""
-        print("Setting up Arduino interface")
-        self.arduino = comm.Arduino()
-        self.thread = QThread()
+    def update_time(self):
+        if not self.protocol_timer.isValid():
+            return
+        elapsed = self.protocol_timer.elapsed()
+        seconds = (elapsed / 1000) % 60
+        seconds = int(seconds)
+        minutes = (elapsed / (1000 * 60)) % 60
+        minutes = int(minutes)
+        dt = QDateTime.currentDateTime()
+        time = QTime.currentTime()
+        textMM = "{:02d}".format(minutes)
+        textSS = "{:02d}".format(seconds)
+        text = ":"
+        if self.hourFormat == "12":
+            textTime = time.toString("h:mm ap").split(" ")[0]
+        else:
+            textTime = time.toString("h:mm").split(" ")[0]
+        textTime = textTime.replace(":", text)
 
-        print("Connecting Arduino signals to KneeSpaApp slots")
-        self.arduino.doneEmit.connect(self.setDone)
-        self.arduino.moveToThread(self.thread)
-        self.arduino.finished.connect(self.thread.quit)
-        self.arduino.AstatusEmit.connect(self.statusEmit)
-        self.arduino.readyToGoEmit.connect(self.readyToGo)
-        self.thread.started.connect(self.arduino.run)
-
-        self.arduino.positionEmit.connect(self.readPosition)
-        self.arduino.statusEmit.connect(self.status)
-        self.arduino.pressureEmit.connect(self.readPressure)
-        self.update_leg_length_field
-
-        self.thread.start()
-
-        self.setupGPIO()
-
-    def setupGPIO(self):
-        """Setup GPIO pins."""
-        print("Setting up GPIO pins")
-        GPIO.setmode(GPIO.BCM)
-        GPIO.setwarnings(False)
-
-        GPIO.setup(EMERGENCYSTOP, GPIO.OUT)
-        GPIO.setup(EXTRAFORWARD, GPIO.OUT)
-        GPIO.setup(EXTRABACKWARD, GPIO.OUT)
-        GPIO.setup(EXTRAENABLE, GPIO.OUT)
-
-        GPIO.output(EMERGENCYSTOP, GPIO.HIGH)
-        GPIO.output(EXTRAENABLE, GPIO.HIGH)
-
-        print("GPIO setup completed")
-
-    ### UI Methods ###
+        self.ui.timeMMLbl.setText(textMM)
+        self.ui.timeColonLbl.setText(text)
+        self.ui.timeSSLbl.setText(textSS)
 
     def setup_timers(self):
         """Setup timers for protocol event"""
@@ -381,6 +646,63 @@ class KneeSpaApp(QMainWindow):
         else:
             print("Showing PressureDialog")
             self.pressure_dialog.show()
+
+    def log_protocol(
+        self, protocol, cycles, pressure, degrees, start_degrees, left_lat, right_lat
+    ):
+        return
+        time_stamp = datetime.now().strftime("%m/%d/%Y %H:%M")
+        file_name = datetime.now().strftime("%m-%d-%Y") + ".csv"
+        if exists(file_name):
+            self.logger = False
+            with open(file_name, "a") as f:
+                csv_writer = csv.writer(f)
+                # writing the fields
+                csv_writer.writerow(
+                    [
+                        time_stamp,
+                        self.unlock_id,
+                        protocol,
+                        cycles,
+                        pressure,
+                        degrees,
+                        start_degrees,
+                        left_lat,
+                        right_lat,
+                    ]
+                )
+        else:
+            with open(file_name, "w") as f:
+                # creating a csv writer object
+                csv_writer = csv.writer(f)
+                # writing the fields
+                csv_writer.writerow(
+                    [
+                        "TimeStamp",
+                        "Id",
+                        "Protocol",
+                        "Cycles",
+                        "Axial Pressure",
+                        "Horizontal Degrees",
+                        "Start Degrees",
+                        "Left Lat Degrees",
+                        "Right Lat Degrees",
+                    ]
+                )
+                csv_writer.writerow(
+                    [
+                        time_stamp,
+                        self.unlock_id,
+                        protocol,
+                        cycles,
+                        pressure,
+                        degrees,
+                        start_degrees,
+                        left_lat,
+                        right_lat,
+                    ]
+                )
+                self.logger = True
 
     def start_or_stop_protocol(self):
         """Start or stop the protocol."""
@@ -760,7 +1082,7 @@ class KneeSpaApp(QMainWindow):
         """Show the video player dialog."""
         print("Showing video player dialog")
         if not self.video_player_dialog:
-            self.video_player_dialog = VideoPlayerDialog(self)
+            self.video_player_dialog = VideoPlayer(self)
             self.video_player_dialog.load_current_video()
         self.video_player_dialog.show()
 
@@ -807,6 +1129,206 @@ class KneeSpaApp(QMainWindow):
             self.current_pressure -= 5
             self.update_pressure_field()
             print(f"Pressure decreased to {self.current_pressure} lbs")
+
+    def right_lat_up(self, event):
+        self.right_lat_angle = self.ui.right_lat_flexion_slider.value()
+        self.right_lat_angle += 10
+        if self.right_lat_angle > 20:
+            self.right_lat_angle = 20
+        self.ui.right_lat_flexion_slider.setValue(self.right_lat_angle)
+        self.ui.right_lat_flexion_lbl.setText(str(self.right_lat_angle))
+
+    def right_lat_down(self, event):
+        self.right_lat_angle = self.ui.right_lat_flexion_slider.value()
+        self.right_lat_angle -= 10
+        if self.right_lat_angle < 0:
+            self.right_lat_angle = 0
+        self.ui.right_lat_flexion_slider.setValue(self.right_lat_angle)
+        self.ui.right_lat_flexion_lbl.setText(str(self.right_lat_angle))
+
+    def left_lat_up(self, event):
+        self.left_lat_angle = self.ui.left_lat_flexion_slider.value()
+        self.left_lat_angle += 10
+        if self.left_lat_angle > 20:
+            self.left_lat_angle = 20
+        self.ui.left_lat_flexion_slider.setValue(self.left_lat_angle)
+        self.ui.left_lat_flexion_lbl.setText(str(-self.left_lat_angle))
+
+    def left_lat_down(self, event):
+        self.left_lat_angle = self.ui.left_lat_flexion_slider.value()
+        self.left_lat_angle -= 10
+        if self.left_lat_angle < 0:
+            self.left_lat_angle = 0
+        self.ui.left_lat_flexion_slider.setValue(self.left_lat_angle)
+        self.ui.left_lat_flexion_lbl.setText(str(-self.left_lat_angle))
+
+    def acd_axial_pressure_up(self, event):
+        self.axial_pressure = self.ui.acd_axial_pressure_slider.value()
+        self.axial_pressure += 5
+        if self.axial_pressure > 80:
+            self.axial_pressure = 80
+        self.ui.acd_axial_pressure_slider.setValue(self.axial_pressure)
+        self.ui.acd_axial_pressure_lbl.setText(str(self.axial_pressure) + " lb")
+
+    def acd_axial_pressure_down(self, event):
+        self.axial_pressure = self.ui.acd_axial_pressure_slider.value()
+        self.axial_pressure -= 5
+        if self.axial_pressure < 10:
+            self.axial_pressure = 10
+        self.ui.acd_axial_pressure_slider.setValue(self.axial_pressure)
+        self.ui.acd_axial_pressure_lbl.setText(str(self.axial_pressure) + " lb")
+
+    def acd_right_lat_up(self, event):
+        self.right_lat_angle = self.ui.acd_right_lat_flexion_slider.value()
+        self.right_lat_angle += 5
+        if self.right_lat_angle > 20:
+            self.right_lat_angle = 20
+        self.ui.acd_right_lat_flexion_slider.setValue(self.right_lat_angle)
+        self.ui.acd_right_lat_flexion_lbl.setText(str(self.right_lat_angle) + DEGREES)
+
+    def acd_right_lat_down(self, event):
+        self.right_lat_angle = self.ui.acd_right_lat_flexion_slider.value()
+        self.right_lat_angle -= 5
+        if self.right_lat_angle < 0:
+            self.right_lat_angle = 0
+        self.ui.acd_right_lat_flexion_slider.setValue(self.right_lat_angle)
+        self.ui.acd_right_lat_flexion_lbl.setText(str(self.right_lat_angle) + DEGREES)
+
+    def acd_left_lat_up(self, event):
+        self.left_lat_angle = self.ui.acd_left_lat_flexion_slider.value()
+        self.left_lat_angle += 5
+        if self.left_lat_angle > 20:
+            self.left_lat_angle = 20
+        self.ui.acd_left_lat_flexion_slider.setValue(self.left_lat_angle)
+        self.ui.acd_left_lat_flexion_lbl.setText(str(-self.left_lat_angle) + DEGREES)
+
+    def acd_left_lat_down(self, event):
+        self.left_lat_angle = self.ui.acd_left_lat_flexion_slider.value()
+        self.left_lat_angle -= 5
+        if self.left_lat_angle < 0:
+            self.left_lat_angle = 0
+        self.ui.acd_left_lat_flexion_slider.setValue(self.left_lat_angle)
+        self.ui.acd_left_lat_flexion_lbl.setText(str(-self.left_lat_angle) + DEGREES)
+
+    def minus_horizontal_up(self, event):
+        self.minus_horizontal_degrees = self.ui.minus_horizontal_flexion_slider.value()
+        self.minus_horizontal_degrees -= 5
+        if self.minus_horizontal_degrees < 15:
+            self.minus_horizontal_degrees = 15
+        self.ui.minus_horizontal_flexion_slider.setValue(self.minus_horizontal_degrees)
+        self.ui.minus_horizontal_flexion_lbl.setText(
+            str(self.minus_horizontal_degrees) + DEGREES
+        )
+
+    def minus_horizontal_down(self, event):
+        self.minus_horizontal_degrees = self.ui.minus_horizontal_flexion_slider.value()
+        self.minus_horizontal_degrees += 5
+        if self.minus_horizontal_degrees > 25:
+            self.minus_horizontal_degrees = 25
+        self.ui.minus_horizontal_flexion_slider.setValue(self.minus_horizontal_degrees)
+        self.ui.minus_horizontal_flexion_lbl.setText(
+            str(self.minus_horizontal_degrees) + DEGREES
+        )
+
+    def plus_horizontal_up(self, event):
+        self.plus_horizontal_degrees = self.ui.plus_horizontal_flexion_slider.value()
+        self.plus_horizontal_degrees -= 5
+        if self.plus_horizontal_degrees <= 5:
+            self.plus_horizontal_degrees = 5
+        self.ui.plus_horizontal_flexion_slider.setValue(self.plus_horizontal_degrees)
+        self.ui.plus_horizontal_flexion_lbl.setText(
+            str(self.plus_horizontal_degrees) + DEGREES
+        )
+
+    def plus_horizontal_down(self, event):
+        self.plus_horizontal_degrees = self.ui.plus_horizontal_flexion_slider.value()
+        self.plus_horizontal_degrees += 5
+        if self.plus_horizontal_degrees >= 15:
+            self.plus_horizontal_degrees = 15
+        self.ui.plus_horizontal_flexion_slider.setValue(self.plus_horizontal_degrees)
+        self.ui.plus_horizontal_flexion_lbl.setText(
+            str(self.plus_horizontal_degrees) + DEGREES
+        )
+
+    def minus_ab_horizontal_flexion_up(self, event):
+        self.minus_horizontal_degrees = (
+            self.ui.minus_ab_horizontal_flexion_slider.value()
+        )
+        self.minus_horizontal_degrees -= 5
+        if self.minus_horizontal_degrees < 15:
+            self.minus_horizontal_degrees = 15
+        self.ui.minus_ab_horizontal_flexion_slider.setValue(
+            self.minus_horizontal_degrees
+        )
+        self.ui.minus_ab_horizontal_flexion_lbl.setText(
+            str(self.minus_horizontal_degrees) + DEGREES
+        )
+
+    def minus_ab_horizontal_flexion_down(self, event):
+        self.minus_horizontal_degrees = (
+            self.ui.minus_ab_horizontal_flexion_slider.value()
+        )
+        self.minus_horizontal_degrees += 5
+        if self.minus_horizontal_degrees > 25:
+            self.minus_horizontal_degrees = 25
+        self.ui.minus_ab_horizontal_flexion_slider.setValue(
+            self.minus_horizontal_degrees
+        )
+        self.ui.minus_ab_horizontal_flexion_lbl.setText(
+            str(self.minus_horizontal_degrees) + DEGREES
+        )
+
+    def plus_ab_horizontal_flexion_up(self, event):
+        self.plus_horizontal_degrees = self.ui.plus_ab_horizontal_flexion_slider.value()
+        self.plus_horizontal_degrees -= 5
+        if self.plus_horizontal_degrees < 5:
+            self.plus_horizontal_degrees = 5
+        self.ui.plus_ab_horizontal_flexion_slider.setValue(self.plus_horizontal_degrees)
+        self.ui.plus_ab_horizontal_flexion_lbl.setText(
+            str(self.plus_horizontal_degrees) + DEGREES
+        )
+
+    def plus_ab_horizontal_flexion_down(self, event):
+        self.plus_horizontal_degrees = self.ui.plus_ab_horizontal_flexion_slider.value()
+        self.plus_horizontal_degrees += 5
+        if self.plus_horizontal_degrees > 15:
+            self.plus_horizontal_degrees = 15
+        self.ui.plus_ab_horizontal_flexion_slider.setValue(self.plus_horizontal_degrees)
+        self.ui.plus_ab_horizontal_flexion_lbl.setText(
+            str(self.plus_horizontal_degrees) + DEGREES
+        )
+
+    def axial_pressure_up(self, event):
+        self.axial_pressure = self.ui.axial_pressure_slider.value()
+        self.axial_pressure += 5
+        if self.axial_pressure > 80:
+            self.axial_pressure = 80
+        self.ui.axial_pressure_slider.setValue(self.axial_pressure)
+        self.ui.axial_pressure_lbl.setText(str(self.axial_pressure) + " lb")
+
+    def axial_pressure_down(self, event):
+        self.axial_pressure = self.ui.axial_pressure_slider.value()
+        self.axial_pressure -= 5
+        if self.axial_pressure < 10:
+            self.axial_pressure = 10
+        self.ui.axial_pressure_slider.setValue(self.axial_pressure)
+        self.ui.axial_pressure_lbl.setText(str(self.axial_pressure) + " lb")
+
+    def ab_axial_pressure_up(self, event):
+        self.axial_pressure = self.ui.ab_axial_pressure_slider.value()
+        self.axial_pressure += 5
+        if self.axial_pressure > 80:
+            self.axial_pressure = 80
+        self.ui.ab_axial_pressure_slider.setValue(self.axial_pressure)
+        self.ui.ab_axial_pressure_lbl.setText(str(self.axial_pressure) + " lb")
+
+    def ab_axial_pressure_down(self, event):
+        self.axial_pressure = self.ui.ab_axial_pressure_slider.value()
+        self.axial_pressure -= 5
+        if self.axial_pressure < 10:
+            self.axial_pressure = 10
+        self.ui.ab_axial_pressure_slider.setValue(self.axial_pressure)
+        self.ui.ab_axial_pressure_lbl.setText(str(self.axial_pressure) + " lb")
 
     def update_leg_length_field(self):
         """Update the leg length field display."""
@@ -860,15 +1382,6 @@ class KneeSpaApp(QMainWindow):
         except Exception as e:
             print(f"Error in adjust_leg_length: {str(e)}")
 
-    def logProtocol(self, protocol, cycles, pressure):
-        print(f"Logging protocol: {protocol}, cycles: {cycles}, pressure: {pressure}")
-        timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        log_entry = f"{timestamp},{self.current_user['username']},{protocol},{cycles},{pressure}\n"
-
-        with open("protocol_log.csv", "a") as log_file:
-            log_file.write(log_entry)
-        print("Protocol logged successfully")
-
     def debug_status(self, s1, s2, s3, s4):
         """Debug: log status received from the Arduino."""
         print(f"Debug status: {s1}, {s2}, {s3}, {s4}")
@@ -886,46 +1399,125 @@ class KneeSpaApp(QMainWindow):
         print(f"Updating status: {s1}, {s2}, {s3}, {s4}")
         self.ui.status_label.setText(f"Status: {s1}, {s2}, {s3}, {s4}")
 
+    ### Other UI Control Methods ###
+    def axial_pressure_slider_moved(self, event):
+        rounded = int(round(event / 5) * 5)
+        self.ui.axial_pressure_slider.setValue(rounded)
+        self.ui.axial_pressure_lbl.setText(str(rounded) + " lb")
+
+    def ab_axial_pressure_slider_moved(self, event):
+        rounded = int(round(event / 5) * 5)
+        self.ui.ab_axial_pressure_slider.setValue(rounded)
+        self.ui.ab_axial_pressure_lbl.setText(str(rounded) + " lb")
+
+    def acd_axial_pressure_slider_moved(self, event):
+        rounded = int(round(event / 5) * 5)
+        self.ui.acd_axial_pressure_slider.setValue(rounded)
+        self.ui.acd_axial_pressure_lbl.setText(str(rounded) + " lb")
+
+    def axial_flexion_pressure_slider_moved(self, event):
+        rounded = int(round(event / 5) * 5)
+        self.ui.axial_flexion_pressure_slider.setValue(rounded)
+        self.ui.axial_flexion_pressure_lbl.setText(str(rounded) + " lb")
+
+    def minus_horizontal_flexion_slider_moved(self, event):
+        rounded = int(round(event / 5) * 5)
+        self.ui.minus_horizontal_flexion_slider.setValue(rounded)
+        self.ui.minus_horizontal_flexion_lbl.setText(str(rounded) + DEGREES)
+
+    def plus_horizontal_flexion_slider_moved(self, event):
+        rounded = int(round(event / 5) * 5)
+        self.ui.plus_horizontal_flexion_slider.setValue(rounded)
+        self.ui.plus_horizontal_flexion_lbl.setText(str(rounded) + DEGREES)
+
+    def minus_ab_horizontal_flexion_slider_moved(self, event):
+        rounded = int(round(event / 5) * 5)
+        self.ui.minus_ab_horizontal_flexion_slider.setValue(rounded)
+        self.ui.minus_ab_horizontal_flexion_lbl.setText(str(rounded) + DEGREES)
+
+    def plus_ab_horizontal_flexion_slider_moved(self, event):
+        rounded = int(round(event / 5) * 5)
+        self.ui.plus_ab_horizontal_flexion_slider.setValue(rounded)
+        self.ui.plus_ab_horizontal_flexion_lbl.setText(str(rounded) + DEGREES)
+
+    def left_lat_flexion_slider_moved(self, event):
+        rounded = int(round(event / 5) * 5)
+        self.ui.left_lat_flexion_slider.setValue(rounded)
+        self.ui.left_lat_flexion_lbl.setText(str(-rounded) + DEGREES)
+
+    def right_lat_flexion_slider_moved(self, event):
+        rounded = int(round(event / 5) * 5)
+        self.ui.right_lat_flexion_slider.setValue(rounded)
+        self.ui.right_lat_flexion_lbl.setText(str(rounded) + DEGREES)
+
+    def acd_left_lat_flexion_slider_moved(self, event):
+        rounded = int(round(event / 5) * 5)
+        self.ui.acd_left_lat_flexion_slider.setValue(rounded)
+        self.ui.acd_left_lat_flexion_lbl.setText(str(-rounded) + DEGREES)
+
+    def acd_right_lat_flexion_slider_moved(self, event):
+        rounded = int(round(event / 5) * 5)
+        self.ui.acd_right_lat_flexion_slider.setValue(rounded)
+        self.ui.acd_right_lat_flexion_lbl.setText(str(rounded) + DEGREES)
+
+    def horizontal_position_flexion_slider_moved(self, event):
+        rounded = int(round(event / 5) * 5)
+        self.ui.horizontal_position_flexion_slider.setValue(rounded)
+        self.ui.horizontal_position_flexion_lbl.setText(str(rounded) + DEGREES)
+
+    def lateral_flexion_slider_moved(self, event):
+        rounded = int(round(event / 10) * 10)
+        self.ui.lateral_flexion_position_slider.setValue(rounded)
+        self.ui.lateral_flexion_position_lbl.setText(str(rounded) + DEGREES)
+
     @QtCore.pyqtSlot()
-    def setDone(self):
+    def set_done(self):
         """Set the I2C status to done."""
         print("Setting I2C status to done")
-        self.I2Cstatus = True
+        self.i2c_status = True
         if self.worker:
-            self.worker.I2CStatus()
+            self.worker.i2c_status()
 
-    def readyToGo(self):
+    def ready_to_go(self):
         """Set the I2C status to ready."""
         print("Setting I2C status to ready")
-        self.I2Cstatus = True
+        self.i2c_status = True
 
-    def readPosition(self, position, steps, actuator):
+    def read_position(self, position, steps, actuator):
         """Read position data from the Arduino."""
         print(
             f"Reading position: position={position}, steps={steps}, actuator={actuator}"
         )
-        if hasattr(self, "actuatorB") and actuator == self.actuatorB:
-            inches = (position * 6) / self.config.BFactor
+        if hasattr(self, "actuator_b") and actuator == self.actuator_b:
+            inches = (position * 6) / self.config.b_factor
             inches = round(inches * 2.0) / 2.0
             print(f"Inches (actuator B): {inches}")
             degrees = int(-(25 - (inches / 5) * 25))
             print(f"Degrees (actuator B): {degrees}")
-        elif hasattr(self, "actuatorA") and actuator == self.actuatorA:
-            inches = (position * 6) / self.config.AFactor
+        elif hasattr(self, "actuator_a") and actuator == self.actuator_a:
+            inches = (position * 6) / self.config.a_factor
             inches = round(inches * 2.0) / 2.0
             print(f"Inches (actuator A): {inches}")
-        elif hasattr(self, "actuatorC") and actuator == self.actuatorC:
-            inches = steps / (self.config.CFactor / 6)
+        elif hasattr(self, "actuator_c") and actuator == self.actuator_c:
+            inches = steps / (self.config.c_factor / 6)
             inches = round(inches * 2.0) / 2.0
             print(f"Inches (actuator C): {inches}")
             degrees = int((inches * 20) - 20)
             print(f"Degrees (actuator C): {degrees}")
 
-    def readPressure(self, pressure):
+    def read_pressure(self, pressure):
         """Read pressure data from the Arduino."""
         print(f"Reading pressure: {pressure}")
 
+    def cycles_slider_moved(self, event):
+        rounded = int(round(event / 5) * 5)
+        if rounded == 0:
+            rounded = 1
+        self.ui.cycles_slider.setValue(rounded)
+        self.ui.cycles_lbl.setText(str(rounded))
+
     def start_protocol(self):
+        """Initiate protocol sequence."""
         print("Starting protocol")
         if not self.current_user:
             print("Access denied: User not logged in")
@@ -942,10 +1534,158 @@ class KneeSpaApp(QMainWindow):
         ### Temp hard code # of cycles ###
         cycles = 10
 
-        self.logProtocol(protocol, cycles, pressure)
+        self.log_protocol(protocol, cycles, pressure)
         self.execute_protocol(protocol, pressure, cycles)
 
+        self.ui.cyclesSlider.setEnabled(False)
+
+        self.protocolValue += str(self.buttonValue)
+        print("protocol {}".format(self.protocolValue))
+
+        self.ui.statusLbl_2.setText("")
+
+        self.ui.statusLbl.setText("Protocol Started")
+
+        self.arduino.send(
+            "L5{:3} {:3}".format(self.config.AMarks["0.0"], self.config.BMarks["0.0"])
+        )
+        self.I2C_status = 0
+        time.sleep(1.5)
+        print("End")
+
+        self.protocolTimer.start()
+
+        QApplication.processEvents()
+        self.elapsedTimer.start(1000)
+
+        #        self.logProtocol(self.protocolValue, self.cycles, self.axialPressure, self.minusHorizontalDegrees, self.plusHorizontalDegrees,self.leftLatAngle, self.rightLatAngle)
+        if protocol == "A":
+            self.worker = AProtocols.Protocols(
+                self.config.AFactor,
+                self.protocolValue,
+                self.axialPressure,
+                self.cycles,
+                self.arduino,
+            )
+            options = "Pressure: " + str(self.axialPressure)
+
+        if protocol == "B":
+            inches = self.BDegreeList[
+                self.minusHorizontalDegrees
+            ]  # set as initial angle
+            horizontalPosition = int(inches * self.config.BFactor / 6.0)
+            inches = self.BDegreeList[
+                self.plusHorizontalDegrees
+            ]  # set as initial angle
+            horizontalStartPosition = int(inches * self.config.BFactor / 6.0)
+
+            self.worker = BProtocols.Protocols(
+                self.config.BFactor,
+                self.protocolValue,
+                self.minusHorizontalDegrees,
+                self.plusHorizontalDegrees,
+                self.cycles,
+                self.arduino,
+            )
+            options = (
+                "Minus "
+                + str(self.minusHorizontalDegrees)
+                + DEGREES
+                + " Plus "
+                + str(self.plusHorizontalDegrees)
+                + DEGREES
+            )
+
+        if protocol == "C":
+            self.worker = CProtocols.Protocols(
+                self.config.CFactor,
+                self.protocolValue,
+                self.leftLatAngle,
+                self.rightLatAngle,
+                self.cycles,
+                self.arduino,
+                self.config,
+            )
+            options = (
+                "Left: "
+                + str(self.leftLatAngle)
+                + DEGREES
+                + " Right: "
+                + str(self.rightLatAngle)
+                + DEGREES
+            )
+
+        if protocol == "D":
+            self.worker = DProtocols.Protocols(
+                self.config.CFactor,
+                self.protocolValue,
+                self.leftLatAngle,
+                self.rightLatAngle,
+                self.cycles,
+                self.arduino,
+                self.config,
+            )
+            options = (
+                "Left: "
+                + str(self.leftLatAngle)
+                + DEGREES
+                + " Right: "
+                + str(self.rightLatAngle)
+                + DEGREES
+            )
+
+        if protocol == "AB":
+            self.worker = ABProtocols.Protocols(
+                self.config.BFactor,
+                self.protocolValue,
+                self.axialPressure,
+                self.minusHorizontalDegrees,
+                self.plusHorizontalDegrees,
+                self.cycles,
+                self.arduino,
+            )
+            options = "Pressure: " + str(self.axialPressure)
+
+        if protocol == "AC":
+            self.plusHorizontalDegrees = 0
+            self.worker = ACProtocols.Protocols(
+                self.config.CFactor,
+                self.protocolValue,
+                self.axialPressure,
+                self.leftLatAngle,
+                self.rightLatAngle,
+                self.plusHorizontalDegrees,
+                self.cycles,
+                self.arduino,
+                self.config,
+            )
+            options = "Pressure: " + str(self.axialPressure)
+
+        if protocol == "AD":
+            self.plusHorizontalDegrees = 0
+            self.worker = ADProtocols.Protocols(
+                self.config.CFactor,
+                self.protocolValue,
+                self.axialPressure,
+                self.leftLatAngle,
+                self.rightLatAngle,
+                self.plusHorizontalDegrees,
+                self.cycles,
+                self.arduino,
+                self.config,
+            )
+            options = "Pressure: " + str(self.axialPressure)
+
+        self.worker.signals.finished.connect(self.protocolCompleted)
+        self.worker.signals.progress.connect(self.protocolProgress)
+        self.worker.signals.APressure.connect(self.AProtocolPressure)
+
+        self.threadpool.start(self.worker)
+
+        self.goTimer.start(500)
+
     def stop_protocol(self):
+        """Stop protocol sequence."""
         print("Stopping protocol")
         self.arduino.send("X")
         self.ui.start_button.setText("Start")
@@ -953,9 +1693,10 @@ class KneeSpaApp(QMainWindow):
             self.worker.stop()
 
     def execute_protocol(self, protocol, pressure, cycles):
+        """Carry out the protocol after initation."""
         print(f"Executing protocol: {protocol}, pressure: {pressure}, cycles: {cycles}")
         if protocol.isdigit() and 1 <= int(protocol) <= 9:
-            protocol_number = AC_PROTOCOL_MAPPING[int(protocol)]
+            protocol_number = PROTOCOL_MAPPING[int(protocol)]
             start_degrees = 0
 
             self.worker = ACProtocols.Protocols(
@@ -984,6 +1725,7 @@ class KneeSpaApp(QMainWindow):
             )
 
     def update_protocol_time(self):
+        """Populat the remaining time in a protocol."""
         print("Updating protocol time")
         elapsed_time = datetime.now() - self.protocol_start_time
         remaining_time = self.protocol_total_time - elapsed_time
@@ -993,7 +1735,7 @@ class KneeSpaApp(QMainWindow):
         self.timer_dialog.update_time(str(remaining_time).split(".")[0])
         print(f"Time remaining: {remaining_time}")
 
-    def statusEmit(self, s1, s2, s3, s4):
+    def status_emit(self, s1, s2, s3, s4):
         print(f"Status emit: {s1}, {s2}, {s3}, {s4}")
         zero = int(self.config.AMarks["0.0"])
         inches = ((s1 + zero) * 8.0) / self.config.AFactor
@@ -1017,42 +1759,42 @@ class KneeSpaApp(QMainWindow):
         self.arduino.send("Y")
         QMessageBox.information(self, "Arduino Reset", "Arduino has been reset.")
 
-    def sendZeroMark(self):
+    def send_zero_mark(self):
         """Send zero mark to Arduino."""
         print("Sending zero mark to Arduino")
         self.arduino.send(
             "L5{:3} {:3}".format(self.config.AMarks["0.0"], self.config.BMarks["0.0"])
         )
 
-    def sendCalibration(self):
+    def send_calibration(self):
         """Send calibration data to Arduino."""
         print("Sending calibration data to Arduino")
         self.arduino.send("L0{}".format(self.config.calibration))
 
-    def measureWeightBtnClicked(self):
+    def measure_weight_btn_clicked(self):
         """Measure weight."""
         print("Measuring weight")
         self.arduino.send("L4")
 
-    def measureLocationBtnClicked(self):
+    def measure_location_btn_clicked(self):
         """Measure location."""
         print("Measuring location")
         self.arduino.send("L6")
 
-    def readyToGo(self):
+    def ready_to_go(self):
         """Set I2C status to ready."""
         print("Setting I2C status to ready")
-        self.I2Cstatus = True
+        self.i2c_status = True
 
-    def status(self, positionA, positionB, steps, pressure):
+    def status(self, position_a, position_b, steps, pressure):
         """Log the status data received from the Arduino."""
         print(
-            f"Status received: A {positionA}, B {positionB}, C {steps}, Pressure {pressure}"
+            f"Status received: A {position_a}, B {position_b}, C {steps}, Pressure {pressure}"
         )
         if self.worker:
-            self.worker.status(positionA, positionB, steps, pressure)
+            self.worker.status(position_a, position_b, steps, pressure)
 
-    def closeEvent(self, event):
+    def close_event(self, event):
         """Handle window close event."""
         print("Closing application")
         GPIO.cleanup()
@@ -1062,143 +1804,506 @@ class KneeSpaApp(QMainWindow):
         if self.worker:
             self.worker.stop()
 
-    def forwardFlexionBtn(self, actuator, step, speedFactor):
+    def forward_flexion_btn(self, actuator, step, speed_factor):
         """Handle forward flexion button press."""
         print(
-            f"Forward flexion button pressed: actuator={actuator}, step={step}, speedFactor={speedFactor}"
+            f"Forward flexion button pressed: actuator={actuator}, step={step}, speed_factor={speed_factor}"
         )
 
-        if actuator == self.actuatorB:
-            if int(speedFactor) <= 4:
+        if actuator == self.actuator_b:
+            if int(speed_factor) <= 4:
                 step = 5
             else:
                 step = 10
-            print(f"Actuator B current position: {self.horizontalFlexionPosition}")
-            if (self.horizontalFlexionPosition + step) > -5:
+            print(f"Actuator B current position: {self.horizontal_flexion_position}")
+            if (self.horizontal_flexion_position + step) > -5:
                 return
-            self.horizontalFlexionPosition += step
-            print(f"New Actuator B position: {self.horizontalFlexionPosition}")
+            self.horizontal_flexion_position += step
+            print(f"New Actuator B position: {self.horizontal_flexion_position}")
 
-            command = "E{}+{}".format(actuator, speedFactor)
+            command = "E{}+{}".format(actuator, speed_factor)
 
             self.arduino.send(command)
             return
 
-        if actuator == self.actuatorA:
-            print(f"Actuator A current position: {self.axialFlexionPosition}")
-            if int(speedFactor) <= 4:
+        if actuator == self.actuator_a:
+            print(f"Actuator A current position: {self.axial_flexion_position}")
+            if int(speed_factor) <= 4:
                 step = 0.5
             else:
                 step = 1
 
-            self.axialFlexionPosition += step
+            self.axial_flexion_position += step
 
-            command = "E{}+{}".format(actuator, speedFactor)
-            command = "A12{}".format(self.axialFlexionPosition)
+            command = "E{}+{}".format(actuator, speed_factor)
+            command = "A12{}".format(self.axial_flexion_position)
 
             self.arduino.send(command)
-            print(f"Actuator A new position: {self.axialFlexionPosition}")
+            print(f"Actuator A new position: {self.axial_flexion_position}")
 
-            sleep(0.3)
+            time.sleep(0.3)
             self.arduino.send("L5")
             return
 
-        if actuator == self.actuatorC:
-            if int(speedFactor) <= 4:
+        if actuator == self.actuator_c:
+            if int(speed_factor) <= 4:
                 step = 5
             else:
                 step = 10
-            if (self.lateralFlexionPosition + step) > 20:
+            if (self.lateral_flexion_position + step) > 20:
                 return
-            self.lateralFlexionPosition += step
-            position = self.config.CMarks["{:.1f}".format(self.lateralFlexionPosition)]
+            self.lateral_flexion_position += step
+            position = self.config.c_marks[
+                "{:.1f}".format(self.lateral_flexion_position)
+            ]
             print(
-                f"Actuator C positioned to {self.lateralFlexionPosition} degrees pos {position}"
+                f"Actuator C positioned to {self.lateral_flexion_position} degrees pos {position}"
             )
             command = "K{}".format(position)
 
             self.arduino.send(command)
 
-    def reverseFlexionBtn(self, actuator, step, speedFactor):
+    def reverse_flexion_btn(self, actuator, step, speed_factor):
         """Handle reverse flexion button press."""
         print(
-            f"Reverse flexion button pressed: actuator={actuator}, step={step}, speedFactor={speedFactor}"
+            f"Reverse flexion button pressed: actuator={actuator}, step={step}, speed_factor={speed_factor}"
         )
-        print(f"Actuator A current position: {self.axialFlexionPosition}")
+        print(f"Actuator A current position: {self.axial_flexion_position}")
 
-        if actuator == self.actuatorA:
-            if int(speedFactor) <= 4:
+        if actuator == self.actuator_a:
+            if int(speed_factor) <= 4:
                 step = 0.5
             else:
                 step = 1
-            if (self.axialFlexionPosition - step) < -5:
+            if (self.axial_flexion_position - step) < -5:
                 return
 
-            self.axialFlexionPosition -= step
-            command = "A12{}".format(self.axialFlexionPosition)
+            self.axial_flexion_position -= step
+            command = "A12{}".format(self.axial_flexion_position)
 
             self.arduino.send(command)
-            print(f"Actuator A new position: {self.axialFlexionPosition}")
+            print(f"Actuator A new position: {self.axial_flexion_position}")
 
-        if actuator == self.actuatorB:
-            if int(speedFactor) <= 4:
+        if actuator == self.actuator_b:
+            if int(speed_factor) <= 4:
                 step = 5
             else:
                 step = 10
-            print(f"Actuator B current position: {self.horizontalFlexionPosition}")
-            if (self.horizontalFlexionPosition - step) < -25:
+            print(f"Actuator B current position: {self.horizontal_flexion_position}")
+            if (self.horizontal_flexion_position - step) < -25:
                 return
-            self.horizontalFlexionPosition -= step
-            print(f"New Actuator B position: {self.horizontalFlexionPosition}")
+            self.horizontal_flexion_position -= step
+            print(f"New Actuator B position: {self.horizontal_flexion_position}")
 
-            command = "E{}-{}".format(actuator, speedFactor)
+            command = "E{}-{}".format(actuator, speed_factor)
 
             self.arduino.send(command)
 
-        if actuator == self.actuatorC:
-            print(f"Actuator C current position: {self.lateralFlexionPosition}")
-            if int(speedFactor) <= 4:
+        if actuator == self.actuator_c:
+            print(f"Actuator C current position: {self.lateral_flexion_position}")
+            if int(speed_factor) <= 4:
                 step = 5
             else:
                 step = 10
-            if (self.lateralFlexionPosition - step) < -20:
+            if (self.lateral_flexion_position - step) < -20:
                 return
-            self.lateralFlexionPosition -= step
+            self.lateral_flexion_position -= step
 
-            position = self.config.CMarks["{:.1f}".format(self.lateralFlexionPosition)]
+            position = self.config.c_marks[
+                "{:.1f}".format(self.lateral_flexion_position)
+            ]
             print(
-                f"Actuator C positioned to {self.lateralFlexionPosition} degrees pos {position}"
+                f"Actuator C positioned to {self.lateral_flexion_position} degrees pos {position}"
             )
             command = "K{}".format(position)
 
             self.arduino.send(command)
 
-    def resetFlexionBtn(self, actuator):
+    def reset_flexion_btn(self, actuator):
         """Reset flexion for the given actuator."""
         print(f"Resetting flexion for actuator: {actuator}")
-        if actuator == self.actuatorB:
+        if actuator == self.actuator_b:
             command = "A{}2".format(actuator)
 
             self.arduino.send(command)
-            self.horizontalFlexionPosition = -15
+            self.horizontal_flexion_position = -15
             return
 
-        if actuator == self.actuatorA:
+        if actuator == self.actuator_a:
             command = "R{}".format(actuator)
 
             self.arduino.send(command)
-            self.axialFlexionPosition = 0
-            sleep(5)
+            self.axial_flexion_position = 0
+            time.sleep(5)
             self.arduino.send("L0{}".format(self.config.calibration))
             return
 
-        if actuator == self.actuatorC:
-            position = self.config.CMarks["{:.1f}".format(0)]
+        if actuator == self.actuator_c:
+            position = self.config.c_marks["{:.1f}".format(0)]
             print(f"Actuator C positioned to {0} degrees pos {position}")
             command = "I14{}".format(position)
             self.arduino.send(command)
-            self.lateralFlexionPosition = 0
+            self.lateral_flexion_position = 0
             return
+
+    def protocol_completed(self, finished):
+        self.ui.a_program_lbl.setText(" ")
+        self.protocol_timer.invalidate()
+        if finished:
+            print("protocol_completed")
+            self.reset_btns(True)
+            self.ui.status_lbl.setText("Protocol Completed")
+            self.complete_timer.start(500)
+            self.blinking_complete_count = 1
+            self.blink_complete()
+        else:
+            print("protocol_stopped")
+            self.ui.status_lbl.setText("Protocol STOPPED")
+
+    def clear_status(self):
+        self.ui.status_lbl.setText("")
+        self.ui.status_lbl_2.setText("")
+        self.ui.program_lbl.setText("")
+        self.ui.program_lbl_2.setText("")
+        self.ui.a_program_lbl.setText("")
+
+    def blink_complete(self):
+        if self.blinking_complete:
+            self.ui.keypad_widget.setStyleSheet(
+                "border-radius:25px;border:4px solid white;background-color:white;"
+            )
+        else:
+            self.ui.keypad_widget.setStyleSheet(
+                "border-radius:25px;border:4px solid white;background-color:blue;"
+            )
+        self.blinking_complete = not self.blinking_complete
+        self.blinking_complete_count += 1
+        if self.blinking_complete_count > 5:
+            self.complete_timer.stop()
+            self.blinking_complete = 0
+
+    def blink_go(self):
+        if self.blinking_go:
+            self.ui.button_go_btn.setStyleSheet("background-color:#78909C")
+        else:
+            self.ui.button_go_btn.setStyleSheet("background-color:green;")
+        self.blinking_go = not self.blinking_go
+
+    def blink_stop(self):
+        if self.blinking_stop:
+            self.ui.emergency_stop_lbl.setStyleSheet(
+                "border:4px solid black;border-radius:20px;background-color:#78909C;"
+            )
+            self.ui.emergency_stop_2_lbl.setStyleSheet(
+                "border:4px solid black;border-radius:20px;background-color:#78909C;"
+            )
+        else:
+            self.ui.emergency_stop_lbl.setStyleSheet(
+                "border:4px solid black;border-radius:20px;background-color:red;"
+            )
+            self.ui.emergency_stop_2_lbl.setStyleSheet(
+                "border:4px solid black;border-radius:20px;background-color:red;"
+            )
+        self.blinking_stop = not self.blinking_stop
+
+    def protocol_progress(self, status):
+        print("Progress: {}".format(status))
+        if status[:2] == ">>":
+            self.ui.status_lbl_2.setText(str(status))
+
+    def btns_clear(self):
+        self.elapsed_timer.stop()
+        self.ui.time_group.hide()
+        self.protocol_timer.invalidate()
+
+        for i in range(len(self.letter_buttons)):
+            self.letter_buttons[i].setEnabled(True)
+            self.letter_buttons[i].setStyleSheet("background-color: grey;color:white")
+
+        if not self.unlocked:
+            self.unlock_code = ""
+            self.ui.unlock_key_lbl.setText("")
+
+            for i in range(len(self.number_buttons)):
+                self.number_buttons[i].setStyleSheet(
+                    "background-color: blue;color:white"
+                )
+
+            return
+
+        for i in range(len(self.letter_buttons)):
+            self.letter_buttons[i].setEnabled(True)
+
+        for i in range(len(self.number_buttons)):
+            self.number_buttons[i].setEnabled(True)
+
+        self.ui.button_go_btn.setEnabled(True)
+
+        self.reset_btns(True)
+        self.first_letter = ""
+        self.ui.status_lbl_2.setText("")
+
+        if self.worker is not None:
+            self.worker.stop()
+
+        self.ui.setup_btn.show()
+
+        self.ui.status_lbl.setText("Protocol Stopped")
+        self.stop_timer.stop()
+        self.ui.emergency_stop_lbl.setStyleSheet(
+            "border:4px solid black;border-radius:20px;background-color:red;"
+        )
+        self.ui.emergency_stop_2_lbl.setStyleSheet(
+            "border:4px solid black;border-radius:20px;background-color:red;"
+        )
+
+    def reset_btns(self, letters):
+        self.go_timer.stop()
+        if self.task:
+            self.task.stop()
+            print("task stop")
+        return
+        self.button_value = 0
+        self.protocol = ""
+        self.first_letter = ""
+
+        self.axial_pressure = 10
+        self.minus_horizontal_degrees = 15
+        self.plus_horizontal_degrees = 15
+        self.left_lat_angle = 0
+        self.right_lat_angle = 0
+        self.cycles = 1
+
+        for i in range(len(self.number_buttons)):
+            self.number_buttons[i].setEnabled(False)
+            self.number_buttons[i].setStyleSheet("background-color: blue;color:white")
+
+        for i in range(len(self.letter_buttons)):
+            self.letter_buttons[i].setEnabled(True)
+            self.letter_buttons[i].setStyleSheet("background-color: grey;color:white")
+
+        self.sender_number = self.ui.button_0_btn
+
+        self.ui.button_go_btn.setEnabled(False)
+        self.ui.button_go_btn.setStyleSheet("background-color: green;")
+
+        self.ui.cycles_slider.setValue(1)
+        self.ui.cycles_lbl.setText("1")
+        self.ui.cycles_slider.setEnabled(True)
+
+        self.ui.axial_pressure_slider.setValue(10)
+        self.ui.axial_pressure_lbl.setText("10 lb")
+        self.ui.axial_pressure_slider.setEnabled(True)
+
+        self.ui.minus_horizontal_flexion_slider.setValue(15)
+        self.ui.minus_horizontal_flexion_lbl.setText("15" + DEGREES)
+        self.ui.minus_horizontal_flexion_slider.setEnabled(True)
+        self.ui.plus_horizontal_flexion_slider.setValue(15)
+        self.ui.plus_horizontal_flexion_lbl.setText("15" + DEGREES)
+        self.ui.plus_horizontal_flexion_slider.setEnabled(True)
+
+        self.ui.ab_axial_pressure_slider.setValue(10)
+        self.ui.ab_axial_pressure_lbl.setText("10 lb")
+        self.ui.minus_ab_horizontal_flexion_slider.setValue(15)
+        self.ui.minus_ab_horizontal_flexion_lbl.setText("15" + DEGREES)
+        self.ui.plus_ab_horizontal_flexion_slider.setValue(15)
+        self.ui.plus_ab_horizontal_flexion_lbl.setText("15" + DEGREES)
+
+        self.ui.a_group_box.hide()
+        self.ui.cd_group_box.hide()
+        self.ui.b_group_box.hide()
+        self.ui.ab_group_box.hide()
+        self.ui.ax_group_box.hide()
+        self.ui.acd_group_box.hide()
+        self.ui.right_lat_flexion_slider.setValue(0)
+        self.ui.right_lat_flexion_lbl.setText("0" + DEGREES)
+        self.ui.left_lat_flexion_slider.setValue(0)
+        self.ui.left_lat_flexion_lbl.setText("0" + DEGREES)
+
+        self.ui.acd_axial_pressure_slider.setValue(10)
+        self.ui.acd_axial_pressure_lbl.setText("10 lb")
+        self.ui.acd_right_lat_flexion_slider.setValue(0)
+        self.ui.acd_right_lat_flexion_lbl.setText("0" + DEGREES)
+        self.ui.acd_left_lat_flexion_slider.setValue(0)
+        self.ui.acd_left_lat_flexion_lbl.setText("0" + DEGREES)
+
+        self.ui.status_lbl.setText("")
+        self.ui.program_lbl.setText("")
+        self.ui.program_lbl_2.setText("")
+
+        self.ui.setup_btn.show()
+
+    ### Shutdown methods ###
+
+    def shutdown(self):
+        if os.path.exists("debug.txt"):
+            self.exit_app()
+        print("shutdown")
+        self.shutdown_app()
+
+    ### Arduino methods ###
+
+    def setup_arduino(self):
+        """Setup Arduino interface."""
+        print("Setting up Arduino interface")
+        self.arduino = comm.Arduino()
+        self.thread = QThread()
+
+        print("Connecting Arduino signals to KneeSpaApp slots")
+        self.arduino.doneEmit.connect(self.setDone)
+        self.arduino.moveToThread(self.thread)
+        self.arduino.finished.connect(self.thread.quit)
+        self.arduino.astatus_emit.connect(self.status_emit)
+        self.arduino.readyToGoEmit.connect(self.readyToGo)
+        self.thread.started.connect(self.arduino.run)
+
+        self.arduino.positionEmit.connect(self.readPosition)
+        self.arduino.status_emit.connect(self.status)
+        self.arduino.pressureEmit.connect(self.readPressure)
+        self.update_leg_length_field
+
+        self.thread.start()
+
+        self.setup_GPIO()
+
+    def blink_slider(self, go):
+        print("self.slider_go", self.slider_go)
+        if self.slider_go:
+            self.ui.horizontalPositionFlexionBtn.setStyleSheet(
+                "background-color:#78909C"
+            )  # green;color:78909C")
+        else:
+            self.ui.horizontalPositionFlexionBtn.setStyleSheet(
+                "background-color:green;"
+            )
+        self.slider_go = not self.slider_go
+
+        self.ui.horizontalPositionFlexionBtn.update()
+
+    def blink_reset(self):
+        if self.blinking_reset:
+            self.ui.reset_arduino_btn.show()
+            self.ui.reset_arduino_2_btn.show()
+        else:
+            self.ui.reset_arduino_btn.hide()
+            self.ui.reset_arduino_2_btn.hide()
+        self.blinking_reset = not self.blinking_reset
+    
+    def reset_arduino_btn(self):
+        self.ui.reset_arduino_btn.setEnabled(False)
+        self.ui.reset_arduino_2_btn.setEnabled(False)
+        self.reset_timer.start(500)
+    
+        self.i2c_status = 0
+        self.arduino.send("Y")
+        self.i2c_status = 1
+        while self.i2c_status == 0:
+            time.sleep(0.5)
+            QApplication.processEvents()
+            print("time.sleep(0.5)", self.i2c_status)
+        self.i2c_status = 0
+        print("end Y")
+        self.blinking_reset = False
+        QApplication.processEvents()
+        for i in range(12):
+            QApplication.processEvents()
+            time.sleep(0.3)
+    
+        self.i2c_status = 0
+        self.i2c_status_mark()
+        self.i2c_status = 0
+        while self.i2c_status == 0:
+            time.sleep(0.5)
+            QApplication.processEvents()
+            print("time.sleep(0.5)", self.i2c_status)
+        self.i2c_status = 0
+        print("end L5")
+        QApplication.processEvents()
+        for i in range(12):
+            QApplication.processEvents()
+            time.sleep(0.3)
+    
+        QApplication.processEvents()
+        position = 0
+        print(" positioned to {}".format(position))
+        command = "I12{}".format(position)
+        self.arduino.send(command)
+        self.i2c_status = 0
+        QApplication.processEvents()
+        while self.i2c_status == 0:
+            QApplication.processEvents()
+            time.sleep(0.5)
+        self.i2c_status = 0
+        print("end I12")
+        for i in range(5):
+            QApplication.processEvents()
+            time.sleep(0.3)
+    
+        QApplication.processEvents()
+        position = 1213
+        print(" positioned to {}".format(position))
+        command = "A132.0"
+        self.arduino.send(command)
+        self.i2c_status = 0
+        while self.i2c_status == 0:
+            QApplication.processEvents()
+            time.sleep(0.5)
+        self.i2c_status = 0
+        print("end I13")
+        for i in range(5):
+            QApplication.processEvents()
+            time.sleep(0.3)
+    
+        QApplication.processEvents()
+        position = self.config.c_marks["{:.1f}".format(0)]
+        print(" positioned to {} degrees pos {}".format(0, position))
+        command = "I14{}".format(position)
+        self.arduino.send(command)
+        self.i2c_status = 0
+        while self.i2c_status == 0:
+            QApplication.processEvents()
+            time.sleep(0.5)
+        self.i2c_status = 0
+        print("end I14")
+        for i in range(5):
+            QApplication.processEvents()
+            time.sleep(0.3)
+    
+        self.arduino.send("L0{}".format(self.config.calibration))
+    
+        self.ui.horizontal_position_flexion_slider.setValue(-15)
+        self.ui.horizontal_position_flexion_lbl.setText("-15" + DEGREES)
+        self.setup_horizontal_degrees = -15
+    
+        self.ui.axial_flexion_position_slider.setValue(0)
+        self.ui.axial_flexion_position_lbl.setText("0 in")
+        self.axial_flexion_position = 0
+    
+        self.ui.lateral_flexion_position_slider.setValue(0)
+        self.ui.lateral_flexion_position_lbl.setText("0" + DEGREES)
+        self.setup_lateral_degrees = 0
+        self.ui.reset_arduino_btn.setEnabled(True)
+        self.ui.reset_arduino_2_btn.setEnabled(True)
+        self.blinking_reset = True
+        self.blink_reset()
+        self.reset_timer.stop()
+
+
+    def setup_GPIO(self):
+        """Setup GPIO pins."""
+        print("Setting up GPIO pins")
+        GPIO.setmode(GPIO.BCM)
+        GPIO.setwarnings(False)
+
+        GPIO.setup(EMERGENCYSTOP, GPIO.OUT)
+        GPIO.setup(EXTRAFORWARD, GPIO.OUT)
+        GPIO.setup(EXTRABACKWARD, GPIO.OUT)
+        GPIO.setup(EXTRAENABLE, GPIO.OUT)
+
+        GPIO.output(EMERGENCYSTOP, GPIO.HIGH)
+        GPIO.output(EXTRAENABLE, GPIO.HIGH)
+
+        print("GPIO setup completed")
 
 
 def main():
