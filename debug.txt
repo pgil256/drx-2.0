@@ -1,0 +1,174 @@
+pi@kneespa:~/drx-2.1/main $ python3 kneespa.py --debug
+Logging initialized at 2025-03-20 14:26:24.475397
+Application started at 2025-03-20 14:26:53.766022
+Debug mode: enabled
+libEGL warning: DRI2: failed to authenticate
+Initializing KneeSpa class in debug mode
+Loading main UI file
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+Debug mode: Running in windowed mode
+Finding central widget 'central_widget'
+Loading CSV file: /home/pi/drx-2.0/main/data/users/user_pins.csv
+CSV file /home/pi/drx-2.0/main/data/users/user_pins.csv loaded successfully
+Loading CSV file: /home/pi/drx-2.0/main/data/patients/patient_pins.csv
+CSV file /home/pi/drx-2.0/main/data/patients/patient_pins.csv loaded successfully
+Patient data loaded successfully.
+Setting up UI buttons and labels
+Setting up actuator controls...
+Actuator controls setup complete
+UI elements setup completed successfully
+Connecting UI element signals
+Connecting show_pressure_button
+Updating protocol image to number 1
+Signal connections completed successfully
+Protocol controls setup completed successfully
+Setting up dialogs
+Initializing login dialog
+Initializing enter patient dialog
+Showing home page
+Multithreading with maximum 4 threads
+Setting up timers for protocol events
+Mark 0: angle -20.0, value 98
+Mark 1: angle -17.5, value 318
+Mark 2: angle -15.0, value 538
+Mark 3: angle -12.5, value 758
+Mark 4: angle -10.0, value 978
+Mark 5: angle -7.5, value 1198
+Mark 6: angle -5.0, value 1418
+Mark 7: angle -2.5, value 1638
+Mark 8: angle 0.0, value 1858
+Mark 9: angle 2.5, value 2078
+Mark 10: angle 5.0, value 2298
+Mark 11: angle 7.5, value 2518
+Mark 12: angle 10.0, value 2738
+Mark 13: angle 12.5, value 2958
+Mark 14: angle 15.0, value 3178
+Mark 15: angle 17.5, value 3398
+Initializing GPIO setup process
+Setting GPIO mode to BCM
+Disabling GPIO warnings
+Setting up GPIO pins for EMERGENCYSTOP, EXTRAFORWARD, EXTRABACKWARD, and EXTRAENABLE
+Configuring default GPIO states
+GPIO setup completed successfully
+Setting up Arduino interface
+Arduino instance created
+<bound PYQT_SIGNAL done_emit of Arduino object at 0xa37f9a80>
+Thread instance created for Arduino
+Connecting Arduino signals to corresponding slots
+Moving Arduino object to thread
+Connecting Arduino finished signal to thread quit
+Connecting thread started signal to Arduino run method
+Connecting Arduino position, status, and pressure signals
+Starting Arduino thread
+Thread started for Arduino
+Waiting for Arduino connection readiness
+Arduino initialized successfully
+Resetting all actuators
+Resetting leg length
+Attempting to connect to Arduino on /dev/ttyS0 (attempt 1/3)
+2025-03-20 14:26:55,783 - INFO - [Arduino Communication] Attempting to release busy port: /dev/ttyS0
+INFO:KneeSpa:[Arduino Communication] Attempting to release busy port: /dev/ttyS0
+2025-03-20 14:26:56,102 - INFO - [Arduino Communication] Port /dev/ttyS0 is not busy
+INFO:KneeSpa:[Arduino Communication] Port /dev/ttyS0 is not busy
+Buffer state before verify: in_waiting=22
+Verifying connection (attempt 1/4)
+Test command sent, waiting for response...
+Raw response: 'OK' (length: 2)
+Valid response from Arduino: OK
+Arduino connection verified
+Starting to read from serial communication
+Raw received data: OK
+Arduino sent OK acknowledgment
+Resetting Arduino
+Sending command: Y
+
+Command sent successfully.
+End Y
+send_zero_mark
+Sending command: L5100 100
+
+Command sent successfully.
+Sending command: F0
+
+Command sent successfully.
+Timeout waiting for response
+end L5
+Positioned to 0
+Sending command: I120
+
+Command sent successfully.
+Raw received data: S|986|1220|1528|
+Error handling data 'S|986|1220|1528|': could not convert string to float: '\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00\x00'
+Timeout waiting for response
+end I12
+ positioned to 1213
+Sending command: A132.0
+
+Command sent successfully.
+Timeout waiting for response
+end I13
+ positioned to 0 degrees pos 1570
+Sending command: I141570
+
+Command sent successfully.
+Timeout waiting for response
+end I14
+send_calibration
+Sending command: L0-28369.0
+
+Command sent successfully.
+Connection timeout: No data received in 30 seconds
+Showing profile page
+Showing profile page
+Cleaning up resources.
+Forcefully closing existing serial connection
+Serial connection closed successfully.
+pi@kneespa:~/drx-2.1/main $ ^C
+pi@kneespa:~/drx-2.1/main $ 

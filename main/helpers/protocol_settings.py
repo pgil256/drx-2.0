@@ -1,0 +1,17 @@
+# helpers/protocol_settings.py
+# protocol_settings.py
+from dataclasses import dataclass
+from typing import Optional
+from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt5.QtWidgets import (
+    QDialog, QVBoxLayout, QHBoxLayout, QLabel, 
+    QPushButton, QSlider, QDialogButtonBox
+)
+from PyQt5.QtCore import Qt
+
+@dataclass
+class ProtocolSettings:
+    """Holds all settings for a protocol run"""
+    duration_minutes: int = 1
+    use_pulse: bool = False
+    pressure_tolerance: int = 40  # Default pressure

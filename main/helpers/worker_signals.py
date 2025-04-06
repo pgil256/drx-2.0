@@ -1,0 +1,36 @@
+from PyQt5 import QtCore, QtGui, QtWidgets, uic
+from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
+from PyQt5.QtMultimediaWidgets import QVideoWidget
+from PyQt5.QtCore import QUrl, Qt, QObject
+
+# Define worker signals
+class WorkerSignals(QObject):
+    """
+    Defines the signals available from a running worker thread.
+
+    Supported signals are:
+
+    finished
+        No data
+
+    error
+        tuple (exctype, value, traceback.format_exc() )
+
+    result
+        object data returned from processing, anything
+
+    progress
+        int indicating % progress
+
+    """
+
+    finished = QtCore.pyqtSignal(bool)
+    stopped = QtCore.pyqtSignal(bool)
+    error = QtCore.pyqtSignal(tuple)
+    result = QtCore.pyqtSignal(object)
+    progress = QtCore.pyqtSignal(str)
+    pressure_emit = QtCore.pyqtSignal(float)  # Add pressure signal
+    status_emit = QtCore.pyqtSignal(int, int, int, float)
+    axial_pressure = QtCore.pyqtSignal(str)
+    async_status_emit = QtCore.pyqtSignal(int, int, int, float)
+    reset_needed = QtCore.pyqtSignal()

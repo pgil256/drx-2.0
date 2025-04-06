@@ -1,0 +1,5 @@
+// Original Path: main\data\users\user_pins.csv
+
+pin,username,email,status
+123,Administrator Account,patrick@kneespa.com,admin
+456,user.lastname,user@gmail.com,user
