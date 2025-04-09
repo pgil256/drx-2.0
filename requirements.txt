@@ -1,0 +1,10 @@
+# Core dependencies
+PyQt5>=5.15.0
+pyserial>=3.5
+configparser>=5.0.0
+
+# Development/Testing dependencies
+pytest>=7.0.0
+pytest-qt>=4.0.0
+pytest-mock>=3.8.0
+pytest-cov>=3.0.0

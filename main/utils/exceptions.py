@@ -129,10 +129,33 @@ class DataLoadError(DataException):
 # Configuration Exceptions
 class ConfigurationException(KneeSpaException):
     """Base class for configuration-related exceptions."""
-    pass
+    
+    def __init__(self, message: str, path: str = None, code: Optional[int] = None, **kwargs: Any):
+        """
+        Initialize configuration exception.
+        
+        Args:
+            message: Error message
+            path: Path to configuration file
+            code: Error code
+            kwargs: Additional context
+        """
+        super().__init__(message, code=code, path=path, **kwargs)
+        self.path = path
+    
+    def __str__(self) -> str:
+        """String representation with path information."""
+        base_msg = super().__str__()
+        if self.path:
+            return f"{base_msg} (File: {self.path})"
+        return base_msg
 
 class ConfigurationLoadError(ConfigurationException):
     """Configuration loading failures."""
+    pass
+
+class ConfigurationSaveError(ConfigurationException):
+    """Configuration saving failures."""
     pass
 
 class InvalidConfigurationError(ConfigurationException):

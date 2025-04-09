@@ -1,6 +1,0 @@
-14:26:50.203 -> status:  12: 986 13: 1219 14: 1528 pressure: 0.93
-14:26:55.202 -> status:  12: 986 13: 1220 14: 1527 pressure: 1.16
-14:27:00.191 -> status:  12: 986 13: 1219 14: 1528 pressure: 0.95
-14:27:02.615 -> Test command received
-14:27:02.848 -> Test command received
-14:27:05.173 -> sta⸮

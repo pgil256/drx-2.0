@@ -80,7 +80,11 @@ class Arduino(QObject):
                 self.logger.info(f"Port {port} is not busy")
                 return True
 
+        except ArduinoCommandError as e:
+            print(f"Error attempting to release port {port}: {e}")
+            return False
         except Exception as e:
+            from utils.exceptions import ArduinoException
             print(f"Error attempting to release port {port}: {e}")
             return False
 
@@ -95,8 +99,12 @@ class Arduino(QObject):
                 self.connected = False
                 print("Serial connection closed successfully.")
                 time.sleep(2)  # Give system time to reset port
-            except Exception as ex:
+            except serial.SerialException as ex:
                 print(f"Error closing the serial port: {ex}")
+            except Exception as ex:
+                from utils.exceptions import ArduinoConnectionError
+                error = ArduinoConnectionError(f"Error closing the serial port: {ex}")
+                print(f"Error closing the serial port: {error}")
 
         self.serial_com = None
         self.connected = False
@@ -114,6 +122,8 @@ class Arduino(QObject):
                 print(
                     f"Buffer state before verify: in_waiting={self.serial_com.in_waiting}"
                 )
+        except serial.SerialException:
+            pass
         except Exception:
             pass
 
@@ -169,8 +179,14 @@ class Arduino(QObject):
                 tries += 1
                 time.sleep(1)  # Longer wait between attempts
 
+            except serial.SerialException as e:
+                print(f"Serial error during verification attempt {tries + 1}: {e}")
+                tries += 1
+                time.sleep(1)
             except Exception as e:
-                print(f"Verification attempt {tries + 1} failed: {e}")
+                from utils.exceptions import ArduinoCommandError
+                error = ArduinoCommandError(f"Verification attempt {tries + 1} failed: {e}")
+                print(f"Verification attempt {tries + 1} failed: {error}")
                 tries += 1
                 time.sleep(1)
 
@@ -222,8 +238,16 @@ class Arduino(QObject):
             self.disconnect()
             return False
 
+        except serial.SerialException as e:
+            from utils.exceptions import ArduinoConnectionError
+            error = ArduinoConnectionError(f"Serial connection error to {port}: {e}")
+            print(f"Connection attempt to {port} failed: {error}")
+            self.disconnect()
+            return False
         except Exception as e:
-            print(f"Connection attempt to {port} failed: {e}")
+            from utils.exceptions import ArduinoConnectionError
+            error = ArduinoConnectionError(f"Connection attempt to {port} failed: {e}")
+            print(f"Connection attempt to {port} failed: {error}")
             self.disconnect()
             return False
 

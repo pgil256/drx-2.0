@@ -26,9 +26,13 @@ class Configuration:
 
         if not os.path.exists(self.configFile):
             self.config["Options"] = {"flexion_position": self.flexion_position}
-            self.config.write(open(self.configFile, "w"))
+            try:
+                self.config.write(open(self.configFile, "w"))
+            except Exception as e:
+                from utils.exceptions import ConfigurationSaveError
+                error = ConfigurationSaveError(f"Could not create config file: {e}", path=self.configFile)
+                print(f"Error: {error}")
         else:
-
             try:
                 self.config.read(self.configFile)
 
@@ -79,12 +83,21 @@ class Configuration:
                 else:
                     self.calibration = float(self.config["Options"]["calibration"])
 
+            except KeyError as e:
+                from utils.exceptions import ConfigurationLoadError
+                error = ConfigurationLoadError(f"Missing required configuration section or key: {e}", path=self.configFile)
+                print(f"Error: {error}")
+                print(f'Fatal error, could not load config file from "{self.configFile}"')
+            except ValueError as e:
+                from utils.exceptions import InvalidConfigurationError
+                error = InvalidConfigurationError(f"Invalid configuration value: {e}", path=self.configFile)
+                print(f"Error: {error}")
+                print(f'Fatal error, could not load config file from "{self.configFile}"')
             except Exception as e:
-                print(str(e))
-                print(
-                    'Fatal error, could not load config file from "%s"'
-                    % self.configFile
-                )
+                from utils.exceptions import ConfigurationException
+                error = ConfigurationException(f"Configuration error: {e}", path=self.configFile)
+                print(f"Error: {error}")
+                print(f'Fatal error, could not load config file from "{self.configFile}"')
 
     def update_config(self):
         section = "Options"
@@ -100,6 +113,29 @@ class Configuration:
         print("config written")
         try:
             self.config.write(open(self.configFile, "w"))
+        except PermissionError as e:
+            from utils.exceptions import ConfigurationSaveError
+            error = ConfigurationSaveError(
+                f"Permission denied when writing config file: {e}",
+                path=self.configFile,
+                code=403
+            )
+            print(f"Error: {error}")
+            print(f'Fatal error, could not write config file to "{self.configFile}"')
+        except FileNotFoundError as e:
+            from utils.exceptions import ConfigurationSaveError
+            error = ConfigurationSaveError(
+                f"Config directory not found: {e}",
+                path=self.configFile,
+                code=404
+            )
+            print(f"Error: {error}")
+            print(f'Fatal error, could not write config file to "{self.configFile}"')
         except Exception as e:
-            print(str(e))
-            print('Fatal error, could not load config file from "%s"' % self.configFile)
+            from utils.exceptions import ConfigurationSaveError
+            error = ConfigurationSaveError(
+                f"Failed to save configuration: {e}",
+                path=self.configFile
+            )
+            print(f"Error: {error}")
+            print(f'Fatal error, could not write config file to "{self.configFile}"')

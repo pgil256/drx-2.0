@@ -7,8 +7,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Run application: `python main/kneespa.py`
 
 ## Testing
-- No formal testing framework implemented yet
-- Manual testing through UI interaction
+- Run tests: `python -m pytest`
+- Run specific test categories: 
+  - Unit tests: `python -m pytest -m unit`
+  - Integration tests: `python -m pytest -m integration`
+  - UI tests: `python -m pytest -m ui`
+- Generate coverage report: `python -m pytest --cov=main tests/`
 
 ## Code Style Guidelines
 

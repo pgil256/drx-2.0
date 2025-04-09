@@ -122,9 +122,16 @@ class VideoPlayer(QtWidgets.QDialog):
 
             self.logger.debug("UI setup completed")
 
+        except FileNotFoundError as e:
+            from utils.exceptions import UIException
+            error = UIException(f"UI file not found: {e}", ui_file="ui/guis/video-player.ui")
+            print(f"Failed to setup UI: {error}")
+            raise error
         except Exception as e:
-            print(f"Failed to setup UI: {e}")
-            raise RuntimeError(f"Failed to initialize video player UI: {e}")
+            from utils.exceptions import WidgetError
+            error = WidgetError(f"Failed to initialize video player UI: {e}")
+            print(f"Failed to setup UI: {error}")
+            raise error
 
     def _setup_timers(self):
         """Initialize timers for UI updates and video frames."""
@@ -166,8 +173,20 @@ class VideoPlayer(QtWidgets.QDialog):
 
             self.logger.debug("VLC initialized successfully")
 
+        except AttributeError as e:
+            from utils.exceptions import WidgetError
+            error = WidgetError(f"VLC configuration error: {e}")
+            print(f"Failed to initialize VLC: {error}")
+            QtWidgets.QMessageBox.critical(
+                self,
+                "Error",
+                f"Failed to initialize video player: {error}"
+            )
+            self.close()
         except Exception as e:
-            print(f"Failed to initialize VLC: {e}")
+            from utils.exceptions import UIException
+            error = UIException(f"Failed to initialize VLC: {e}")
+            print(f"Failed to initialize VLC: {error}")
             QtWidgets.QMessageBox.critical(
                 self,
                 "Error",

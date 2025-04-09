@@ -38,12 +38,16 @@ class CSVHelper:
             print(f"CSV file {filename} loaded successfully")
 
         except FileNotFoundError:
-            print(f"CSV file not found: {filename}")
-            QMessageBox.critical(None, "Error", f"CSV file not found: {filename}")
+            from utils.exceptions import DataLoadError
+            error = DataLoadError(f"CSV file not found: {filename}", path=filename)
+            print(f"CSV file not found: {error}")
+            QMessageBox.critical(None, "Error", str(error))
 
         except csv.Error as e:
-            print(f"CSV file error in {filename}: {e}")
-            QMessageBox.critical(None, "Error", f"CSV file error in {filename}: {e}")
+            from utils.exceptions import CSVError
+            error = CSVError(f"CSV file error in {filename}: {e}", path=filename)
+            print(f"CSV file error: {error}")
+            QMessageBox.critical(None, "Error", str(error))
 
         return data
 
@@ -59,15 +63,17 @@ class CSVHelper:
         print("Saving patient data to CSV")
 
         if not current_user or current_user["status"] != "admin":
-            QMessageBox.warning(
-                None, "Access Denied", "Only admins can save patient data."
-            )
-            print("Access denied for saving patient data")
+            from utils.exceptions import AccessDeniedError
+            error = AccessDeniedError("Only admins can save patient data.")
+            QMessageBox.warning(None, "Access Denied", str(error))
+            print(f"Access denied for saving patient data: {error}")
             return
 
         if current_pin not in self.patients:
-            QMessageBox.warning(None, "Error", "No patient data to save.")
-            print("No patient data to save")
+            from utils.exceptions import DataValidationError
+            error = DataValidationError("No patient data to save.")
+            QMessageBox.warning(None, "Error", str(error))
+            print(f"No patient data to save: {error}")
             return
 
         # Update patient data from table
@@ -93,8 +99,18 @@ class CSVHelper:
             )
             print("Patient data saved successfully")
 
+        except FileNotFoundError as e:
+            from utils.exceptions import DataSaveError
+            error = DataSaveError(f"CSV file not found: {e}", path="/home/pi/drx-2.0/main/data/patients/patient_pins.csv")
+            QMessageBox.critical(None, "Error", f"Failed to save patient data: {error}")
+            print(f"Error saving patient data: {error}")
+        except csv.Error as e:
+            from utils.exceptions import CSVError
+            error = CSVError(f"CSV formatting error: {e}")
+            QMessageBox.critical(None, "Error", f"Failed to save patient data: {error}")
+            print(f"Error saving patient data: {error}")
         except Exception as e:
-            QMessageBox.critical(
-                None, "Error", f"Failed to save patient data: {str(e)}"
-            )
-            print(f"Error saving patient data: {str(e)}")
+            from utils.exceptions import DataSaveError
+            error = DataSaveError(f"Failed to save patient data: {str(e)}")
+            QMessageBox.critical(None, "Error", f"Failed to save patient data: {error}")
+            print(f"Error saving patient data: {error}")

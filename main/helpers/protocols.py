@@ -108,7 +108,9 @@ class Protocols(QtCore.QRunnable):
             return True
 
         except Exception as e:
-            print(f"Error during pulse sequence: {e}")
+            from utils.exceptions import ProtocolExecutionError
+            error = ProtocolExecutionError(f"Error during pulse sequence: {e}")
+            print(f"Error during pulse sequence: {error}")
             self.arduino.send("JS")  # Try to stop jerking even on error
             return False
 
@@ -126,10 +128,14 @@ class Protocols(QtCore.QRunnable):
             elif self.protocol == "3":
                 self.protocol_3()
             else:
-                print(f"Unknown protocol: {self.protocol}")
+                from utils.exceptions import ProtocolValidationError
+                error = ProtocolValidationError(f"Unknown protocol: {self.protocol}")
+                print(f"Error: {error}")
                 self.signals.finished.emit(False)
         except Exception as e:
-            print(f"Error executing protocol: {str(e)}")
+            from utils.exceptions import ProtocolExecutionError
+            error = ProtocolExecutionError(f"Error executing protocol: {str(e)}")
+            print(f"Error executing protocol: {error}")
             self.is_running = False
             self.signals.finished.emit(False)
 
@@ -192,11 +198,15 @@ class Protocols(QtCore.QRunnable):
 
                 return True
             else:
-                print(f"Error: No position defined for angle {degrees}°")
+                from utils.exceptions import ProtocolValidationError
+                error = ProtocolValidationError(f"No position defined for angle {degrees}°")
+                print(f"Error: {error}")
                 return False
 
         except Exception as e:
-            print(f"Error setting angle: {str(e)}")
+            from utils.exceptions import ActuatorException
+            error = ActuatorException(f"Error setting angle: {str(e)}")
+            print(f"Error setting angle: {error}")
             return False
 
     def set_to_pressure(self, pressure):
@@ -209,9 +219,15 @@ class Protocols(QtCore.QRunnable):
 
             # Validate pressure is within safe limits
             if pressure < 0 or pressure > MAX_SAFE_PRESSURE:
-                print(
-                    f"Error: Pressure {pressure} outside safe range (0-{MAX_SAFE_PRESSURE})"
+                from utils.exceptions import SafetyLimitException
+                error = SafetyLimitException(
+                    f"Pressure {pressure} outside safe range (0-{MAX_SAFE_PRESSURE})",
+                    severity="HIGH",
+                    limit_type="pressure",
+                    current_value=pressure,
+                    limit_value=MAX_SAFE_PRESSURE
                 )
+                print(f"Error: {error}")
                 return False
 
             # Send command to Arduino
@@ -238,14 +254,18 @@ class Protocols(QtCore.QRunnable):
 
                 time.sleep(0.5)
 
-            print(
+            from utils.exceptions import ArduinoTimeoutError
+            timeout_warning = ArduinoTimeoutError(
                 f"Pressure set operation timed out. Current: {self.current_pressure}, Target: {pressure}"
             )
+            print(f"Warning: {timeout_warning}")
             self.I2Cstatus = 1  # Force status to continue
             return True
 
         except Exception as e:
-            print(f"Error setting pressure: {str(e)}")
+            from utils.exceptions import ActuatorException
+            error = ActuatorException(f"Error setting pressure: {str(e)}")
+            print(f"Error setting pressure: {error}")
             return False
 
     def update_I2Cstatus(self):
@@ -279,7 +299,9 @@ class Protocols(QtCore.QRunnable):
             print("Reset sequence completed")
             return True
         except Exception as e:
-            print(f"Error during reset sequence: {e}")
+            from utils.exceptions import ActuatorException
+            error = ActuatorException(f"Error during reset sequence: {e}", requires_reset=True)
+            print(f"Error during reset sequence: {error}")
             return False
 
     def protocol_1(self):
