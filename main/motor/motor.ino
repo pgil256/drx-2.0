@@ -5,6 +5,12 @@
 */
 
 #define VERSION "2025-03-20"
+#define DEBUG_MODE true  // Set to true to enable debug printing
+
+// Debug print macro - only prints when DEBUG_MODE is true
+#define DEBUG_PRINT(msg) if(DEBUG_MODE) { Serial.print("[DEBUG] "); Serial.println(msg); }
+#define DEBUG_PRINTF(fmt, ...) if(DEBUG_MODE) { Serial.print("[DEBUG] "); char buf[128]; snprintf(buf, sizeof(buf), fmt, __VA_ARGS__); Serial.println(buf); }
+
 #include "HX711.h"
 #include <elapsedMillis.h>
 #include <Wire.h>
@@ -258,10 +264,16 @@ void processCommand(String cmd) {
   char commandType = cmd[0];
   String parameter = "";
   
+  DEBUG_PRINTF("Received command: %s", cmd.c_str());
+  
   // Wait if we're sending status
   unsigned long waitStart = millis();
-  while (isProcessingStatus && millis() - waitStart < 500) {
-    delay(10);
+  if (isProcessingStatus) {
+    DEBUG_PRINT("Status in progress, waiting...");
+    while (isProcessingStatus && millis() - waitStart < 500) {
+      delay(10);
+    }
+    DEBUG_PRINT("Done waiting for status");
   }
   
   // Pre-declare all variables that will be used in case statements
@@ -285,27 +297,35 @@ void processCommand(String cmd) {
     case 'T':
         Serial.println("Test command received");
         Serial1.println("OK");
+        DEBUG_PRINT("Sent test command acknowledgment");
         break;
         
     // Status acknowledgment
     case 'Q': 
         statusAcknowledged = true;
+        DEBUG_PRINT("Status acknowledged");
         break;
       
     // Status request
     case 'S':
+      DEBUG_PRINT("Status request received");
       sendStatus();
       Serial1.println("DONE");
+      DEBUG_PRINT("Status sent");
       break;
 
     // Pressure control
     case 'P':
-      if (bRunning) return;
+      if (bRunning) {
+        DEBUG_PRINT("Ignoring pressure command - system already running");
+        return;
+      }
       
       parameter = cmd.substring(1);
       desiredPressure = parameter.toInt();
       Serial.print("desiredPressure ");
       Serial.println(desiredPressure);
+      DEBUG_PRINTF("Setting pressure to %d lbs", desiredPressure);
       
       sendStatus();
       noStatus = true;
@@ -317,6 +337,7 @@ void processCommand(String cmd) {
       pressure = abs(scale.get_units(5));
       Serial.print(" pressure now: ");
       Serial.println(pressure);
+      DEBUG_PRINTF("Current pressure: %.2f lbs", pressure);
       
       pressureDirection = 1;
       if (pressure >= desiredPressure)
@@ -324,8 +345,10 @@ void processCommand(String cmd) {
         
       Serial.print(" pressureDirection: ");
       Serial.println(pressureDirection);
+      DEBUG_PRINTF("Setting pressure direction: %d", pressureDirection);
       
       setMotorSpeed(PRESSURE_SPEED * pressureDirection);
+      DEBUG_PRINTF("Motor speed set to %d", PRESSURE_SPEED * pressureDirection);
       measurePressure = true;
       break;
 
@@ -402,7 +425,10 @@ void processCommand(String cmd) {
 
     // C Position (lateral flexion) control
     case 'K':
-      if (bRunning) return;
+      if (bRunning) {
+        DEBUG_PRINT("Ignoring position command - system already running");
+        return;
+      }
       
       smcDeviceNumber = 14;
       Serial.println(cmd);
@@ -411,16 +437,20 @@ void processCommand(String cmd) {
       
       localDesiredPosition = parameter.toInt();
       Serial.println(localDesiredPosition);
+      DEBUG_PRINTF("Setting angle position to %d", localDesiredPosition);
       
       localPosition = readPosition();
       Serial.print(localDesiredPosition);
       Serial.print(" ");
       Serial.println(localPosition);
+      DEBUG_PRINTF("Current position: %d, Target position: %d", localPosition, localDesiredPosition);
       
       if (localDesiredPosition >= (localPosition + 25)) {
         forward = 1;
+        DEBUG_PRINT("Moving forward");
       } else {
         forward = -1;
+        DEBUG_PRINT("Moving backward");
       }
       
       // Copy to globals
@@ -428,6 +458,7 @@ void processCommand(String cmd) {
       position = localPosition;
       
       setMotorSpeed(forward * C_SPEED);
+      DEBUG_PRINTF("Motor speed set to %d", forward * C_SPEED);
       
       Serial.print(forward);
       Serial.print(" ");
@@ -640,11 +671,17 @@ void setup() {
   Serial.setTimeout(5000);
   Serial1.begin(115200);
 
+  // Wait for serial to initialize - helpful for debugging
+  delay(3000);
+
   exitSafeStart();
 
   Serial.println("\n\n\nStarting");
   Serial.print("VERSION: "); 
   Serial.println(VERSION);
+  
+  DEBUG_PRINT("Debug mode is enabled");
+  DEBUG_PRINT("Initialization sequence started");
 
   // Initialize load cell
   scale.begin(LOADCELL_DOUT_PIN, LOADCELL_SCK_PIN);
@@ -660,22 +697,27 @@ void setup() {
   pinMode(DIR_A_REVERSE, OUTPUT);
 
   // Initialize actuators
+  DEBUG_PRINT("Starting actuator initialization");
   int movement = -3000;
   AInches = 0;
   smcDeviceNumber = 12; // position actuator
   setMotorSpeed(0);  // stop
   Serial.println("A actuator positioned");
+  DEBUG_PRINTF("Actuator A initialized at position %d", readPosition());
 
   BInches = 2;
   smcDeviceNumber = 13; // position actuator
   setMotorSpeed(0);  // stop
   Serial.println("B actuator positioned");
+  DEBUG_PRINTF("Actuator B initialized at position %d", readPosition());
 
   smcDeviceNumber = 14; // position actuator
   setMotorSpeed(0);  // stop
   Serial.println("C actuator ready");
+  uint16_t pos = readPosition();
   Serial.print("readPosition ");
-  Serial.println(readPosition());
+  Serial.println(pos);
+  DEBUG_PRINTF("Actuator C initialized at position %d", pos);
 
   // Startup complete
   Serial.println("Ready to Go");
@@ -688,37 +730,60 @@ void setup() {
 // Main loop function
 void loop() {
   static int lastPosition = -1;
+  static unsigned long lastDebugTime = 0;
+  
+  // Simple heartbeat debug - log every 15 seconds
+  if (DEBUG_MODE && (millis() - lastDebugTime > 15000)) {
+    lastDebugTime = millis();
+    DEBUG_PRINT("Arduino heartbeat");
+    DEBUG_PRINTF("System state: bRunning=%d, jerking=%d, measurePressure=%d", 
+                bRunning, jerking, measurePressure);
+  }
 
   // Read stop pin
   STOP = digitalRead(STOP_PIN);
+  if (STOP) {
+    DEBUG_PRINT("STOP pin activated!");
+  }
 
   // Reset if processing status took too long
   if (isProcessingStatus && (millis() - statusStartTime > 500)) {
     isProcessingStatus = false;
     Serial.println("Status processing timeout");
+    DEBUG_PRINT("Status processing timeout - reset isProcessingStatus flag");
   }
   
   // Periodic status update
   if ((millis() - loopPosition) > LOOP_STATUS_DELAY) {
     loopPosition = millis();
     if (!bRunning) {
+      DEBUG_PRINT("Sending periodic status update");
       sendStatus();
     }
   }
 
   if (jerking) {
-  // Jerking motion handler
-  if (jerksCompleted >= MAX_JERKS) {
-    // Reset counter but continue jerking
-    jerksCompleted = 0;
-    // Send a status update periodically
-    if (jerksCompleted % 2 == 0) {
+    // Jerking motion handler
+    DEBUG_PRINTF("Jerking: count=%d, direction=%d", jerksCompleted, jerkDirection);
+    
+    if (jerksCompleted >= MAX_JERKS) {
+      // Reset counter but continue jerking
+      jerksCompleted = 0;
+      DEBUG_PRINT("Jerking counter reset");
+      
+      // Send a status update periodically
+      if (jerksCompleted % 2 == 0) {
+        DEBUG_PRINT("Sending status during jerking");
         sendStatus();
       }
     } else {
       smcDeviceNumber = 12;
-      setMotorSpeed(3200 * jerkDirection);
+      int speed = 3200 * jerkDirection;
+      setMotorSpeed(speed);
+      DEBUG_PRINTF("Jerk pulse: direction=%d, speed=%d", jerkDirection, speed);
+      
       jerkDirection = -jerkDirection;
+      jerksCompleted++;
       delay(200);
     }
   }
@@ -736,10 +801,16 @@ void loop() {
 
   // Running motor handler (position control)
   if (bRunning) {
+    DEBUG_PRINT("Position control active");
+    
     if (STOP) {
+      DEBUG_PRINT("STOP pin triggered during position control");
       emergencyStop();
     } else {
-      setMotorSpeed(forward * BC_SPEED);
+      int motorSpeed = forward * BC_SPEED;
+      setMotorSpeed(motorSpeed);
+      DEBUG_PRINTF("Running motor at speed %d", motorSpeed);
+      
       uint16_t position = readPosition();
       
       // Debug output
@@ -749,24 +820,31 @@ void loop() {
       Serial.print(lastPosition); Serial.print(" ");
       Serial.println(desiredPosition);
       
+      DEBUG_PRINTF("Position control: current=%d, target=%d, direction=%d", 
+                  position, desiredPosition, forward);
+      
       // Check if position reached
       if (forward > 0) {
         if (position >= desiredPosition) {
           Serial.println("Stopped Moving");
+          DEBUG_PRINTF("Position reached (forward): %d >= %d", position, desiredPosition);
           setMotorSpeed(0);
           bRunning = false;
           forward = 0;
         }
       } else if (position <= desiredPosition) {
         Serial.println("Stopped Moving");
+        DEBUG_PRINTF("Position reached (reverse): %d <= %d", position, desiredPosition);
         setMotorSpeed(0);
         bRunning = false;
         forward = 0;
       }
       
       // Handle stalling
-      if (lastPosition == position)
+      if (lastPosition == position) {
+        DEBUG_PRINTF("Possible stall detected: position stuck at %d", position);
         delay(500);
+      }
       else
         lastPosition = position;
     }
@@ -774,6 +852,7 @@ void loop() {
     // Cleanup after run complete
     if (!bRunning) {
       position = readPosition();
+      DEBUG_PRINT("Position control complete, sending final status");
       sendStatus();
       Serial.println(position);
       Serial1.println("DONE");
@@ -782,6 +861,8 @@ void loop() {
 
   // Pressure monitoring and control
   if (measurePressure) {
+    DEBUG_PRINT("Pressure control active");
+    
     smcDeviceNumber = 12;
     uint16_t position = readPosition();
     pressure = abs(scale.get_units(5));
@@ -792,18 +873,27 @@ void loop() {
     Serial.print(pressureDirection);
     Serial.print(" pressure: ");
     Serial.println(pressure);
+    
+    DEBUG_PRINTF("Pressure control: current=%.2f, target=%.2f, direction=%d", 
+                pressure, desiredPressure, pressureDirection);
 
-    if (pressure < 0.5)
+    if (pressure < 0.5) {
       pressure = 0;
+      DEBUG_PRINT("Low pressure reading adjusted to 0");
+    }
 
     // Check if target pressure reached
     if (pressureDirection > 0) {
       if (pressure >= desiredPressure) {
+        DEBUG_PRINTF("Target pressure reached (increasing): %.2f >= %.2f", 
+                    pressure, desiredPressure);
         setMotorSpeed(0);
         measurePressure = false;
         pressureDirection = 0;
       }
     } else if (pressure <= desiredPressure) {
+      DEBUG_PRINTF("Target pressure reached (decreasing): %.2f <= %.2f", 
+                  pressure, desiredPressure);
       setMotorSpeed(0);
       measurePressure = false;
       pressureDirection = 0;
@@ -812,6 +902,7 @@ void loop() {
     // Cleanup after pressure adjustment complete
     if (!measurePressure) {
       pressure = abs(scale.get_units(5));
+      DEBUG_PRINT("Pressure control complete, sending final status");
       sendStatus();
       Serial1.println("DONE");
       noStatus = false;
@@ -824,11 +915,14 @@ void loop() {
 
     if (incomingByte == '\n') {  // Command complete
       isCommandComplete = true;
+      DEBUG_PRINTF("Command received: %s", commandBuffer.c_str());
       break;
     } else {
       // Limit buffer size to prevent overflows
       if (commandBuffer.length() < 50) {
         commandBuffer += incomingByte;  // Append character to buffer
+      } else {
+        DEBUG_PRINT("Command buffer overflow - discarding data");
       }
     }
   }
@@ -836,8 +930,13 @@ void loop() {
   // Process complete commands with rate limiting
   if (isCommandComplete && millis() - lastCommandTime > MIN_COMMAND_INTERVAL && !isProcessingStatus) {
     lastCommandTime = millis();
+    DEBUG_PRINTF("Processing command: %s", commandBuffer.c_str());
     processCommand(commandBuffer);
     commandBuffer = "";
     isCommandComplete = false;
+  } else if (isCommandComplete && isProcessingStatus) {
+    DEBUG_PRINT("Command waiting - status in progress");
+  } else if (isCommandComplete && millis() - lastCommandTime <= MIN_COMMAND_INTERVAL) {
+    DEBUG_PRINT("Command waiting - rate limiting");
   }
 }
