@@ -1,1 +1,8 @@
 scope.txt
+rpi_settings/ser_port_access.txt
+rpi_settings/background.txt
+rpi_settings/ssh_display.txt
+rpi_settings/venv.txt
+rpi_settings/ssh_display.txt
+kneespa_env/
+

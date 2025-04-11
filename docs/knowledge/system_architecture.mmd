@@ -1,0 +1,89 @@
+graph TD
+    %% Main system components
+    User((User)) --> UI[User Interface Layer]
+    UI --> AppLogic[Application Logic Layer]
+    AppLogic --> HardwareComm[Hardware Communication Layer]
+    HardwareComm --> Hardware[Hardware Layer]
+    
+    %% User Interface Layer
+    UI --> Login[Login/Authentication]
+    UI --> ProtocolUI[Protocol UI]
+    UI --> SetupUI[Setup UI]
+    UI --> PatientUI[Patient Management UI]
+    UI --> ProfileUI[User Profile UI]
+    
+    %% Application Logic Layer
+    AppLogic --> KneeSpaClass[KneeSpa Main Class]
+    AppLogic --> ProtocolExec[Protocol Execution]
+    AppLogic --> DataManagement[Data Management]
+    AppLogic --> ConfigManagement[Configuration Management]
+    
+    %% Protocol Classes
+    ProtocolExec --> Protocol1[Protocol 1: Axial]
+    ProtocolExec --> Protocol2[Protocol 2: Left Lateral]
+    ProtocolExec --> Protocol3[Protocol 3: Right Lateral]
+    
+    %% Hardware Communication Layer
+    HardwareComm --> ArduinoComm[Arduino Communication]
+    HardwareComm --> GPIOControl[GPIO Control]
+    HardwareComm --> SensorFeedback[Sensor Feedback]
+    
+    %% Hardware Layer
+    Hardware --> AxialActuator[Axial Actuator]
+    Hardware --> LateralActuator[Lateral Actuator]
+    Hardware --> HorizontalActuator[Horizontal Actuator]
+    Hardware --> ExtraActuator[Extra Actuator]
+    Hardware --> PressureSensor[Pressure Sensor]
+    Hardware --> EmergencyStop[Emergency Stop]
+    
+    %% Key Classes
+    KneeSpaClass --> Arduino[Arduino Class]
+    KneeSpaClass --> CSVHelper[CSV Helper]
+    KneeSpaClass --> Configuration[Configuration]
+    Arduino --> WorkerSignals[Worker Signals]
+    ProtocolExec --> ProtocolsClass[Protocols Class]
+    ProtocolsClass --> ProtocolSettings[Protocol Settings]
+    
+    %% Error Handling
+    AppLogic --> ExceptionHandling[Exception Handling]
+    ExceptionHandling --> SafetyCritical[Safety Critical]
+    ExceptionHandling --> FunctionalCritical[Functional Critical]
+    ExceptionHandling --> UserExperience[User Experience]
+    
+    %% Serial Communication
+    ArduinoComm --> SerialProtocol[Serial Protocol]
+    SerialProtocol --> CommandSet[Command Set]
+    SerialProtocol --> StatusFormat[Status Format]
+    
+    %% Data Flow
+    KneeSpaClass -- "Thread Pool" --> ProtocolsClass
+    Arduino -- "Serial Comm" --> ArduinoFirmware[Arduino Firmware]
+    ArduinoFirmware -- "I2C" --> MotorControllers[Motor Controllers]
+    
+    %% Additional Components
+    MCP[MCP Memory Server] -- "State Management" --> KneeSpaClass
+    
+    %% Testing Framework
+    TestingFramework[Testing Framework] --> UnitTests[Unit Tests]
+    TestingFramework --> IntegrationTests[Integration Tests]
+    TestingFramework --> Fixtures[Test Fixtures]
+    
+    %% Style definitions
+    classDef userInterface fill:#f9d5e5,stroke:#333,stroke-width:1px;
+    classDef appLogic fill:#eeeeee,stroke:#333,stroke-width:1px;
+    classDef hardwareComm fill:#e3f2fd,stroke:#333,stroke-width:1px;
+    classDef hardware fill:#dcedc8,stroke:#333,stroke-width:1px;
+    classDef protocol fill:#fff9c4,stroke:#333,stroke-width:1px;
+    classDef errorHandling fill:#ffccbc,stroke:#333,stroke-width:1px;
+    classDef testing fill:#d1c4e9,stroke:#333,stroke-width:1px;
+    classDef mcp fill:#bbdefb,stroke:#333,stroke-width:1px;
+    
+    %% Apply styles
+    class User,UI,Login,ProtocolUI,SetupUI,PatientUI,ProfileUI userInterface;
+    class AppLogic,KneeSpaClass,ProtocolExec,DataManagement,ConfigManagement appLogic;
+    class HardwareComm,ArduinoComm,GPIOControl,SensorFeedback,SerialProtocol,CommandSet,StatusFormat hardwareComm;
+    class Hardware,AxialActuator,LateralActuator,HorizontalActuator,ExtraActuator,PressureSensor,EmergencyStop hardware;
+    class Protocol1,Protocol2,Protocol3,ProtocolsClass,ProtocolSettings protocol;
+    class ExceptionHandling,SafetyCritical,FunctionalCritical,UserExperience errorHandling;
+    class TestingFramework,UnitTests,IntegrationTests,Fixtures testing;
+    class MCP mcp;

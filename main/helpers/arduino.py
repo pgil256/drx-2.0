@@ -90,25 +90,37 @@ class Arduino(QObject):
 
     def disconnect(self):
         """Forcefully closes the current serial connection if open."""
-        if self.serial_com:
+        try:
             print("Forcefully closing existing serial connection")
-            try:
-                self.serial_com.close()
-                # Add additional cleanup steps
-                self.serial_com = None
-                self.connected = False
-                print("Serial connection closed successfully.")
-                time.sleep(2)  # Give system time to reset port
-            except serial.SerialException as ex:
-                print(f"Error closing the serial port: {ex}")
-            except Exception as ex:
-                from utils.exceptions import ArduinoConnectionError
-                error = ArduinoConnectionError(f"Error closing the serial port: {ex}")
-                print(f"Error closing the serial port: {error}")
-
-        self.serial_com = None
-        self.connected = False
-        self.current_port = None
+            # Indicate we're not connected first to stop any ongoing read operations
+            self.connected = False
+            
+            # Safely close the serial connection if it exists
+            if self.serial_com:
+                try:
+                    # Only try to close if the port is still open
+                    if hasattr(self.serial_com, 'is_open') and self.serial_com.is_open:
+                        self.serial_com.close()
+                        print("Serial connection closed successfully.")
+                    else:
+                        print("Serial port was already closed.")
+                except serial.SerialException as ex:
+                    print(f"Error closing the serial port: {ex}")
+                except Exception as ex:
+                    from utils.exceptions import ArduinoConnectionError
+                    error = ArduinoConnectionError(f"Error closing the serial port: {ex}")
+                    print(f"Error closing the serial port: {error}")
+                finally:
+                    # Always clear the reference even if errors occur
+                    self.serial_com = None
+                    time.sleep(1)  # Reduced from 2 to 1 second
+        except Exception as ex:
+            print(f"Unexpected error in disconnect: {ex}")
+        finally:
+            # Always make sure these are reset
+            self.serial_com = None
+            self.connected = False
+            self.current_port = None
 
     @pyqtSlot()
     def verify_connection(self):
@@ -170,6 +182,7 @@ class Arduino(QObject):
                             or "Test command received" in response
                         ):
                             print(f"Valid response from Arduino: {response}")
+                            print("Arduino SoftwareSerial communication verified")
                             return True
 
                         response_buffer += response + " | "
@@ -196,18 +209,29 @@ class Arduino(QObject):
         """Attempt to reestablish Arduino connection if lost."""
         print("Attempting to reconnect to Arduino...")
 
-        # Try to reconnect to the last used port first
-        if self.current_port and os.path.exists(self.current_port):
-            if self.try_connect_to_port(self.current_port):
-                return True
-
-        # Try other ports
-        ports_to_try = ["/dev/ttyS0", "/dev/ttyACM0", "/dev/ttyUSB0"]
-        for port in ports_to_try:
-            if port != self.current_port and os.path.exists(port):
+        # Use only ttyS0 for Raspberry Pi hardware serial to Arduino
+        port = "/dev/ttyS0"
+        
+        if os.path.exists(port):
+            # Try reconnection up to 3 times
+            for attempt in range(3):
+                print(f"Reconnection attempt {attempt+1}/3")
                 if self.try_connect_to_port(port):
-                    return True
-
+                    print("Successfully reconnected to Arduino")
+                    # Emergency stop immediately after reconnection for safety
+                    try:
+                        print("Sending emergency stop after reconnection for safety")
+                        self.send("X")  # Stop all movements
+                        time.sleep(0.5)  # Wait for command to process
+                        return True
+                    except Exception as e:
+                        print(f"Warning: Failed to send emergency stop: {e}")
+                        # Continue anyway since we did reconnect
+                        return True
+                time.sleep(2)  # Wait between attempts
+        else:
+            print(f"Serial port {port} does not exist")
+            
         print("Failed to reconnect to Arduino")
         return False
 
@@ -225,11 +249,13 @@ class Arduino(QObject):
 
             # Open new connection
             self.serial_com = serial.Serial(port, 115200, timeout=10, write_timeout=1)
+            print(f"Opened serial connection to {port} at 115200 baud")
             time.sleep(5)  # Wait for Arduino initialization
 
             # Verify connection
             if self.verify_connection():
-                print(f"Connected to Arduino on {port}")
+                print(f"Successfully connected to Arduino on {port}")
+                print("Communication with Arduino SoftwareSerial established")
                 self.connected = True
                 self._running = True
                 self.current_port = port
@@ -255,99 +281,194 @@ class Arduino(QObject):
         max_retries = 3
         retry_delay = 3  # Increased from 2
 
-        # Try multiple ports in case one is busy
-        ports_to_try = ["/dev/ttyS0", "/dev/ttyACM0", "/dev/ttyUSB0"]
+        # Only use ttyS0 for direct Raspberry Pi hardware serial to Arduino SoftwareSerial
+        port = "/dev/ttyS0"
 
         for attempt in range(1, max_retries + 1):
-            # Try each port before moving to next attempt
-            for port in ports_to_try:
+            print(f"Attempting Arduino connection on {port} (attempt {attempt}/{max_retries})")
+            
+            if os.path.exists(port):
                 if self.try_connect_to_port(port):
                     # Start reading loop
                     self.read_from_com()
                     return
-
-            # After trying all ports, wait before next attempt
+            else:
+                print(f"Serial port {port} does not exist")
+                
+            # Wait before next attempt
             time.sleep(retry_delay)
 
-        print(
-            "Failed to establish Arduino connection after trying all ports and attempts"
-        )
+        print(f"Failed to establish Arduino connection on {port} after {max_retries} attempts")
         self.connection_failed.emit("Failed to establish connection")
 
     def monitor_buffer(self):
-        if not self.serial_com:
+        """Monitor serial buffer usage with improved error handling."""
+        # If serial_com is None or we're not connected, exit early
+        if not self.serial_com or not self.connected:
             return
 
         try:
-            in_waiting = self.serial_com.in_waiting
-            in_buffer_usage = in_waiting / self.ARDUINO_BUFFER_SIZE
+            # Verify the serial port is still open before accessing
+            if not hasattr(self.serial_com, 'is_open') or not self.serial_com.is_open:
+                # The port is closed but we still have a reference; reset it
+                print("Serial port is closed but still referenced in monitor_buffer")
+                self.serial_com = None
+                self.connected = False
+                return
+                
+            # Now safely check buffer levels
+            try:
+                in_waiting = self.serial_com.in_waiting
+                in_buffer_usage = in_waiting / self.ARDUINO_BUFFER_SIZE
 
-            # Only check output buffer if input is OK
-            if in_buffer_usage <= self.BUFFER_WARNING_THRESHOLD:
-                out_waiting = self.serial_com.out_waiting
-                out_buffer_usage = out_waiting / self.ARDUINO_BUFFER_SIZE
+                # Only check output buffer if input is OK
+                if in_buffer_usage <= self.BUFFER_WARNING_THRESHOLD:
+                    out_waiting = self.serial_com.out_waiting
+                    out_buffer_usage = out_waiting / self.ARDUINO_BUFFER_SIZE
 
-                if out_buffer_usage > self.BUFFER_WARNING_THRESHOLD:
-                    warning = f"Output buffer at {out_buffer_usage*100:.1f}% capacity"
-                    self.buffer_warning.emit(warning)
-                    print(warning)
+                    if out_buffer_usage > self.BUFFER_WARNING_THRESHOLD:
+                        warning = f"Output buffer at {out_buffer_usage*100:.1f}% capacity"
+                        self.buffer_warning.emit(warning)
+                        print(warning)
 
-            # Emergency flush if input buffer critical
-            if in_buffer_usage > 0.9:
-                self.serial_com.reset_input_buffer()
-                print("Emergency input buffer flush performed")
-
+                # Emergency flush if input buffer critical
+                if in_buffer_usage > 0.9:
+                    self.serial_com.reset_input_buffer()
+                    print("Emergency input buffer flush performed")
+            except (OSError, IOError) as ex:
+                # Common errors when the file descriptor is invalid
+                print(f"Serial port error during buffer monitoring: {ex}")
+                self.serial_com = None
+                self.connected = False
+                
         except Exception as ex:
             print(f"Buffer monitoring error: {ex}")
-            self.connection_failed.emit(str(ex))
+            # Don't emit connection_failed for every error - only for serious ones
+            if "Bad file descriptor" in str(ex) or "argument must be an int" in str(ex):
+                print("Serial connection appears broken - marking as disconnected")
+                self.serial_com = None
+                self.connected = False
+            else:
+                self.connection_failed.emit(str(ex))
 
     def read_from_com(self):
-        """Continuously reads data from the serial connection."""
+        """Continuously reads data from the serial connection with improved error handling."""
         print("Starting to read from serial communication")
         last_data_time = time.time()
+        last_status_request = time.time()  # Track when we last requested a status update
+        error_count = 0  # Track consecutive errors
 
+        # Main reading loop
         while self.connected and self.serial_com:
+            # Guard against too many errors
+            if error_count > 5:
+                print("Too many consecutive errors, breaking serial communication loop")
+                self.connected = False
+                self.connection_lost.emit()
+                break
+                
             try:
-                # Monitor buffer before reading
-                self.monitor_buffer()
+                # First verify that the serial port is valid and open
+                if not hasattr(self.serial_com, 'is_open') or not self.serial_com.is_open:
+                    print("Serial port is closed but still referenced in read_from_com")
+                    self.serial_com = None
+                    self.connected = False
+                    break
+                    
+                # Monitor buffer before reading (wrapped in try to catch file descriptor errors)
+                try:
+                    self.monitor_buffer()
+                except Exception as buffer_ex:
+                    print(f"Error in buffer monitoring (non-fatal): {buffer_ex}")
+                    # Don't break the loop here, continue trying to read
 
-                # Check for connection timeout (no data received in 30 seconds)
+                # Request a status update every 15 seconds if no other data received
+                # This keeps the connection alive and provides regular feedback
                 current_time = time.time()
-                if current_time - last_data_time > 30:
-                    print("Connection timeout: No data received in 30 seconds")
+                if current_time - last_status_request > 15:
+                    try:
+                        if self.serial_com and self.serial_com.is_open:
+                            # Request status update with "S" command
+                            self.serial_com.write(b"S\n")
+                            self.serial_com.flush()
+                            print("Requesting status update to keep connection alive")
+                            last_status_request = current_time
+                    except Exception as status_ex:
+                        print(f"Failed to request status update: {status_ex}")
+
+                # Check for connection timeout (no data received in 2 minutes)
+                # We're being more generous with timeout since we're actively requesting status
+                if current_time - last_data_time > 120:
+                    print("Connection timeout: No data received in 2 minutes")
                     self.connected = False
                     self.connection_lost.emit()
                     self.connection_failed.emit("Connection timeout")
                     break
 
-                if self.serial_com and self.serial_com.in_waiting > 0:
+                # Only try to read if we still have a valid connection
+                if self.connected and self.serial_com and hasattr(self.serial_com, 'in_waiting'):
                     try:
-                        data = (
-                            self.serial_com.readline().decode(errors="replace").strip()
-                        )
-                        last_data_time = time.time()  # Update last data time
+                        # Non-blocking check for data
+                        if self.serial_com.in_waiting > 0:
+                            data = self.serial_com.readline().decode(errors="replace").strip()
+                            last_data_time = time.time()  # Update last data time
+                            error_count = 0  # Reset error count on successful read
 
-                        if len(data) > 0:
-                            print(f"Raw received data: {data}")
-                            self.handle_com(data)
+                            if len(data) > 0:
+                                print(f"Raw received data: {data}")
+                                self.handle_com(data)
+                        else:
+                            # No data to read, just sleep a bit
+                            time.sleep(0.01)
+                    except (serial.SerialException, OSError, IOError) as read_ex:
+                        print(f"Error reading from serial port: {read_ex}")
+                        error_count += 1
+                        time.sleep(0.1)  # Brief delay to avoid tight error loop
                     except Exception as e:
-                        print(f"Error reading data: {e}")
+                        print(f"Unexpected error reading data: {e}")
+                        error_count += 1
                 else:
-                    time.sleep(0.01)
+                    # Invalid serial state, break the loop
+                    print("Serial connection invalid during read operation")
+                    self.connected = False
+                    break
 
             except serial.SerialException as ex:
-                print(f"Serial connection error: {ex}")
+                print(f"Serial connection exception: {ex}")
                 self.connected = False
                 self.connection_lost.emit()
                 break
+            except (OSError, IOError) as io_ex:
+                # File descriptor errors
+                print(f"I/O error in serial read loop: {io_ex}")
+                error_count += 1
+                if "Bad file descriptor" in str(io_ex):
+                    self.connected = False
+                    break
             except Exception as ex:
                 print(f"Unexpected error in read loop: {ex}")
-                # Try to continue, but mark time so we don't timeout
+                error_count += 1
+                # If we can continue, do so but mark time so we don't timeout
                 last_data_time = time.time()
+                
+        print("Exited serial read loop")
 
     def handle_com(self, data):
         """Handles incoming serial messages."""
         try:
+            # Check if we have a pending command to execute after calibration
+            if "STATUS_START|" in data and hasattr(self, '_pending_command') and self._pending_command:
+                # Only execute pending command if we're getting calibrated pressure readings
+                # This indicates calibration is complete
+                if "|STATUS_END" in data and "-0." in data:
+                    pending_cmd = self._pending_command
+                    self._pending_command = None
+                    print(f"Calibration complete, executing pending command: {pending_cmd}")
+                    # Small delay to ensure Arduino is ready
+                    time.sleep(0.5)
+                    # Execute the previously stored command
+                    self.send(pending_cmd)
+            
             # Handle STATUS_START format messages
             if "STATUS_START|" in data:
                 try:
@@ -371,11 +492,26 @@ class Arduino(QObject):
                         pressure = float(tokens[4])
 
                         self.status_emit.emit(pos_a, pos_b, pos_c, pressure)
-                        print(f"A {pos_a} B {pos_b} C {pos_c} Pressure {pressure}")
-                        # Add this at the end of successful status processing:
                         
-                        if self.connected and self.serial_com:
+                        # Only deduplicate identical consecutive status messages
+                        def is_duplicate_message(a, b, c, p, prev_a, prev_b, prev_c, prev_p):
+                            # Only suppress if all values are exactly the same
+                            return (a == prev_a and 
+                                    b == prev_b and 
+                                    c == prev_c and 
+                                    abs(p - prev_p) < 0.01)
+                        
+                        # Always print status messages
+                        print(f"A {pos_a} B {pos_b} C {pos_c} Pressure {pressure}")
+                        # Store values for reference
+                        if not hasattr(self, '_last_status'):
+                            self._last_status = {'a': 0, 'b': 0, 'c': 0, 'p': 100.0}
+                        
+                        # Update last values
+                        self._last_status = {'a': pos_a, 'b': pos_b, 'c': pos_c, 'p': pressure}
+                        
                         # Send acknowledgment
+                        if self.connected and self.serial_com:
                             self.serial_com.write(b"Q\n")
                             self.serial_com.flush()
                         return
@@ -415,12 +551,24 @@ class Arduino(QObject):
             elif "OK" in tokens[0] or tokens[0] == "OK":
                 print("Arduino sent OK acknowledgment")
             else:
-                print(f"Unrecognized data format: {data}")
+                # Filter known non-critical messages
+                if not (data.startswith("step ") or data.startswith("Re")):
+                    print(f"Unrecognized data format: {data}")
         except Exception as ex:
             print(f"Error handling data '{data}': {ex}")
 
     def send(self, command):
-        """Send a command to the Arduino with reconnection capability."""
+        """Send a command to the Arduino with improved error handling and reconnection."""
+        # Handle calibration at startup (only needed once per session)
+        if not hasattr(self, 'is_pressure_zeroed'):
+            self.is_pressure_zeroed = False
+            # Only send calibration if it's not already a calibration command
+            if not command.startswith('L0-'):
+                print("First command after startup - initializing pressure calibration")
+                self._pending_command = command
+                command = "L0-28369.0"
+                self.is_pressure_zeroed = True
+        
         # Check connection first
         if not self.connected or not self.serial_com:
             print("Not connected - attempting to reconnect")
@@ -429,20 +577,52 @@ class Arduino(QObject):
                 return False
 
         try:
-            if not self.serial_com:  # Double-check after reconnect
-                return False
+            # Verify the port is still valid and open
+            if not self.serial_com or not hasattr(self.serial_com, 'is_open') or not self.serial_com.is_open:
+                print("Serial port invalid or closed before sending command")
+                if self.reconnect():
+                    print("Reconnected successfully")
+                else:
+                    print("Failed to reconnect")
+                    return False
 
-            self.serial_com.reset_input_buffer()
+            # Safely reset buffers
+            try:
+                self.serial_com.reset_input_buffer()
+            except Exception as buf_ex:
+                print(f"Warning: Could not reset input buffer: {buf_ex}")
+                
+            # Send the command
             command_with_newline = command + "\n"
             print(f"Sending command: {command_with_newline}")
-            self.serial_com.write(command_with_newline.encode())
-            self.serial_com.flush()
-            time.sleep(0.2)  # Increased from 0.1 to give more time for flush
+            bytes_written = self.serial_com.write(command_with_newline.encode())
+            
+            # Verify data was written
+            if bytes_written <= 0:
+                print("Warning: No bytes written to serial port")
+                
+            # Flush to ensure command is sent
+            try:
+                self.serial_com.flush()
+            except Exception as flush_ex:
+                print(f"Warning: Error flushing serial buffer: {flush_ex}")
+                
+            time.sleep(0.2)  # Wait for command processing
             print("Command sent successfully.")
             return True
 
+        except serial.SerialException as serial_ex:
+            print(f"Serial error sending command '{command}': {serial_ex}")
+            self.connected = False
+            self.connection_lost.emit()
+            return False
+        except (OSError, IOError) as io_ex:
+            print(f"I/O error sending command '{command}': {io_ex}")
+            self.connected = False
+            self.connection_lost.emit()
+            return False
         except Exception as ex:
             print(f"Failed to send command '{command}': {ex}")
-            self.connected = False  # Mark as disconnected
-            self.connection_lost.emit()  # Signal that connection was lost
+            self.connected = False
+            self.connection_lost.emit()
             return False

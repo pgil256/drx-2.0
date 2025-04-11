@@ -305,16 +305,34 @@ class Protocols(QtCore.QRunnable):
             return False
 
     def protocol_1(self):
-        """Axial protocol - pressure only."""
+        """Axial protocol - pressure only with static 15-degree flexion."""
         print("Running protocol 1...")
         if not self.check_duration():
             return
 
         self.signals.progress.emit(">>Starting axial protocol")
+        
+        # First reset to ensure we're starting from a known state
+        self.signals.reset_needed.emit()
+        time.sleep(2)  # Extended wait for reset
+        
+        # Set standard 15-degree flexion angle first
+        print("Setting standard 15-degree flexion angle")
+        if not self.set_to_angle(15.0):
+            self.signals.finished.emit(False)
+            return
+            
+        # Extra wait to ensure angle is stable
+        time.sleep(2)
+        
+        # Request status update to verify position
+        self.arduino.send("S")
+        time.sleep(1)
 
         # Start with minimal pressure
         current_pressure = MIN_PRESSURE
         if not self.set_to_pressure(current_pressure):
+            self.signals.finished.emit(False)
             return
 
         self.exit_flag.wait(timeout=HOLD_TIME_SHORT)
@@ -331,7 +349,14 @@ class Protocols(QtCore.QRunnable):
             print(f"Increasing pressure to {current_pressure} lbs.")
 
             if not self.set_to_pressure(current_pressure):
+                self.signals.finished.emit(False)
                 return
+                
+            # Periodically verify we're still at 15 degrees
+            if current_pressure % 15 == 0:  # Every 15 lbs check angle
+                print("Verifying 15-degree angle is maintained")
+                if not self.set_to_angle(15.0):
+                    print("Warning: Angle verification failed. Continuing protocol.")
 
             self.exit_flag.wait(timeout=HOLD_TIME_SHORT)
 
@@ -345,10 +370,16 @@ class Protocols(QtCore.QRunnable):
                 f"Adjusting final pressure from {self.current_pressure} to {self.max_pressure}"
             )
             if not self.set_to_pressure(self.max_pressure):
+                self.signals.finished.emit(False)
                 return
 
             # Extra wait to ensure pressure stabilizes
             self.exit_flag.wait(timeout=2.0)
+            
+            # Verify 15-degree angle again
+            print("Final verification of 15-degree angle")
+            if not self.set_to_angle(15.0):
+                print("Warning: Final angle verification failed. Continuing protocol.")
 
             # Request status update to get latest pressure
             self.arduino.send("S")
@@ -359,6 +390,8 @@ class Protocols(QtCore.QRunnable):
             # Regardless of exact pressure, apply pulse if pulse mode is enabled
             print(f"Applying continuous pulses at pressure {self.current_pressure}")
             if not self.apply_continuous_pulse():
+                self.signals.reset_needed.emit()
+                self.signals.finished.emit(False)
                 return
         elif self.is_running:
             # Hold at max pressure until time expires
@@ -369,9 +402,22 @@ class Protocols(QtCore.QRunnable):
                 # Periodic status check
                 if self.is_running and self.check_duration():
                     self.arduino.send("S")
-                    time.sleep(0.1)
+                    time.sleep(0.5)
+                    
+                    # Re-verify angle every minute
+                    if (time.time() - self.start_time) % 60 < 1:
+                        print("Periodic angle verification")
+                        self.set_to_angle(15.0)
 
-        # Reset actuators after protocol completes
+        # Reset actuators after protocol completes - first zero pressure
+        print("Protocol complete, resetting to zero pressure")
+        self.set_to_pressure(0)
+        time.sleep(2)
+        
+        # Then reset angle to zero
+        self.set_to_angle(0)
+        
+        # Final reset signal
         self.signals.reset_needed.emit()
 
         print("Protocol 1 complete.")
@@ -379,7 +425,7 @@ class Protocols(QtCore.QRunnable):
         self.signals.finished.emit(True)
 
     def protocol_2(self):
-        """Axial with left lateral movement."""
+        """Axial with left lateral movement at static 15-degree flexion."""
         print("Running protocol 2...")
         if not self.check_duration():
             return
@@ -388,15 +434,37 @@ class Protocols(QtCore.QRunnable):
 
         # First reset to ensure we're starting from a known state
         self.signals.reset_needed.emit()
-        time.sleep(1)
-
-        # Start with pressure before moving to angle
+        time.sleep(3)  # Extended wait for reset
+        
+        # Ensure we're starting with zero pressure before any movement
+        print("Zeroing pressure before beginning protocol")
+        self.arduino.send("P0")
+        time.sleep(3)  # Wait for pressure to drop
+        
+        # Get current status to verify zero pressure
+        self.arduino.send("S")
+        time.sleep(2)
+        
+        # Set standard 15-degree flexion angle first
+        print("Setting standard 15-degree flexion angle")
+        if not self.set_to_angle(15.0):
+            self.signals.finished.emit(False)
+            return
+            
+        # Wait to ensure angle is stable
+        time.sleep(3)
+        
+        # Request status update to verify position
+        self.arduino.send("S")
+        time.sleep(2)
+        
+        # Start with minimal pressure
         current_pressure = MIN_PRESSURE
         if not self.set_to_pressure(current_pressure):
             self.signals.finished.emit(False)
             return
 
-        self.exit_flag.wait(timeout=HOLD_TIME_SHORT)
+        self.exit_flag.wait(timeout=HOLD_TIME_LONG)  # Longer wait for initial pressure
 
         # Gradually increase to max pressure
         while (
@@ -412,6 +480,12 @@ class Protocols(QtCore.QRunnable):
             if not self.set_to_pressure(current_pressure):
                 self.signals.finished.emit(False)
                 return
+                
+            # Periodically verify we're still at 15 degrees
+            if current_pressure % 15 == 0:  # Every 15 lbs check angle
+                print("Verifying 15-degree angle is maintained")
+                if not self.set_to_angle(15.0):
+                    print("Warning: Angle verification failed. Continuing protocol.")
 
             self.exit_flag.wait(timeout=HOLD_TIME_SHORT)
 
@@ -419,48 +493,52 @@ class Protocols(QtCore.QRunnable):
             self.arduino.send("S")
             time.sleep(0.5)
 
-        # Ensure we're at max pressure
-        if self.current_pressure < (self.max_pressure - 3):
-            print(
-                f"Adjusting final pressure from {self.current_pressure} to {self.max_pressure}"
-            )
-            if not self.set_to_pressure(self.max_pressure):
-                self.signals.finished.emit(False)
-                return
-
-            # Extra wait to ensure pressure stabilizes
-            self.exit_flag.wait(timeout=2.0)
-
+        # Once at pressure, move to left lateral angle
         if self.is_running:
-            # IMPORTANT: Move to angle position FIRST before any pulsing
-            print(f"Moving to left {self.max_left}°.")
+            # IMPORTANT: Apply lateral movement now that pressure is stable
+            print(f"Moving to left lateral angle {self.max_left}°.")
             if not self.set_to_angle(self.max_left):
                 self.signals.finished.emit(False)
                 return
-
-            # Additional delay to ensure position is stable
+                
+            # Extra wait to ensure lateral position is stable
             time.sleep(3)
+            
+            # Request status update
+            self.arduino.send("S")
+            time.sleep(1)
 
-            # Verify angle has been set
-            if not self.angle_set:
-                print("Warning: Angle may not be properly set. Continuing anyway.")
-
-            # Now that angle is set, apply pulsing if enabled
+            # Now apply pulsing if enabled
             if self.use_pulse:
-                print("Angle set complete. Now applying continuous pulses.")
+                print("Starting continuous pulses with fixed left angle.")
                 if not self.apply_continuous_pulse():
                     self.signals.reset_needed.emit()
                     self.signals.finished.emit(False)
                     return
             else:
                 # Hold at position until time expires
-                print("Holding at position until time expires.")
+                print("Holding at left angle until time expires.")
                 while self.is_running and self.check_duration():
                     self.exit_flag.wait(timeout=HOLD_TIME_LONG)
-                    # Periodic status check
+                    # Periodic status check and angle verification
                     if self.is_running and self.check_duration():
                         self.arduino.send("S")
                         time.sleep(0.5)
+                        
+                        # Re-verify angle every minute
+                        if (time.time() - self.start_time) % 60 < 1:
+                            print("Periodic angle verification")
+                            self.set_to_angle(self.max_left)
+        
+        # Protocol complete - first reset lateral angle back to center
+        print("Protocol complete, resetting lateral angle to center")
+        self.set_to_angle(0)
+        time.sleep(2)
+        
+        # Then zero pressure
+        print("Reducing pressure to zero")
+        self.set_to_pressure(0)
+        time.sleep(2)
 
         # Ensure reset happens regardless of how we exit the protocol
         self.signals.reset_needed.emit()
@@ -470,7 +548,7 @@ class Protocols(QtCore.QRunnable):
         self.signals.finished.emit(True)
 
     def protocol_3(self):
-        """Axial with right lateral movement."""
+        """Axial with right lateral movement at static 15-degree flexion."""
         print("Running protocol 3...")
         if not self.check_duration():
             return
@@ -479,15 +557,37 @@ class Protocols(QtCore.QRunnable):
 
         # First reset to ensure we're starting from a known state
         self.signals.reset_needed.emit()
-        time.sleep(1)
-
-        # Start with pressure before moving to angle
+        time.sleep(3)  # Extended wait for reset
+        
+        # Ensure we're starting with zero pressure before any movement
+        print("Zeroing pressure before beginning protocol")
+        self.arduino.send("P0")
+        time.sleep(3)  # Wait for pressure to drop
+        
+        # Get current status to verify zero pressure
+        self.arduino.send("S")
+        time.sleep(2)
+        
+        # Set standard 15-degree flexion angle first
+        print("Setting standard 15-degree flexion angle")
+        if not self.set_to_angle(15.0):
+            self.signals.finished.emit(False)
+            return
+            
+        # Wait to ensure angle is stable
+        time.sleep(3)
+        
+        # Request status update to verify position
+        self.arduino.send("S")
+        time.sleep(2)
+        
+        # Start with minimal pressure
         current_pressure = MIN_PRESSURE
         if not self.set_to_pressure(current_pressure):
             self.signals.finished.emit(False)
             return
 
-        self.exit_flag.wait(timeout=HOLD_TIME_SHORT)
+        self.exit_flag.wait(timeout=HOLD_TIME_LONG)  # Longer wait for initial pressure
 
         # Gradually increase to max pressure
         while (
@@ -503,6 +603,12 @@ class Protocols(QtCore.QRunnable):
             if not self.set_to_pressure(current_pressure):
                 self.signals.finished.emit(False)
                 return
+                
+            # Periodically verify we're still at 15 degrees
+            if current_pressure % 15 == 0:  # Every 15 lbs check angle
+                print("Verifying 15-degree angle is maintained")
+                if not self.set_to_angle(15.0):
+                    print("Warning: Angle verification failed. Continuing protocol.")
 
             self.exit_flag.wait(timeout=HOLD_TIME_SHORT)
 
@@ -510,48 +616,52 @@ class Protocols(QtCore.QRunnable):
             self.arduino.send("S")
             time.sleep(0.5)
 
-        # Ensure we're at max pressure
-        if self.current_pressure < (self.max_pressure - 3):
-            print(
-                f"Adjusting final pressure from {self.current_pressure} to {self.max_pressure}"
-            )
-            if not self.set_to_pressure(self.max_pressure):
-                self.signals.finished.emit(False)
-                return
-
-            # Extra wait to ensure pressure stabilizes
-            self.exit_flag.wait(timeout=2.0)
-
+        # Once at pressure, move to right lateral angle
         if self.is_running:
-            # IMPORTANT: Move to angle position FIRST before any pulsing
-            print(f"Moving to right {self.max_right}°.")
+            # IMPORTANT: Apply lateral movement now that pressure is stable
+            print(f"Moving to right lateral angle {self.max_right}°.")
             if not self.set_to_angle(self.max_right):
                 self.signals.finished.emit(False)
                 return
-
-            # Additional delay to ensure position is stable
+                
+            # Extra wait to ensure lateral position is stable
             time.sleep(3)
+            
+            # Request status update
+            self.arduino.send("S")
+            time.sleep(1)
 
-            # Verify angle has been set
-            if not self.angle_set:
-                print("Warning: Angle may not be properly set. Continuing anyway.")
-
-            # Now that angle is set, apply pulsing if enabled
+            # Now apply pulsing if enabled
             if self.use_pulse:
-                print("Angle set complete. Now applying continuous pulses.")
+                print("Starting continuous pulses with fixed right angle.")
                 if not self.apply_continuous_pulse():
                     self.signals.reset_needed.emit()
                     self.signals.finished.emit(False)
                     return
             else:
                 # Hold at position until time expires
-                print("Holding at position until time expires.")
+                print("Holding at right angle until time expires.")
                 while self.is_running and self.check_duration():
                     self.exit_flag.wait(timeout=HOLD_TIME_LONG)
-                    # Periodic status check
+                    # Periodic status check and angle verification
                     if self.is_running and self.check_duration():
                         self.arduino.send("S")
                         time.sleep(0.5)
+                        
+                        # Re-verify angle every minute
+                        if (time.time() - self.start_time) % 60 < 1:
+                            print("Periodic angle verification")
+                            self.set_to_angle(self.max_right)
+        
+        # Protocol complete - first reset lateral angle back to center
+        print("Protocol complete, resetting lateral angle to center")
+        self.set_to_angle(0)
+        time.sleep(2)
+        
+        # Then zero pressure
+        print("Reducing pressure to zero")
+        self.set_to_pressure(0)
+        time.sleep(2)
 
         # Ensure reset happens regardless of how we exit the protocol
         self.signals.reset_needed.emit()

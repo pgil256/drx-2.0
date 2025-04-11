@@ -183,6 +183,21 @@ QPushButton#request_pin_reset:pressed {
     background-color: #219a52;  /* Even darker when pressed */
 }
 
+/* Request Assistance Button */
+QPushButton#request_assistance_button {
+    background-color: rgb(0, 170, 255);  /* Red - warning/danger action */
+    color: white;
+    border: none;
+    padding: 12px 20px;
+    font-size: 16px;
+    font-weight: bold;
+    border-radius: 8px;
+    min-width: 250px;
+    min-height: 50px;
+    text-align: center;
+    margin: 5px;
+}
+
 /* Exit App Button */
 QPushButton#exit_app_button {
     background-color: #e74c3c;  /* Red - warning/danger action */
@@ -270,6 +285,51 @@ QGroupBox {
     border: 0px solid silver;
     border-radius: 6px;
     margin-top: 0px;
+}
+/* Enhanced Slider Styles */
+QSlider::groove:horizontal {
+    border: 1px solid #bdc3c7;
+    height: 6px;
+    background: #ecf0f1;
+    border-radius: 4px;
+}
+
+QSlider::groove:horizontal:hover {
+    background-color: #d6eaf8;
+}
+
+QSlider::handle:horizontal {
+    background-color: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, 
+                                     stop:0 rgba(0, 50, 145, 255), 
+                                     stop:1 rgba(255, 255, 255, 255));
+    border: 3px solid #2c3e50;
+    width: 30px;
+    height: 30px;
+    margin: -12px 0;
+    border-radius: 15px;
+}
+
+QSlider::handle:horizontal:hover {
+    background-color: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, 
+                                     stop:0 rgba(0, 70, 175, 255), 
+                                     stop:1 rgba(220, 235, 255, 255));
+}
+
+QSlider::sub-page:horizontal {
+    background: #3498db;
+    border: 1px solid #2980b9;
+    border-radius: 4px;
+}
+
+/* Apply these styles to all sliders */
+QSlider#axial_flexion_position_slider,
+QSlider#axial_flexion_pressure_slider,
+QSlider#lateral_flexion_position_slider,
+QSlider#horizontal_flexion_position_slider,
+QSlider#max_pressure_edit,
+QSlider#max_left_edit,
+QSlider#max_right_edit {
+    padding: 5px 0;
 }
 
 QGroupBox::title {
@@ -788,7 +848,7 @@ QHeaderView::section {
       </size>
      </property>
      <property name="currentIndex">
-      <number>2</number>
+      <number>4</number>
      </property>
      <widget class="QWidget" name="page_home">
       <property name="sizePolicy">
@@ -912,7 +972,7 @@ QHeaderView::section {
        </property>
        <property name="font">
         <font>
-         <family>Arial,sans-serif</family>
+         <family>Arial</family>
          <pointsize>-1</pointsize>
         </font>
        </property>
@@ -973,7 +1033,7 @@ QHeaderView::section {
            </property>
            <property name="font">
             <font>
-             <family>Arial,sans-serif</family>
+             <family>Arial</family>
              <pointsize>-1</pointsize>
             </font>
            </property>
@@ -1025,9 +1085,8 @@ QHeaderView::section {
            </property>
            <property name="font">
             <font>
-             <family>Arial,sans-serif</family>
+             <family>Arial</family>
              <pointsize>-1</pointsize>
-             <weight>75</weight>
              <bold>true</bold>
             </font>
            </property>
@@ -1080,7 +1139,7 @@ QHeaderView::section {
         </property>
         <property name="font">
          <font>
-          <family>Arial,sans-serif</family>
+          <family>Arial</family>
           <pointsize>-1</pointsize>
          </font>
         </property>
@@ -1138,9 +1197,8 @@ QHeaderView::section {
           </property>
           <property name="font">
            <font>
-            <family>Arial,sans-serif</family>
+            <family>Arial</family>
             <pointsize>-1</pointsize>
-            <weight>75</weight>
             <italic>false</italic>
             <bold>true</bold>
            </font>
@@ -1183,7 +1241,7 @@ QHeaderView::section {
                   <widget class="QPushButton" name="forward_axial_flexion_button">
                    <property name="font">
                     <font>
-                     <family>Arial,sans-serif</family>
+                     <family>Arial</family>
                      <pointsize>-1</pointsize>
                     </font>
                    </property>
@@ -1210,7 +1268,7 @@ QHeaderView::section {
                   <widget class="QPushButton" name="reverse_axial_flexion_button">
                    <property name="font">
                     <font>
-                     <family>Arial,sans-serif</family>
+                     <family>Arial</family>
                      <pointsize>-1</pointsize>
                     </font>
                    </property>
@@ -1243,7 +1301,7 @@ QHeaderView::section {
                   <widget class="QPushButton" name="forward_fast_axial_flexion_button">
                    <property name="font">
                     <font>
-                     <family>Arial,sans-serif</family>
+                     <family>Arial</family>
                      <pointsize>-1</pointsize>
                     </font>
                    </property>
@@ -1270,7 +1328,7 @@ QHeaderView::section {
                   <widget class="QPushButton" name="reverse_fast_axial_flexion_button">
                    <property name="font">
                     <font>
-                     <family>Arial,sans-serif</family>
+                     <family>Arial</family>
                      <pointsize>-1</pointsize>
                     </font>
                    </property>
@@ -1312,7 +1370,7 @@ QHeaderView::section {
                  </property>
                  <property name="font">
                   <font>
-                   <family>Arial,sans-serif</family>
+                   <family>Arial</family>
                    <pointsize>-1</pointsize>
                   </font>
                  </property>
@@ -1377,7 +1435,7 @@ QHeaderView::section {
                 </property>
                 <property name="font">
                  <font>
-                  <family>Arial,sans-serif</family>
+                  <family>Arial</family>
                   <pointsize>-1</pointsize>
                  </font>
                 </property>
@@ -1436,7 +1494,7 @@ QHeaderView::section {
                    </property>
                    <property name="font">
                     <font>
-                     <family>Arial,sans-serif</family>
+                     <family>Arial</family>
                      <pointsize>-1</pointsize>
                     </font>
                    </property>
@@ -1450,7 +1508,7 @@ QHeaderView::section {
                    <property name="minimumSize">
                     <size>
                      <width>480</width>
-                     <height>30</height>
+                     <height>0</height>
                     </size>
                    </property>
                    <property name="maximumSize">
@@ -1511,7 +1569,7 @@ QHeaderView::section {
                 </property>
                 <property name="font">
                  <font>
-                  <family>Arial,sans-serif</family>
+                  <family>Arial</family>
                   <pointsize>-1</pointsize>
                  </font>
                 </property>
@@ -1561,7 +1619,7 @@ QHeaderView::section {
                 </property>
                 <property name="font">
                  <font>
-                  <family>Arial,sans-serif</family>
+                  <family>Arial</family>
                   <pointsize>-1</pointsize>
                  </font>
                 </property>
@@ -1645,7 +1703,7 @@ QHeaderView::section {
                 </property>
                 <property name="font">
                  <font>
-                  <family>Arial,sans-serif</family>
+                  <family>Arial</family>
                   <pointsize>-1</pointsize>
                  </font>
                 </property>
@@ -1710,7 +1768,7 @@ QHeaderView::section {
                    </property>
                    <property name="font">
                     <font>
-                     <family>Arial,sans-serif</family>
+                     <family>Arial</family>
                      <pointsize>-1</pointsize>
                     </font>
                    </property>
@@ -1724,7 +1782,7 @@ QHeaderView::section {
                    <property name="minimumSize">
                     <size>
                      <width>480</width>
-                     <height>30</height>
+                     <height>0</height>
                     </size>
                    </property>
                    <property name="maximumSize">
@@ -1788,10 +1846,9 @@ QHeaderView::section {
                 </property>
                 <property name="font">
                  <font>
-                  <family>Arial,sans-serif</family>
+                  <family>Arial</family>
                   <pointsize>-1</pointsize>
-                  <weight>62</weight>
-                  <bold>true</bold>
+                  <fontweight>Medium</fontweight>
                  </font>
                 </property>
                 <property name="text">
@@ -1840,10 +1897,9 @@ QHeaderView::section {
                 </property>
                 <property name="font">
                  <font>
-                  <family>Arial,sans-serif</family>
+                  <family>Arial</family>
                   <pointsize>-1</pointsize>
-                  <weight>62</weight>
-                  <bold>true</bold>
+                  <fontweight>Medium</fontweight>
                  </font>
                 </property>
                 <property name="text">
@@ -1915,9 +1971,8 @@ QHeaderView::section {
           </property>
           <property name="font">
            <font>
-            <family>Arial,sans-serif</family>
+            <family>Arial</family>
             <pointsize>-1</pointsize>
-            <weight>75</weight>
             <italic>false</italic>
             <bold>true</bold>
            </font>
@@ -2023,7 +2078,7 @@ QHeaderView::section {
                 <widget class="QLabel" name="lateral_flexion_position_slider_label">
                  <property name="font">
                   <font>
-                   <family>Arial,sans-serif</family>
+                   <family>Arial</family>
                    <pointsize>-1</pointsize>
                   </font>
                  </property>
@@ -2092,10 +2147,9 @@ QHeaderView::section {
               </property>
               <property name="font">
                <font>
-                <family>Arial,sans-serif</family>
+                <family>Arial</family>
                 <pointsize>-1</pointsize>
-                <weight>62</weight>
-                <bold>true</bold>
+                <fontweight>Medium</fontweight>
                </font>
               </property>
               <property name="text">
@@ -2138,10 +2192,9 @@ QHeaderView::section {
               </property>
               <property name="font">
                <font>
-                <family>Arial,sans-serif</family>
+                <family>Arial</family>
                 <pointsize>-1</pointsize>
-                <weight>62</weight>
-                <bold>true</bold>
+                <fontweight>Medium</fontweight>
                </font>
               </property>
               <property name="text">
@@ -2211,7 +2264,7 @@ QHeaderView::section {
                 <widget class="QPushButton" name="forward_lateral_flexion_button">
                  <property name="font">
                   <font>
-                   <family>Arial,sans-serif</family>
+                   <family>Arial</family>
                    <pointsize>-1</pointsize>
                   </font>
                  </property>
@@ -2238,7 +2291,7 @@ QHeaderView::section {
                 <widget class="QPushButton" name="reverse_lateral_flexion_button">
                  <property name="font">
                   <font>
-                   <family>Arial,sans-serif</family>
+                   <family>Arial</family>
                    <pointsize>-1</pointsize>
                   </font>
                  </property>
@@ -2271,7 +2324,7 @@ QHeaderView::section {
                 <widget class="QPushButton" name="forward_fast_lateral_flexion_button">
                  <property name="font">
                   <font>
-                   <family>Arial,sans-serif</family>
+                   <family>Arial</family>
                    <pointsize>-1</pointsize>
                   </font>
                  </property>
@@ -2298,7 +2351,7 @@ QHeaderView::section {
                 <widget class="QPushButton" name="reverse_fast_lateral_flexion_button">
                  <property name="font">
                   <font>
-                   <family>Arial,sans-serif</family>
+                   <family>Arial</family>
                    <pointsize>-1</pointsize>
                   </font>
                  </property>
@@ -2340,7 +2393,7 @@ QHeaderView::section {
                </property>
                <property name="font">
                 <font>
-                 <family>Arial,sans-serif</family>
+                 <family>Arial</family>
                  <pointsize>-1</pointsize>
                 </font>
                </property>
@@ -2406,9 +2459,8 @@ QHeaderView::section {
           </property>
           <property name="font">
            <font>
-            <family>Arial,sans-serif</family>
+            <family>Arial</family>
             <pointsize>-1</pointsize>
-            <weight>75</weight>
             <italic>false</italic>
             <bold>true</bold>
            </font>
@@ -2479,7 +2531,7 @@ QHeaderView::section {
               </property>
               <property name="font">
                <font>
-                <family>Arial,sans-serif</family>
+                <family>Arial</family>
                 <pointsize>-1</pointsize>
                </font>
               </property>
@@ -2526,7 +2578,7 @@ QHeaderView::section {
                 <widget class="QLabel" name="label_11">
                  <property name="font">
                   <font>
-                   <family>Arial,sans-serif</family>
+                   <family>Arial</family>
                    <pointsize>-1</pointsize>
                   </font>
                  </property>
@@ -2592,10 +2644,9 @@ QHeaderView::section {
               </property>
               <property name="font">
                <font>
-                <family>Arial,sans-serif</family>
+                <family>Arial</family>
                 <pointsize>-1</pointsize>
-                <weight>62</weight>
-                <bold>true</bold>
+                <fontweight>Medium</fontweight>
                </font>
               </property>
               <property name="text">
@@ -2638,10 +2689,9 @@ QHeaderView::section {
               </property>
               <property name="font">
                <font>
-                <family>Arial,sans-serif</family>
+                <family>Arial</family>
                 <pointsize>-1</pointsize>
-                <weight>62</weight>
-                <bold>true</bold>
+                <fontweight>Medium</fontweight>
                </font>
               </property>
               <property name="text">
@@ -2717,7 +2767,7 @@ QHeaderView::section {
                 <widget class="QPushButton" name="forward_horizontal_flexion_button">
                  <property name="font">
                   <font>
-                   <family>Arial,sans-serif</family>
+                   <family>Arial</family>
                    <pointsize>-1</pointsize>
                   </font>
                  </property>
@@ -2744,7 +2794,7 @@ QHeaderView::section {
                 <widget class="QPushButton" name="reverse_horizontal_flexion_button">
                  <property name="font">
                   <font>
-                   <family>Arial,sans-serif</family>
+                   <family>Arial</family>
                    <pointsize>-1</pointsize>
                   </font>
                  </property>
@@ -2777,7 +2827,7 @@ QHeaderView::section {
                 <widget class="QPushButton" name="forward_fast_horizontal_flexion_button">
                  <property name="font">
                   <font>
-                   <family>Arial,sans-serif</family>
+                   <family>Arial</family>
                    <pointsize>-1</pointsize>
                   </font>
                  </property>
@@ -2804,7 +2854,7 @@ QHeaderView::section {
                 <widget class="QPushButton" name="reverse_fast_horizontal_flexion_button">
                  <property name="font">
                   <font>
-                   <family>Arial,sans-serif</family>
+                   <family>Arial</family>
                    <pointsize>-1</pointsize>
                   </font>
                  </property>
@@ -2846,7 +2896,7 @@ QHeaderView::section {
                </property>
                <property name="font">
                 <font>
-                 <family>Arial,sans-serif</family>
+                 <family>Arial</family>
                  <pointsize>-1</pointsize>
                 </font>
                </property>
@@ -2910,9 +2960,8 @@ QHeaderView::section {
           </property>
           <property name="font">
            <font>
-            <family>Arial,sans-serif</family>
+            <family>Arial</family>
             <pointsize>-1</pointsize>
-            <weight>75</weight>
             <italic>false</italic>
             <bold>true</bold>
            </font>
@@ -2980,7 +3029,7 @@ QHeaderView::section {
               </property>
               <property name="font">
                <font>
-                <family>Arial,sans-serif</family>
+                <family>Arial</family>
                 <pointsize>-1</pointsize>
                </font>
               </property>
@@ -3046,7 +3095,7 @@ QHeaderView::section {
                  </property>
                  <property name="font">
                   <font>
-                   <family>Arial,sans-serif</family>
+                   <family>Arial</family>
                    <pointsize>-1</pointsize>
                   </font>
                  </property>
@@ -3079,7 +3128,7 @@ QHeaderView::section {
                  </property>
                  <property name="font">
                   <font>
-                   <family>Arial,sans-serif</family>
+                   <family>Arial</family>
                    <pointsize>-1</pointsize>
                   </font>
                  </property>
@@ -3160,7 +3209,7 @@ QHeaderView::section {
                  </property>
                  <property name="font">
                   <font>
-                   <family>Arial,sans-serif</family>
+                   <family>Arial</family>
                    <pointsize>-1</pointsize>
                   </font>
                  </property>
@@ -3193,7 +3242,7 @@ QHeaderView::section {
                  </property>
                  <property name="font">
                   <font>
-                   <family>Arial,sans-serif</family>
+                   <family>Arial</family>
                    <pointsize>-1</pointsize>
                   </font>
                  </property>
@@ -3273,7 +3322,7 @@ QHeaderView::section {
                </property>
                <property name="font">
                 <font>
-                 <family>Arial,sans-serif</family>
+                 <family>Arial</family>
                  <pointsize>-1</pointsize>
                 </font>
                </property>
@@ -3985,7 +4034,7 @@ QHeaderView::section {
                    </property>
                    <property name="font">
                     <font>
-                     <family>Arial,sans-serif</family>
+                     <family>Arial</family>
                      <pointsize>-1</pointsize>
                     </font>
                    </property>
@@ -3999,7 +4048,7 @@ QHeaderView::section {
                    <property name="minimumSize">
                     <size>
                      <width>480</width>
-                     <height>30</height>
+                     <height>0</height>
                     </size>
                    </property>
                    <property name="maximumSize">
@@ -4093,7 +4142,7 @@ QHeaderView::section {
                    </property>
                    <property name="font">
                     <font>
-                     <family>Arial,sans-serif</family>
+                     <family>Arial</family>
                      <pointsize>-1</pointsize>
                     </font>
                    </property>
@@ -4107,7 +4156,7 @@ QHeaderView::section {
                    <property name="minimumSize">
                     <size>
                      <width>480</width>
-                     <height>30</height>
+                     <height>0</height>
                     </size>
                    </property>
                    <property name="maximumSize">
@@ -4207,7 +4256,7 @@ QHeaderView::section {
                    </property>
                    <property name="font">
                     <font>
-                     <family>Arial,sans-serif</family>
+                     <family>Arial</family>
                      <pointsize>-1</pointsize>
                     </font>
                    </property>
@@ -4221,7 +4270,7 @@ QHeaderView::section {
                    <property name="minimumSize">
                     <size>
                      <width>480</width>
-                     <height>30</height>
+                     <height>0</height>
                     </size>
                    </property>
                    <property name="maximumSize">
@@ -4626,7 +4675,7 @@ While performing a protocol, feel free to watch a video detailing the benefits o
 
 If you need technical assitance for any reason, click the &quot;Profile&quot; icon in the top right, then click &quot;Request Assitance&quot; in the botttom left. A technincian will reach out shortly to address your issue.</string>
            </property>
-           <property name="tabStopWidth">
+           <property name="tabStopWidth" stdset="0">
             <number>200</number>
            </property>
           </widget>

@@ -1,0 +1,3 @@
+  sudo visudo -f /etc/sudoers.d/010_pi-nopasswd-serial
+  pi ALL=(ALL) NOPASSWD: /bin/systemctl stop serial-getty@ttyS0.service
+  pi ALL=(ALL) NOPASSWD: /bin/systemctl start serial-getty@ttyS0.service

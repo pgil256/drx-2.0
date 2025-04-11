@@ -3,6 +3,24 @@ import traceback
 import sys
 import os
 import csv
+
+# Configure Qt to use sensible defaults that avoid font issues
+os.environ["QT_LOGGING_RULES"] = "qt.qpa.xcb.fontdatabase=false"
+os.environ["QT_DEBUG_PLUGINS"] = "0"
+os.environ["QT_FONT_DPI"] = "96"
+
+# Fix negative font size issue - QFont is in QtGui, not QtWidgets
+import PyQt5.QtGui
+originalSetPointSize = PyQt5.QtGui.QFont.setPointSize
+
+def fixed_setPointSize(self, size):
+    """Override QFont.setPointSize to prevent negative values"""
+    if size <= 0:
+        size = 10  # Use a reasonable default size
+    return originalSetPointSize(self, size)
+
+PyQt5.QtGui.QFont.setPointSize = fixed_setPointSize
+
 import RPi.GPIO as GPIO
 import time
 import smtplib
@@ -76,8 +94,19 @@ from utils.exceptions import (
 # Import UI components
 from ui.dialogs import TimerDialog, PressureDialog, VideoPlayer
 
-# Suppress Qt warnings
-os.environ["QT_LOGGING_RULES"] = "*.debug=false;qt.qpa.xcb=false"
+# Completely suppress Qt warnings - more aggressive approach
+import sys
+# Redirect stderr before ANY Qt imports
+class NullDevice():
+    def write(self, s): pass
+    def flush(self): pass
+sys._original_stderr = sys.stderr
+sys.stderr = NullDevice() 
+
+# Still set these just in case
+os.environ["QT_LOGGING_RULES"] = "*.debug=false;qt.*=false"
+os.environ["QT_DEBUG_PLUGINS"] = "0"
+os.environ["QT_FONT_DPI"] = "96"
 
 # Main Python class
 class KneeSpa(QMainWindow):
@@ -287,7 +316,7 @@ class KneeSpa(QMainWindow):
         for i in range(16):
             u = (i * 220) + 98
             angle = (i * 2.5) - 20
-            print(f"Mark {i}: angle {angle}, value {u}")
+            # Store marks without printing
             self.CMarks[angle] = u
 
         # print(self.config.AMarks)
@@ -1971,15 +2000,33 @@ class KneeSpa(QMainWindow):
         print("Protocol completed")
         self.protocol_timer.stop()
 
+        # Hide timer and pressure dialogs if they're visible
+        if hasattr(self, 'timer_dialog') and self.timer_dialog.isVisible():
+            self.timer_dialog.hide()
+            # Uncheck the checkbox to maintain consistency
+            if hasattr(self.ui, 'show_timer_button'):
+                self.ui.show_timer_button.setChecked(False)
+                
+        if hasattr(self, 'pressure_dialog') and self.pressure_dialog.isVisible():
+            self.pressure_dialog.hide()
+            # Uncheck the checkbox to maintain consistency
+            if hasattr(self.ui, 'show_pressure_button'):
+                self.ui.show_pressure_button.setChecked(False)
+
         # Update UI
         self.ui.start_button.setText("Start")
         self.ui.start_button.setStyleSheet(BUTTON_STYLES["START"])
 
+        # Reset position and pressure
         self.set_to_c_distance(0)
         time.sleep(3)
         command = "P{}".format(0)
         self.arduino.send(command)
 
+        # Reset protocol timer and start time to prepare for the next protocol
+        self.protocol_start_time = None
+        self.protocol_duration = None
+        
         QMessageBox.information(
             self,
             "Protocol Complete",
@@ -1989,9 +2036,31 @@ class KneeSpa(QMainWindow):
     def stop_protocol(self):
         """Stop protocol sequence."""
         print("Stopping protocol")
+        
+        # Hide timer and pressure dialogs
+        if hasattr(self, 'timer_dialog') and self.timer_dialog.isVisible():
+            self.timer_dialog.hide()
+            # Uncheck the checkbox to maintain consistency
+            if hasattr(self.ui, 'show_timer_button'):
+                self.ui.show_timer_button.setChecked(False)
+                
+        if hasattr(self, 'pressure_dialog') and self.pressure_dialog.isVisible():
+            self.pressure_dialog.hide()
+            # Uncheck the checkbox to maintain consistency
+            if hasattr(self.ui, 'show_pressure_button'):
+                self.ui.show_pressure_button.setChecked(False)
+        
+        # Reset UI and stop the worker
         self.ui.start_button.setText("Start")
         if self.worker:
             self.worker.stop()
+            
+        # Reset protocol timer and start time
+        self.protocol_timer.stop()
+        self.protocol_start_time = None
+        self.protocol_duration = None
+        
+        # Reset hardware
         self.reset_arduino()
 
     def show_timer_dialog(self, state):
