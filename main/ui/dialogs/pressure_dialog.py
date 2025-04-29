@@ -3,30 +3,17 @@ from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton
 from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
 from PyQt5.QtMultimediaWidgets import QVideoWidget
 from PyQt5.QtCore import QUrl, Qt
+from main.config.constants import DIALOG_STYLES, DIALOG_DIMENSIONS
 
 
 class PressureDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Current Pressure")
-        self.setFixedSize(325, 150)
+        self.setFixedSize(*DIALOG_DIMENSIONS["PRESSURE"])
         self.setWindowFlags(Qt.Tool | Qt.WindowStaysOnTopHint)
         
-        self.setStyleSheet("""
-            QDialog {
-                background-color: white;
-                border: 2px solid #3498db;
-                border-radius: 12px;
-            }
-            QLabel {
-                color: #27ae60;
-                font-family: 'Segoe UI', Arial;
-                font-size: 22px;
-                font-weight: bold;
-                padding: 10px;
-                qproperty-alignment: AlignCenter;
-            }
-        """)
+        self.setStyleSheet(DIALOG_STYLES["PRESSURE"])
 
         # Layout
         layout = QVBoxLayout()

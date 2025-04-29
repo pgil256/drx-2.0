@@ -10,7 +10,7 @@ import os
 # Application Info
 APP_NAME = "KneeSpa"
 APP_VERSION = "2.0"
-APP_BASE_DIR = "/home/pi/drx-2.1/main/"
+APP_BASE_DIR = "/home/pi/drx-2.2/main/"
 
 # Logging Configuration
 LOG_FILE = "kneespa_app.log"
@@ -130,6 +130,53 @@ BUTTON_STYLES = {
     """,
 }
 
+# Dialog Styles
+DIALOG_STYLES = {
+    "PRESSURE": """
+        QDialog {
+            background-color: white;
+            border: 2px solid #3498db;
+            border-radius: 12px;
+        }
+        QLabel {
+            color: #27ae60;
+            font-family: 'Segoe UI', Arial;
+            font-size: 22px;
+            font-weight: bold;
+            padding: 10px;
+            qproperty-alignment: AlignCenter;
+        }
+    """,
+    "TIMER": """
+        QDialog {
+            background-color: white;
+            border: 2px solid #3498db;
+            border-radius: 12px;
+        }
+        QLabel {
+            color: #2c3e50;
+            font-family: 'Segoe UI', Arial;
+            font-size: 22px;
+            font-weight: bold;
+            padding: 15px;
+            qproperty-alignment: AlignCenter;
+        }
+        QLabel#elapsed {
+            color: #16a085;
+        }
+        QLabel#remaining {
+            color: #c0392b;
+        }
+    """
+}
+
+# Dialog Dimensions
+DIALOG_DIMENSIONS = {
+    "PRESSURE": (325, 150),
+    "TIMER": (325, 150),
+    "VIDEO": (640, 480)
+}
+
 # Protocol Settings
 PROTOCOL_DEFAULTS = {
     "CYCLES": 10,
@@ -137,6 +184,27 @@ PROTOCOL_DEFAULTS = {
     "MAX_PRESSURE": 100,  # lbs
     "PRESSURE_STEP": 5,  # lbs
 }
+
+# Protocol Execution Constants
+DEGREES0 = 0  # Center/neutral position
+MIN_PRESSURE = 10  # Minimum starting pressure in lbs
+MAX_SAFE_PRESSURE = 100  # Maximum safe pressure in lbs
+HOLD_TIME_SHORT = 1  # Short hold duration in seconds
+HOLD_TIME_LONG = 5  # Default hold duration in seconds
+PRESSURE_INCREMENT = 5  # Standard pressure increase step
+ANGLE_INCREMENT = 2.5  # Standard angle adjustment step
+DEFAULT_TIMEOUT = 30.0  # Default timeout in seconds for operations
+
+# Protocol Timing Constants
+WARMUP_DURATION = 30  # Warmup phase duration in seconds
+COOLDOWN_DURATION = 30  # Cooldown phase duration in seconds
+CYCLE_DURATION = {
+    "1": 30,  # Protocol 1 cycle time in seconds
+    "2": 40,  # Protocol 2 cycle time in seconds
+    "3": 40   # Protocol 3 cycle time in seconds
+}
+PULSE_INTERVAL_DEFAULT = 5  # Default interval between pulses in seconds
+PULSE_COUNT_DEFAULT = 3  # Default number of pulses
 
 # Arduino Communication
 ARDUINO_SETTINGS = {
