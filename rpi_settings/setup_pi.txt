@@ -1,7 +1,0 @@
-#Setup wallpaper
-pcmanfm --set-wallpaper=/home/pi/drx-2.2/main/ui/media/images/logos/drx-logo-full.png
-
-#Allow serial port access
-  sudo visudo -f /etc/sudoers.d/010_pi-nopasswd-serial
-  pi ALL=(ALL) NOPASSWD: /bin/systemctl stop serial-getty@ttyS0.service
-  pi ALL=(ALL) NOPASSWD: /bin/systemctl start serial-getty@ttyS0.service

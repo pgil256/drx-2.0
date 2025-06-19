@@ -8,16 +8,26 @@ from PyQt5.QtWidgets import (
 )
 from PyQt5.QtCore import Qt, QTimer
 import time
-from main.config.constants import DIALOG_STYLES, DIALOG_DIMENSIONS
 
 class TimerDialog(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
         self.setWindowTitle("Protocol Timer")
-        self.setFixedSize(*DIALOG_DIMENSIONS["TIMER"])
+        self.setFixedSize(325, 150)
         self.setWindowFlags(Qt.Tool | Qt.WindowStaysOnTopHint)
         
-        self.setStyleSheet(DIALOG_STYLES["TIMER"])
+        self.setStyleSheet("""
+            QDialog {
+                background-color: white;
+                border: 2px solid #3498db;
+                border-radius: 12px;
+            }
+            QLabel {
+                color: #2c3e50;
+                font-family: 'Segoe UI', Arial;
+                font-size: 22px;
+                font-weight: bold;
+                padding: 15px;
                 qproperty-alignment: AlignCenter;
             }
         """)

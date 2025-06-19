@@ -1,0 +1,15 @@
+{
+	"folders": [
+		{
+			"path": "."
+		}
+	],
+	"settings": {
+		"terminal.integrated.smoothScrolling": true,
+		"terminal.integrated.fastScrollSensitivity": 1,
+		"terminal.integrated.scrollback": 500,
+		"terminal.integrated.stickyScroll.enabled": true,
+		"cursor.composer.shouldAutoScrollToBottom": false,
+		"notebook.output.scrolling": false
+	}
+}

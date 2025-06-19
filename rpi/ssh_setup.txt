@@ -1,0 +1,24 @@
+Get-Service ssh-agent
+Start-Service ssh-agent
+Set-Service -Name ssh-agent -StartupType Automatic
+
+# Run this line in RDP
+x11vnc -display :0 -auth guess -forever -loop -noxdamage -repeat -rfbauth ~/.vnc/passwd -rfbport 5900 -shared
+
+ssh pi@100.111.162.21
+
+# turn HDMI back on in its preferred mode
+tvservice -p
+
+export DISPLAY=:0
+
+cd drx-2.3
+
+#source kneespa_env/bin/activate
+
+cd main
+
+python3 kneespa.py 
+
+cd /mnt/c/Users/user/Desktop/drx/main
+

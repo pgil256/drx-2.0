@@ -1,0 +1,19 @@
+# 1) Give the full UART those pins and turn Bluetooth off
+sudo tee -a /boot/config.txt <<'EOF'
+enable_uart=1
+dtoverlay=disable-bt
+EOF
+
+# 2) Remove the Linux console from the UART
+sudo sed -i 's/console=serial[0-9]*,[0-9]* //g' /boot/cmdline.txt
+
+# 3) Stop the getty that would try to grab it
+sudo systemctl disable --now serial-getty@ttyAMA0.service
+
+# 4) Reboot
+sudo reboot
+
+//
+Interface Options -> Serial Port
+Login shell accessible over serial? No
+Serial port hardware enabled? Yes

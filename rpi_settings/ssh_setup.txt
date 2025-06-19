@@ -1,3 +1,0 @@
-cmd.exe /c "ssh -i %USERPROFILE%\.ssh\id_ed25519 pi@100.111.162.21"
-
-export DISPLAY=:1

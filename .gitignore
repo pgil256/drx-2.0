@@ -1,4 +1,6 @@
 # Python
+kneespa_env/
+
 __pycache__/
 *.py[cod]
 *$py.class
@@ -90,3 +92,6 @@ claude_tmp/
 claude_temp/
 claude_backup/
 claude_old/
+
+
+

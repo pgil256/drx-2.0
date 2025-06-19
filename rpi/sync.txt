@@ -1,0 +1,2 @@
+rsync -avz /mnt/c/Users/user/Desktop/drx/main/ \
+      pi@100.111.162.21:/home/pi/drx-2.3/main/
