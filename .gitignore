@@ -73,6 +73,7 @@ htmlcov/
 # MCPs and Claude
 mcps/
 claude.md
+CLAUDE.md
 *.mcp
 *.claude
 model_control_parameters/
