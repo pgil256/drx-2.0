@@ -544,6 +544,120 @@ class Protocols(QtCore.QRunnable):
         self.signals.progress.emit("Protocol complete")
         self.signals.finished.emit(True)
 
+    def protocol_4(self):
+        """Axial with oscillating lateral movement between left and right."""
+        print("Running protocol 4...")
+        if not self.check_duration():
+            return
+
+        self.signals.progress.emit(">>Starting oscillating lateral protocol")
+        
+        # Determine initial pressure based on max pressure
+        initial_pressure = MIN_PRESSURE
+        if self.max_pressure > 20:
+            initial_pressure = max(20.0, MIN_PRESSURE)
+            print(f"Setting higher initial pressure of {initial_pressure} lbs for max_pressure={self.max_pressure}")
+    
+        # Initial pressure setting
+        if not self.set_to_pressure(initial_pressure):
+            self.signals.finished.emit(False)
+            return
+
+        if not self.run_pressure_sequence(MIN_PRESSURE, self.max_pressure):
+            self.signals.finished.emit(False)
+            return
+
+        # Oscillation parameters
+        oscillation_period = 30  # Total time for one complete cycle (left->right->left) in seconds
+        hold_at_extreme = 2      # Time to hold at each extreme position
+        
+        # Main oscillation loop
+        if self.is_running:
+            print(f"Starting oscillation between {self.max_left}° and {self.max_right}°")
+            oscillation_start_time = time.time()
+            position_at_left = True  # Start at left position
+            last_position_change = oscillation_start_time
+            pulse_active = False
+            
+            # Move to initial left position
+            if not self.set_to_c_distance(self.max_left):
+                self.signals.finished.emit(False)
+                return
+            
+            # Start pulsing if enabled
+            if self.use_pulse and self.arduino:
+                if not self.arduino.send("J"):
+                    print("Warning: Failed to start pulse")
+                else:
+                    pulse_active = True
+                    print(f"Protocol 4: Started continuous pulsing")
+            
+            while self.is_running and self.check_duration():
+                current_time = time.time()
+                time_since_position_change = current_time - last_position_change
+                
+                # Check if it's time to switch positions
+                if time_since_position_change >= (oscillation_period / 2):
+                    # Switch position
+                    if position_at_left:
+                        # Move to right
+                        print(f"Oscillating to right {self.max_right}°")
+                        self.signals.progress.emit(f">>Moving to right {self.max_right}°")
+                        if not self.set_to_c_distance(self.max_right):
+                            break
+                        position_at_left = False
+                    else:
+                        # Move to left
+                        print(f"Oscillating to left {self.max_left}°")
+                        self.signals.progress.emit(f">>Moving to left {self.max_left}°")
+                        if not self.set_to_c_distance(self.max_left):
+                            break
+                        position_at_left = True
+                    
+                    last_position_change = current_time
+                    
+                    # Hold briefly at extreme position
+                    if hold_at_extreme > 0:
+                        hold_start = time.time()
+                        while time.time() - hold_start < hold_at_extreme and self.is_running and self.check_duration():
+                            time.sleep(0.1)
+                
+                # Handle pulse state changes
+                if self.use_pulse and not pulse_active and self.arduino:
+                    # Pulse was turned on
+                    if not self.arduino.send("J"):
+                        print("Warning: Failed to start pulse")
+                    else:
+                        pulse_active = True
+                        print(f"Protocol 4: Restarted pulsing")
+                elif not self.use_pulse and pulse_active and self.arduino:
+                    # Pulse was turned off
+                    if not self.arduino.send("JS"):
+                        print("Warning: Failed to stop pulse")
+                    else:
+                        pulse_active = False
+                        print(f"Protocol 4: Stopped pulsing")
+                
+                # Send periodic keepalive
+                if int(current_time) % 30 == 0:
+                    if self.arduino:
+                        self.arduino.send("T")
+                
+                time.sleep(0.1)  # Main loop sleep
+            
+            # Stop pulsing if it was active
+            if pulse_active and self.arduino:
+                self.arduino.send("JS")
+                print(f"Protocol 4: Stopped final pulsing")
+
+        # Reset
+        self.set_to_c_distance(0)
+        time.sleep(1)  # Wait for return to center
+        self.set_to_pressure(0)
+        print("Protocol 4 complete")
+        self.signals.progress.emit("Protocol complete")
+        self.signals.finished.emit(True)
+
     def run(self):
         """Execute the selected protocol."""
         try:
@@ -559,6 +673,8 @@ class Protocols(QtCore.QRunnable):
                 self.protocol_2()
             elif self.protocol == "3":
                 self.protocol_3()
+            elif self.protocol == "4":
+                self.protocol_4()
             else:
                 print(f"Unknown protocol: {self.protocol}")
                 self.signals.finished.emit(False)

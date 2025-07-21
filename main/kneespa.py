@@ -1042,7 +1042,7 @@ class KneeSpa(QMainWindow):
     def show_next_protocol_image(self, event):
         """Show the next protocol image."""
         print("Showing next protocol image")
-        if self.current_image_number < 3:
+        if self.current_image_number < 4:
             self.current_image_number += 1
             self.update_protocol_image()
 
@@ -1727,7 +1727,7 @@ class KneeSpa(QMainWindow):
         try:
             # Validate protocol number
             protocol = self.protocol_number_field.text()
-            if protocol not in ["1", "2", "3"]:
+            if protocol not in ["1", "2", "3", "4"]:
                 raise ValueError(f"Invalid protocol number: {protocol}")
 
             # Get duration in minutes from time_edit
