@@ -1,3 +1,4 @@
+# test
 import logging
 import traceback
 import sys
@@ -27,7 +28,7 @@ from PyQt5.QtWidgets import (
     QLabel,
     QCheckBox,
 )
- 
+
 from config.constants import (
     APP_BASE_DIR,
     PAGES,
@@ -173,6 +174,7 @@ class KneeSpa(QMainWindow):
         self.mid_protocol_warning_shown = False # <-- Add this
         self.button_value = 0
         self.protocol_start_time = None  # Initialize as None
+        self.current_use_pulse_setting = True
         self.axial_flexion_pressure = 0
         self.left_lat_angle = 0
         self.right_lat_angle = 0
@@ -225,7 +227,7 @@ class KneeSpa(QMainWindow):
         self.centralWidget().setSizePolicy(
             QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
         )
-        
+
         self.loading_spinner = LoadingSpinner(
             parent=self,
             size=300,        # up to you
@@ -233,7 +235,7 @@ class KneeSpa(QMainWindow):
         )
 
         self.login_pin = ""
-        
+
         # Initialize the CSV helper
         self.csv = CSVHelper()
         try:
@@ -529,7 +531,7 @@ class KneeSpa(QMainWindow):
         except Exception as e:
             print(f"UI setup failed: {str(e)}")
             raise
-    
+
     def disable_actuator_controls(self):
         for w in self.actuator_controls:
             w.setEnabled(False)
@@ -558,7 +560,7 @@ class KneeSpa(QMainWindow):
             # Protocol control connections
             if self.ui.start_button:
                 self.ui.start_button.clicked.connect(self.start_or_stop_protocol)
-                
+
             # Profile and navigation connections
             if self.ui.profile_button:
                 self.ui.profile_button.mousePressEvent = self.show_profile_page
@@ -628,7 +630,7 @@ class KneeSpa(QMainWindow):
             # Pulse control checkbox - single checkbox now
             self.ui.use_pulse_button = self.findChild(QtWidgets.QCheckBox, "checkbox_use_pulse")
             if self.ui.use_pulse_button:
-                self.ui.use_pulse_button.setChecked(False)  # Default to no pulse
+                self.ui.use_pulse_button.setChecked(True)  # Default to use pulse
                 self.ui.use_pulse_button.stateChanged.connect(self._on_pulse_toggled)
             # Slider controls
             self.max_pressure_edit = self.findChild(QtWidgets.QSlider, "max_pressure_edit")
@@ -657,7 +659,7 @@ class KneeSpa(QMainWindow):
             # Time display (LCD)
             self.time_edit = self.findChild(QtWidgets.QLCDNumber, "time_edit")
             if self.time_edit:
-                self.time_edit.display(5)  # Default 15 minutes
+                self.time_edit.display(12)  # Default 12 minutes
 
             self.decrease_time = self.findChild(QtWidgets.QLabel, "decrease_time")
             self.increase_time = self.findChild(QtWidgets.QLabel, "increase_time")
@@ -714,7 +716,7 @@ class KneeSpa(QMainWindow):
             actual_right = abs(value) # Ensure positive
             self.worker.max_right = actual_right
             print(f"Mid-protocol: Worker max_right_angle updated to {value}")
-    
+
     def _on_pulse_toggled(self, state):
         if not self._confirm_mid_protocol_change():
             self.ui.use_pulse_button.blockSignals(True)
@@ -722,7 +724,10 @@ class KneeSpa(QMainWindow):
             self.ui.use_pulse_button.blockSignals(False)
             return
         current_state = bool(state)
-        self.current_use_pulse_setting = current_state # Update KneeSpa's state tracker
+        if self.current_use_pulse_setting:
+            self.current_use_pulse_setting = (
+                current_state  # Update KneeSpa's state tracker
+            )
         if self.worker:
             self.worker.use_pulse = current_state # Update worker with correct attribute name and value
             print(f"Mid-protocol: Worker use_pulse updated to {current_state}")
@@ -956,7 +961,7 @@ class KneeSpa(QMainWindow):
         self.ui.login_button.setText("Login")
         self.ui.login_button.clicked.disconnect()
         self.ui.login_button.clicked.connect(self.show_login_dialog)
-        
+
         self.ui.protocols_button.setEnabled(False)
 
         self.ui.findChild(QtWidgets.QStackedWidget, "stackedWidget").setCurrentIndex(
@@ -1233,13 +1238,13 @@ class KneeSpa(QMainWindow):
                 return
             if direction < 0 and new_position < -25:
                 return
-            
+
             self.loading_spinner.show()
             self.disable_actuator_controls()
 
             self.horizontal_flexion_position = new_position
             print(f"B position: {self.horizontal_flexion_position}")
-            
+
             # Update UI
             self.ui.horizontal_flexion_position_slider.setValue(
                 self.horizontal_flexion_position
@@ -1266,7 +1271,7 @@ class KneeSpa(QMainWindow):
                 return
             if direction < 0 and new_position < 0:
                 return
-            
+
             self.loading_spinner.show()
             self.disable_actuator_controls()
 
@@ -1291,7 +1296,7 @@ class KneeSpa(QMainWindow):
                 self.arduino.send("L5")
 
             self.loading_spinner.hide()
-            
+
         elif actuator == self.actuator_c:  # Lateral Flexion
             step = 5 if int(speed_factor) > 4 else 2.5  # Use 2.5 degree increments
             new_position = self.lateral_flexion_position + (step * direction)
@@ -1304,7 +1309,7 @@ class KneeSpa(QMainWindow):
                 return
             if direction < 0 and new_position < -20:
                 return
-            
+
             self.loading_spinner.show()
             self.disable_actuator_controls()
 
@@ -1340,7 +1345,7 @@ class KneeSpa(QMainWindow):
             self.arduino.send(command)
 
             self.loading_spinner.hide()
-            
+
     def reset_flexion_button_clicked(self, actuator):
         self.loading_spinner.show()
         self.disable_actuator_controls()
@@ -1356,7 +1361,7 @@ class KneeSpa(QMainWindow):
             )
             self.ui.lateral_flexion_position_slider.setValue(0)
             self.loading_spinner.hide()
-            
+
             return
 
         if actuator == self.actuator_b:
@@ -1370,7 +1375,7 @@ class KneeSpa(QMainWindow):
                 self.horizontal_flexion_position
             )
             self.loading_spinner.hide()
-            
+
             return
 
         if actuator == self.actuator_a:
@@ -1386,7 +1391,7 @@ class KneeSpa(QMainWindow):
             time.sleep(5)
             self.send_calibration()
             self.loading_spinner.hide()
-            
+
             return
 
     def move_position_flexion_button(self, actuator):
@@ -1400,14 +1405,12 @@ class KneeSpa(QMainWindow):
                 self.set_to_distance(inches, actuator, self.config.b_factor)
                 self.horizontal_flexion_position = horizontal_degrees
                 self.loading_spinner.hide()
-                
 
             elif actuator == self.actuator_a:  # Axial
                 inches = self.ui.axial_flexion_position_slider.value() / 2.0
                 self.set_to_distance(inches, actuator, self.config.a_factor)
                 self.axial_flexion_position = inches
                 self.loading_spinner.hide()
-                
 
             elif actuator == self.actuator_c:  # Lateral
                 degrees = self.ui.lateral_flexion_position_slider.value()
@@ -1416,14 +1419,13 @@ class KneeSpa(QMainWindow):
                 self.set_to_c_distance(degrees)
                 self.lateral_flexion_position = degrees
                 self.loading_spinner.hide()
-                
+
         except Exception as e:
             print(f"Error in move_position_flexion_button: {str(e)}")
             self._show_timed_error(
                  f"Error moving actuator: {str(e)}"
             )
             self.loading_spinner.hide()
-            
 
     def adjust_pressure(self, target_pressure):
         """Adjust axial pressure to target value."""
@@ -1436,13 +1438,12 @@ class KneeSpa(QMainWindow):
             self.current_pressure = target_pressure
             print(f"Pressure adjusted to {target_pressure} lbs")
             self.loading_spinner.hide()
-            
+
         except Exception as e:
             print(f"Error adjusting pressure: {str(e)}")
             print(f"Pressure adjustment failed: {str(e)}")
             self.stop_pressure_adjustment()
             self.loading_spinner.hide()
-            
 
     def update_pressure_display(self, value):
         """Update pressure display when slider moves."""
@@ -1514,7 +1515,6 @@ class KneeSpa(QMainWindow):
         self.leg_length = min(self.leg_length, self.LEG_LENGTH_MAX)  # Don't exceed max
         self.ui.axial_flexion_position_label_2.setText(f"{self.leg_length:.1f} in")
         self.loading_spinner.hide()
-        
 
     def reverse_button_clicked(self):
         """Handle reverse button press - normal speed."""
@@ -1532,7 +1532,6 @@ class KneeSpa(QMainWindow):
         self.leg_length = max(0, self.leg_length)  # Don't go below 0
         self.ui.axial_flexion_position_label_2.setText(f"{self.leg_length:.1f} in")
         self.loading_spinner.hide()
-        
 
     def forward_fast_button_clicked(self):
         """Handle forward button press - fast speed."""
@@ -1551,8 +1550,7 @@ class KneeSpa(QMainWindow):
         self.leg_length = min(self.leg_length, self.LEG_LENGTH_MAX)  # Don't exceed max
         self.ui.axial_flexion_position_label_2.setText(f"{self.leg_length:.1f} in")
         self.loading_spinner.hide()
-        
-    
+
     def reverse_fast_button_clicked(self):
         """Handle reverse button press - fast speed."""
         self.loading_spinner.show()
@@ -1570,7 +1568,6 @@ class KneeSpa(QMainWindow):
             self.leg_length = max(0, self.leg_length)  # Don't go below 0
 
         self.loading_spinner.hide()
-        
 
     def reset_extra_button_clicked(self):
         """Reset leg length position."""
@@ -1585,7 +1582,6 @@ class KneeSpa(QMainWindow):
         self.leg_length = 0.0
         self.ui.axial_flexion_position_label_2.setText("0.0 in")
         self.loading_spinner.hide()
-        
 
     def stop_leg_movement(self):
         """Stop leg length actuator movement."""
@@ -1594,9 +1590,9 @@ class KneeSpa(QMainWindow):
         self.arduino.send("F0")
         GPIO.output(EXTRAFORWARD, GPIO.LOW)
         GPIO.output(EXTRABACKWARD, GPIO.LOW)
-        #GPIO.output(EXTRAENABLE, GPIO.LOW)
+        # GPIO.output(EXTRAENABLE, GPIO.LOW)
         self.loading_spinner.hide()
-        
+
     def axial_flexion_position_changed(self):
         inches = self.ui.axial_flexion_position_slider.value() / 2.0
         self.ui.axial_flexion_position_label.setText(str(inches) + " in")
@@ -1615,7 +1611,7 @@ class KneeSpa(QMainWindow):
         self.arduino.send(command)
         print("Pressure cmd sent {}".format(command.strip()))
         self.loading_spinner.hide()
-        
+
     def horizontal_flexion_position_changed(self):
         self.minus_horizontal_degrees = (
             self.ui.horizontal_flexion_position_slider.value()
@@ -1731,7 +1727,7 @@ class KneeSpa(QMainWindow):
                 raise ValueError(f"Invalid protocol number: {protocol}")
 
             # Get duration in minutes from time_edit
-            duration = 5  # Default to 5 minutes
+            duration = 12  # Default to 12 minutes
             if hasattr(self, "time_edit") and self.time_edit is not None:
                 try:
                     duration = int(self.time_edit.value())
@@ -1739,7 +1735,7 @@ class KneeSpa(QMainWindow):
                     print(f"Error getting time value: {e}, using default 5 minutes")
 
             if duration == 0:
-                duration = 5  # Ensure we have a valid duration
+                duration = 12  # Ensure we have a valid duration
 
             print(f"Protocol duration: {duration} minutes")
             self.protocol_duration = duration * 60  # Convert to seconds
@@ -1755,7 +1751,7 @@ class KneeSpa(QMainWindow):
             max_pressure = int(self.max_pressure_edit.value()) if self.max_pressure_edit else 50
             max_left_from_slider = int(self.max_left_edit.value()) if self.max_left_edit else 10
             max_right_from_slider = int(self.max_right_edit.value()) if self.max_right_edit else 10
-            
+
             # The worker expects max_left to be negative
             max_left_for_worker = -abs(max_left_from_slider)
             max_right_for_worker = abs(max_right_from_slider)
@@ -1783,11 +1779,10 @@ class KneeSpa(QMainWindow):
             if self.max_right_edit: self.max_right_edit_previous_value = self.max_right_edit.value()
             # self.current_use_pulse_setting is already up-to-date via its handler
 
-
             # Update UI
             self.ui.start_button.setText("Stop")
             self.ui.start_button.setStyleSheet(BUTTON_STYLES["STOP"])
-            
+
             self.set_to_c_distance(0)
             time.sleep(0.5)
 
@@ -1815,18 +1810,18 @@ class KneeSpa(QMainWindow):
                     self.worker.signals.pressure_emit.disconnect(self.pressure_dialog.update_pressure)
                 except Exception:
                     pass  # Ignore if not previously connected
-                
+
                 # Connect the pressure signal to the dialog's update method
                 self.worker.signals.pressure_emit.connect(self.pressure_dialog.update_pressure)
                 print("MAIN APP: Connected worker.signals.pressure_emit to pressure_dialog.update_pressure")
-                
+
                 # Also connect the Arduino's status directly as a backup connection
                 if hasattr(self, "arduino") and self.arduino and hasattr(self.arduino, "status_emit"):
                     try:
                         self.arduino.status_emit.disconnect(self.pressure_dialog.update_pressure)
                     except Exception:
                         pass  # Ignore if not previously connected
-                    
+
                     # Create a direct connection from Arduino to pressure dialog
                     self.arduino.status_emit.connect(
                         lambda pos_a, pos_b, pos_c, pressure: self.pressure_dialog.update_pressure(pressure)
@@ -1881,7 +1876,6 @@ class KneeSpa(QMainWindow):
             self.enable_actuator_controls()
         return True
 
-
     def update_protocol_time(self):
         """Update the protocol timer display."""
         if not self.protocol_start_time:
@@ -1908,7 +1902,7 @@ class KneeSpa(QMainWindow):
         # Update UI
         self.ui.show_timer_button.setChecked(False)
         self.ui.show_pressure_button.setChecked(False)
-        self.ui.use_pulse_button.setChecked(False)
+        # self.ui.use_pulse_button.setChecked(False)
         self.ui.use_pulse_button.setEnabled(True)
         self.ui.forward_button_protocol_image.setEnabled(True)
         self.ui.backward_button_protocol_image.setEnabled(True)
@@ -1946,11 +1940,11 @@ class KneeSpa(QMainWindow):
                 dialog_x = self.x() + self.width() - self.pressure_dialog.width() - 20
                 dialog_y = self.y() + (300)
                 self.pressure_dialog.move(dialog_x, dialog_y)
-                
+
                 # Initialize with current pressure if available
                 if hasattr(self, 'worker') and self.worker and hasattr(self.worker, 'current_pressure'):
                     self.pressure_dialog.update_pressure(self.worker.current_pressure)
-                
+
                 # Check if we're running a protocol and need to connect signals
                 if self.protocol_running and hasattr(self, 'worker') and self.worker:
                     # Make sure signal is connected
@@ -1958,10 +1952,10 @@ class KneeSpa(QMainWindow):
                         self.worker.signals.pressure_emit.disconnect(self.pressure_dialog.update_pressure)
                     except Exception:
                         pass  # Ignore if not previously connected
-                    
+
                     self.worker.signals.pressure_emit.connect(self.pressure_dialog.update_pressure)
                     print("Connected pressure signal to dialog on show")
-                    
+
                 # Show the dialog
                 self.pressure_dialog.show()
         else:
@@ -2072,7 +2066,6 @@ class KneeSpa(QMainWindow):
             self.arduino.status_emit.connect(self.status_emit)
             self.arduino.connection_lost.connect(self.reset_arduino)
             self.arduino.connection_failed.connect(self.handle_connection_failed)
-            
 
             # 6 - Start the thread
             print("Starting Arduino thread")
@@ -2092,25 +2085,24 @@ class KneeSpa(QMainWindow):
 
             if connection_ready:
                 print("Arduino initialized successfully")
-                
+
                 # Setup connection signal handlers for initialization tasks
                 print("Setting up initialization tasks to run on successful connection")
-                
+
                 # Connect the signal once to reset Arduino
                 self.arduino.connection_ready.connect(self.reset_arduino)
-                
+
                 # Emit signal to trigger connected handlers if already connected
             else:
                 self.loading_spinner.hide()
-                
-                print("Arduino initialization timed out")
-            
-            return connection_ready  # Indicate success or failure
 
+                print("Arduino initialization timed out")
+
+            return connection_ready  # Indicate success or failure
 
         except Exception as e:
             self.loading_spinner.hide()
-            
+
             print(f"An error occurred while setting up Arduino: {e}")
             raise
 
@@ -2136,6 +2128,8 @@ class KneeSpa(QMainWindow):
         print("Showing loading spinner for reset")
         self.loading_spinner.show()
         self.disable_actuator_controls()
+        # Disable start button during reset to prevent crashes
+        self.start_button.setEnabled(False)
         QApplication.processEvents() # Ensure spinner is visible
 
         # Create and configure the worker, passing 'self'
@@ -2164,6 +2158,7 @@ class KneeSpa(QMainWindow):
             self.loading_spinner.hide() # Hide spinner when done
             self.start_button.setText("Start")
             self.start_button.setStyleSheet(BUTTON_STYLES["START"])
+            self.start_button.setEnabled(True)  # Re-enable start button
             time.sleep(0.1)
             self._show_timed_error(
                 "Arduino reset and actuators reinitialized."
@@ -2171,10 +2166,10 @@ class KneeSpa(QMainWindow):
             self.initial_setup_complete = True
             print("Reset sequence completed successfully via worker.")
         else:
-             self._show_timed_error(
+            self.start_button.setEnabled(True)  # Re-enable start button even on failure
+            self._show_timed_error(
              "Reset sequence failed. Check logs and Arduino connection."
              )
-
 
     @QtCore.pyqtSlot(str)
     def _on_reset_error(self, error_message):
@@ -2184,6 +2179,7 @@ class KneeSpa(QMainWindow):
         self.loading_spinner.hide()
         # Make sure to clear the reset_in_progress flag in case of error too
         self.reset_in_progress = False
+        self.start_button.setEnabled(True)  # Re-enable start button on error
         self._show_timed_error(
          f"Could not complete reset sequence:\n{error_message}"
         )

@@ -82,8 +82,10 @@ class VideoPlayer(QtWidgets.QDialog):
         self.logger.debug("Setting up UI")
         try:
             # Load the UI file
-            # Ensure this path is correct relative to where the script is run
-            uic.loadUi("ui/guis/video-player.ui", self)
+            # Use absolute path relative to the main directory
+            import os
+            ui_file_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "ui", "guis", "video-player.ui")
+            uic.loadUi(ui_file_path, self)
 
             # Get UI elements (ensure names match your .ui file)
             self.video_container = self.findChild(QtWidgets.QWidget, "video_container")
@@ -115,7 +117,7 @@ class VideoPlayer(QtWidgets.QDialog):
             self.logger.debug("UI setup completed")
 
         except FileNotFoundError:
-             self.logger.error("Video player UI file 'ui/guis/video-player.ui' not found.")
+             self.logger.error(f"Video player UI file '{ui_file_path}' not found.")
              QtWidgets.QMessageBox.critical(self, "UI Error", "Video player UI file not found.")
              QtCore.QTimer.singleShot(0, self.close) # Close dialog if UI missing
         except Exception as e:
