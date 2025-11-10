@@ -9,12 +9,11 @@ Camera streaming functionality has been removed based on user request.
 # Removed QImage as it was only used for camera frames
 from PyQt5 import QtWidgets, uic, QtGui, QtCore
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QPixmap
 import vlc
 import sys
 import os
 import logging
-from config.constants import APP_BASE_DIR, UI_PATHS
+from config.constants import UI_PATHS
 
 
 class VideoPlayer(QtWidgets.QDialog):

@@ -9,7 +9,7 @@ import time
 import smtplib
 import threading 
 from email.mime.text import MIMEText
-from datetime import datetime, timedelta
+from datetime import datetime
 from PyQt5 import QtWidgets, uic, QtCore
 from PyQt5.QtCore import (
     Qt,
@@ -67,7 +67,7 @@ from config.config import Configuration
 from helpers.arduino import Arduino
 from helpers.csv import CSVHelper
 from helpers import protocols
-from helpers.reset_worker import ResetWorker, ResetWorkerSignals 
+from helpers.reset_worker import ResetWorker
 
 from helpers.logging import setup_logger
 

@@ -1,0 +1,323 @@
+/home/pi/drx-2.3/main/motor/motor_fixed.ino:15:0: warning: "VERSION" redefined
+ #define VERSION "2025-03-20-FIXED"
+ 
+/home/pi/drx-2.3/main/motor/motor.ino:7:0: note: this is the location of the previous definition
+ #define VERSION "2025-03-20"
+ 
+motor_fixed:48:15: error: redefinition of 'volatile bool isProcessingStatus'
+ volatile bool isProcessingStatus = false;
+               ^~~~~~~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:37:15: note: 'volatile bool isProcessingStatus' previously defined here
+ volatile bool isProcessingStatus = false;
+               ^~~~~~~~~~~~~~~~~~
+motor_fixed:49:15: error: redefinition of 'long unsigned int lastCommandTime'
+ unsigned long lastCommandTime = 0;
+               ^~~~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:38:15: note: 'long unsigned int lastCommandTime' previously defined here
+ unsigned long lastCommandTime = 0;
+               ^~~~~~~~~~~~~~~
+motor_fixed:50:21: error: redefinition of 'const long unsigned int MIN_COMMAND_INTERVAL'
+ const unsigned long MIN_COMMAND_INTERVAL = 200; // ms
+                     ^~~~~~~~~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:39:21: note: 'const long unsigned int MIN_COMMAND_INTERVAL' previously defined here
+ const unsigned long MIN_COMMAND_INTERVAL = 200; // ms
+                     ^~~~~~~~~~~~~~~~~~~~
+motor_fixed:51:15: error: redefinition of 'long unsigned int statusStartTime'
+ unsigned long statusStartTime = 0;
+               ^~~~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:40:15: note: 'long unsigned int statusStartTime' previously defined here
+ unsigned long statusStartTime = 0;
+               ^~~~~~~~~~~~~~~
+motor_fixed:52:6: error: redefinition of 'bool statusAcknowledged'
+ bool statusAcknowledged = true; // Start with true so first status is sent
+      ^~~~~~~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:41:6: note: 'bool statusAcknowledged' previously defined here
+ bool statusAcknowledged = true; // Start with true so first status is sent
+      ^~~~~~~~~~~~~~~~~~
+motor_fixed:53:15: error: redefinition of 'long unsigned int lastStatusTime'
+ unsigned long lastStatusTime = 0;
+               ^~~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:42:15: note: 'long unsigned int lastStatusTime' previously defined here
+ unsigned long lastStatusTime = 0;
+               ^~~~~~~~~~~~~~
+motor_fixed:54:21: error: redefinition of 'const long unsigned int STATUS_TIMEOUT'
+ const unsigned long STATUS_TIMEOUT = 2000; // Force-reset acknowledgment after 2 seconds
+                     ^~~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:43:21: note: 'const long unsigned int STATUS_TIMEOUT' previously defined here
+ const unsigned long STATUS_TIMEOUT = 2000; // Force-reset acknowledgment after 2 seconds
+                     ^~~~~~~~~~~~~~
+motor_fixed:58:7: error: redefinition of 'HX711 scale'
+ HX711 scale;
+       ^~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:47:7: note: 'HX711 scale' previously declared here
+ HX711 scale;
+       ^~~~~
+motor_fixed:59:7: error: redefinition of 'float calibration_factor'
+ float calibration_factor = -4360.14;
+       ^~~~~~~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:48:7: note: 'float calibration_factor' previously defined here
+ float calibration_factor = -4360.14;
+       ^~~~~~~~~~~~~~~~~~
+motor_fixed:60:7: error: redefinition of 'float pressure'
+ float pressure = 0;
+       ^~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:49:7: note: 'float pressure' previously defined here
+ float pressure = 0;
+       ^~~~~~~~
+motor_fixed:63:9: error: redefinition of 'uint8_t smcDeviceNumber'
+ uint8_t smcDeviceNumber = 13;
+         ^~~~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:52:9: note: 'uint8_t smcDeviceNumber' previously defined here
+ uint8_t smcDeviceNumber = 13;
+         ^~~~~~~~~~~~~~~
+motor_fixed:64:5: error: redefinition of 'int AZERO'
+ int AZERO = 0;
+     ^~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:53:5: note: 'int AZERO' previously defined here
+ int AZERO = 0;
+     ^~~~~
+motor_fixed:65:5: error: redefinition of 'int BZERO'
+ int BZERO = 0;
+     ^~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:54:5: note: 'int BZERO' previously defined here
+ int BZERO = 0;
+     ^~~~~
+motor_fixed:66:5: error: redefinition of 'int CZERO'
+ int CZERO = 0;
+     ^~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:55:5: note: 'int CZERO' previously defined here
+ int CZERO = 0;
+     ^~~~~
+motor_fixed:67:5: error: redefinition of 'int AInches'
+ int AInches = 0;
+     ^~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:56:5: note: 'int AInches' previously defined here
+ int AInches = 0;
+     ^~~~~~~
+motor_fixed:68:5: error: redefinition of 'int BInches'
+ int BInches = 0;
+     ^~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:57:5: note: 'int BInches' previously defined here
+ int BInches = 0;
+     ^~~~~~~
+motor_fixed:69:7: error: redefinition of 'float CInches'
+ float CInches = 0;
+       ^~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:58:7: note: 'float CInches' previously defined here
+ float CInches = 0;
+       ^~~~~~~
+motor_fixed:70:6: error: redefinition of 'bool STOP'
+ bool STOP = false;
+      ^~~~
+/home/pi/drx-2.3/main/motor/motor.ino:59:6: note: 'bool STOP' previously defined here
+ bool STOP = false;
+      ^~~~
+motor_fixed:71:6: error: redefinition of 'bool bRunning'
+ bool bRunning = false;
+      ^~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:60:6: note: 'bool bRunning' previously defined here
+ bool bRunning = false;
+      ^~~~~~~~
+motor_fixed:72:6: error: redefinition of 'bool measurePressure'
+ bool measurePressure = false;
+      ^~~~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:61:6: note: 'bool measurePressure' previously defined here
+ bool measurePressure = false;
+      ^~~~~~~~~~~~~~~
+motor_fixed:73:6: error: redefinition of 'bool noStatus'
+ bool noStatus = false;
+      ^~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:62:6: note: 'bool noStatus' previously defined here
+ bool noStatus = false;
+      ^~~~~~~~
+motor_fixed:74:5: error: redefinition of 'int forward'
+ int forward = 1;
+     ^~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:63:5: note: 'int forward' previously defined here
+ int forward = 1;
+     ^~~~~~~
+motor_fixed:75:7: error: redefinition of 'float desiredPressure'
+ float desiredPressure = 0;
+       ^~~~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:64:7: note: 'float desiredPressure' previously defined here
+ float desiredPressure = 0;
+       ^~~~~~~~~~~~~~~
+motor_fixed:76:5: error: redefinition of 'int pressureDirection'
+ int pressureDirection = 0;
+     ^~~~~~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:65:5: note: 'int pressureDirection' previously defined here
+ int pressureDirection = 0;
+     ^~~~~~~~~~~~~~~~~
+motor_fixed:77:10: error: redefinition of 'uint16_t position'
+ uint16_t position = 0;
+          ^~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:66:10: note: 'uint16_t position' previously defined here
+ uint16_t position = 0;
+          ^~~~~~~~
+motor_fixed:78:10: error: redefinition of 'uint16_t desiredPosition'
+ uint16_t desiredPosition = 3;
+          ^~~~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:67:10: note: 'uint16_t desiredPosition' previously defined here
+ uint16_t desiredPosition = 3;
+          ^~~~~~~~~~~~~~~
+motor_fixed:79:6: error: redefinition of 'bool highFrequencyStatus'
+ bool highFrequencyStatus = false;
+      ^~~~~~~~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:68:6: note: 'bool highFrequencyStatus' previously defined here
+ bool highFrequencyStatus = false;
+      ^~~~~~~~~~~~~~~~~~~
+motor_fixed:80:15: error: redefinition of 'elapsedMillis timeSinceLastStatus'
+ elapsedMillis timeSinceLastStatus = 0; // Timer for high-frequency updates
+               ^~~~~~~~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:69:15: note: 'elapsedMillis timeSinceLastStatus' previously declared here
+ elapsedMillis timeSinceLastStatus = 0; // Timer for high-frequency updates
+               ^~~~~~~~~~~~~~~~~~~
+motor_fixed:81:21: error: redefinition of 'const long unsigned int HIGH_FREQ_INTERVAL'
+ const unsigned long HIGH_FREQ_INTERVAL = 1000; // ms for frequent updates (adjust as needed)
+                     ^~~~~~~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:70:21: note: 'const long unsigned int HIGH_FREQ_INTERVAL' previously defined here
+ const unsigned long HIGH_FREQ_INTERVAL = 1000; // ms for frequent updates (adjust as needed)
+                     ^~~~~~~~~~~~~~~~~~
+motor_fixed:84:8: error: redefinition of 'String commandBuffer'
+ String commandBuffer = "";
+        ^~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:73:8: note: 'String commandBuffer' previously declared here
+ String commandBuffer = "";
+        ^~~~~~~~~~~~~
+motor_fixed:85:6: error: redefinition of 'bool isCommandComplete'
+ bool isCommandComplete = false;
+      ^~~~~~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:74:6: note: 'bool isCommandComplete' previously defined here
+ bool isCommandComplete = false;
+      ^~~~~~~~~~~~~~~~~
+motor_fixed:88:15: error: redefinition of 'long unsigned int loopPosition'
+ unsigned long loopPosition = 0;
+               ^~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:77:15: note: 'long unsigned int loopPosition' previously defined here
+ unsigned long loopPosition = 0;
+               ^~~~~~~~~~~~
+motor_fixed:91:15: error: redefinition of 'elapsedMillis timeInFIT'
+ elapsedMillis timeInFIT = 0;
+               ^~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:80:15: note: 'elapsedMillis timeInFIT' previously declared here
+ elapsedMillis timeInFIT = 0;
+               ^~~~~~~~~
+motor_fixed:92:5: error: redefinition of 'int FITDelay'
+ int FITDelay = 0;
+     ^~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:81:5: note: 'int FITDelay' previously defined here
+ int FITDelay = 0;
+     ^~~~~~~~
+motor_fixed:93:6: error: redefinition of 'bool moveFITForward'
+ bool moveFITForward = false;
+      ^~~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:82:6: note: 'bool moveFITForward' previously defined here
+ bool moveFITForward = false;
+      ^~~~~~~~~~~~~~
+motor_fixed:96:6: error: redefinition of 'bool jerking'
+ bool jerking = false;
+      ^~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:85:6: note: 'bool jerking' previously defined here
+ bool jerking = false;
+      ^~~~~~~
+motor_fixed:97:5: error: redefinition of 'int jerkDirection'
+ int jerkDirection = 1;
+     ^~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:86:5: note: 'int jerkDirection' previously defined here
+ int jerkDirection = 1;
+     ^~~~~~~~~~~~~
+motor_fixed:98:5: error: redefinition of 'int jerksCompleted'
+ int jerksCompleted = 0;
+     ^~~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:87:5: note: 'int jerksCompleted' previously defined here
+ int jerksCompleted = 0;
+     ^~~~~~~~~~~~~~
+motor_fixed:99:15: error: redefinition of 'long unsigned int lastJerkTime'
+ unsigned long lastJerkTime = 0;
+               ^~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:88:15: note: 'long unsigned int lastJerkTime' previously defined here
+ unsigned long lastJerkTime = 0;
+               ^~~~~~~~~~~~
+motor_fixed:100:21: error: conflicting declaration 'const long unsigned int jerkInterval'
+ const unsigned long jerkInterval = 400;  // 400ms delay between direction changes (controls smoothness)
+                     ^~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:89:15: note: previous declaration as 'long unsigned int jerkInterval'
+ unsigned long jerkInterval = 400;  // 400ms delay between direction changes (controlls smoothness)
+               ^~~~~~~~~~~~
+motor_fixed:101:6: error: redefinition of 'bool jerkDirectionChanged'
+ bool jerkDirectionChanged = false;
+      ^~~~~~~~~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:90:6: note: 'bool jerkDirectionChanged' previously defined here
+ bool jerkDirectionChanged = false;
+      ^~~~~~~~~~~~~~~~~~~~
+motor_fixed:104:24: error: redefinition of 'void (* resetFunc)()'
+ void(* resetFunc) (void) = 0;
+                        ^
+/home/pi/drx-2.3/main/motor/motor.ino:93:8: note: 'void (* resetFunc)()' previously defined here
+ void(* resetFunc) (void) = 0;
+        ^~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor_fixed.ino: In function 'void exitSafeStart()':
+motor_fixed:107:6: error: redefinition of 'void exitSafeStart()'
+ void exitSafeStart() {
+      ^~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:96:6: note: 'void exitSafeStart()' previously defined here
+ void exitSafeStart() {
+      ^~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor_fixed.ino: In function 'void setMotorSpeed(int16_t)':
+motor_fixed:114:6: error: redefinition of 'void setMotorSpeed(int16_t)'
+ void setMotorSpeed(int16_t speed) {
+      ^~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:103:6: note: 'void setMotorSpeed(int16_t)' previously defined here
+ void setMotorSpeed(int16_t speed) {
+      ^~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor_fixed.ino: In function 'uint16_t readPosition()':
+motor_fixed:148:10: error: redefinition of 'uint16_t readPosition()'
+ uint16_t readPosition() {
+          ^~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:137:10: note: 'uint16_t readPosition()' previously defined here
+ uint16_t readPosition() {
+          ^~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor_fixed.ino: In function 'String getValue(String, char, int)':
+motor_fixed:190:8: error: redefinition of 'String getValue(String, char, int)'
+ String getValue(String data, char separator, int index) {
+        ^~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:173:8: note: 'String getValue(String, char, int)' previously defined here
+ String getValue(String data, char separator, int index) {
+        ^~~~~~~~
+/home/pi/drx-2.3/main/motor/motor_fixed.ino: In function 'bool sendStatus()':
+motor_fixed:206:6: error: redefinition of 'bool sendStatus()'
+ bool sendStatus() {
+      ^~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:189:6: note: 'bool sendStatus()' previously defined here
+ bool sendStatus() {
+      ^~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor_fixed.ino: In function 'void emergencyStop()':
+motor_fixed:261:6: error: redefinition of 'void emergencyStop()'
+ void emergencyStop() {
+      ^~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:243:6: note: 'void emergencyStop()' previously defined here
+ void emergencyStop() {
+      ^~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor_fixed.ino: In function 'void processCommand(String)':
+motor_fixed:283:6: error: redefinition of 'void processCommand(String)'
+ void processCommand(String cmd) {
+      ^~~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:264:6: note: 'void processCommand(String)' previously defined here
+ void processCommand(String cmd) {
+      ^~~~~~~~~~~~~~
+/home/pi/drx-2.3/main/motor/motor_fixed.ino: In function 'void setup()':
+motor_fixed:699:6: error: redefinition of 'void setup()'
+ void setup() {
+      ^~~~~
+/home/pi/drx-2.3/main/motor/motor.ino:663:6: note: 'void setup()' previously defined here
+ void setup() {
+      ^~~~~
+/home/pi/drx-2.3/main/motor/motor_fixed.ino: In function 'void loop()':
+motor_fixed:754:6: error: redefinition of 'void loop()'
+ void loop() {
+      ^~~~
+/home/pi/drx-2.3/main/motor/motor.ino:718:6: note: 'void loop()' previously defined here
+ void loop() {
+      ^~~~
+exit status 1
+redefinition of 'volatile bool isProcessingStatus'

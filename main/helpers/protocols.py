@@ -1,12 +1,8 @@
-from datetime import datetime
 import time
 import threading
-import logging
 from helpers.logging import setup_logger
-from typing import Optional
 
-from PyQt5 import QtCore, QtGui, QtWidgets, uic
-from PyQt5.QtCore import QUrl, Qt, QObject
+from PyQt5.QtCore import QObject
 
 from config.constants import (
     PRESSURE_MAX,

@@ -1,4 +1,3 @@
-import sys
 import time
 import traceback
 import threading
@@ -136,9 +135,6 @@ class Arduino(QObject):
                  # If no serial_com object, ensure flags are false
                  self._running = False
                  self.connected = False
-
-        # --- REMOVE THE RECONNECT CALL ---
-        # self.reconnect()
 
     @pyqtSlot()
     def verify_connection(self, tries=3, timeout_s=10.0):

@@ -1,3 +1,0 @@
-pin,name,provider,start_date,frequency,protocol,cycles,pressure,pulse,leg_length
-123,Patient One,Dr. Smith,2023-07-01,3x/week,5,10,40,Yes,8.5
-456,Patient Two,Dr. Johnson,2023-07-15,2x/week,3,8,35,No,7.0

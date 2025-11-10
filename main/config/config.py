@@ -1,18 +1,9 @@
 import configparser
-import serial
-import time
-from datetime import datetime
 import os
-import sys
-from PyQt5.QtWidgets import QApplication, QWidget, QInputDialog, QLineEdit, QFileDialog
-from PyQt5 import QtCore, QtGui, QtWidgets
 from config.constants import CONFIG_PATH
 
 
 class Configuration:
-    def get_list(option, sep=",", chars=None):
-        return [chunk.strip(chars) for chunk in option.split(sep)]
-
     def __init__(self):
 
         self.flexion_position = 0

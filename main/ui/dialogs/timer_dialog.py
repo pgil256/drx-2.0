@@ -1,12 +1,12 @@
 from PyQt5.QtWidgets import (
-    QDialog, 
-    QVBoxLayout, 
+    QDialog,
+    QVBoxLayout,
     QHBoxLayout,
-    QLabel, 
+    QLabel,
     QPushButton,
     QWidget
 )
-from PyQt5.QtCore import Qt, QTimer
+from PyQt5.QtCore import Qt
 import time
 
 class TimerDialog(QDialog):

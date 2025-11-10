@@ -1,8 +1,5 @@
-from PyQt5 import QtCore, QtGui, QtWidgets, uic
-from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QApplication
-from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
-from PyQt5.QtMultimediaWidgets import QVideoWidget
-from PyQt5.QtCore import QUrl, Qt
+from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QApplication
+from PyQt5.QtCore import Qt
 
 
 class PressureDialog(QDialog):
