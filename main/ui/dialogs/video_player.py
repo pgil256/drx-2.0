@@ -1,416 +1,458 @@
+# ui/dialogs/video_player.py
+
+"""
+Simplified Video Player Dialog using VLC.
+Plays video files from a specified directory.
+Camera streaming functionality has been removed based on user request.
+"""
+
+# Removed QImage as it was only used for camera frames
 from PyQt5 import QtWidgets, uic, QtGui, QtCore
 from PyQt5.QtCore import Qt, QTimer
-from PyQt5.QtGui import QPixmap, QImage
-import cv2
+from PyQt5.QtGui import QPixmap
 import vlc
 import sys
 import os
 import logging
+from config.constants import APP_BASE_DIR, UI_PATHS
 
 
 class VideoPlayer(QtWidgets.QDialog):
-    """Video player dialog supporting both video files and USB camera streaming."""
+    """Video player dialog supporting video file playback using VLC."""
 
     def __init__(self, parent=None):
         super(VideoPlayer, self).__init__(parent)
         self.logger = logging.getLogger(__name__)
+        self.logger.info("Initializing Simplified VideoPlayer Dialog (VLC Only)")
 
-        # Configuration
-        base_dir = "/home/pi/drx-2.0/main"
+        # Use UI_PATHS["VIDEOS"] instead of self-config
         self.config = {
-            "video_dir": os.path.join(base_dir, "ui", "media", "videos"),
+            "video_dir": os.path.dirname(UI_PATHS["VIDEOS"]),
             "video_list": [],
-            "camera_indices": list(range(3)),
-            "frame_rate": 30,
-            "vlc_options": ["--no-xlib", "--quiet", "--no-audio"],
+            "vlc_options": ["--no-xlib", "--quiet", "--no-audio"], # Default VLC options
         }
 
         # Resource tracking
         self.resources = {
             "vlc_instance": None,
             "media_player": None,
-            "camera": None,
             "timers": {
-                "update": QTimer(self),  # UI updates
-                "frame": QTimer(self),  # Camera frames
+                "update": QTimer(self),  # UI updates timer remains
             },
         }
 
         # State tracking
         self.video_state = {
-            "showing_stream": False,
             "current_video_index": 0,
             "video_path": "",
             "is_playing": False,
         }
 
-        # Populate video list
-        try:
-            if os.path.exists(self.config["video_dir"]):
-                self.config["video_list"] = [
-                    f
-                    for f in os.listdir(self.config["video_dir"])
-                    if f.endswith(".mp4")
-                ]
-                if not self.config["video_list"]:
-                    self.logger.warning(
-                        f"No .mp4 files found in {self.config['video_dir']}"
-                    )
-                    self.config["video_list"] = ["1.mp4"]
-            else:
-                print(
-                    f"Video directory not found: {self.config['video_dir']}"
-                )
-                self.config["video_list"] = ["1.mp4"]
-        except Exception as e:
-            print(f"Error scanning video directory: {e}")
-            self.config["video_list"] = ["1.mp4"]
 
+        try:
+            video_directory = self.config["video_dir"]
+            if os.path.exists(video_directory):
+                # Find all .mp4 files and sort them
+                self.config["video_list"] = sorted([
+                    f
+                    for f in os.listdir(video_directory)
+                    if f.lower().endswith(".mp4") and os.path.isfile(os.path.join(video_directory, f))
+                ])
+                if not self.config["video_list"]:
+                    self.logger.warning(f"No .mp4 files found in {video_directory}")
+                else:
+                     self.logger.info(f"Found videos: {self.config['video_list']}")
+            else:
+                self.logger.error(f"Video directory not found: {video_directory}")
+                self.config["video_list"] = ["1.mp4"] # Fallback if dir missing?
+
+        except Exception as e:
+            # Log error during scanning, list remains empty or fallback
+            self.logger.error(f"Error scanning video directory '{video_directory}': {e}")
+            # self.config["video_list"] = ["1.mp4"] # Fallback on error?
+
+        # Setup UI, Timers, Signals, and VLC
         self._setup_ui()
-        self._setup_timers()
+        self._setup_timers() # Only sets up the 'update' timer now
         self._connect_signals()
+        self._init_vlc() # Initialize VLC early
 
     def _setup_ui(self):
         """Initialize the UI elements."""
+        self.logger.debug("Setting up UI")
         try:
-            uic.loadUi("ui/guis/video-player.ui", self)
+            # Load the UI file
+            # Use absolute path relative to the main directory
+            import os
+            ui_file_path = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(__file__))), "ui", "guis", "video-player.ui")
+            uic.loadUi(ui_file_path, self)
 
-            # Get UI elements
+            # Get UI elements (ensure names match your .ui file)
             self.video_container = self.findChild(QtWidgets.QWidget, "video_container")
             self.play_button = self.findChild(QtWidgets.QPushButton, "play_button")
             self.pause_button = self.findChild(QtWidgets.QPushButton, "pause_button")
-            self.forward_button = self.findChild(
-                QtWidgets.QLabel, "forward_button_video"
-            )
-            self.backward_button = self.findChild(
-                QtWidgets.QLabel, "backward_button_video"
-            )
+            self.forward_button = self.findChild(QtWidgets.QLabel, "forward_button_video")
+            self.backward_button = self.findChild(QtWidgets.QLabel, "backward_button_video")
+
+            # Check if elements were found
+            if not all([self.video_container, self.play_button, self.pause_button, self.forward_button, self.backward_button]):
+                self.logger.error("One or more UI elements not found in video-player.ui. Check names.")
+                raise RuntimeError("Failed to find required UI elements in video player UI file.")
 
             # Configure video container layout
             layout = QtWidgets.QVBoxLayout(self.video_container)
             layout.setContentsMargins(0, 0, 0, 0)
             layout.setAlignment(Qt.AlignCenter)
 
-            # Create and configure video widget
+            # Create and configure video widget (QFrame for VLC)
             self.video_widget = QtWidgets.QFrame(self.video_container)
             self.video_widget.setSizePolicy(
                 QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
             )
-            self.video_widget.setStyleSheet(
-                """
-                background-color: black;
-                border: none;
-            """
-            )
+            self.video_widget.setStyleSheet("background-color: black; border: none;")
             layout.addWidget(self.video_widget)
 
-            # Create and configure USB stream label
-            self.usb_stream_label = QtWidgets.QLabel(self)
-            self.usb_stream_label.setAlignment(Qt.AlignCenter)
-            self.usb_stream_label.setMinimumSize(400, 200)
-            self.usb_stream_label.setSizePolicy(
-                QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
-            )
-            self.usb_stream_label.setStyleSheet(
-                """
-                background-color: black;
-                border: none;
-            """
-            )
-            layout.addWidget(self.usb_stream_label)
-            self.usb_stream_label.hide()
+            # Removed self.usb_stream_label setup and hiding
 
             self.logger.debug("UI setup completed")
 
-        except FileNotFoundError as e:
-            from utils.exceptions import UIException
-            error = UIException(f"UI file not found: {e}", ui_file="ui/guis/video-player.ui")
-            print(f"Failed to setup UI: {error}")
-            raise error
+        except FileNotFoundError:
+             self.logger.error(f"Video player UI file '{ui_file_path}' not found.")
+             QtWidgets.QMessageBox.critical(self, "UI Error", "Video player UI file not found.")
+             QtCore.QTimer.singleShot(0, self.close) # Close dialog if UI missing
         except Exception as e:
-            from utils.exceptions import WidgetError
-            error = WidgetError(f"Failed to initialize video player UI: {e}")
-            print(f"Failed to setup UI: {error}")
-            raise error
+            self.logger.exception(f"Failed to setup UI: {e}")
+            # Raise the error again or handle it by closing the dialog
+            QtWidgets.QMessageBox.critical(self, "UI Error", f"Failed to load video player UI.\nError: {e}")
+            QtCore.QTimer.singleShot(0, self.close)
 
     def _setup_timers(self):
-        """Initialize timers for UI updates and video frames."""
+        """Initialize timers for UI updates."""
+        self.logger.debug("Setting up UI update timer")
+        # Only connect the UI update timer
         self.resources["timers"]["update"].timeout.connect(self.update_ui)
-        self.resources["timers"]["update"].start(100)
+        self.resources["timers"]["update"].start(250) # Update UI state periodically
 
-        self.resources["timers"]["frame"].timeout.connect(self.update_frame)
+        # Removed frame timer setup
 
     def _connect_signals(self):
         """Connect UI signals to their slots."""
-        self.play_button.clicked.connect(self.play_video)
-        self.pause_button.clicked.connect(self.pause_video)
-        self.forward_button.mousePressEvent = self.show_next_video
-        self.backward_button.mousePressEvent = self.show_previous_video
+        self.logger.debug("Connecting signals")
+        if self.play_button:
+            self.play_button.clicked.connect(self.play_video)
+        if self.pause_button:
+            self.pause_button.clicked.connect(self.pause_video)
+        if self.forward_button:
+            self.forward_button.mousePressEvent = self.show_next_video
+        if self.backward_button:
+            self.backward_button.mousePressEvent = self.show_previous_video
 
     def _init_vlc(self):
         """Initialize VLC instance and media player."""
+        if self.resources.get("media_player"): return # Already initialized
+        self.logger.info("Initializing VLC")
         try:
+            # Check if vlc module was imported successfully
+            if vlc is None:
+                raise ImportError("VLC library not loaded.")
+
+            # Create VLC instance
+            self.resources["vlc_instance"] = vlc.Instance(self.config["vlc_options"])
             if not self.resources["vlc_instance"]:
-                self.resources["vlc_instance"] = vlc.Instance(
-                    self.config["vlc_options"]
-                )
+                 raise RuntimeError("Failed to create VLC instance.")
 
+            # Create VLC media player
+            self.resources["media_player"] = self.resources["vlc_instance"].media_player_new()
             if not self.resources["media_player"]:
-                self.resources["media_player"] = self.resources[
-                    "vlc_instance"
-                ].media_player_new()
+                 raise RuntimeError("Failed to create VLC media player.")
 
-                if sys.platform.startswith("linux"):
-                    self.resources["media_player"].set_xwindow(
-                        self.video_widget.winId()
-                    )
-                elif sys.platform == "win32":
-                    self.resources["media_player"].set_hwnd(self.video_widget.winId())
-                elif sys.platform == "darwin":
-                    self.resources["media_player"].set_nsobject(
-                        int(self.video_widget.winId())
-                    )
+            # Embed the player into the video_widget QFrame
+            if sys.platform.startswith("linux"):
+                self.resources["media_player"].set_xwindow(self.video_widget.winId())
+            elif sys.platform == "win32":
+                self.resources["media_player"].set_hwnd(self.video_widget.winId())
+            elif sys.platform == "darwin":
+                self.resources["media_player"].set_nsobject(int(self.video_widget.winId()))
+            else:
+                 self.logger.warning(f"Unsupported platform '{sys.platform}' for VLC window embedding.")
 
             self.logger.debug("VLC initialized successfully")
 
-        except AttributeError as e:
-            from utils.exceptions import WidgetError
-            error = WidgetError(f"VLC configuration error: {e}")
-            print(f"Failed to initialize VLC: {error}")
+        except Exception as e:
+            self.logger.exception(f"Failed to initialize VLC: {e}")
             QtWidgets.QMessageBox.critical(
                 self,
-                "Error",
-                f"Failed to initialize video player: {error}"
+                "VLC Error",
+                "Failed to initialize video player.\nPlease ensure VLC is installed and the python-vlc library is compatible.",
             )
-            self.close()
-        except Exception as e:
-            from utils.exceptions import UIException
-            error = UIException(f"Failed to initialize VLC: {e}")
-            print(f"Failed to initialize VLC: {error}")
-            QtWidgets.QMessageBox.critical(
-                self,
-                "Error",
-                "Failed to initialize video player. Please check VLC installation.",
-            )
-            self.close()
+            # Disable controls if VLC fails
+            if self.play_button: self.play_button.setEnabled(False)
+            if self.pause_button: self.pause_button.setEnabled(False)
+            # Optionally close the dialog: QtCore.QTimer.singleShot(0, self.close)
 
-    def update_frame(self):
-        """Update camera frame display."""
-        if not self.video_state["showing_stream"] or not self.resources["camera"]:
-            return
-
-        try:
-            ret, frame = self.resources["camera"].read()
-            if ret:
-                frame = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
-                h, w, ch = frame.shape
-                qt_image = QImage(frame.data, w, h, ch * w, QImage.Format_RGB888)
-
-                # Scale and center the image
-                label_size = self.usb_stream_label.size()
-                scaled_pixmap = QPixmap.fromImage(qt_image).scaled(
-                    label_size.width(),
-                    label_size.height(),
-                    Qt.KeepAspectRatio,
-                    Qt.SmoothTransformation,
-                )
-
-                # Create centered pixmap
-                x_offset = (label_size.width() - scaled_pixmap.width()) // 2
-                y_offset = (label_size.height() - scaled_pixmap.height()) // 2
-
-                final_pixmap = QPixmap(label_size)
-                final_pixmap.fill(Qt.black)
-
-                painter = QtGui.QPainter(final_pixmap)
-                painter.drawPixmap(x_offset, y_offset, scaled_pixmap)
-                painter.end()
-
-                self.usb_stream_label.setPixmap(final_pixmap)
-
-        except Exception as e:
-            print(f"Frame update failed: {e}")
-            self.resources["timers"]["frame"].stop()
+    # Removed update_frame method
 
     def update_ui(self):
-        """Update UI elements."""
-        if not self.video_state["showing_stream"] and self.resources["media_player"]:
-            self.play_button.setEnabled(not self.video_state["is_playing"])
-            self.pause_button.setEnabled(self.video_state["is_playing"])
+        """Update UI elements based on VLC player state."""
+        # Simplified: Only update based on VLC player state
+        if self.resources.get("media_player"):
+            try:
+                is_playing_vlc = self.resources["media_player"].is_playing()
+                if self.video_state["is_playing"] != is_playing_vlc:
+                     self.video_state["is_playing"] = is_playing_vlc
+                     self.logger.debug(f"Player state updated: is_playing={self.is_playing}")
 
-    def switch_to_camera(self):
-        """Switch display to USB camera feed."""
-        try:
-            if self.resources["media_player"]:
-                self.resources["media_player"].stop()
+                # Update button states
+                if self.play_button:
+                    # Enable play only if stopped and videos exist in the list
+                    self.play_button.setEnabled(not self.video_state["is_playing"] and bool(self.config["video_list"]))
+                if self.pause_button:
+                    self.pause_button.setEnabled(self.video_state["is_playing"])
 
-            if self.resources["camera"]:
-                self.resources["camera"].release()
+            except Exception as e:
+                 self.logger.error(f"Error updating UI from VLC state: {e}")
+        else:
+             # Ensure buttons are disabled if player isn't ready
+             if self.play_button: self.play_button.setEnabled(False)
+             if self.pause_button: self.pause_button.setEnabled(False)
 
-            for idx in self.config["camera_indices"]:
-                try:
-                    self.resources["camera"] = cv2.VideoCapture(idx)
-                    if self.resources["camera"].isOpened():
-                        print(f"Connected to camera at index {idx}")
-                        break
-                except Exception as e:
-                    self.logger.warning(f"Failed to open camera at index {idx}: {e}")
 
-            if not self.resources["camera"] or not self.resources["camera"].isOpened():
-                raise RuntimeError("No available camera found")
-
-            self.video_state["showing_stream"] = True
-            self.video_widget.hide()
-            self.usb_stream_label.show()
-
-            self.resources["timers"]["frame"].start(1000 // self.config["frame_rate"])
-            return True
-
-        except Exception as e:
-            print(f"Failed to switch to camera: {e}")
-            return False
+    # Removed switch_to_camera method
 
     def load_current_video(self):
         """Load and prepare current video for playback."""
+        self.logger.info(f"Attempting to load video index: {self.video_state['current_video_index']}")
+        video_list = self.config["video_list"]
+
+        # Check if player and video list are ready
+        if not self.resources.get("media_player"):
+             self.logger.error("VLC media player not initialized. Cannot load video.")
+             return
+        if not video_list:
+            self.logger.warning("No videos available in the list to play.")
+            # Optionally inform user
+            # QtWidgets.QMessageBox.warning(self, "No Videos", "No video files found.")
+            return
+
+        # Validate index
+        if not (0 <= self.video_state["current_video_index"] < len(video_list)):
+            self.logger.warning(f"Video index {self.video_state['current_video_index']} out of bounds. Resetting to 0.")
+            self.video_state["current_video_index"] = 0
+            if not video_list: return # Still no videos?
+
         try:
-            if not self.config["video_list"]:
-                raise RuntimeError("No videos available to play")
+            # Get filename and construct full path
+            video_filename = video_list[self.video_state["current_video_index"]]
+            video_path_str = os.path.join(self.config["video_dir"], video_filename)
+            self.video_state["video_path"] = video_path_str # Store the path string
+            self.logger.info(f"Loading video: {video_path_str}")
 
-            if self.video_state["current_video_index"] >= len(
-                self.config["video_list"]
-            ):
-                self.video_state["current_video_index"] = 0
 
-            self._init_vlc()
+            # Check if file exists
+            if not os.path.exists(video_path_str):
+                self.logger.error(f"Video file not found: {video_path_str}")
+                # Removed the switch_to_camera fallback
+                QtWidgets.QMessageBox.warning(self, "File Not Found", f"Video file not found:\n{video_filename}")
+                # Maybe try next video or disable playback?
+                return
 
-            video_path = os.path.join(
-                self.config["video_dir"],
-                self.config["video_list"][self.video_state["current_video_index"]],
-            )
+            # Create VLC media object
+            media = self.resources["vlc_instance"].media_new(video_path_str)
+            if not media:
+                 raise RuntimeError("Failed to create VLC media object.")
 
-            if not os.path.exists(video_path):
-                print(f"Video file not found: {video_path}")
-                if self.switch_to_camera():
-                    return
-                raise FileNotFoundError(f"Video file not found: {video_path}")
-
-            media = self.resources["vlc_instance"].media_new(video_path)
+            # Set media for the player
             self.resources["media_player"].set_media(media)
-            self.video_state["video_path"] = video_path
+            media.release() # Release our reference
 
-            self.video_state["showing_stream"] = False
-            self.usb_stream_label.hide()
+            self.logger.info(f"Video '{video_filename}' loaded.")
+
+            # Ensure the correct widget is visible (video_widget)
+            # Removed usb_stream_label.hide()
             self.video_widget.show()
 
+            # Automatically play the loaded video
             self.play_video()
 
         except Exception as e:
-            print(f"Failed to load video: {e}")
-            if not self.video_state["showing_stream"] and self.switch_to_camera():
-                print("Switched to camera stream after video load failed")
-            else:
-                QtWidgets.QMessageBox.warning(
-                    self,
-                    "Error",
-                    f"Failed to load video and camera not available: {str(e)}",
-                )
+            self.logger.exception(f"Failed to load video '{self.video_state['video_path']}': {e}")
+            # Removed the switch_to_camera fallback
+            QtWidgets.QMessageBox.critical(
+                self, "Load Error", f"Failed to load video:\n{video_filename}\n\nError: {e}"
+            )
 
     def safe_cleanup(self):
-        """Clean up all resources."""
-        self.logger.debug("Starting cleanup")
+        """Clean up VLC resources."""
+        self.logger.info("Cleaning up VideoPlayer resources")
 
-        for timer in self.resources["timers"].values():
-            if timer and timer.isActive():
-                timer.stop()
+        # Stop timers
+        if "update" in self.resources["timers"] and self.resources["timers"]["update"].isActive():
+            self.resources["timers"]["update"].stop()
+            self.logger.debug("Update timer stopped.")
+        # Removed frame timer stop
 
-        if self.resources["camera"]:
-            self.resources["camera"].release()
-            self.resources["camera"] = None
+        # Removed camera resource cleanup
 
-        if self.resources["media_player"]:
-            self.resources["media_player"].stop()
-            if self.resources["media_player"].get_media():
-                self.resources["media_player"].get_media().release()
-            self.resources["media_player"].release()
-            self.resources["media_player"] = None
+        # Release VLC player
+        if self.resources.get("media_player"):
+            try:
+                player = self.resources["media_player"]
+                if player.is_playing():
+                    player.stop()
+                current_media = player.get_media()
+                if current_media:
+                    current_media.release()
+                player.release()
+                self.resources["media_player"] = None
+                self.logger.debug("VLC media player released.")
+            except Exception as e:
+                self.logger.error(f"Error releasing VLC media player: {e}")
 
-        if self.resources["vlc_instance"]:
-            self.resources["vlc_instance"].release()
-            self.resources["vlc_instance"] = None
+        # Release VLC instance
+        if self.resources.get("vlc_instance"):
+            try:
+                self.resources["vlc_instance"].release()
+                self.resources["vlc_instance"] = None
+                self.logger.debug("VLC instance released.")
+            except Exception as e:
+                self.logger.error(f"Error releasing VLC instance: {e}")
 
-        self.logger.debug("Cleanup completed")
+        self.logger.info("VideoPlayer cleanup finished.")
+
+    # --- Event Handlers ---
 
     def showEvent(self, event):
         """Handle dialog show event."""
-        self.logger.debug("Showing VideoPlayer")
+        self.logger.debug("VideoPlayer showEvent triggered")
         try:
-            self._init_vlc()
-            self.load_current_video()
+            # Ensure VLC is initialized
+            if not self.resources.get("media_player"):
+                self._init_vlc()
+            # Load the current video if VLC is ready
+            if self.resources.get("media_player"):
+                self.load_current_video()
             super().showEvent(event)
         except Exception as e:
-            print(f"Error during show: {e}")
-            super().showEvent(event)
+            self.logger.exception(f"Error during showEvent: {e}")
+            super().showEvent(event) # Still call parent
 
     def closeEvent(self, event):
         """Handle dialog close event."""
-        self.logger.debug("Closing VideoPlayer")
-        try:
-            self.safe_cleanup()
-            super().closeEvent(event)
-        except Exception as e:
-            print(f"Error during close: {e}")
-            super().closeEvent(event)
+        self.logger.debug("VideoPlayer closeEvent triggered")
+        self.safe_cleanup() # Ensure cleanup on close
+        super().closeEvent(event)
 
     def hideEvent(self, event):
         """Handle dialog hide event."""
-        self.logger.debug("Hiding VideoPlayer")
+        self.logger.debug("VideoPlayer hideEvent triggered")
         try:
-            if self.resources["media_player"]:
+            # Stop playback when hidden
+            if self.resources.get("media_player") and self.resources["media_player"].is_playing():
                 self.resources["media_player"].stop()
-            if self.resources["camera"]:
-                self.resources["camera"].release()
-                self.resources["camera"] = None
+                self.video_state["is_playing"] = False
+                self.logger.info("Video playback stopped on hide.")
+                self.update_ui() # Update button states
+
+            # Removed camera cleanup on hide
+
             super().hideEvent(event)
         except Exception as e:
-            print(f"Error during hide: {e}")
+            self.logger.exception(f"Error during hideEvent: {e}")
             super().hideEvent(event)
 
+    # --- Control Slots ---
+
     def play_video(self):
-        """Start video playback or camera stream."""
-        if self.video_state["showing_stream"]:
-            self.resources["timers"]["frame"].start(1000 // self.config["frame_rate"])
-        elif self.resources["media_player"]:
-            self.resources["media_player"].play()
-            self.video_state["is_playing"] = True
+        """Start video playback."""
+        # Removed check for showing_stream
+        player = self.resources.get("media_player")
+        if player and not player.is_playing():
+            # Ensure media is loaded
+            if not player.get_media():
+                self.logger.warning("Play called but no media loaded. Loading current video.")
+                self.load_current_video()
+                # Check again, return if still no media
+                if not player.get_media():
+                     self.logger.error("Failed to load media, cannot play.")
+                     return
+
+            self.logger.info(f"Playing video: {self.video_state['video_path']}")
+            try:
+                result = player.play()
+                if result == -1:
+                     self.logger.error("VLC play() returned error.")
+                     QtWidgets.QMessageBox.critical(self, "Playback Error", "VLC could not play the video.")
+                else:
+                     self.video_state["is_playing"] = True
+                     self.update_ui()
+            except Exception as e:
+                 self.logger.exception(f"Error trying to play video: {e}")
+                 QtWidgets.QMessageBox.critical(self, "Playback Error", f"Could not play video.\nError: {e}")
+
+        elif not player:
+             self.logger.error("Play called but VLC player not initialized.")
+        elif player.is_playing():
+             self.logger.debug("Play called but video already playing.")
+
 
     def pause_video(self):
-        """Pause video playback or camera stream."""
-        if self.video_state["showing_stream"]:
-            self.resources["timers"]["frame"].stop()
-        elif self.resources["media_player"]:
-            self.resources["media_player"].pause()
-            self.video_state["is_playing"] = False
+        """Pause video playback."""
+        # Removed check for showing_stream
+        player = self.resources.get("media_player")
+        if player and player.is_playing():
+            self.logger.info(f"Pausing video: {self.video_state['video_path']}")
+            try:
+                player.pause() # pause() toggles in VLC
+                self.video_state["is_playing"] = False # Assume pause worked
+                self.update_ui()
+            except Exception as e:
+                 self.logger.exception(f"Error trying to pause video: {e}")
+        elif not player:
+             self.logger.error("Pause called but VLC player not initialized.")
+        elif not player.get_media() or not player.can_pause():
+             self.logger.debug("Pause called but video not playing or cannot be paused.")
+
 
     def show_next_video(self, event):
-        """Switch to next video or camera stream."""
+        """Switch to the next video in the list."""
+        video_list = self.config["video_list"]
+        if not video_list: return # No videos
+        self.logger.debug("Next video requested")
+
+        # Stop current playback
+        player = self.resources.get("media_player")
+        if player and player.get_media():
+            if player.is_playing():
+                player.stop()
+        self.video_state["is_playing"] = False
+
+        # Cycle index
         self.video_state["current_video_index"] += 1
-        if self.video_state["current_video_index"] >= len(self.config["video_list"]):
-            if self.switch_to_camera():
-                print("Switched to camera stream")
-            else:
-                self.video_state["current_video_index"] = 0
-                self.load_current_video()
-        else:
-            self.load_current_video()
+        if self.video_state["current_video_index"] >= len(video_list):
+            self.video_state["current_video_index"] = 0 # Wrap around
+
+        # Removed switch_to_camera logic
+        self.load_current_video()
 
     def show_previous_video(self, event):
-        """Switch to previous video."""
-        if self.video_state["showing_stream"]:
-            self.video_state["showing_stream"] = False
-            self.video_state["current_video_index"] = len(self.config["video_list"]) - 1
-            self.load_current_video()
-        else:
-            self.video_state["current_video_index"] = max(
-                0, self.video_state["current_video_index"] - 1
-            )
-            self.load_current_video()
+        """Switch to the previous video in the list."""
+        video_list = self.config["video_list"]
+        if not video_list: return # No videos
+        self.logger.debug("Previous video requested")
+
+        # Stop current playback
+        player = self.resources.get("media_player")
+        if player and player.get_media():
+             if player.is_playing():
+                player.stop()
+        self.video_state["is_playing"] = False
+
+        # Removed check for showing_stream
+
+        # Cycle index
+        self.video_state["current_video_index"] -= 1
+        if self.video_state["current_video_index"] < 0:
+            self.video_state["current_video_index"] = len(video_list) - 1 # Wrap around
+
+        self.load_current_video()
+

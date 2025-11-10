@@ -37,5 +37,6 @@ pip3 install opencv-python==4.5.5.64
 echo "Installing other Python dependencies..."
 pip3 install -r requirements.txt
 
+
 echo "Environment setup complete!"
 echo "You can now run the application with: python3 main/kneespa.py"

@@ -2,20 +2,39 @@ from datetime import datetime
 import time
 import threading
 import logging
-from utils.logging import setup_logger
+from helpers.logging import setup_logger
 from typing import Optional
-from PyQt5 import QtCore
-from helpers import worker_signals
+
+from PyQt5 import QtCore, QtGui, QtWidgets, uic
+from PyQt5.QtCore import QUrl, Qt, QObject
+
+from config.constants import (
+    PRESSURE_MAX,
+    AXIAL_MAX,
+    LATERAL_MIN,
+    LATERAL_MAX,
+    PROTOCOL_DEFAULT_SETTINGS
+)
 
 # Constants
-DEGREES0 = 0  # Center/neutral position
-MIN_PRESSURE = 10  # Minimum starting pressure in lbs
-MAX_SAFE_PRESSURE = 100  # Maximum safe pressure in lbs
-HOLD_TIME_SHORT = 1
-HOLD_TIME_LONG = 5  # Default hold duration in seconds
-PRESSURE_INCREMENT = 5  # Standard pressure increase step
-ANGLE_INCREMENT = 2.5  # Standard angle adjustment step
+DEGREES0 = PROTOCOL_DEFAULT_SETTINGS["DEGREES0"]          # Center/neutral position
+MIN_PRESSURE = PROTOCOL_DEFAULT_SETTINGS["MIN_PRESSURE"]  # Minimum starting pressure in lbs
+MAX_SAFE_PRESSURE = PROTOCOL_DEFAULT_SETTINGS["MAX_SAFE_PRESSURE"]  # Maximum safe pressure in lbs
+HOLD_TIME_SHORT = PROTOCOL_DEFAULT_SETTINGS["HOLD_TIME_SHORT"]
+HOLD_TIME_LONG = PROTOCOL_DEFAULT_SETTINGS["HOLD_TIME_LONG"]        # Default hold duration in seconds
+PRESSURE_INCREMENT = PROTOCOL_DEFAULT_SETTINGS["PRESSURE_INCREMENT"]  # Standard pressure increase step
+ANGLE_INCREMENT = PROTOCOL_DEFAULT_SETTINGS["ANGLE_INCREMENT"]        # Standard angle adjustment step
 
+class WorkerSignals(QObject):
+    """Defines the signals available from a running worker thread."""
+    finished = QtCore.pyqtSignal(bool)
+    stopped = QtCore.pyqtSignal(bool)
+    error = QtCore.pyqtSignal(tuple)
+    result = QtCore.pyqtSignal(object)
+    progress = QtCore.pyqtSignal(str)
+    pressure_emit = QtCore.pyqtSignal(float)
+    status_emit = QtCore.pyqtSignal(int, int, int, float)
+    reset_needed = QtCore.pyqtSignal()
 
 class Protocols(QtCore.QRunnable):
     """Main protocol handler for KneeSpa treatment sequences."""
@@ -41,632 +60,736 @@ class Protocols(QtCore.QRunnable):
         self.arduino = ser
         self.a_factor = a_factor
         self.config = config
-        self.signals = worker_signals.WorkerSignals()
+        self.signals = WorkerSignals()
 
         # Protocol parameters
         self.protocol = protocol
         self.max_pressure = max_pressure
-        self.max_left = -abs(max_left)  # Ensure negative for left
-        self.max_right = abs(max_right)  # Ensure positive for right
-        self.duration = duration * 60  # Convert to seconds
+        self.max_left = -abs(max_left)     # Ensure negative for left
+        self.max_right = abs(max_right)    # Ensure positive for right
+        self.duration = duration * 60      # Convert to seconds
         self.use_pulse = use_pulse
 
         # State tracking
         self.is_running = False
-        self.I2Cstatus = 0
-        self.exit_flag = threading.Event()
         self.start_time = None
         self.elapsed_time = 0
         self.current_pressure = 0
-        self.angle_set = False  # Flag to track if angle is set
+        self.current_pos_c = 0
+        self.target_pos_c = None
+        self.angle_set = False
 
         # Connect signals if arduino is provided
         if ser is not None and hasattr(ser, "status_emit"):
+            # First disconnect any existing connections to avoid duplicates
+            try:
+                ser.status_emit.disconnect(self.update_status)
+            except Exception:
+                pass  # Ignore if not previously connected
+                
+            # Now connect the signal
             ser.status_emit.connect(self.update_status)
+            print("Protocol: Connected Arduino status_emit signal to update_status method")
+        else:
+            print("WARNING: Arduino object missing status_emit signal - status updates won't work!")
 
         print(f"Protocols class initialized with use_pulse={use_pulse}")
 
     def update_status(self, pos_a, pos_b, pos_c, pressure):
         """Update current status values from Arduino feedback."""
-        self.current_pressure = pressure
-        # Forward pressure to UI if needed
+        print(f"Protocol update_status received: A={pos_a}, B={pos_b}, C={pos_c}, Pressure={pressure}")
+        
+        # Store values with explicit type conversion
+        self.current_pressure = float(pressure)
+        self.current_pos_c = int(pos_c)
+        
+        # Emit separate pressure signal for dialogs and UI updates
+        # Make sure to use float for pressure to avoid type conversion issues
+        print(f"Protocol emitting pressure_emit with pressure={float(pressure)}")
         self.signals.pressure_emit.emit(float(pressure))
+        
+        # Also emit the full status update for other components
+        print(f"Protocol emitting status_emit with all values")
+        self.signals.status_emit.emit(int(pos_a), int(pos_b), int(pos_c), float(pressure))
 
-    def apply_continuous_pulse(self) -> bool:
-        """Apply continuous pulse sequence until duration expires."""
-        if not self.is_running or not self.use_pulse:
+    def check_duration(self) -> bool:
+        """Check if protocol duration has expired."""
+        if not self.start_time:
+            print("Warning: No start time set for duration check")
+            return False
+        
+        self.elapsed_time = time.time() - self.start_time
+        
+        # Only print status every 15 seconds
+        if int(self.elapsed_time) % 15 == 0:
+            print(f"Duration check - Elapsed: {self.elapsed_time:.1f}s / Total: {self.duration}s")
+            
+        return self.elapsed_time < self.duration
+
+    def run_pressure_sequence(self, starting_pressure: float, target_pressure: float) -> bool:
+            """Run a sequence of pressure increases from start to target."""
+            current_command = starting_pressure
+            pressure_tolerance = 3  # Acceptable pressure difference in lbs
+            max_wait_time = 5  # Increased max time to wait for pressure (seconds)
+            max_retries = 5    # Increased max retries
+            check_interval = 0.5  # Time between pressure checks in seconds
+            last_check_time = 0  # Track when we last printed a status update
+            
+            # Initial pressure command 
+            print(f"Increasing pressure to: {current_command} lbs")
+            self.arduino.send(f"P{current_command}")
+            
+            # Wait for initial pressure to build with less frequent status checks
+            wait_start = time.time()
+            while time.time() - wait_start < max_wait_time:
+                if self.current_pressure >= current_command - pressure_tolerance:
+                    break
+                # Avoid excessive status printing
+                current_time = time.time()
+                if current_time - last_check_time >= check_interval:
+                    last_check_time = current_time
+                    print(f"Initial pressure build - Target: {current_command}, Current: {self.current_pressure}")
+                time.sleep(1)  # Longer sleep to reduce polling
+
+            # Step through pressure increments with reduced monitoring
+            while current_command < (target_pressure - PRESSURE_INCREMENT/2):
+                current_command += PRESSURE_INCREMENT
+                print(f"Increasing pressure to: {current_command} lbs")
+                self.arduino.send(f"P{current_command}")
+                
+                # Wait for current increment to stabilize before next increment
+                increment_start = time.time()
+                increment_stable = False
+                
+                while time.time() - increment_start < max_wait_time:
+                    # Check if this increment is stable before moving to next
+                    if abs(self.current_pressure - current_command) <= pressure_tolerance:
+                        print(f"Pressure increment stabilized at {self.current_pressure} lbs")
+                        increment_stable = True
+                        break
+                    time.sleep(0.2)
+                
+                if not increment_stable:
+                    print(f"Warning: Pressure increment {current_command} not fully stabilized")
+                
+                # Small delay between increments
+                time.sleep(2.0)
+
+            # Send final pressure command
+            print(f"Setting final pressure: {target_pressure} lbs")
+            final_attempt_start = time.time()
+            self.arduino.send(f"P{target_pressure}")
+            
+            # Wait and verify with extended monitoring for final pressure
+            retry_count = 0
+            final_stabilized = False
+            max_final_wait_time = 15  # Longer wait for final pressure to stabilize
+            
+            while retry_count < max_retries and not final_stabilized:
+                wait_start = time.time()
+                last_check_time = 0
+                
+                # Give pressure time to stabilize 
+                while time.time() - wait_start < max_wait_time:
+                    final_diff = abs(target_pressure - self.current_pressure)
+                    
+                    # Only print status updates periodically
+                    current_time = time.time()
+                    if current_time - last_check_time >= check_interval:
+                        last_check_time = current_time
+                        print(f"Pressure check - Target: {target_pressure}, Current: {self.current_pressure}, Difference: {final_diff} lbs")
+                    
+                    if final_diff <= pressure_tolerance:
+                        print(f"Pressure within tolerance! Achieved {self.current_pressure} lbs")
+                        final_stabilized = True
+                        break
+                    
+                    # Check if we've spent too long on final pressure - if we're close, consider it good enough
+                    if time.time() - final_attempt_start > max_final_wait_time and final_diff < 5:
+                        print(f"Pressure close enough after extended attempts: {self.current_pressure}/{target_pressure} lbs")
+                        final_stabilized = True
+                        break
+                        
+                    time.sleep(0.2)  # Longer sleep to reduce polling
+                
+                if final_stabilized:
+                    break
+                else:
+                    retry_count += 1
+                    if retry_count < max_retries:
+                        print(f"Retrying final pressure command (attempt {retry_count + 1}/{max_retries})")
+                        self.arduino.send(f"P{target_pressure}")
+                    else:
+                        print(f"Warning: Final pressure of {self.current_pressure} lbs not reaching target {target_pressure} lbs")
+            
+            # Give one final moment to stabilize before continuing
+            time.sleep(3)
+            
+            # Leave high-frequency updates on for next command
+            # We'll turn them off after the lateral position is set
+            print(f"Pressure sequence complete. Final pressure: {self.current_pressure} lbs")
             return True
 
+    def set_to_pressure(self, target_pressure: float) -> bool:
+        """Set axial pressure directly."""
+        pressure_tolerance = 2  # Acceptable pressure difference in lbs
+        max_wait_time = 5  # Maximum time to wait for pressure to stabilize (seconds)
+        
         try:
-            print("Starting continuous pulse sequence...")
-            self.signals.progress.emit(">>Starting continuous pulsing")
+            if not self.is_running:
+                print("Cannot set pressure - protocol not running")
+                return False
+            if target_pressure < 0 or target_pressure > MAX_SAFE_PRESSURE:
+                print(f"Error: Pressure {target_pressure} outside safe range (0-{MAX_SAFE_PRESSURE})")
+                return False
+                
+            print(f"Setting pressure to: {target_pressure} lbs")
+            self.arduino.send(f"P{target_pressure}")
+            
+            # Wait for pressure to reach target with live monitoring
+            if target_pressure > 0:  # Only wait if we're increasing pressure
+                wait_start = time.time()
+                while time.time() - wait_start < max_wait_time:
+                    diff = abs(target_pressure - self.current_pressure)
+                    if diff <= pressure_tolerance:
+                        print(f"Pressure stabilized at {self.current_pressure} lbs")
+                        break
+                    time.sleep(0.1)  # Small sleep to prevent CPU hogging
+            
+            return True
+        except Exception as e:
+            print(f"Error setting pressure: {e}")
+            return False
 
-            # Send initial jerking command to Arduino
-            print("Sending jerk command")
-            self.arduino.send("J")
-            self.signals.progress.emit(">>Pulsing")
+    def set_to_c_distance(self, degrees: float) -> bool:
+        """Set the C actuator position based on degrees."""
+        position_tolerance = 25  # Acceptable position difference
+        max_wait_time = 5  # Maximum time to wait for position to be reached (seconds)
+        
+        try:
+            print(f"Setting C actuator to {degrees} degrees")
+            degrees = float(degrees)
+            degrees = round(degrees * 2) / 2
+            degrees = max(-20.0, min(20.0, degrees))
+            degree_key = "{:.1f}".format(degrees)
 
-            # Monitor until protocol completes or is stopped
-            while self.is_running and self.check_duration():
-                # Brief check interval without disrupting Arduino
-                time.sleep(0.5)
-
-                # Check if we should continue
-                if not self.check_duration() or not self.is_running:
-                    break
-
-            # Stop jerking when done
-            if self.is_running:
-                print("Pulse sequence complete due to time expiration")
+            # Look up or interpolate position
+            if degree_key in self.config.CMarks:
+                position = int(self.config.CMarks[degree_key])
             else:
-                print("Pulse sequence stopped by user")
+                marks = sorted((float(k), int(v)) for k, v in self.config.CMarks.items())
+                for i in range(len(marks) - 1):
+                    if marks[i][0] <= degrees <= marks[i + 1][0]:
+                        deg1, pos1 = marks[i]
+                        deg2, pos2 = marks[i + 1]
+                        # Prevent division by zero
+                        if deg2 - deg1 != 0:
+                            ratio = (degrees - deg1) / (deg2 - deg1)
+                            position = pos1 + int((pos2 - pos1) * ratio)
+                        else:
+                            # If degree marks are identical, use the first position
+                            position = pos1
+                        break
+                else:
+                    raise ValueError(f"Degree value {degrees} outside valid range")
 
-            # Send stop command
-            self.arduino.send("JS")  # Stop jerking
-            time.sleep(1)  # Increased wait time after stopping pulse
+            # Send command and ensure high-frequency status updates for position monitoring
+            self.angle_set = False
+            self.target_pos_c = position
+            self.arduino.send(f"K{position}")
+            
+            # Wait for position to be reached with live monitoring
+            wait_start = time.time()
+            while time.time() - wait_start < max_wait_time:
+                current_diff = abs(self.current_pos_c - position)
+                print(f"Position check - Target: {position}, Current: {self.current_pos_c}, Difference: {current_diff}")
+                
+                if current_diff <= position_tolerance:
+                    print(f"Position reached within tolerance")
+                    self.angle_set = True
+                    break
+                time.sleep(0.1)  # Small sleep to prevent CPU hogging
+            
+            if not self.angle_set:
+                print("Warning: Angle position not verified within timeout")
+                
+            return True
+
+        except Exception as e:
+            print(f"Error in set_to_c_distance: {e}")
+            return False
+
+    def apply_continuous_pulse(self) -> bool:
+        """
+        Apply continuous pulse sequence.
+        Checks self.use_pulse dynamically and stops pulsing if it becomes False.
+        """
+        if not self.is_running:
+            return True # Exit if protocol stopped externally
+
+        # This function is entered when the main protocol loop decides pulsing should happen.
+        # It needs to handle the case where self.use_pulse becomes False while running.
+        try:
+            # Check if pulsing is actually enabled *now*
+            if not self.use_pulse:
+                print(f"Protocol {self.protocol} ({time.time()}): apply_continuous_pulse called, but self.use_pulse is False. Skipping.")
+                return True # Not an error, just nothing to pulse.
+
+            print(f"Protocol {self.protocol} ({time.time()}): Starting continuous pulse sequence (self.use_pulse={self.use_pulse})...")
+            self.signals.progress.emit(">>Pulsing...")
+
+            if not self.arduino.send("J"): return False # Command to start pulsing
+            print(f"Protocol {self.protocol} ({time.time()}): Sent 'J' (start pulse) to Arduino.")
+            pulse_command_active_j = True # Flag to track if "J" was sent
+
+            last_keepalive_time = time.time()
+            keepalive_interval = 30  # seconds
+            check_interval = 0.2 # How often to check conditions in this loop
+
+            while self.is_running and self.use_pulse: # *** KEY: Check self.use_pulse in loop condition ***
+                current_time = time.time()
+
+                # Check overall protocol duration
+                if not self.check_duration():
+                    print(f"Protocol {self.protocol} ({time.time()}): Duration ended during pulse operation.")
+                    break # Exit loop if duration is over
+
+                # Send keepalive periodically
+                if current_time - last_keepalive_time > keepalive_interval:
+                    if self.arduino: self.arduino.send("T")
+                    last_keepalive_time = current_time
+
+                time.sleep(check_interval) # Main loop pause
+
+            # Loop exited. Reasons: not self.is_running OR self.use_pulse became False OR duration ended.
+            print(f"Protocol {self.protocol} ({time.time()}): Exiting apply_continuous_pulse loop. Conditions: is_running={self.is_running}, use_pulse={self.use_pulse}, elapsed_time={self.elapsed_time:.1f}/{self.duration}")
+
+            # Always send stop pulse command ('JS') if start command ('J') was sent, to ensure it stops.
+            if pulse_command_active_j and self.arduino:
+                if not self.arduino.send("JS"): print("Warning: Failed to send JS command")
+                print(f"Protocol {self.protocol} ({time.time()}): Sent 'JS' (stop pulse) to Arduino.")
 
             return True
 
         except Exception as e:
-            from utils.exceptions import ProtocolExecutionError
-            error = ProtocolExecutionError(f"Error during pulse sequence: {e}")
-            print(f"Error during pulse sequence: {error}")
-            self.arduino.send("JS")  # Try to stop jerking even on error
+            print(f"Error during pulse sequence: {e}")
+            # Try to send stop command on error too
+            if self.arduino: self.arduino.send("JS")
             return False
 
+    def protocol_1(self):
+        """Axial protocol - pressure only."""
+        print("Running protocol 1...")
+        if not self.check_duration():
+            return
+
+        self.signals.progress.emit(">>Starting axial protocol")
+
+        # Determine initial pressure based on max pressure
+        initial_pressure = MIN_PRESSURE
+        if self.max_pressure > 20:
+            initial_pressure = max(20.0, MIN_PRESSURE)
+            print(f"Setting higher initial pressure of {initial_pressure} lbs for max_pressure={self.max_pressure}")
+
+        # Initial pressure setting
+        if not self.set_to_pressure(initial_pressure):
+            self.signals.finished.emit(False)
+            return
+
+        # Run pressure sequence
+        if not self.run_pressure_sequence(MIN_PRESSURE, self.max_pressure):
+            self.signals.finished.emit(False)
+            return
+            
+        # Final phase: pulse or hold, responsive to changes in self.use_pulse
+        if self.is_running:
+            main_phase_loop_active = True
+            print(f"Protocol {self.protocol} ({time.time()}): Entering final phase loop. Initial self.use_pulse={self.use_pulse}")
+            while main_phase_loop_active and self.is_running and self.check_duration():
+                if self.use_pulse:
+                    # If we enter here, we intend to pulse.
+                    # apply_continuous_pulse will run its own loop based on duration
+                    # and will also internally check self.use_pulse to stop early if it changes.
+                    print(f"Protocol {self.protocol} ({time.time()}): Loop decides to pulse. Calling apply_continuous_pulse.")
+                    if not self.apply_continuous_pulse():
+                        # Error during pulse
+                        return False # Signal protocol failure
+                    # apply_continuous_pulse completed (either by duration, stop, or self.use_pulse becoming False)
+                    # The function handles the timed part. We break the outer loop now.
+                    main_phase_loop_active = False
+                else:
+                    # Hold mode
+                    # print(f"Protocol {self.protocol} ({time.time()}): Loop decides to hold.") # Verbose
+                    time.sleep(0.5) # Check frequently if state changes back to pulse or duration ends
+
+            # Ensure pulse is stopped if loop exited for any reason
+            if hasattr(self.arduino, 'send') and self.arduino:
+                 if not self.arduino.send("JS"): print("Warning: Failed sending final JS in P1")
+                 print(f"Protocol {self.protocol} ({time.time()}): Sent final 'JS' after main phase loop.")
+        
+        # Reset
+        self.set_to_pressure(0)
+        print("Protocol 1 complete")
+        self.signals.progress.emit("Protocol complete")
+        self.signals.finished.emit(True)
+
+    def protocol_2(self):
+        """Axial with left lateral movement."""
+        print("Running protocol 2...")
+        if not self.check_duration():
+            return
+
+        self.signals.progress.emit(">>Starting left lateral protocol")
+        
+        # Determine initial pressure based on max pressure
+        initial_pressure = MIN_PRESSURE
+        if self.max_pressure > 20:
+            initial_pressure = max(20.0, MIN_PRESSURE)
+            print(f"Setting higher initial pressure of {initial_pressure} lbs for max_pressure={self.max_pressure}")
+    
+        # Initial pressure setting
+        if not self.set_to_pressure(initial_pressure):
+            self.signals.finished.emit(False)
+            return
+
+        if not self.run_pressure_sequence(MIN_PRESSURE, self.max_pressure):
+            self.signals.finished.emit(False)
+            return
+
+        # Move to left position
+        if self.is_running:
+            print(f"Moving to left {self.max_left}°")
+            if not self.set_to_c_distance(self.max_left):
+                self.signals.finished.emit(False)
+                return
+
+            # Final phase: pulse or hold, responsive to changes in self.use_pulse
+            main_phase_loop_active = True
+            print(f"Protocol {self.protocol} ({time.time()}): Entering final phase loop (pulse/hold). Initial self.use_pulse={self.use_pulse}")
+            while main_phase_loop_active and self.is_running and self.check_duration():
+                if self.use_pulse:
+                    print(f"Protocol {self.protocol} ({time.time()}): self.use_pulse is True, attempting to run apply_continuous_pulse.")
+                    if not self.apply_continuous_pulse():
+                        self.signals.reset_needed.emit()
+                        self.signals.finished.emit(False)
+                        return
+                    main_phase_loop_active = False 
+                else:
+                    print(f"Protocol {self.protocol} ({time.time()}): self.use_pulse is False, in hold mode.")
+                    time.sleep(0.5)
+            
+            if hasattr(self.arduino, 'send') and self.arduino:
+                 self.arduino.send("JS")
+                 print(f"Protocol {self.protocol} ({time.time()}): Sent final 'JS' after main phase loop.")
+
+        # Reset
+        self.set_to_c_distance(0)
+        self.set_to_pressure(0)
+        print("Protocol 2 complete")
+        self.signals.progress.emit("Protocol complete")
+        self.signals.finished.emit(True)
+
+    def protocol_3(self):
+        """Axial with right lateral movement."""
+        print("Running protocol 3...")
+        if not self.check_duration():
+            return
+
+        self.signals.progress.emit(">>Starting right lateral protocol")
+        
+        # Determine initial pressure based on max pressure
+        initial_pressure = MIN_PRESSURE
+        if self.max_pressure > 20:
+            initial_pressure = max(20.0, MIN_PRESSURE)
+            print(f"Setting higher initial pressure of {initial_pressure} lbs for max_pressure={self.max_pressure}")
+    
+        # Initial pressure setting
+        if not self.set_to_pressure(initial_pressure):
+            self.signals.finished.emit(False)
+            return
+
+        if not self.run_pressure_sequence(MIN_PRESSURE, self.max_pressure):
+            self.signals.finished.emit(False)
+            return
+
+        # Move to right position
+        if self.is_running:
+            print(f"Moving to right {self.max_right}°")
+            if not self.set_to_c_distance(self.max_right):
+                self.signals.finished.emit(False)
+                return
+
+            # Final phase: pulse or hold, responsive to changes in self.use_pulse
+            main_phase_loop_active = True
+            print(f"Protocol {self.protocol} ({time.time()}): Entering final phase loop (pulse/hold). Initial self.use_pulse={self.use_pulse}")
+            while main_phase_loop_active and self.is_running and self.check_duration():
+                if self.use_pulse:
+                    print(f"Protocol {self.protocol} ({time.time()}): self.use_pulse is True, attempting to run apply_continuous_pulse.")
+                    if not self.apply_continuous_pulse():
+                        self.signals.reset_needed.emit()
+                        self.signals.finished.emit(False)
+                        return
+                    main_phase_loop_active = False 
+                else:
+                    print(f"Protocol {self.protocol} ({time.time()}): self.use_pulse is False, in hold mode.")
+                    time.sleep(0.5)
+            
+            if hasattr(self.arduino, 'send') and self.arduino:
+                 self.arduino.send("JS")
+                 print(f"Protocol {self.protocol} ({time.time()}): Sent final 'JS' after main phase loop.")
+
+        # Reset
+        self.set_to_c_distance(0)
+        
+        # Simple wait for returning to center position
+        time.sleep(1)
+            
+        self.set_to_pressure(0)
+        print("Protocol 3 complete")
+        self.signals.progress.emit("Protocol complete")
+        self.signals.finished.emit(True)
+
+    def protocol_4(self):
+        """Axial with oscillating lateral movement between left and right."""
+        print("Running protocol 4...")
+        if not self.check_duration():
+            return
+
+        self.signals.progress.emit(">>Starting oscillating lateral protocol")
+        
+        # Determine initial pressure based on max pressure
+        initial_pressure = MIN_PRESSURE
+        if self.max_pressure > 20:
+            initial_pressure = max(20.0, MIN_PRESSURE)
+            print(f"Setting higher initial pressure of {initial_pressure} lbs for max_pressure={self.max_pressure}")
+    
+        # Initial pressure setting
+        if not self.set_to_pressure(initial_pressure):
+            self.signals.finished.emit(False)
+            return
+
+        if not self.run_pressure_sequence(MIN_PRESSURE, self.max_pressure):
+            self.signals.finished.emit(False)
+            return
+
+        # Oscillation parameters
+        oscillation_period = 30  # Total time for one complete cycle (left->right->left) in seconds
+        hold_at_extreme = 2      # Time to hold at each extreme position
+        
+        # Main oscillation loop
+        if self.is_running:
+            print(f"Starting oscillation between {self.max_left}° and {self.max_right}°")
+            oscillation_start_time = time.time()
+            position_at_left = True  # Start at left position
+            last_position_change = oscillation_start_time
+            pulse_active = False
+            
+            # Move to initial left position
+            if not self.set_to_c_distance(self.max_left):
+                self.signals.finished.emit(False)
+                return
+            
+            # Start pulsing if enabled
+            if self.use_pulse and self.arduino:
+                if not self.arduino.send("J"):
+                    print("Warning: Failed to start pulse")
+                else:
+                    pulse_active = True
+                    print(f"Protocol 4: Started continuous pulsing")
+            
+            while self.is_running and self.check_duration():
+                current_time = time.time()
+                time_since_position_change = current_time - last_position_change
+                
+                # Check if it's time to switch positions
+                if time_since_position_change >= (oscillation_period / 2):
+                    # Switch position
+                    if position_at_left:
+                        # Move to right
+                        print(f"Oscillating to right {self.max_right}°")
+                        self.signals.progress.emit(f">>Moving to right {self.max_right}°")
+                        if not self.set_to_c_distance(self.max_right):
+                            break
+                        position_at_left = False
+                    else:
+                        # Move to left
+                        print(f"Oscillating to left {self.max_left}°")
+                        self.signals.progress.emit(f">>Moving to left {self.max_left}°")
+                        if not self.set_to_c_distance(self.max_left):
+                            break
+                        position_at_left = True
+                    
+                    last_position_change = current_time
+                    
+                    # Hold briefly at extreme position
+                    if hold_at_extreme > 0:
+                        hold_start = time.time()
+                        while time.time() - hold_start < hold_at_extreme and self.is_running and self.check_duration():
+                            time.sleep(0.1)
+                
+                # Handle pulse state changes
+                if self.use_pulse and not pulse_active and self.arduino:
+                    # Pulse was turned on
+                    if not self.arduino.send("J"):
+                        print("Warning: Failed to start pulse")
+                    else:
+                        pulse_active = True
+                        print(f"Protocol 4: Restarted pulsing")
+                elif not self.use_pulse and pulse_active and self.arduino:
+                    # Pulse was turned off
+                    if not self.arduino.send("JS"):
+                        print("Warning: Failed to stop pulse")
+                    else:
+                        pulse_active = False
+                        print(f"Protocol 4: Stopped pulsing")
+                
+                # Send periodic keepalive
+                if int(current_time) % 30 == 0:
+                    if self.arduino:
+                        self.arduino.send("T")
+                
+                time.sleep(0.1)  # Main loop sleep
+            
+            # Stop pulsing if it was active
+            if pulse_active and self.arduino:
+                self.arduino.send("JS")
+                print(f"Protocol 4: Stopped final pulsing")
+
+        # Reset
+        self.set_to_c_distance(0)
+        time.sleep(1)  # Wait for return to center
+        self.set_to_pressure(0)
+        print("Protocol 4 complete")
+        self.signals.progress.emit("Protocol complete")
+        self.signals.finished.emit(True)
+
     def run(self):
-        """Implementation of QRunnable's run method to execute in thread pool."""
+        """Execute the selected protocol."""
         try:
+            print("Starting protocol execution...")
             self.is_running = True
             self.start_time = time.time()
+            self.arduino.send("HF1")
+            time.sleep(0.1)
 
-            # Execute the right protocol based on protocol number
             if self.protocol == "1":
                 self.protocol_1()
             elif self.protocol == "2":
                 self.protocol_2()
             elif self.protocol == "3":
                 self.protocol_3()
+            elif self.protocol == "4":
+                self.protocol_4()
             else:
-                from utils.exceptions import ProtocolValidationError
-                error = ProtocolValidationError(f"Unknown protocol: {self.protocol}")
-                print(f"Error: {error}")
+                print(f"Unknown protocol: {self.protocol}")
                 self.signals.finished.emit(False)
+            
+            self.arduino.send("HF0")
+            time.sleep(0.1)
+            
         except Exception as e:
-            from utils.exceptions import ProtocolExecutionError
-            error = ProtocolExecutionError(f"Error executing protocol: {str(e)}")
-            print(f"Error executing protocol: {error}")
+            print(f"Critical error executing protocol: {e}")
+            self.arduino.send("HF0")
+            time.sleep(0.1)
             self.is_running = False
             self.signals.finished.emit(False)
 
     def stop(self):
         """Safely stop a running protocol."""
-        print("Stopping protocol")
+        print("Initiating protocol stop sequence...")
         self.is_running = False
-        self.exit_flag.set()  # Signal threads to exit
-
-        # Send stop command to Arduino
-        if self.arduino:
-            self.arduino.send("X")  # Emergency stop command
-
-        # Notify UI of completion
-        self.signals.stopped.emit(True)
-
-    def check_duration(self):
-        """Check if protocol duration has expired.
-
-        Returns:
-            bool: True if should continue, False if time expired
-        """
-        if not self.start_time:
-            return False
-
-        self.elapsed_time = time.time() - self.start_time
-        return self.elapsed_time < self.duration
-
-    def set_to_angle(self, degrees):
-        """Set lateral flexion to specified angle."""
-        try:
-            if not self.is_running:
-                return False
-
-            print(f"Setting angle to {degrees}°")
-            self.angle_set = False  # Reset angle flag
-
-            # Format for dictionary lookup with one decimal place
-            degree_key = "{:.1f}".format(degrees)
-
-            # Get position value from CMarks dictionary
-            if degree_key in self.config.CMarks:
-                position = self.config.CMarks[degree_key]
-                print(f"Position value for {degrees}° is {position}")
-
-                # Send command to Arduino
-                self.arduino.send(f"K{position}")
-                self.signals.progress.emit(f">>Setting angle to {degrees}°")
-
-                # Use a fixed delay instead of waiting for I2Cstatus
-                time.sleep(3)  # Increased wait time for angle setting
-
-                # Get a status update to ensure position is set
-                self.arduino.send("S")
-                time.sleep(1)
-
-                self.I2Cstatus = 1  # Force status to 1
-                self.angle_set = True  # Mark angle as set
-                print(f"Angle set to {degrees}° completed")
-
-                return True
-            else:
-                from utils.exceptions import ProtocolValidationError
-                error = ProtocolValidationError(f"No position defined for angle {degrees}°")
-                print(f"Error: {error}")
-                return False
-
-        except Exception as e:
-            from utils.exceptions import ActuatorException
-            error = ActuatorException(f"Error setting angle: {str(e)}")
-            print(f"Error setting angle: {error}")
-            return False
-
-    def set_to_pressure(self, pressure):
-        """Set axial pressure to specified value."""
-        try:
-            if not self.is_running:
-                return False
-
-            print(f"Setting pressure to {pressure} lbs")
-
-            # Validate pressure is within safe limits
-            if pressure < 0 or pressure > MAX_SAFE_PRESSURE:
-                from utils.exceptions import SafetyLimitException
-                error = SafetyLimitException(
-                    f"Pressure {pressure} outside safe range (0-{MAX_SAFE_PRESSURE})",
-                    severity="HIGH",
-                    limit_type="pressure",
-                    current_value=pressure,
-                    limit_value=MAX_SAFE_PRESSURE
-                )
-                print(f"Error: {error}")
-                return False
-
-            # Send command to Arduino
-            self.arduino.send(f"P{pressure}")
-            self.signals.progress.emit(f">>Setting pressure to {pressure} lbs")
-            self.signals.pressure_emit.emit(float(pressure))
-
-            # Wait for pressure to be applied with timeout
-            wait_start = time.time()
-            max_wait = 5  # Maximum wait time in seconds
-
-            while (time.time() - wait_start) < max_wait:
-                # Check if target pressure reached within tolerance (±2 lbs)
-                if abs(self.current_pressure - pressure) <= 2:
-                    print(
-                        f"Target pressure {pressure} reached at {self.current_pressure}"
-                    )
-                    self.I2Cstatus = 1
-                    return True
-
-                # Request status update to get latest pressure
-                if (time.time() - wait_start) > 1:  # Don't spam requests
-                    self.arduino.send("S")
-
-                time.sleep(0.5)
-
-            from utils.exceptions import ArduinoTimeoutError
-            timeout_warning = ArduinoTimeoutError(
-                f"Pressure set operation timed out. Current: {self.current_pressure}, Target: {pressure}"
-            )
-            print(f"Warning: {timeout_warning}")
-            self.I2Cstatus = 1  # Force status to continue
-            return True
-
-        except Exception as e:
-            from utils.exceptions import ActuatorException
-            error = ActuatorException(f"Error setting pressure: {str(e)}")
-            print(f"Error setting pressure: {error}")
-            return False
-
-    def update_I2Cstatus(self):
-        """Update I2C status flag."""
-        self.I2Cstatus = 1
-
-    def reset_actuators(self):
-        """Reset all actuators to safe positions."""
-        try:
-            print("Performing final reset sequence...")
-
-            # First ensure jerking/pulsing is stopped
-            self.arduino.send("JS")
-            time.sleep(1)
-
-            # Then return to neutral angle
-            degree_key = "{:.1f}".format(0)
-            if degree_key in self.config.CMarks:
-                position = self.config.CMarks[degree_key]
-                self.arduino.send(f"K{position}")
-                time.sleep(3)  # Wait for movement to complete
-
-            # Then set pressure to zero
-            self.arduino.send("P0")
-            time.sleep(2)
-
-            # Final status check
-            self.arduino.send("S")
-            time.sleep(1)
-
-            print("Reset sequence completed")
-            return True
-        except Exception as e:
-            from utils.exceptions import ActuatorException
-            error = ActuatorException(f"Error during reset sequence: {e}", requires_reset=True)
-            print(f"Error during reset sequence: {error}")
-            return False
-
-    def protocol_1(self):
-        """Axial protocol - pressure only with static 15-degree flexion."""
-        print("Running protocol 1...")
-        if not self.check_duration():
-            return
-
-        self.signals.progress.emit(">>Starting axial protocol")
         
-        # First reset to ensure we're starting from a known state
-        self.signals.reset_needed.emit()
-        time.sleep(2)  # Extended wait for reset
-        
-        # Set standard 15-degree flexion angle first
-        print("Setting standard 15-degree flexion angle")
-        if not self.set_to_angle(15.0):
-            self.signals.finished.emit(False)
+        # Ensure we have a valid Arduino connection
+        if not self.arduino:
+            print("Warning: No Arduino connection available for stop sequence")
+            self.signals.stopped.emit(True)
             return
+        
+        try:
+            # Turn off high-frequency status first (more reliable before emergency stop)
+            success = self.arduino.send("HF0")
+            print(f"High frequency status turned off: {'Success' if success else 'Failed'}")
+            time.sleep(0.5)  # Brief pause before next command
             
-        # Extra wait to ensure angle is stable
-        time.sleep(2)
-        
-        # Request status update to verify position
-        self.arduino.send("S")
-        time.sleep(1)
-
-        # Start with minimal pressure
-        current_pressure = MIN_PRESSURE
-        if not self.set_to_pressure(current_pressure):
-            self.signals.finished.emit(False)
-            return
-
-        self.exit_flag.wait(timeout=HOLD_TIME_SHORT)
-
-        # Gradually increase to max pressure
-        while (
-            current_pressure < self.max_pressure
-            and self.is_running
-            and self.check_duration()
-        ):
-            current_pressure = min(
-                current_pressure + PRESSURE_INCREMENT, self.max_pressure
-            )
-            print(f"Increasing pressure to {current_pressure} lbs.")
-
-            if not self.set_to_pressure(current_pressure):
-                self.signals.finished.emit(False)
-                return
-                
-            # Periodically verify we're still at 15 degrees
-            if current_pressure % 15 == 0:  # Every 15 lbs check angle
-                print("Verifying 15-degree angle is maintained")
-                if not self.set_to_angle(15.0):
-                    print("Warning: Angle verification failed. Continuing protocol.")
-
-            self.exit_flag.wait(timeout=HOLD_TIME_SHORT)
-
-            # Request status update to get latest pressure
-            self.arduino.send("S")
-            time.sleep(0.5)
-
-        # Ensure we're at max pressure before pulsing
-        if self.current_pressure < (self.max_pressure - 3):
-            print(
-                f"Adjusting final pressure from {self.current_pressure} to {self.max_pressure}"
-            )
-            if not self.set_to_pressure(self.max_pressure):
-                self.signals.finished.emit(False)
-                return
-
-            # Extra wait to ensure pressure stabilizes
-            self.exit_flag.wait(timeout=2.0)
+            # Send emergency stop command
+            success = self.arduino.send("X")
+            print(f"Emergency stop command sent: {'Success' if success else 'Failed'}")
             
-            # Verify 15-degree angle again
-            print("Final verification of 15-degree angle")
-            if not self.set_to_angle(15.0):
-                print("Warning: Final angle verification failed. Continuing protocol.")
-
-            # Request status update to get latest pressure
-            self.arduino.send("S")
-            time.sleep(0.5)
-
-        # At max pressure, either pulse continuously or hold until time expires
-        if self.is_running and self.use_pulse:
-            # Regardless of exact pressure, apply pulse if pulse mode is enabled
-            print(f"Applying continuous pulses at pressure {self.current_pressure}")
-            if not self.apply_continuous_pulse():
-                self.signals.reset_needed.emit()
-                self.signals.finished.emit(False)
-                return
-        elif self.is_running:
-            # Hold at max pressure until time expires
-            print("Holding at max pressure until time expires.")
-            while self.is_running and self.check_duration():
-                self.exit_flag.wait(timeout=HOLD_TIME_LONG)
-
-                # Periodic status check
-                if self.is_running and self.check_duration():
-                    self.arduino.send("S")
-                    time.sleep(0.5)
+            # Wait for a moment to let the stop command process
+            time.sleep(0.5)  # Increased wait time
+            
+            # Send test command to verify connection is still active
+            success = self.arduino.send("T")
+            print(f"Test command sent: {'Success' if success else 'Failed'}")
+            
+            # Start a keepalive thread that continues even after worker is "stopped"
+            # This prevents connection timeouts
+            self._start_keepalive_thread()
+            
+            # Signal that the protocol was stopped
+            self.signals.stopped.emit(True)
+            
+        except Exception as e:
+            print(f"Error during protocol stop: {e}")
+            self.signals.stopped.emit(False)
+    
+    def _start_keepalive_thread(self):
+        """Start a separate thread to send periodic keepalive signals to Arduino."""
+        def keepalive_worker():
+            print("Starting keepalive worker thread")
+            # Run for 60 seconds to ensure Arduino connection is maintained
+            # even after the QRunnable is removed from the threadpool
+            end_time = time.time() + 60  # Extended duration to 60 seconds
+            keepalive_interval = 3  # More frequent - every 3 seconds
+            last_keepalive = 0
+            reconnect_attempts = 0
+            max_reconnect_attempts = 3
+            
+            while time.time() < end_time:
+                try:
+                    current_time = time.time()
+                    if current_time - last_keepalive >= keepalive_interval:
+                        if self.arduino and hasattr(self.arduino, "send"):
+                            # Try to verify connection first
+                            success = False
+                            if hasattr(self.arduino, "verify_connection"):
+                                try:
+                                    success = self.arduino.verify_connection(tries=3, timeout_s=5.0)
+                                except Exception as ve:
+                                    print(f"Error verifying connection: {ve}")
+                            
+                            # If verification fails or unavailable, try basic send
+                            if not success:
+                                success = self.arduino.send("T")  # Test command as keepalive
+                            
+                            if success:
+                                # Only print keepalive message on first success or after failures
+                                if reconnect_attempts > 0 or last_keepalive == 0:
+                                    print("Sent keepalive after protocol stop")
+                                last_keepalive = current_time
+                                reconnect_attempts = 0  # Reset counter on success
+                            else:
+                                # Try reconnecting if connection seems lost
+                                reconnect_attempts += 1
+                                if reconnect_attempts <= max_reconnect_attempts:
+                                    print(f"Keepalive failed, trying reconnect ({reconnect_attempts}/{max_reconnect_attempts})...")
+                                    if hasattr(self.arduino, "reconnect"):
+                                        self.arduino.reconnect(max_retries=1)
+                                else:
+                                    print("Maximum reconnect attempts reached, stopping keepalive")
+                                    break
+                except Exception as e:
+                    print(f"Error in keepalive thread: {e}")
+                    reconnect_attempts += 1
+                    if reconnect_attempts > max_reconnect_attempts:
+                        print("Too many errors in keepalive thread, stopping")
+                        break
                     
-                    # Re-verify angle every minute
-                    if (time.time() - self.start_time) % 60 < 1:
-                        print("Periodic angle verification")
-                        self.set_to_angle(15.0)
-
-        # Reset actuators after protocol completes - first zero pressure
-        print("Protocol complete, resetting to zero pressure")
-        self.set_to_pressure(0)
-        time.sleep(2)
-        
-        # Then reset angle to zero
-        self.set_to_angle(0)
-        
-        # Final reset signal
-        self.signals.reset_needed.emit()
-
-        print("Protocol 1 complete.")
-        self.signals.progress.emit("Protocol complete")
-        self.signals.finished.emit(True)
-
-    def protocol_2(self):
-        """Axial with left lateral movement at static 15-degree flexion."""
-        print("Running protocol 2...")
-        if not self.check_duration():
-            return
-
-        self.signals.progress.emit(">>Starting left lateral protocol")
-
-        # First reset to ensure we're starting from a known state
-        self.signals.reset_needed.emit()
-        time.sleep(3)  # Extended wait for reset
-        
-        # Ensure we're starting with zero pressure before any movement
-        print("Zeroing pressure before beginning protocol")
-        self.arduino.send("P0")
-        time.sleep(3)  # Wait for pressure to drop
-        
-        # Get current status to verify zero pressure
-        self.arduino.send("S")
-        time.sleep(2)
-        
-        # Set standard 15-degree flexion angle first
-        print("Setting standard 15-degree flexion angle")
-        if not self.set_to_angle(15.0):
-            self.signals.finished.emit(False)
-            return
+                time.sleep(1)
             
-        # Wait to ensure angle is stable
-        time.sleep(3)
+            print("Keepalive thread finished")
         
-        # Request status update to verify position
-        self.arduino.send("S")
-        time.sleep(2)
-        
-        # Start with minimal pressure
-        current_pressure = MIN_PRESSURE
-        if not self.set_to_pressure(current_pressure):
-            self.signals.finished.emit(False)
-            return
-
-        self.exit_flag.wait(timeout=HOLD_TIME_LONG)  # Longer wait for initial pressure
-
-        # Gradually increase to max pressure
-        while (
-            current_pressure < self.max_pressure
-            and self.is_running
-            and self.check_duration()
-        ):
-            current_pressure = min(
-                current_pressure + PRESSURE_INCREMENT, self.max_pressure
-            )
-            print(f"Increasing pressure to {current_pressure} lbs.")
-
-            if not self.set_to_pressure(current_pressure):
-                self.signals.finished.emit(False)
-                return
-                
-            # Periodically verify we're still at 15 degrees
-            if current_pressure % 15 == 0:  # Every 15 lbs check angle
-                print("Verifying 15-degree angle is maintained")
-                if not self.set_to_angle(15.0):
-                    print("Warning: Angle verification failed. Continuing protocol.")
-
-            self.exit_flag.wait(timeout=HOLD_TIME_SHORT)
-
-            # Request status update to get latest pressure
-            self.arduino.send("S")
-            time.sleep(0.5)
-
-        # Once at pressure, move to left lateral angle
-        if self.is_running:
-            # IMPORTANT: Apply lateral movement now that pressure is stable
-            print(f"Moving to left lateral angle {self.max_left}°.")
-            if not self.set_to_angle(self.max_left):
-                self.signals.finished.emit(False)
-                return
-                
-            # Extra wait to ensure lateral position is stable
-            time.sleep(3)
-            
-            # Request status update
-            self.arduino.send("S")
-            time.sleep(1)
-
-            # Now apply pulsing if enabled
-            if self.use_pulse:
-                print("Starting continuous pulses with fixed left angle.")
-                if not self.apply_continuous_pulse():
-                    self.signals.reset_needed.emit()
-                    self.signals.finished.emit(False)
-                    return
-            else:
-                # Hold at position until time expires
-                print("Holding at left angle until time expires.")
-                while self.is_running and self.check_duration():
-                    self.exit_flag.wait(timeout=HOLD_TIME_LONG)
-                    # Periodic status check and angle verification
-                    if self.is_running and self.check_duration():
-                        self.arduino.send("S")
-                        time.sleep(0.5)
-                        
-                        # Re-verify angle every minute
-                        if (time.time() - self.start_time) % 60 < 1:
-                            print("Periodic angle verification")
-                            self.set_to_angle(self.max_left)
-        
-        # Protocol complete - first reset lateral angle back to center
-        print("Protocol complete, resetting lateral angle to center")
-        self.set_to_angle(0)
-        time.sleep(2)
-        
-        # Then zero pressure
-        print("Reducing pressure to zero")
-        self.set_to_pressure(0)
-        time.sleep(2)
-
-        # Ensure reset happens regardless of how we exit the protocol
-        self.signals.reset_needed.emit()
-
-        print("Protocol 2 complete.")
-        self.signals.progress.emit("Protocol complete")
-        self.signals.finished.emit(True)
-
-    def protocol_3(self):
-        """Axial with right lateral movement at static 15-degree flexion."""
-        print("Running protocol 3...")
-        if not self.check_duration():
-            return
-
-        self.signals.progress.emit(">>Starting right lateral protocol")
-
-        # First reset to ensure we're starting from a known state
-        self.signals.reset_needed.emit()
-        time.sleep(3)  # Extended wait for reset
-        
-        # Ensure we're starting with zero pressure before any movement
-        print("Zeroing pressure before beginning protocol")
-        self.arduino.send("P0")
-        time.sleep(3)  # Wait for pressure to drop
-        
-        # Get current status to verify zero pressure
-        self.arduino.send("S")
-        time.sleep(2)
-        
-        # Set standard 15-degree flexion angle first
-        print("Setting standard 15-degree flexion angle")
-        if not self.set_to_angle(15.0):
-            self.signals.finished.emit(False)
-            return
-            
-        # Wait to ensure angle is stable
-        time.sleep(3)
-        
-        # Request status update to verify position
-        self.arduino.send("S")
-        time.sleep(2)
-        
-        # Start with minimal pressure
-        current_pressure = MIN_PRESSURE
-        if not self.set_to_pressure(current_pressure):
-            self.signals.finished.emit(False)
-            return
-
-        self.exit_flag.wait(timeout=HOLD_TIME_LONG)  # Longer wait for initial pressure
-
-        # Gradually increase to max pressure
-        while (
-            current_pressure < self.max_pressure
-            and self.is_running
-            and self.check_duration()
-        ):
-            current_pressure = min(
-                current_pressure + PRESSURE_INCREMENT, self.max_pressure
-            )
-            print(f"Increasing pressure to {current_pressure} lbs.")
-
-            if not self.set_to_pressure(current_pressure):
-                self.signals.finished.emit(False)
-                return
-                
-            # Periodically verify we're still at 15 degrees
-            if current_pressure % 15 == 0:  # Every 15 lbs check angle
-                print("Verifying 15-degree angle is maintained")
-                if not self.set_to_angle(15.0):
-                    print("Warning: Angle verification failed. Continuing protocol.")
-
-            self.exit_flag.wait(timeout=HOLD_TIME_SHORT)
-
-            # Request status update to get latest pressure
-            self.arduino.send("S")
-            time.sleep(0.5)
-
-        # Once at pressure, move to right lateral angle
-        if self.is_running:
-            # IMPORTANT: Apply lateral movement now that pressure is stable
-            print(f"Moving to right lateral angle {self.max_right}°.")
-            if not self.set_to_angle(self.max_right):
-                self.signals.finished.emit(False)
-                return
-                
-            # Extra wait to ensure lateral position is stable
-            time.sleep(3)
-            
-            # Request status update
-            self.arduino.send("S")
-            time.sleep(1)
-
-            # Now apply pulsing if enabled
-            if self.use_pulse:
-                print("Starting continuous pulses with fixed right angle.")
-                if not self.apply_continuous_pulse():
-                    self.signals.reset_needed.emit()
-                    self.signals.finished.emit(False)
-                    return
-            else:
-                # Hold at position until time expires
-                print("Holding at right angle until time expires.")
-                while self.is_running and self.check_duration():
-                    self.exit_flag.wait(timeout=HOLD_TIME_LONG)
-                    # Periodic status check and angle verification
-                    if self.is_running and self.check_duration():
-                        self.arduino.send("S")
-                        time.sleep(0.5)
-                        
-                        # Re-verify angle every minute
-                        if (time.time() - self.start_time) % 60 < 1:
-                            print("Periodic angle verification")
-                            self.set_to_angle(self.max_right)
-        
-        # Protocol complete - first reset lateral angle back to center
-        print("Protocol complete, resetting lateral angle to center")
-        self.set_to_angle(0)
-        time.sleep(2)
-        
-        # Then zero pressure
-        print("Reducing pressure to zero")
-        self.set_to_pressure(0)
-        time.sleep(2)
-
-        # Ensure reset happens regardless of how we exit the protocol
-        self.signals.reset_needed.emit()
-
-        print("Protocol 3 complete.")
-        self.signals.progress.emit("Protocol complete")
-        self.signals.finished.emit(True)
-        
+        # Start background thread
+        keepalive_thread = threading.Thread(target=keepalive_worker, daemon=True)
+        keepalive_thread.start()
+        print("Keepalive thread started")

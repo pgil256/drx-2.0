@@ -1,0 +1,1 @@
+cmd.exe /c "rsync -avz -e \"ssh -i %USERPROFILE%\.ssh\id_ed25519\" ./ pi@100.111.162.21:~/drx-2.2"

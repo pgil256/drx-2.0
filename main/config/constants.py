@@ -9,8 +9,8 @@ import os
 
 # Application Info
 APP_NAME = "KneeSpa"
-APP_VERSION = "2.0"
-APP_BASE_DIR = "/home/pi/drx-2.1/main/"
+APP_VERSION = "2.3"
+APP_BASE_DIR = "/home/pi/drx-2.3/main/"
 
 # Logging Configuration
 LOG_FILE = "kneespa_app.log"
@@ -34,11 +34,11 @@ UI_PATHS = {
         APP_BASE_DIR, "ui/guis/enter-patient-help.ui"
     ),
     "PROTOCOL_IMAGES": os.path.join(APP_BASE_DIR, "ui/media/images/graphics"),
+    "VIDEOS": os.path.join(APP_BASE_DIR, "ui/media/videos/1.mp4"),
 }
 
 DATA_PATHS = {
-    "USER_PINS": os.path.join(APP_BASE_DIR, "data/users/user_pins.csv"),
-    "PATIENT_PINS": os.path.join(APP_BASE_DIR, "data/patients/patient_pins.csv"),
+    "USER_PINS": os.path.join(APP_BASE_DIR, "data/user_pins.csv"),
 }
 
 # GPIO Pin Configuration
@@ -84,28 +84,47 @@ ACTUATORS = {
     },
 }
 
+# Safety Limits
+PRESSURE_MAX = 80  # Maximum safe pressure in lbs
+AXIAL_MAX = 4600  # Maximum axial position
+LATERAL_MIN = 500  # Minimum lateral position
+LATERAL_MAX = 2400  # Maximum lateral position
+HORIZONTAL_MIN = 50  # Minimum horizontal position (-5 degrees)
+HORIZONTAL_MAX = 4500  # Maximum horizontal position (-25 degrees)
+
+# Actuator Command Speed
+LEG_LENGTH_SPEED_NORMAL = 0.5  # inches per second
+LEG_LENGTH_SPEED_FAST = 1.0  # inches per second
+LEG_LENGTH_MIN = 0.0  # Minimum leg length in inches
+LEG_LENGTH_MAX = 6.0  # Maximum leg length in inches
+
 # Movement Configuration
 MOVEMENT_DELAY = 0.5  # seconds between movements
 DEFAULT_HORIZONTAL_POSITION = -15  # degrees
+
+# Default Positions
+DEFAULT_AXIAL_POSITION = 0  # inches
+DEFAULT_LATERAL_POSITION = 0  # degrees
+DEFAULT_PRESSURE = 0  # pounds
+DEFAULT_LEG_LENGTH_POSITION = 0  # inches
 
 # Protocol Configuration
 PROTOCOL_MAPPING = {
     1: "AC1",
     2: "AC2",
     3: "AC3",
-    4: "AC4",
-    5: "AC5",
-    6: "AC6",
-    7: "AC7",
-    8: "AC8",
-    9: "AC9",
+    4: "AC4"
 }
 
-# Degree Lists for Different Movements
-DEGREE_LISTS = {
-    "STANDARD": {0: 5, -5: 4, -10: 3, -15: 2, -20: 1, -25: 0, -30: 0},
-    "C_TYPE": {-20: 0, -10: 0.5, 0: 1, 10: 1.5, 20: 2},
-    "B_TYPE": {0: 5, 5: 4, 10: 3, 15: 2, 20: 1, 25: 0, 30: 0},
+# Protocol Default Settings
+PROTOCOL_DEFAULT_SETTINGS = {
+    "DEGREES0": 0,  # Center/neutral position
+    "MIN_PRESSURE": 10,  # Minimum starting pressure in lbs
+    "MAX_SAFE_PRESSURE": 80,  # Maximum safe pressure in lbs
+    "HOLD_TIME_SHORT": 1,
+    "HOLD_TIME_LONG": 5,  # Default hold duration in seconds
+    "PRESSURE_INCREMENT": 10,  # Standard pressure increase step
+    "ANGLE_INCREMENT": 5  # Standard angle adjustment step
 }
 
 # UI Style Constants
@@ -130,19 +149,24 @@ BUTTON_STYLES = {
     """,
 }
 
-# Protocol Settings
-PROTOCOL_DEFAULTS = {
-    "CYCLES": 10,
-    "CYCLE_TIME": 60,  # seconds
-    "MAX_PRESSURE": 100,  # lbs
-    "PRESSURE_STEP": 5,  # lbs
-}
-
 # Arduino Communication
 ARDUINO_SETTINGS = {
     "CALIBRATION_DELAY": 2000,  # ms
     "ZERO_MARK_DELAY": 5000,  # ms
     "COMMAND_DELAY": 1500,  # ms
+    "BUFFER_WARNING_THRESHOLD": 0.8,  # 80% full
+    "ARDUINO_BUFFER_SIZE": 64,  # Standard Arduino buffer size
+    "ARDUINO_PORT": "/dev/serial0",  # Default Arduino port
+    "CONNECTION_TIMEOUT_S": 30  # Timeout duration in seconds
+}
+
+# Email Configuration
+EMAIL_CONFIG = {
+    "SENDER_EMAIL": "ksdrxsmtp@gmail.com",
+    "SENDER_PASSWORD": "nujyxfajvgouwvux",
+    "RECEIVER_EMAIL": "ksdrxsmtp@gmail.com",
+    "SMTP_SERVER": "smtp.gmail.com",
+    "SMTP_PORT": 465,
 }
 
 # Error Messages
@@ -160,11 +184,9 @@ ERROR_MESSAGES = {
 
 # Success Messages
 SUCCESS_MESSAGES = {
-    "DATA_SAVED": "Patient data updated successfully.",
-    "DATA_LOADED": "Patient data loaded successfully.",
-    "DATA_CLEARED": "Patient data cleared successfully.",
     "PROTOCOL_COMPLETE": "The protocol has finished executing successfully.",
     "ARDUINO_RESET": "Arduino reset and actuators reinitialized.",
+    "DATA_LOADED": "User data loaded successfully."
 }
 
 

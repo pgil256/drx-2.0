@@ -26,116 +26,148 @@ class Configuration:
 
         if not os.path.exists(self.configFile):
             self.config["Options"] = {"flexion_position": self.flexion_position}
-            try:
-                self.config.write(open(self.configFile, "w"))
-            except Exception as e:
-                from utils.exceptions import ConfigurationSaveError
-                error = ConfigurationSaveError(f"Could not create config file: {e}", path=self.configFile)
-                print(f"Error: {error}")
+            # Fix file handle leak - use context manager
+            with open(self.configFile, "w") as config_file:
+                self.config.write(config_file)
         else:
+
             try:
                 self.config.read(self.configFile)
 
                 allSections = {
                     s: dict(self.config.items(s)) for s in self.config.sections()
                 }
-                # Convert CMarks values to integers
-                self.CMarks = {k: int(v) for k, v in allSections["CMarks"].items()}
-                self.AMarks = {k: int(v) for k, v in allSections["AMarks"].items()}
-                self.BMarks = {k: int(v) for k, v in allSections["BMarks"].items()}
+
+                # Safely convert marks values to integers with error handling
+                self.CMarks = {}
+                self.AMarks = {}
+                self.BMarks = {}
+
+                # Handle CMarks section
+                if "CMarks" in allSections:
+                    try:
+                        self.CMarks = {k: int(v) for k, v in allSections["CMarks"].items()}
+                    except (ValueError, TypeError) as e:
+                        print(f"Error parsing CMarks: {e}")
+                        self.CMarks = self._get_default_marks("C")
+                else:
+                    print("CMarks section missing, using defaults")
+                    self.CMarks = self._get_default_marks("C")
+
+                # Handle AMarks section
+                if "AMarks" in allSections:
+                    try:
+                        self.AMarks = {k: int(v) for k, v in allSections["AMarks"].items()}
+                    except (ValueError, TypeError) as e:
+                        print(f"Error parsing AMarks: {e}")
+                        self.AMarks = self._get_default_marks("A")
+                else:
+                    print("AMarks section missing, using defaults")
+                    self.AMarks = self._get_default_marks("A")
+
+                # Handle BMarks section
+                if "BMarks" in allSections:
+                    try:
+                        self.BMarks = {k: int(v) for k, v in allSections["BMarks"].items()}
+                    except (ValueError, TypeError) as e:
+                        print(f"Error parsing BMarks: {e}")
+                        self.BMarks = self._get_default_marks("B")
+                else:
+                    print("BMarks section missing, using defaults")
+                    self.BMarks = self._get_default_marks("B")
 
                 section = "Options"
 
                 if not self.config.has_section(section):
                     self.config.add_section(section)
+                
+                # Define config options with their default values and types
+                config_options = {
+                    "flexion_position": {"default": self.flexion_position, "type": int},
+                    "a_factor": {"default": getattr(self, "a_factor", 1900), "type": int},
+                    "b_factor": {"default": getattr(self, "b_factor", 1900), "type": int},
+                    "c_factor": {"default": self.c_factor, "type": int},
+                    "unlock": {"default": getattr(self, "unlock", "false"), "type": str},
+                    "calibration": {"default": getattr(self, "calibration", 1.0), "type": float}
+                }
+                
+                # Process all config options with a single pattern
+                for option_name, option_settings in config_options.items():
+                    if not self.config.has_option(section, option_name):
+                        # Option doesn't exist, set default
+                        self.config.set(section, option_name, str(option_settings["default"]))
+                        setattr(self, option_name, option_settings["default"])
+                    else:
+                        # Option exists, read it with proper type conversion
+                        value = self.config[section][option_name]
+                        if option_settings["type"] != str:
+                            value = option_settings["type"](value)
+                        setattr(self, option_name, value)
 
-                if not self.config.has_option(section, "flexion_position"):
-                    self.config.set(
-                        "Options", "flexion_position", str(self.flexion_position)
-                    )
-                else:
-                    self.flexion_position = int(
-                        self.config["Options"]["flexion_position"]
-                    )
-
-                if not self.config.has_option(section, "a_factor"):
-                    self.config.set("Options", "a_factor", str(self.a_factor))
-                else:
-                    self.a_factor = int(self.config["Options"]["a_factor"])
-
-                if not self.config.has_option(section, "b_factor"):
-                    self.config.set("Options", "b_factor", str(self.b_factor))
-                else:
-                    self.b_factor = int(self.config["Options"]["b_factor"])
-
-                if not self.config.has_option(section, "c_factor"):
-                    self.config.set("Options", "c_factor", str(self.c_factor))
-                else:
-                    self.c_factor = int(self.config["Options"]["c_factor"])
-
-                if not self.config.has_option(section, "unlock"):
-                    self.config.set("Options", "unlock", str(self.unlock))
-                else:
-                    self.unlock = self.config["Options"]["unlock"]
-
-                if not self.config.has_option(section, "calibration"):
-                    self.config.set("Options", "calibration", str(self.calibration))
-                else:
-                    self.calibration = float(self.config["Options"]["calibration"])
-
-            except KeyError as e:
-                from utils.exceptions import ConfigurationLoadError
-                error = ConfigurationLoadError(f"Missing required configuration section or key: {e}", path=self.configFile)
-                print(f"Error: {error}")
-                print(f'Fatal error, could not load config file from "{self.configFile}"')
-            except ValueError as e:
-                from utils.exceptions import InvalidConfigurationError
-                error = InvalidConfigurationError(f"Invalid configuration value: {e}", path=self.configFile)
-                print(f"Error: {error}")
-                print(f'Fatal error, could not load config file from "{self.configFile}"')
             except Exception as e:
-                from utils.exceptions import ConfigurationException
-                error = ConfigurationException(f"Configuration error: {e}", path=self.configFile)
-                print(f"Error: {error}")
-                print(f'Fatal error, could not load config file from "{self.configFile}"')
+                print(str(e))
+                print(
+                    'Fatal error, could not load config file from "%s"'
+                    % self.configFile
+                )
+
+    def _get_default_marks(self, actuator_type):
+        """Return default calibration marks for a given actuator type."""
+        if actuator_type == "A":
+            # Default marks for Axial actuator (inches to position)
+            return {
+                "0": 0,
+                "1": 475,
+                "2": 950,
+                "3": 1425,
+                "4": 1900
+            }
+        elif actuator_type == "B":
+            # Default marks for Horizontal actuator (degrees to position)
+            return {
+                "-25": 0,
+                "-20": 380,
+                "-15": 760,
+                "-10": 1140,
+                "-5": 1520,
+                "0": 1900,
+                "5": 2280
+            }
+        elif actuator_type == "C":
+            # Default marks for Lateral actuator (degrees to position)
+            return {
+                "-20": 0,
+                "-15": 475,
+                "-10": 950,
+                "-5": 1425,
+                "0": 1900,
+                "5": 2375,
+                "10": 2850,
+                "15": 3325,
+                "20": 3800
+            }
+        return {}
 
     def update_config(self):
+        """Update the configuration file with current values."""
         section = "Options"
-        self.config.set("Options", "flexion_position", str(self.flexion_position))
 
-        self.config.set("Options", "a_factor", str(self.a_factor))
-        self.config.set("Options", "b_factor", str(self.b_factor))
-        self.config.set("Options", "c_factor", str(self.c_factor))
+        # List of configuration options to update
+        config_options = [
+            "flexion_position", "a_factor", "b_factor", "c_factor",
+            "unlock", "calibration"
+        ]
 
-        self.config.set("Options", "unlock", str(self.unlock))
-        self.config.set("Options", "calibration", str(self.calibration))
+        # Set each option in the config
+        for option in config_options:
+            if hasattr(self, option):
+                self.config.set(section, option, str(getattr(self, option)))
 
-        print("config written")
+        print("Config updated")
         try:
-            self.config.write(open(self.configFile, "w"))
-        except PermissionError as e:
-            from utils.exceptions import ConfigurationSaveError
-            error = ConfigurationSaveError(
-                f"Permission denied when writing config file: {e}",
-                path=self.configFile,
-                code=403
-            )
-            print(f"Error: {error}")
-            print(f'Fatal error, could not write config file to "{self.configFile}"')
-        except FileNotFoundError as e:
-            from utils.exceptions import ConfigurationSaveError
-            error = ConfigurationSaveError(
-                f"Config directory not found: {e}",
-                path=self.configFile,
-                code=404
-            )
-            print(f"Error: {error}")
-            print(f'Fatal error, could not write config file to "{self.configFile}"')
+            # Fix file handle leak - use context manager
+            with open(self.configFile, "w") as config_file:
+                self.config.write(config_file)
         except Exception as e:
-            from utils.exceptions import ConfigurationSaveError
-            error = ConfigurationSaveError(
-                f"Failed to save configuration: {e}",
-                path=self.configFile
-            )
-            print(f"Error: {error}")
+            print(str(e))
             print(f'Fatal error, could not write config file to "{self.configFile}"')

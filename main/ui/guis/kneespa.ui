@@ -41,19 +41,19 @@ QFrame#frameTop, QFrame#frame, QGroupBox#frameBottom {
     color: white;
     border: none;
     text-align: center;
-    text-decoration: none;
+    text-decoration: none; /* This is valid */
     font-size: 14px;
     font-weight: bold;
 }
 
 QFrame#frame_3 {
-	border:none;
+    border:none;
 }
 
 /* Layout Styles */
 QVBoxLayout#verticalLayout_3 {
     background-color: white;
-    border: 1px solid red;
+    border: 2px solid red;
     border-radius: 45px;
     padding: 14px;
 }
@@ -67,30 +67,28 @@ QHBoxLayout#horizontalLayout_19 {
     background-color: rgb(200, 0, 0);
     color: white;
     border: none;
-    text-decoration: bold;
+    font-weight: bold;      
     font-size: 32px;
-    font-weight: bold;
     border-radius: 12px;
 }
 
 QVBoxLayout#verticalLayout_20, QVBoxLayout#verticalLayout_21 {
-    border-bottom: 1px solid #bdc3c7;
+    border-bottom: 2px solid #bdc3c7;
     padding: 2px;
     background-color: #ecf0f1;
-    border: 1px solid #bdc3c7;
+    border: 2px solid #bdc3c7;
     border-radius: 4px;
     font-size: 18px;
 }
 
 /* Button Styles */
 QPushButton#push_button_start {
-        background-color: rgb(0, 200, 0);
-        color: white;
-        border: none;
-        text-decoration: bold;
-        font-size: 32px;
-        font-weight: bold;
-        border-radius: 12px;
+    background-color: rgb(0, 200, 0);
+    color: white;
+    border: none;
+    font-weight: bold;       
+    font-size: 32px;
+    border-radius: 12px;
 }
 
 QPushButton#login_button, QPushButton#setup_button, QPushButton#protocols_button, QPushButton#help_button {
@@ -98,7 +96,7 @@ QPushButton#login_button, QPushButton#setup_button, QPushButton#protocols_button
     color: white;
     border: none;
     text-align: center;
-    text-decoration: none;
+    text-decoration: none; /* This is valid */
     font-size: 22px;
     font-weight: bold;
     margin: 4px 2px;
@@ -108,23 +106,25 @@ QPushButton#login_button, QPushButton#setup_button, QPushButton#protocols_button
 QPushButton#reset_arduino_setup_button, QPushButton#axial_flexion_position_go_button, QPushButton#axial_flexion_position_stop_button {
     outline: 0;
     border: 2px solid rgb(0,57,138);
-	 font-size:16x;
-    border-radius: 6px;
-    background-color: #78909C;
+    font-size: 18px; /* Specific font-size */
+    border-radius: 8px;
+    background-color: #3498db;
     color: white;
+    font-weight: bold;
 }
 
+/* General Button Pseudo-States (applied if specific button doesn't override) */
 QPushButton:hover:!pressed {
-    background-color: #54d777;
+    background-color: #54d777; /* Generic hover - might be overridden by specific hovers below */
 }
 
 QPushButton:hover:pressed {
-    background-color: yellow;
+    background-color: yellow; /* Generic pressed - might be overridden by specific press below */
     border: 2px solid red;
 }
 
 QPushButton:disabled {
-    background-color: purple;
+    background-color: purple; /* Generic disabled - might conflict/be overridden by specific disabled below */
 }
 
 QPushButton:!enabled {
@@ -133,13 +133,15 @@ QPushButton:!enabled {
 }
 
 QPushButton:enabled {
-    background-color: grey;
-    color: white;
+    /* Be careful: This might override specific button background/color when enabled */
+    /* Consider removing if it conflicts with desired specific button styles */
+    /* background-color: grey; */
+    /* color: white; */
 }
 
-/* Request Status Change Button */
+/* Request Status Change Button Specific Styles */
 QPushButton#request_status_change {
-    background-color: #3498db;  /* Bright blue - primary action */
+    background-color: #3498db; /* Bright blue - primary action */
     color: white;
     border: none;
     padding: 12px 20px;
@@ -153,16 +155,16 @@ QPushButton#request_status_change {
 }
 
 QPushButton#request_status_change:hover {
-    background-color: #2980b9;  /* Darker blue on hover */
+    background-color: #2980b9; /* Darker blue on hover */
 }
 
 QPushButton#request_status_change:pressed {
-    background-color: #2472a4;  /* Even darker when pressed */
+    background-color: #2472a4; /* Even darker when pressed */
 }
 
-/* Request Assistance Button */
+/* Request Assistance Button Specific Styles (Note: Original had duplicate comment but correct selector) */
 QPushButton#request_assistance {
-    background-color: #3498db;  /* Bright blue - primary action */
+    background-color: #3498db; /* Bright blue - primary action */
     color: white;
     border: none;
     padding: 12px 20px;
@@ -175,21 +177,22 @@ QPushButton#request_assistance {
     margin: 5px;
 }
 
+/* NOTE: request_pin_reset seems to be missing its base style, only hover/pressed are defined? */
 QPushButton#request_pin_reset:hover {
-    background-color: #2472a4;  /* Even darker when pressed */
+    background-color: #2472a4; /* Even darker when pressed */
 }
 
 QPushButton#request_pin_reset:pressed {
-    background-color: #219a52;  /* Even darker when pressed */
+    background-color: #219a52; /* Even darker when pressed */
 }
 
-/* Request Assistance Button */
+/* Request Assistance Button (assuming this is the correct ID for the button mentioned in profile page) */
 QPushButton#request_assistance_button {
-    background-color: rgb(0, 170, 255);  /* Red - warning/danger action */
+    background-color: rgb(0, 170, 255); /* Original comment said red, but CSS is blue */
     color: white;
     border: none;
     padding: 12px 20px;
-    font-size: 16px;
+    font-size: 20px;
     font-weight: bold;
     border-radius: 8px;
     min-width: 250px;
@@ -198,13 +201,13 @@ QPushButton#request_assistance_button {
     margin: 5px;
 }
 
-/* Exit App Button */
+/* Exit App Button Specific Styles */
 QPushButton#exit_app_button {
-    background-color: #e74c3c;  /* Red - warning/danger action */
+    background-color: #e74c3c; /* Red - warning/danger action */
     color: white;
     border: none;
     padding: 12px 20px;
-    font-size: 16px;
+    font-size: 20px;
     font-weight: bold;
     border-radius: 8px;
     min-width: 250px;
@@ -214,34 +217,34 @@ QPushButton#exit_app_button {
 }
 
 QPushButton#exit_app_button:hover {
-    background-color: #c0392b;  /* Darker red on hover */
+    background-color: #c0392b; /* Darker red on hover */
 }
 
 QPushButton#exit_app_button:pressed {
-    background-color: #a93226;  /* Even darker when pressed */
+    background-color: #a93226; /* Even darker when pressed */
 }
 
-/* Disabled State for All Buttons */
+/* Disabled State for Specific Buttons */
 QPushButton#request_status_change:disabled,
-QPushButton#request_pin_reset:disabled,
+QPushButton#request_pin_reset:disabled, /* Assuming request_pin_reset is a QPushButton */
 QPushButton#exit_app_button:disabled {
-    background-color: #bdc3c7;  /* Gray when disabled */
+    background-color: #bdc3c7; /* Gray when disabled */
     color: #7f8c8d;
-    cursor: not-allowed;
+    cursor: not-allowed; /* Good practice for disabled buttons */
 }
 
-/* Focus State for All Buttons */
+/* Focus State for Specific Buttons */
 QPushButton#request_status_change:focus,
-QPushButton#request_pin_reset:focus,
+QPushButton#request_pin_reset:focus, /* Assuming request_pin_reset is a QPushButton */
 QPushButton#exit_app_button:focus {
-    outline: none;
+    outline: none; /* Removes default focus outline */
 }
 
 
 /* Label Styles */
 QLabel#video_player_button {
     background-color: white;
-    border: 1px solid red;
+    border: 2px solid red;
     border-radius: 45px;
     padding: 14px;
 }
@@ -255,40 +258,22 @@ QLabel#emergency_stop_setup_label {
     background-color: rgb(200, 0, 0);
     color: white;
     border: none;
-    text-decoration: bold;
+    font-weight: bold;         
     font-size:30px;
-    font-weight: bold;
     border-radius: 12px;
-}
-
-/* Slider Styles */
-QSlider#axial_flexion_position_slider, QSlider#axial_flexion_pressure_slider {
-    QSlider::groove:horizontal {
-        border-radius: 2px;
-        background-color: rgb(52, 59, 72);
-    }
-    QSlider::groove:horizontal:hover {
-        background-color: blue;
-    }
-    QSlider::handle:horizontal {
-        background-color: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, stop:0 rgba(0, 50, 145, 255), stop:1 rgba(255, 255, 255, 255));
-        border: 4px solid black;
-        width: 40px;
-        margin: -44px 0px;
-        border-radius: 14px;
-    }
 }
 
 /* Group Box Styles */
 QGroupBox {
-    font: bold;
-    border: 0px solid silver;
+    font-weight: bold;
+    border: 0px solid silver; /* Effectively no border */
     border-radius: 6px;
-    margin-top: 0px;
+    margin-top: 0px; /* Adjust if needed, 0px is default */
 }
-/* Enhanced Slider Styles */
+
+/* Enhanced Slider Styles (Using these as the primary slider styles now) */
 QSlider::groove:horizontal {
-    border: 1px solid #bdc3c7;
+    border: 3px solid #bdc3c7;
     height: 6px;
     background: #ecf0f1;
     border-radius: 4px;
@@ -299,38 +284,31 @@ QSlider::groove:horizontal:hover {
 }
 
 QSlider::handle:horizontal {
-    background-color: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, 
-                                     stop:0 rgba(0, 50, 145, 255), 
-                                     stop:1 rgba(255, 255, 255, 255));
+    background-color: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0,
+                                      stop:0 rgba(0, 50, 145, 255),
+                                      stop:1 rgba(255, 255, 255, 255));
     border: 3px solid #2c3e50;
-    width: 30px;
-    height: 30px;
-    margin: -12px 0;
-    border-radius: 15px;
+    width: 36px;
+    height: 36px;
+    margin: -15px 0;
+    border-radius: 18px;
 }
 
 QSlider::handle:horizontal:hover {
-    background-color: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0, 
-                                     stop:0 rgba(0, 70, 175, 255), 
-                                     stop:1 rgba(220, 235, 255, 255));
+    background-color: qlineargradient(spread:pad, x1:0, y1:0, x2:1, y2:0,
+                                      stop:0 rgba(0, 70, 175, 255),
+                                      stop:1 rgba(220, 235, 255, 255));
 }
 
 QSlider::sub-page:horizontal {
     background: #3498db;
-    border: 1px solid #2980b9;
+    border: 3px solid #2980b9;
     border-radius: 4px;
 }
 
-/* Apply these styles to all sliders */
-QSlider#axial_flexion_position_slider,
-QSlider#axial_flexion_pressure_slider,
-QSlider#lateral_flexion_position_slider,
-QSlider#horizontal_flexion_position_slider,
-QSlider#max_pressure_edit,
-QSlider#max_left_edit,
-QSlider#max_right_edit {
-    padding: 5px 0;
-}
+/* Apply padding to specific sliders (and potentially misidentified SpinBoxes) */
+
+
 
 QGroupBox::title {
     subcontrol-origin: margin;
@@ -349,7 +327,7 @@ QLabel#top_nav_logo, QLabel#top_nav_brand_label, QLabel#username_nav {
     color: white;
     border: none;
     text-align: center;
-    text-decoration: none;
+    text-decoration: none; /* Valid for labels */
     margin: 4px 30px;
 }
 
@@ -364,10 +342,10 @@ QLabel#username_nav {
     border-radius: 12px;
 }
 
-/* Profile Button */
+/* Profile Button (assuming QLabel is clickable via event filter/override) */
 QLabel#profile_button {
     background-color: white;
-    border: 1px solid black;
+    border: 2px solid black;
     margin: 0px 30px 0px 20px;
     border-radius: 40px;
     padding: 12px;
@@ -379,13 +357,15 @@ QWidget#page_setup {
     padding: 2px;
 }
 
-QWidget#page_main, QTabWidget#DRx_tabs, QWidget#preset_protocols_tab {
+/* Styling for Tab Widget and its content pages */
+/* Apply to the tab widget itself and specific named tab pages */
+QTabWidget#DRx_tabs, QWidget#preset_protocols_tab, QWidget#page_main /* Added page_main based on structure */ {
     background-color: white;
     border: none;
-    font-size: 22px;
+    font-size: 22px; /* Note: Affects content font unless overridden */
 }
 
-/* Preset Protocols Tab Styles */
+/* Preset Protocols Tab Specific Styles */
 QVBoxLayout#verticalLayout_4, QVBoxLayout#verticalLayout_6 {
     border: none;
     padding: 15px;
@@ -398,39 +378,41 @@ QGroupBox#groupBox_3, QGroupBox#groupBox_14, QGroupBox#groupBox_15 {
 }
 
 QHBoxLayout#horizontalLayout_3, QHBoxLayout#horizontalLayout_11, QHBoxLayout#horizontalLayout_12 {
-    font-size: 32px;
+    font-size: 32px; /* Affects widgets within unless they override */
     font-weight: bold;
     margin: 5px 0px;
-    border-bottom: 1px solid #bdc3c7;
+    border-bottom: 2px solid #bdc3c7;
     padding: 2px;
     background-color: #ecf0f1;
-    border: 1px solid #bdc3c7;
+    border: 2px solid #bdc3c7;
     border-radius: 4px;
 }
 
 QLabel#label_protocol_image {
-	border:1px solid black;
+    border:2px solid black;
 }
+
 QLabel#label_5, QLabel#backward_button_protocol_image, QLabel#forward_button_protocol_image,
 QLabel#label_12 {
-    font-size: 24px;
+    font-size: 24px; /* Overrides layout font */
     font-weight: bold;
 }
 
 QLabel#time_label, QLabel#max_pressure_label, QLabel#max_left_label, QLabel#max_right_label {
     color: #2c3e50;
-    font: bold 20px;
+    font: bold 20px 'Arial', sans-serif;
     padding: 5px 0px;
 }
 
+/* SpinBox Styles */
 QSpinBox#time_edit {
     background-color: white;
-    border: 1px solid rgb(52, 152, 219);
+    border: 2px solid rgb(52, 152, 219);
     border-radius: 4px;
     padding: 5px;
     min-width: 100px;
     min-height: 30px;
-    font: 18px;
+    font: 18px 'Arial', sans-serif;
     color: #2c3e50;
 }
 
@@ -441,12 +423,12 @@ QSpinBox#time_edit::up-button, QSpinBox#time_edit::down-button {
 
 QSpinBox#max_pressure_edit, QSpinBox#max_left_edit, QSpinBox#max_right_edit {
     background-color: white;
-    border: 1px solid rgb(52, 152, 219);
+    border: 2px solid rgb(52, 152, 219);
     border-radius: 4px;
     padding: 5px;
     min-width: 80px;
     min-height: 30px;
-    font: 18px;
+    font: 18px 'Arial', sans-serif; 
     color: #2c3e50;
 }
 
@@ -456,27 +438,27 @@ QSpinBox#max_pressure_edit::down-button, QSpinBox#max_left_edit::down-button, QS
 }
 
 
-QCheckBox#checkbox_no_pulse, QCheckBox#checkbox_intermittent_pulse, QCheckBox#checkbox_pulse_at_max {
-    font: bold 18px;
+
+QCheckBox#checkbox_use_pulse, QCheckBox#checkbox_show_pressure, QCheckBox#checkbox_show_timer {
+    font: bold 18px 'Arial', sans-serif;
     color: #2c3e50;
     spacing: 8px;
 }
 
-QCheckBox#checkbox_use_pulse::indicator {
+
+QCheckBox#checkbox_use_pulse::indicator, QCheckBox#checkbox_show_pressure::indicator, QCheckBox#checkbox_show_timer::indicator {
     width: 26px;
     height: 26px;
-    border: 2px solid rgb(52, 152, 219);
+    border: 3px solid rgb(52, 152, 219);
     border-radius: 4px;
     background-color: white;
 }
 
-QCheckBox#checkbox_use_pulse::indicator:checked {
+
+QCheckBox#checkbox_use_pulse::indicator:checked, QCheckBox#checkbox_show_pressure::indicator:checked, QCheckBox#checkbox_show_timer::indicator:checked {
     background-color: rgb(52, 152, 219);
 }
 
-QCheckBox#checkbox_use_pulse::indicator:hover {
-    border-color: rgb(41, 128, 185);
-}
 
 QGroupBox#groupBox_15 {
     margin-top: 10px;
@@ -487,14 +469,14 @@ QGroupBox#groupBox_15 {
 QLineEdit#protocol_number_field, QLineEdit#pressure_field {
     font-size: 22px;
     background-color: white;
-    border: 1px solid #bdc3c7;
+    border: 2px solid #bdc3c7;
     border-radius: 4px;
     padding: 4px;
     color: #34495e;
     min-width: 60px;
 }
 
-/* CheckBox Styles */
+/* General CheckBox Styles (Apply if specific checkbox doesn't override) */
 QCheckBox {
     spacing: 10px;
     font-size: 24px;
@@ -509,29 +491,30 @@ QCheckBox::indicator {
 /* Profile Page Styles */
 QWidget#profile_page, QGroupBox#groupBox, QGroupBox#groupBox_4,
 QGroupBox#groupBox_5, QGroupBox#groupBox_7, QGroupBox#groupBox_13, QGroupBox#groupBox_12, QGroupBox#groupBox_10 {
-    border: none;
+    border: none; /* Ensure group boxes here don't inherit default border if any */
 }
 
-QGroupBox#groupBox_4 {
-    font-size: 14px;
+QGroupBox#groupBox_4 { /* This specific group box gets a border and gradient */
+    font-size: 14px; /* Overrides default */
     font-weight: bold;
     color: #333333;
     border: 2px solid #3498db;
     border-radius: 8px;
-    margin-top: 1ex;
+    margin-top: 1ex; /* 1ex is roughly height of 'x' character */
     padding: 0px 2px;
     background-color: qlineargradient(x1: 0, y1: 0, x2: 0, y2: 1, stop: 0 #f0f9ff, stop: 1 #e6f3ff);
 }
 
-QLabel#label_4, QLabel#username_label, QLabel#username_field,
+QLabel#label_4, QLabel#username_label,
 QLabel#email_label, QLabel#status_label {
     border: none;
     padding: 0 5px;
     color: #2c3e50;
-    font-size: 20px;
+    font-size: 24px;
     font-weight: bold;
 }
 
+/* Assuming pushButton exists on profile page? */
 QPushButton#pushButton {
     background-color: #3498db;
     color: white;
@@ -550,7 +533,7 @@ QWidget#help_page, QGroupBox#groupBox_11, QGroupBox#groupBox_18 {
     padding: 10px;
 }
 
-QLabel#label_14 {
+QLabel#label_14 { /* Help page title label */
     border: none;
     padding: 0 10px;
     color: #3498db;
@@ -560,74 +543,135 @@ QLabel#label_14 {
 
 QPlainTextEdit#help_text_edit {
     border: none;
-    font-size: 18px;
+    font-size: 24px;
     padding: 30px;
     color: black;
     background-color: white;
-    line-height: 2;
     border-left: 4px solid #3498db;
     margin-left: 20px;
 }
 
-/* Additional Button Styles */
+/* Additional Button Styles (Measure buttons) */
 QPushButton#measure_weight_button, QPushButton#measure_location_button {
-    border-bottom: 1px solid #bdc3c7;
+    border-bottom: 2px solid #bdc3c7;
     padding: 2px;
     background-color: #ecf0f1;
-    border: 1px solid #bdc3c7;
+    border: 2px solid #bdc3c7; /* Overrides bottom border thickness */
     border-radius: 4px;
     font-size: 18px;
 }
 
+/* Additional Button Styles (Go/Stop buttons in Setup) */
 QPushButton#axial_flexion_pressure_go_button, QPushButton#axial_flexion_pressure_stop_button,
 QPushButton#lateral_flexion_position_go_button, QPushButton#lateral_flexion_position_stop_button,
 QPushButton#horizontal_flexion_position_go_button, QPushButton#horizontal_flexion_position_stop_button {
-    outline: none;
-    border: 2px solid #00398A;  /* Using hex for consistency */
-    border-radius: 6px;
-    background-color: #78909C;
+    outline: 0;
+    border: 2px solid rgb(0,57,138);
+    font-size: 18px; /* Specific font-size */
+    border-radius: 8px;
+    background-color: #3498db;
     color: white;
-    padding: 8px 16px;  /* Added padding for better clickable area */
-    font-weight: 500;   /* Slightly bolder text */
+    font-weight: bold;
 }
-/* Label Styles for Flexion */
+/* Label Styles for Flexion Readouts */
 QLabel#lateral_flexion_position_label, QLabel#axial_flexion_position_label, QLabel#axial_flexion_pressure_label, QLabel#axial_flexion_position_label_2,
 QLabel#lateral_flexion_position_label, QLabel#horizontal_flexion_position_label {
     font-size: 22px;
     background-color: white;
-    border: 1px solid #bdc3c7;
+    border: 2px solid #bdc3c7;
     border-radius: 4px;
     padding: 4px;
     color: #34495e;
-    min-width: 60px;
+    min-width: 60px; /* Ensures a minimum width */
 }
 
 /* Table Widget Styles */
 QTableWidget#patient_table_widget, QTableWidget#patient_table_widget_2 {
     background-color: #ffffff;
     padding: 10px 30px 0px 30px;
-    alternate-background-color: #f7f7f7;
+    alternate-background-color: #f7f7f7; /* For alternating row colors */
     border-radius: 4px;
-    gridline-color: #e0e0e0;
+    gridline-color: #e0e0e0; /* Color of the grid lines */
 }
 
 QTableWidget::item {
-    width: 200px;
+    /* width: 200px; */ /* Applying fixed width to items might not be best, let header control */
+    padding: 5px; /* Add some padding within cells */
 }
 
 QTableWidget::item:selected {
-    background-color: #e6f3ff;
-    color: #000000;
+    background-color: #e6f3ff; /* Light blue for selected items */
+    color: #000000; /* Black text when selected */
 }
 
 QHeaderView::section {
-    background-color: rgb(85, 170, 255);
+    background-color: rgb(85, 170, 255); /* Blue header background */
     color: white;
     padding: 10px;
-    width: 300px;
-    border: 1px solid #e0e0e0;
+    /* width: 300px; */ /* Let the view manage size or set stretch modes */
+    border: 2px solid #e0e0e0; /* Light border for header sections */
     font-weight: bold;
-}</string>
+}
+
+QTabBar::tab {
+    /* Size */
+    height: 20px;
+    min-width: 235px; /* Use min-width for flexibility, adjust as needed */
+    max-width: 250px; /* Optional max width */
+
+    /* Spacing */
+    padding: 5px 15px; /* Vertical and horizontal padding */
+    margin-right: 2px; /* Space between tabs */
+
+    /* Appearance */
+    background-color: #E0E0E0; /* Light grey background */
+    color: #333333; /* Dark text */
+	font-weight: bold;
+    border: 2px solid #B0B0B0; /* Border color */
+    border-bottom: none; /* Remove bottom border to connect with pane below */
+    border-top-left-radius: 6px; /* Rounded top-left corner */
+    border-top-right-radius: 6px; /* Rounded top-right corner */
+
+    /* Font (Optional) */
+    /* font-weight: bold; */
+    /* font-size: 14px; */
+}
+
+QTabBar::tab:!selected {
+    /* Slightly recess non-selected tabs */
+    margin-top: 3px;
+    background-color: #F0F0F0; /* Slightly lighter/different grey */
+     color: #555555;
+     border-color: #C0C0C0;
+}
+
+QTabBar::tab:hover:!selected {
+    background-color: #E8E8E8; /* Slightly darker background on hover */
+    border-color: #A0A0A0;
+}
+
+QTabBar::tab:selected {
+    background-color: #FFFFFF; /* White/Bright background for selected */
+    color: #000000; /* Black text */
+    /* margin-top: 0; */ /* Ensure it's aligned if others have margin-top */
+    border-color: #A0A0A0; /* Match border color or make distinct */
+    /* font-weight: bold; */ /* Make selected tab text bold */
+}
+
+/* Style the Tab Bar itself (Optional) */
+QTabWidget::pane {
+    border: 2px solid #A0A0A0;
+    border-top: none; /* Pane border s below tabs */
+    background-color: #FFFFFF; /* Content area background */
+}
+
+QTabBar {
+    /* Remove the line often drawn above the tabs */
+    border: none;
+
+}
+
+</string>
   </property>
   <widget class="QWidget" name="central_widget" native="true">
    <property name="geometry">
@@ -848,7 +892,7 @@ QHeaderView::section {
       </size>
      </property>
      <property name="currentIndex">
-      <number>4</number>
+      <number>2</number>
      </property>
      <widget class="QWidget" name="page_home">
       <property name="sizePolicy">
@@ -1035,7 +1079,18 @@ QHeaderView::section {
             <font>
              <family>Arial</family>
              <pointsize>-1</pointsize>
+             <weight>75</weight>
+             <bold>true</bold>
             </font>
+           </property>
+           <property name="styleSheet">
+            <string notr="true">    outline: 0;
+    border: 2px solid rgb(0,57,138);
+    font-size: 22px;
+    border-radius: 12px;
+    background-color:rgb(15, 15, 15);
+    color: white;
+    font-weight: bold;</string>
            </property>
            <property name="text">
             <string>Reset All</string>
@@ -1087,6 +1142,7 @@ QHeaderView::section {
             <font>
              <family>Arial</family>
              <pointsize>-1</pointsize>
+             <weight>75</weight>
              <bold>true</bold>
             </font>
            </property>
@@ -1143,6 +1199,9 @@ QHeaderView::section {
           <pointsize>-1</pointsize>
          </font>
         </property>
+        <property name="styleSheet">
+         <string notr="true"/>
+        </property>
         <property name="tabShape">
          <enum>QTabWidget::Rounded</enum>
         </property>
@@ -1151,12 +1210,15 @@ QHeaderView::section {
         </property>
         <property name="iconSize">
          <size>
-          <width>30</width>
-          <height>30</height>
+          <width>40</width>
+          <height>40</height>
          </size>
         </property>
         <property name="elideMode">
-         <enum>Qt::ElideNone</enum>
+         <enum>Qt::ElideMiddle</enum>
+        </property>
+        <property name="usesScrollButtons">
+         <bool>true</bool>
         </property>
         <property name="documentMode">
          <bool>true</bool>
@@ -1199,6 +1261,7 @@ QHeaderView::section {
            <font>
             <family>Arial</family>
             <pointsize>-1</pointsize>
+            <weight>75</weight>
             <italic>false</italic>
             <bold>true</bold>
            </font>
@@ -1221,7 +1284,7 @@ QHeaderView::section {
              <property name="maximumSize">
               <size>
                <width>16777215</width>
-               <height>190</height>
+               <height>180</height>
               </size>
              </property>
              <property name="title">
@@ -1396,6 +1459,12 @@ QHeaderView::section {
            </item>
            <item>
             <widget class="QGroupBox" name="groupBox_30">
+             <property name="minimumSize">
+              <size>
+               <width>0</width>
+               <height>120</height>
+              </size>
+             </property>
              <property name="maximumSize">
               <size>
                <width>16777215</width>
@@ -1423,7 +1492,7 @@ QHeaderView::section {
                <widget class="QLabel" name="axial_flexion_position_label">
                 <property name="minimumSize">
                  <size>
-                  <width>70</width>
+                  <width>72</width>
                   <height>40</height>
                  </size>
                 </property>
@@ -1438,6 +1507,15 @@ QHeaderView::section {
                   <family>Arial</family>
                   <pointsize>-1</pointsize>
                  </font>
+                </property>
+                <property name="styleSheet">
+                 <string notr="true">    font-size: 22px;
+    background-color: white;
+    border: 2px solid #bdc3c7;
+    border-radius: 4px;
+    padding: 4px;
+    color: #34495e;
+    min-width: 60px; /* Ensures a minimum width */</string>
                 </property>
                 <property name="text">
                  <string/>
@@ -1462,6 +1540,12 @@ QHeaderView::section {
               </item>
               <item>
                <widget class="QGroupBox" name="groupBox_31">
+                <property name="minimumSize">
+                 <size>
+                  <width>0</width>
+                  <height>130</height>
+                 </size>
+                </property>
                 <property name="maximumSize">
                  <size>
                   <width>500</width>
@@ -1483,13 +1567,13 @@ QHeaderView::section {
                    <property name="minimumSize">
                     <size>
                      <width>380</width>
-                     <height>30</height>
+                     <height>10</height>
                     </size>
                    </property>
                    <property name="maximumSize">
                     <size>
                      <width>480</width>
-                     <height>30</height>
+                     <height>20</height>
                     </size>
                    </property>
                    <property name="font">
@@ -1514,7 +1598,7 @@ QHeaderView::section {
                    <property name="maximumSize">
                     <size>
                      <width>480</width>
-                     <height>30</height>
+                     <height>80</height>
                     </size>
                    </property>
                    <property name="maximum">
@@ -1571,6 +1655,8 @@ QHeaderView::section {
                  <font>
                   <family>Arial</family>
                   <pointsize>-1</pointsize>
+                  <weight>75</weight>
+                  <bold>true</bold>
                  </font>
                 </property>
                 <property name="text">
@@ -1621,6 +1707,8 @@ QHeaderView::section {
                  <font>
                   <family>Arial</family>
                   <pointsize>-1</pointsize>
+                  <weight>75</weight>
+                  <bold>true</bold>
                  </font>
                 </property>
                 <property name="text">
@@ -1661,13 +1749,13 @@ QHeaderView::section {
              <property name="minimumSize">
               <size>
                <width>0</width>
-               <height>100</height>
+               <height>150</height>
               </size>
              </property>
              <property name="maximumSize">
               <size>
                <width>16777215</width>
-               <height>115</height>
+               <height>150</height>
               </size>
              </property>
              <property name="title">
@@ -1691,7 +1779,7 @@ QHeaderView::section {
                <widget class="QLabel" name="axial_flexion_pressure_label">
                 <property name="minimumSize">
                  <size>
-                  <width>70</width>
+                  <width>72</width>
                   <height>0</height>
                  </size>
                 </property>
@@ -1706,6 +1794,15 @@ QHeaderView::section {
                   <family>Arial</family>
                   <pointsize>-1</pointsize>
                  </font>
+                </property>
+                <property name="styleSheet">
+                 <string notr="true">    font-size: 22px;
+    background-color: white;
+    border: 2px solid #bdc3c7;
+    border-radius: 4px;
+    padding: 4px;
+    color: #34495e;
+    min-width: 60px; /* Ensures a minimum width */</string>
                 </property>
                 <property name="text">
                  <string/>
@@ -1733,13 +1830,13 @@ QHeaderView::section {
                 <property name="minimumSize">
                  <size>
                   <width>500</width>
-                  <height>100</height>
+                  <height>120</height>
                  </size>
                 </property>
                 <property name="maximumSize">
                  <size>
                   <width>500</width>
-                  <height>100</height>
+                  <height>120</height>
                  </size>
                 </property>
                 <property name="title">
@@ -1757,13 +1854,13 @@ QHeaderView::section {
                    <property name="minimumSize">
                     <size>
                      <width>480</width>
-                     <height>30</height>
+                     <height>10</height>
                     </size>
                    </property>
                    <property name="maximumSize">
                     <size>
                      <width>480</width>
-                     <height>30</height>
+                     <height>20</height>
                     </size>
                    </property>
                    <property name="font">
@@ -1782,13 +1879,13 @@ QHeaderView::section {
                    <property name="minimumSize">
                     <size>
                      <width>480</width>
-                     <height>0</height>
+                     <height>5</height>
                     </size>
                    </property>
                    <property name="maximumSize">
                     <size>
                      <width>480</width>
-                     <height>30</height>
+                     <height>80</height>
                     </size>
                    </property>
                    <property name="maximum">
@@ -1848,8 +1945,18 @@ QHeaderView::section {
                  <font>
                   <family>Arial</family>
                   <pointsize>-1</pointsize>
-                  <fontweight>Medium</fontweight>
+                  <weight>75</weight>
+                  <bold>true</bold>
                  </font>
+                </property>
+                <property name="styleSheet">
+                 <string notr="true">    outline: 0;
+    border: 2px solid rgb(0,57,138);
+    font-size: 18px;
+    border-radius: 8px;
+    background-color: #3498db;
+    color: white;
+    font-weight: bold;</string>
                 </property>
                 <property name="text">
                  <string>Go</string>
@@ -1899,8 +2006,18 @@ QHeaderView::section {
                  <font>
                   <family>Arial</family>
                   <pointsize>-1</pointsize>
-                  <fontweight>Medium</fontweight>
+                  <weight>75</weight>
+                  <bold>true</bold>
                  </font>
+                </property>
+                <property name="styleSheet">
+                 <string notr="true">    outline: 0;
+    border: 2px solid rgb(0,57,138);
+    font-size: 18px;
+    border-radius: 8px;
+    background-color: #3498db;
+    color: white;
+    font-weight: bold;</string>
                 </property>
                 <property name="text">
                  <string>Stop</string>
@@ -1959,7 +2076,7 @@ QHeaderView::section {
           </property>
           <property name="minimumSize">
            <size>
-            <width>0</width>
+            <width>1245</width>
             <height>515</height>
            </size>
           </property>
@@ -1973,6 +2090,7 @@ QHeaderView::section {
            <font>
             <family>Arial</family>
             <pointsize>-1</pointsize>
+            <weight>75</weight>
             <italic>false</italic>
             <bold>true</bold>
            </font>
@@ -2031,7 +2149,7 @@ QHeaderView::section {
              <widget class="QLabel" name="lateral_flexion_position_label">
               <property name="minimumSize">
                <size>
-                <width>70</width>
+                <width>72</width>
                 <height>40</height>
                </size>
               </property>
@@ -2040,6 +2158,15 @@ QHeaderView::section {
                 <width>80</width>
                 <height>60</height>
                </size>
+              </property>
+              <property name="styleSheet">
+               <string notr="true">    font-size: 22px;
+    background-color: white;
+    border: 2px solid #bdc3c7;
+    border-radius: 4px;
+    padding: 4px;
+    color: #34495e;
+    min-width: 60px; /* Ensures a minimum width */</string>
               </property>
               <property name="text">
                <string/>
@@ -2092,7 +2219,7 @@ QHeaderView::section {
                  <property name="minimumSize">
                   <size>
                    <width>0</width>
-                   <height>0</height>
+                   <height>50</height>
                   </size>
                  </property>
                  <property name="minimum">
@@ -2149,8 +2276,18 @@ QHeaderView::section {
                <font>
                 <family>Arial</family>
                 <pointsize>-1</pointsize>
-                <fontweight>Medium</fontweight>
+                <weight>75</weight>
+                <bold>true</bold>
                </font>
+              </property>
+              <property name="styleSheet">
+               <string notr="true">    outline: 0;
+    border: 2px solid rgb(0,57,138);
+    font-size: 18px;
+    border-radius: 8px;
+    background-color: #3498db;
+    color: white;
+    font-weight: bold;</string>
               </property>
               <property name="text">
                <string>Go</string>
@@ -2194,8 +2331,18 @@ QHeaderView::section {
                <font>
                 <family>Arial</family>
                 <pointsize>-1</pointsize>
-                <fontweight>Medium</fontweight>
+                <weight>75</weight>
+                <bold>true</bold>
                </font>
+              </property>
+              <property name="styleSheet">
+               <string notr="true">    outline: 0;
+    border: 2px solid rgb(0,57,138);
+    font-size: 18px;
+    border-radius: 8px;
+    background-color: #3498db;
+    color: white;
+    font-weight: bold;</string>
               </property>
               <property name="text">
                <string>Stop</string>
@@ -2234,13 +2381,13 @@ QHeaderView::section {
             <rect>
              <x>10</x>
              <y>30</y>
-             <width>1221</width>
+             <width>1200</width>
              <height>300</height>
             </rect>
            </property>
            <property name="minimumSize">
             <size>
-             <width>0</width>
+             <width>1200</width>
              <height>300</height>
             </size>
            </property>
@@ -2256,37 +2403,16 @@ QHeaderView::section {
            <layout class="QHBoxLayout" name="horizontalLayout_17">
             <item>
              <widget class="QGroupBox" name="groupBox_43">
+              <property name="minimumSize">
+               <size>
+                <width>370</width>
+                <height>0</height>
+               </size>
+              </property>
               <property name="title">
                <string>Control Slow</string>
               </property>
-              <layout class="QVBoxLayout" name="verticalLayout_15">
-               <item>
-                <widget class="QPushButton" name="forward_lateral_flexion_button">
-                 <property name="font">
-                  <font>
-                   <family>Arial</family>
-                   <pointsize>-1</pointsize>
-                  </font>
-                 </property>
-                 <property name="icon">
-                  <iconset>
-                   <normalon>../media/images/buttons/up_1.png</normalon>
-                  </iconset>
-                 </property>
-                 <property name="iconSize">
-                  <size>
-                   <width>121</width>
-                   <height>70</height>
-                  </size>
-                 </property>
-                 <property name="autoRepeat">
-                  <bool>true</bool>
-                 </property>
-                 <property name="flat">
-                  <bool>true</bool>
-                 </property>
-                </widget>
-               </item>
+              <layout class="QHBoxLayout" name="horizontalLayout_7">
                <item>
                 <widget class="QPushButton" name="reverse_lateral_flexion_button">
                  <property name="font">
@@ -2297,7 +2423,7 @@ QHeaderView::section {
                  </property>
                  <property name="icon">
                   <iconset>
-                   <normalon>../media/images/buttons/down_1.png</normalon>
+                   <normalon>../media/images/buttons/arrow-back.png</normalon>
                   </iconset>
                  </property>
                  <property name="iconSize">
@@ -2305,6 +2431,33 @@ QHeaderView::section {
                    <width>121</width>
                    <height>70</height>
                   </size>
+                 </property>
+                 <property name="flat">
+                  <bool>true</bool>
+                 </property>
+                </widget>
+               </item>
+               <item>
+                <widget class="QPushButton" name="forward_lateral_flexion_button">
+                 <property name="font">
+                  <font>
+                   <family>Arial</family>
+                   <pointsize>-1</pointsize>
+                  </font>
+                 </property>
+                 <property name="icon">
+                  <iconset>
+                   <normalon>../media/images/buttons/arrow-forward.png</normalon>
+                  </iconset>
+                 </property>
+                 <property name="iconSize">
+                  <size>
+                   <width>121</width>
+                   <height>70</height>
+                  </size>
+                 </property>
+                 <property name="autoRepeat">
+                  <bool>true</bool>
                  </property>
                  <property name="flat">
                   <bool>true</bool>
@@ -2316,12 +2469,18 @@ QHeaderView::section {
             </item>
             <item>
              <widget class="QGroupBox" name="groupBox_42">
+              <property name="minimumSize">
+               <size>
+                <width>375</width>
+                <height>0</height>
+               </size>
+              </property>
               <property name="title">
                <string>Control Fast</string>
               </property>
-              <layout class="QVBoxLayout" name="verticalLayout_14">
+              <layout class="QHBoxLayout" name="horizontalLayout_8">
                <item>
-                <widget class="QPushButton" name="forward_fast_lateral_flexion_button">
+                <widget class="QPushButton" name="reverse_fast_lateral_flexion_button">
                  <property name="font">
                   <font>
                    <family>Arial</family>
@@ -2330,7 +2489,7 @@ QHeaderView::section {
                  </property>
                  <property name="icon">
                   <iconset>
-                   <normalon>../media/images/buttons/up_2.png</normalon>
+                   <normalon>../media/images/buttons/arrow-back.png</normalon>
                   </iconset>
                  </property>
                  <property name="iconSize">
@@ -2348,7 +2507,7 @@ QHeaderView::section {
                 </widget>
                </item>
                <item>
-                <widget class="QPushButton" name="reverse_fast_lateral_flexion_button">
+                <widget class="QPushButton" name="forward_fast_lateral_flexion_button">
                  <property name="font">
                   <font>
                    <family>Arial</family>
@@ -2357,7 +2516,7 @@ QHeaderView::section {
                  </property>
                  <property name="icon">
                   <iconset>
-                   <normalon>../media/images/buttons/down_2.png</normalon>
+                   <normalon>../media/images/buttons/arrow-forward.png</normalon>
                   </iconset>
                  </property>
                  <property name="iconSize">
@@ -2461,6 +2620,7 @@ QHeaderView::section {
            <font>
             <family>Arial</family>
             <pointsize>-1</pointsize>
+            <weight>75</weight>
             <italic>false</italic>
             <bold>true</bold>
            </font>
@@ -2519,7 +2679,7 @@ QHeaderView::section {
              <widget class="QLabel" name="horizontal_flexion_position_label">
               <property name="minimumSize">
                <size>
-                <width>70</width>
+                <width>72</width>
                 <height>45</height>
                </size>
               </property>
@@ -2534,6 +2694,15 @@ QHeaderView::section {
                 <family>Arial</family>
                 <pointsize>-1</pointsize>
                </font>
+              </property>
+              <property name="styleSheet">
+               <string notr="true">    font-size: 22px;
+    background-color: white;
+    border: 2px solid #bdc3c7;
+    border-radius: 4px;
+    padding: 4px;
+    color: #34495e;
+    min-width: 60px; /* Ensures a minimum width */</string>
               </property>
               <property name="text">
                <string/>
@@ -2570,6 +2739,9 @@ QHeaderView::section {
                 <height>100</height>
                </size>
               </property>
+              <property name="styleSheet">
+               <string notr="true"/>
+              </property>
               <property name="title">
                <string/>
               </property>
@@ -2589,6 +2761,15 @@ QHeaderView::section {
                </item>
                <item>
                 <widget class="QSlider" name="horizontal_flexion_position_slider">
+                 <property name="minimumSize">
+                  <size>
+                   <width>0</width>
+                   <height>50</height>
+                  </size>
+                 </property>
+                 <property name="styleSheet">
+                  <string notr="true"/>
+                 </property>
                  <property name="minimum">
                   <number>-25</number>
                  </property>
@@ -2602,10 +2783,10 @@ QHeaderView::section {
                   <number>5</number>
                  </property>
                  <property name="value">
-                  <number>-15</number>
+                  <number>-10</number>
                  </property>
                  <property name="sliderPosition">
-                  <number>-15</number>
+                  <number>-10</number>
                  </property>
                  <property name="orientation">
                   <enum>Qt::Horizontal</enum>
@@ -2646,8 +2827,18 @@ QHeaderView::section {
                <font>
                 <family>Arial</family>
                 <pointsize>-1</pointsize>
-                <fontweight>Medium</fontweight>
+                <weight>75</weight>
+                <bold>true</bold>
                </font>
+              </property>
+              <property name="styleSheet">
+               <string notr="true">    outline: 0;
+    border: 2px solid rgb(0,57,138);
+    font-size: 18px;
+    border-radius: 8px;
+    background-color: #3498db;
+    color: white;
+    font-weight: bold;</string>
               </property>
               <property name="text">
                <string>Go</string>
@@ -2691,8 +2882,18 @@ QHeaderView::section {
                <font>
                 <family>Arial</family>
                 <pointsize>-1</pointsize>
-                <fontweight>Medium</fontweight>
+                <weight>75</weight>
+                <bold>true</bold>
                </font>
+              </property>
+              <property name="styleSheet">
+               <string notr="true">    outline: 0;
+    border: 2px solid rgb(0,57,138);
+    font-size: 18px;
+    border-radius: 8px;
+    background-color: #3498db;
+    color: white;
+    font-weight: bold;</string>
               </property>
               <property name="text">
                <string>Stop</string>
@@ -2962,6 +3163,7 @@ QHeaderView::section {
            <font>
             <family>Arial</family>
             <pointsize>-1</pointsize>
+            <weight>75</weight>
             <italic>false</italic>
             <bold>true</bold>
            </font>
@@ -3017,7 +3219,7 @@ QHeaderView::section {
              <widget class="QLabel" name="axial_flexion_position_label_2">
               <property name="minimumSize">
                <size>
-                <width>70</width>
+                <width>72</width>
                 <height>50</height>
                </size>
               </property>
@@ -3032,6 +3234,15 @@ QHeaderView::section {
                 <family>Arial</family>
                 <pointsize>-1</pointsize>
                </font>
+              </property>
+              <property name="styleSheet">
+               <string notr="true">    font-size: 22px;
+    background-color: white;
+    border: 2px solid #bdc3c7;
+    border-radius: 4px;
+    padding: 4px;
+    color: #34495e;
+    min-width: 60px; /* Ensures a minimum width */</string>
               </property>
               <property name="text">
                <string/>
@@ -3492,6 +3703,9 @@ QHeaderView::section {
                <height>575</height>
               </size>
              </property>
+             <property name="layoutDirection">
+              <enum>Qt::LeftToRight</enum>
+             </property>
              <property name="frameShape">
               <enum>QFrame::StyledPanel</enum>
              </property>
@@ -3503,7 +3717,7 @@ QHeaderView::section {
                <number>5</number>
               </property>
               <property name="leftMargin">
-               <number>0</number>
+               <number>30</number>
               </property>
               <property name="topMargin">
                <number>0</number>
@@ -3620,7 +3834,7 @@ QHeaderView::section {
                   <widget class="QLineEdit" name="protocol_number_field">
                    <property name="minimumSize">
                     <size>
-                     <width>70</width>
+                     <width>72</width>
                      <height>40</height>
                     </size>
                    </property>
@@ -3698,6 +3912,12 @@ QHeaderView::section {
                   <width>575</width>
                   <height>235</height>
                  </size>
+                </property>
+                <property name="layoutDirection">
+                 <enum>Qt::LeftToRight</enum>
+                </property>
+                <property name="styleSheet">
+                 <string notr="true"/>
                 </property>
                 <property name="pixmap">
                  <pixmap>../media/images/graphics/1.png</pixmap>
@@ -3993,19 +4213,19 @@ QHeaderView::section {
                   <x>60</x>
                   <y>40</y>
                   <width>500</width>
-                  <height>60</height>
+                  <height>80</height>
                  </rect>
                 </property>
                 <property name="minimumSize">
                  <size>
                   <width>500</width>
-                  <height>30</height>
+                  <height>80</height>
                  </size>
                 </property>
                 <property name="maximumSize">
                  <size>
                   <width>500</width>
-                  <height>60</height>
+                  <height>100</height>
                  </size>
                 </property>
                 <property name="title">
@@ -4048,13 +4268,13 @@ QHeaderView::section {
                    <property name="minimumSize">
                     <size>
                      <width>480</width>
-                     <height>0</height>
+                     <height>40</height>
                     </size>
                    </property>
                    <property name="maximumSize">
                     <size>
                      <width>480</width>
-                     <height>30</height>
+                     <height>50</height>
                     </size>
                    </property>
                    <property name="maximum">
@@ -4089,7 +4309,7 @@ QHeaderView::section {
                <property name="maximumSize">
                 <size>
                  <width>16777215</width>
-                 <height>120</height>
+                 <height>140</height>
                 </size>
                </property>
                <property name="title">
@@ -4101,19 +4321,19 @@ QHeaderView::section {
                   <x>60</x>
                   <y>40</y>
                   <width>500</width>
-                  <height>60</height>
+                  <height>80</height>
                  </rect>
                 </property>
                 <property name="minimumSize">
                  <size>
                   <width>500</width>
-                  <height>60</height>
+                  <height>80</height>
                  </size>
                 </property>
                 <property name="maximumSize">
                  <size>
                   <width>500</width>
-                  <height>70</height>
+                  <height>100</height>
                  </size>
                 </property>
                 <property name="title">
@@ -4162,7 +4382,7 @@ QHeaderView::section {
                    <property name="maximumSize">
                     <size>
                      <width>480</width>
-                     <height>30</height>
+                     <height>80</height>
                     </size>
                    </property>
                    <property name="minimum">
@@ -4203,7 +4423,7 @@ QHeaderView::section {
                <property name="maximumSize">
                 <size>
                  <width>16777215</width>
-                 <height>120</height>
+                 <height>140</height>
                 </size>
                </property>
                <property name="title">
@@ -4215,19 +4435,19 @@ QHeaderView::section {
                   <x>60</x>
                   <y>40</y>
                   <width>500</width>
-                  <height>60</height>
+                  <height>80</height>
                  </rect>
                 </property>
                 <property name="minimumSize">
                  <size>
                   <width>500</width>
-                  <height>50</height>
+                  <height>80</height>
                  </size>
                 </property>
                 <property name="maximumSize">
                  <size>
                   <width>500</width>
-                  <height>60</height>
+                  <height>120</height>
                  </size>
                 </property>
                 <property name="title">
@@ -4276,7 +4496,7 @@ QHeaderView::section {
                    <property name="maximumSize">
                     <size>
                      <width>480</width>
-                     <height>30</height>
+                     <height>80</height>
                     </size>
                    </property>
                    <property name="maximum">
@@ -4434,6 +4654,19 @@ QHeaderView::section {
          </spacer>
         </item>
         <item>
+         <spacer name="horizontalSpacer_15">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+        <item>
          <widget class="QPushButton" name="push_button_start">
           <property name="sizePolicy">
            <sizepolicy hsizetype="MinimumExpanding" vsizetype="Preferred">
@@ -4458,25 +4691,12 @@ QHeaderView::section {
           </property>
          </widget>
         </item>
-        <item>
-         <spacer name="horizontalSpacer_15">
-          <property name="orientation">
-           <enum>Qt::Horizontal</enum>
-          </property>
-          <property name="sizeHint" stdset="0">
-           <size>
-            <width>40</width>
-            <height>20</height>
-           </size>
-          </property>
-         </spacer>
-        </item>
         <item alignment="Qt::AlignHCenter">
-         <widget class="QLabel" name="reset_arduino_main_button">
+         <widget class="QPushButton" name="reset_arduino_main_button">
           <property name="minimumSize">
            <size>
             <width>100</width>
-            <height>40</height>
+            <height>50</height>
            </size>
           </property>
           <property name="maximumSize">
@@ -4488,14 +4708,19 @@ QHeaderView::section {
           <property name="text">
            <string/>
           </property>
-          <property name="pixmap">
-           <pixmap>../media/images/buttons/restart.png</pixmap>
+          <property name="icon">
+           <iconset>
+            <normalon>../media/images/buttons/restart.png</normalon>
+           </iconset>
           </property>
-          <property name="scaledContents">
+          <property name="iconSize">
+           <size>
+            <width>100</width>
+            <height>60</height>
+           </size>
+          </property>
+          <property name="flat">
            <bool>true</bool>
-          </property>
-          <property name="margin">
-           <number>5</number>
           </property>
          </widget>
         </item>
@@ -4675,7 +4900,7 @@ While performing a protocol, feel free to watch a video detailing the benefits o
 
 If you need technical assitance for any reason, click the &quot;Profile&quot; icon in the top right, then click &quot;Request Assitance&quot; in the botttom left. A technincian will reach out shortly to address your issue.</string>
            </property>
-           <property name="tabStopWidth" stdset="0">
+           <property name="tabStopWidth">
             <number>200</number>
            </property>
           </widget>

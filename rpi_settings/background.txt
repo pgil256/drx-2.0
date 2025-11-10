@@ -1,1 +1,0 @@
-pcmanfm --set-wallpaper=/home/pi/drx-2.2/main/ui/media/images/logos/drx-logo-full.png
