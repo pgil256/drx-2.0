@@ -1,323 +1,1031 @@
-/home/pi/drx-2.3/main/motor/motor_fixed.ino:15:0: warning: "VERSION" redefined
- #define VERSION "2025-03-20-FIXED"
- 
-/home/pi/drx-2.3/main/motor/motor.ino:7:0: note: this is the location of the previous definition
- #define VERSION "2025-03-20"
- 
-motor_fixed:48:15: error: redefinition of 'volatile bool isProcessingStatus'
- volatile bool isProcessingStatus = false;
-               ^~~~~~~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:37:15: note: 'volatile bool isProcessingStatus' previously defined here
- volatile bool isProcessingStatus = false;
-               ^~~~~~~~~~~~~~~~~~
-motor_fixed:49:15: error: redefinition of 'long unsigned int lastCommandTime'
- unsigned long lastCommandTime = 0;
-               ^~~~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:38:15: note: 'long unsigned int lastCommandTime' previously defined here
- unsigned long lastCommandTime = 0;
-               ^~~~~~~~~~~~~~~
-motor_fixed:50:21: error: redefinition of 'const long unsigned int MIN_COMMAND_INTERVAL'
- const unsigned long MIN_COMMAND_INTERVAL = 200; // ms
-                     ^~~~~~~~~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:39:21: note: 'const long unsigned int MIN_COMMAND_INTERVAL' previously defined here
- const unsigned long MIN_COMMAND_INTERVAL = 200; // ms
-                     ^~~~~~~~~~~~~~~~~~~~
-motor_fixed:51:15: error: redefinition of 'long unsigned int statusStartTime'
- unsigned long statusStartTime = 0;
-               ^~~~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:40:15: note: 'long unsigned int statusStartTime' previously defined here
- unsigned long statusStartTime = 0;
-               ^~~~~~~~~~~~~~~
-motor_fixed:52:6: error: redefinition of 'bool statusAcknowledged'
- bool statusAcknowledged = true; // Start with true so first status is sent
-      ^~~~~~~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:41:6: note: 'bool statusAcknowledged' previously defined here
- bool statusAcknowledged = true; // Start with true so first status is sent
-      ^~~~~~~~~~~~~~~~~~
-motor_fixed:53:15: error: redefinition of 'long unsigned int lastStatusTime'
- unsigned long lastStatusTime = 0;
-               ^~~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:42:15: note: 'long unsigned int lastStatusTime' previously defined here
- unsigned long lastStatusTime = 0;
-               ^~~~~~~~~~~~~~
-motor_fixed:54:21: error: redefinition of 'const long unsigned int STATUS_TIMEOUT'
- const unsigned long STATUS_TIMEOUT = 2000; // Force-reset acknowledgment after 2 seconds
-                     ^~~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:43:21: note: 'const long unsigned int STATUS_TIMEOUT' previously defined here
- const unsigned long STATUS_TIMEOUT = 2000; // Force-reset acknowledgment after 2 seconds
-                     ^~~~~~~~~~~~~~
-motor_fixed:58:7: error: redefinition of 'HX711 scale'
- HX711 scale;
-       ^~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:47:7: note: 'HX711 scale' previously declared here
- HX711 scale;
-       ^~~~~
-motor_fixed:59:7: error: redefinition of 'float calibration_factor'
- float calibration_factor = -4360.14;
-       ^~~~~~~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:48:7: note: 'float calibration_factor' previously defined here
- float calibration_factor = -4360.14;
-       ^~~~~~~~~~~~~~~~~~
-motor_fixed:60:7: error: redefinition of 'float pressure'
- float pressure = 0;
-       ^~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:49:7: note: 'float pressure' previously defined here
- float pressure = 0;
-       ^~~~~~~~
-motor_fixed:63:9: error: redefinition of 'uint8_t smcDeviceNumber'
- uint8_t smcDeviceNumber = 13;
-         ^~~~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:52:9: note: 'uint8_t smcDeviceNumber' previously defined here
- uint8_t smcDeviceNumber = 13;
-         ^~~~~~~~~~~~~~~
-motor_fixed:64:5: error: redefinition of 'int AZERO'
- int AZERO = 0;
-     ^~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:53:5: note: 'int AZERO' previously defined here
- int AZERO = 0;
-     ^~~~~
-motor_fixed:65:5: error: redefinition of 'int BZERO'
- int BZERO = 0;
-     ^~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:54:5: note: 'int BZERO' previously defined here
- int BZERO = 0;
-     ^~~~~
-motor_fixed:66:5: error: redefinition of 'int CZERO'
- int CZERO = 0;
-     ^~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:55:5: note: 'int CZERO' previously defined here
- int CZERO = 0;
-     ^~~~~
-motor_fixed:67:5: error: redefinition of 'int AInches'
- int AInches = 0;
-     ^~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:56:5: note: 'int AInches' previously defined here
- int AInches = 0;
-     ^~~~~~~
-motor_fixed:68:5: error: redefinition of 'int BInches'
- int BInches = 0;
-     ^~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:57:5: note: 'int BInches' previously defined here
- int BInches = 0;
-     ^~~~~~~
-motor_fixed:69:7: error: redefinition of 'float CInches'
- float CInches = 0;
-       ^~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:58:7: note: 'float CInches' previously defined here
- float CInches = 0;
-       ^~~~~~~
-motor_fixed:70:6: error: redefinition of 'bool STOP'
- bool STOP = false;
-      ^~~~
-/home/pi/drx-2.3/main/motor/motor.ino:59:6: note: 'bool STOP' previously defined here
- bool STOP = false;
-      ^~~~
-motor_fixed:71:6: error: redefinition of 'bool bRunning'
- bool bRunning = false;
-      ^~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:60:6: note: 'bool bRunning' previously defined here
- bool bRunning = false;
-      ^~~~~~~~
-motor_fixed:72:6: error: redefinition of 'bool measurePressure'
- bool measurePressure = false;
-      ^~~~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:61:6: note: 'bool measurePressure' previously defined here
- bool measurePressure = false;
-      ^~~~~~~~~~~~~~~
-motor_fixed:73:6: error: redefinition of 'bool noStatus'
- bool noStatus = false;
-      ^~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:62:6: note: 'bool noStatus' previously defined here
- bool noStatus = false;
-      ^~~~~~~~
-motor_fixed:74:5: error: redefinition of 'int forward'
- int forward = 1;
-     ^~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:63:5: note: 'int forward' previously defined here
- int forward = 1;
-     ^~~~~~~
-motor_fixed:75:7: error: redefinition of 'float desiredPressure'
- float desiredPressure = 0;
-       ^~~~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:64:7: note: 'float desiredPressure' previously defined here
- float desiredPressure = 0;
-       ^~~~~~~~~~~~~~~
-motor_fixed:76:5: error: redefinition of 'int pressureDirection'
- int pressureDirection = 0;
-     ^~~~~~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:65:5: note: 'int pressureDirection' previously defined here
- int pressureDirection = 0;
-     ^~~~~~~~~~~~~~~~~
-motor_fixed:77:10: error: redefinition of 'uint16_t position'
- uint16_t position = 0;
-          ^~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:66:10: note: 'uint16_t position' previously defined here
- uint16_t position = 0;
-          ^~~~~~~~
-motor_fixed:78:10: error: redefinition of 'uint16_t desiredPosition'
- uint16_t desiredPosition = 3;
-          ^~~~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:67:10: note: 'uint16_t desiredPosition' previously defined here
- uint16_t desiredPosition = 3;
-          ^~~~~~~~~~~~~~~
-motor_fixed:79:6: error: redefinition of 'bool highFrequencyStatus'
- bool highFrequencyStatus = false;
-      ^~~~~~~~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:68:6: note: 'bool highFrequencyStatus' previously defined here
- bool highFrequencyStatus = false;
-      ^~~~~~~~~~~~~~~~~~~
-motor_fixed:80:15: error: redefinition of 'elapsedMillis timeSinceLastStatus'
- elapsedMillis timeSinceLastStatus = 0; // Timer for high-frequency updates
-               ^~~~~~~~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:69:15: note: 'elapsedMillis timeSinceLastStatus' previously declared here
- elapsedMillis timeSinceLastStatus = 0; // Timer for high-frequency updates
-               ^~~~~~~~~~~~~~~~~~~
-motor_fixed:81:21: error: redefinition of 'const long unsigned int HIGH_FREQ_INTERVAL'
- const unsigned long HIGH_FREQ_INTERVAL = 1000; // ms for frequent updates (adjust as needed)
-                     ^~~~~~~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:70:21: note: 'const long unsigned int HIGH_FREQ_INTERVAL' previously defined here
- const unsigned long HIGH_FREQ_INTERVAL = 1000; // ms for frequent updates (adjust as needed)
-                     ^~~~~~~~~~~~~~~~~~
-motor_fixed:84:8: error: redefinition of 'String commandBuffer'
- String commandBuffer = "";
-        ^~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:73:8: note: 'String commandBuffer' previously declared here
- String commandBuffer = "";
-        ^~~~~~~~~~~~~
-motor_fixed:85:6: error: redefinition of 'bool isCommandComplete'
- bool isCommandComplete = false;
-      ^~~~~~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:74:6: note: 'bool isCommandComplete' previously defined here
- bool isCommandComplete = false;
-      ^~~~~~~~~~~~~~~~~
-motor_fixed:88:15: error: redefinition of 'long unsigned int loopPosition'
- unsigned long loopPosition = 0;
-               ^~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:77:15: note: 'long unsigned int loopPosition' previously defined here
- unsigned long loopPosition = 0;
-               ^~~~~~~~~~~~
-motor_fixed:91:15: error: redefinition of 'elapsedMillis timeInFIT'
- elapsedMillis timeInFIT = 0;
-               ^~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:80:15: note: 'elapsedMillis timeInFIT' previously declared here
- elapsedMillis timeInFIT = 0;
-               ^~~~~~~~~
-motor_fixed:92:5: error: redefinition of 'int FITDelay'
- int FITDelay = 0;
-     ^~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:81:5: note: 'int FITDelay' previously defined here
- int FITDelay = 0;
-     ^~~~~~~~
-motor_fixed:93:6: error: redefinition of 'bool moveFITForward'
- bool moveFITForward = false;
-      ^~~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:82:6: note: 'bool moveFITForward' previously defined here
- bool moveFITForward = false;
-      ^~~~~~~~~~~~~~
-motor_fixed:96:6: error: redefinition of 'bool jerking'
- bool jerking = false;
-      ^~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:85:6: note: 'bool jerking' previously defined here
- bool jerking = false;
-      ^~~~~~~
-motor_fixed:97:5: error: redefinition of 'int jerkDirection'
- int jerkDirection = 1;
-     ^~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:86:5: note: 'int jerkDirection' previously defined here
- int jerkDirection = 1;
-     ^~~~~~~~~~~~~
-motor_fixed:98:5: error: redefinition of 'int jerksCompleted'
- int jerksCompleted = 0;
-     ^~~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:87:5: note: 'int jerksCompleted' previously defined here
- int jerksCompleted = 0;
-     ^~~~~~~~~~~~~~
-motor_fixed:99:15: error: redefinition of 'long unsigned int lastJerkTime'
- unsigned long lastJerkTime = 0;
-               ^~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:88:15: note: 'long unsigned int lastJerkTime' previously defined here
- unsigned long lastJerkTime = 0;
-               ^~~~~~~~~~~~
-motor_fixed:100:21: error: conflicting declaration 'const long unsigned int jerkInterval'
- const unsigned long jerkInterval = 400;  // 400ms delay between direction changes (controls smoothness)
-                     ^~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:89:15: note: previous declaration as 'long unsigned int jerkInterval'
- unsigned long jerkInterval = 400;  // 400ms delay between direction changes (controlls smoothness)
-               ^~~~~~~~~~~~
-motor_fixed:101:6: error: redefinition of 'bool jerkDirectionChanged'
- bool jerkDirectionChanged = false;
-      ^~~~~~~~~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:90:6: note: 'bool jerkDirectionChanged' previously defined here
- bool jerkDirectionChanged = false;
-      ^~~~~~~~~~~~~~~~~~~~
-motor_fixed:104:24: error: redefinition of 'void (* resetFunc)()'
- void(* resetFunc) (void) = 0;
-                        ^
-/home/pi/drx-2.3/main/motor/motor.ino:93:8: note: 'void (* resetFunc)()' previously defined here
- void(* resetFunc) (void) = 0;
-        ^~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor_fixed.ino: In function 'void exitSafeStart()':
-motor_fixed:107:6: error: redefinition of 'void exitSafeStart()'
- void exitSafeStart() {
-      ^~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:96:6: note: 'void exitSafeStart()' previously defined here
- void exitSafeStart() {
-      ^~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor_fixed.ino: In function 'void setMotorSpeed(int16_t)':
-motor_fixed:114:6: error: redefinition of 'void setMotorSpeed(int16_t)'
- void setMotorSpeed(int16_t speed) {
-      ^~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:103:6: note: 'void setMotorSpeed(int16_t)' previously defined here
- void setMotorSpeed(int16_t speed) {
-      ^~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor_fixed.ino: In function 'uint16_t readPosition()':
-motor_fixed:148:10: error: redefinition of 'uint16_t readPosition()'
- uint16_t readPosition() {
-          ^~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:137:10: note: 'uint16_t readPosition()' previously defined here
- uint16_t readPosition() {
-          ^~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor_fixed.ino: In function 'String getValue(String, char, int)':
-motor_fixed:190:8: error: redefinition of 'String getValue(String, char, int)'
- String getValue(String data, char separator, int index) {
-        ^~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:173:8: note: 'String getValue(String, char, int)' previously defined here
- String getValue(String data, char separator, int index) {
-        ^~~~~~~~
-/home/pi/drx-2.3/main/motor/motor_fixed.ino: In function 'bool sendStatus()':
-motor_fixed:206:6: error: redefinition of 'bool sendStatus()'
- bool sendStatus() {
-      ^~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:189:6: note: 'bool sendStatus()' previously defined here
- bool sendStatus() {
-      ^~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor_fixed.ino: In function 'void emergencyStop()':
-motor_fixed:261:6: error: redefinition of 'void emergencyStop()'
- void emergencyStop() {
-      ^~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:243:6: note: 'void emergencyStop()' previously defined here
- void emergencyStop() {
-      ^~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor_fixed.ino: In function 'void processCommand(String)':
-motor_fixed:283:6: error: redefinition of 'void processCommand(String)'
- void processCommand(String cmd) {
-      ^~~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:264:6: note: 'void processCommand(String)' previously defined here
- void processCommand(String cmd) {
-      ^~~~~~~~~~~~~~
-/home/pi/drx-2.3/main/motor/motor_fixed.ino: In function 'void setup()':
-motor_fixed:699:6: error: redefinition of 'void setup()'
- void setup() {
-      ^~~~~
-/home/pi/drx-2.3/main/motor/motor.ino:663:6: note: 'void setup()' previously defined here
- void setup() {
-      ^~~~~
-/home/pi/drx-2.3/main/motor/motor_fixed.ino: In function 'void loop()':
-motor_fixed:754:6: error: redefinition of 'void loop()'
- void loop() {
-      ^~~~
-/home/pi/drx-2.3/main/motor/motor.ino:718:6: note: 'void loop()' previously defined here
- void loop() {
-      ^~~~
-exit status 1
-redefinition of 'volatile bool isProcessingStatus'
+pi@kneespa:~/drx-demo/main$ python3 kneespa.py --debug
+Logging initialized at 2025-11-11 16:40:52.100127
+Application started at 2025-11-11 16:40:52.181480
+Debug mode: enabled
+qt.core.logging: Ignoring malformed logging rule: '*.debug=False'
+qt.core.logging: Ignoring malformed logging rule: 'qt.qpa.xcb=False'
+Initializing KneeSpa class in debug mode
+Configuration: Initializing configuration object
+Configuration: Loading config from /home/pi/drx-2.3/main/config/kneespa.cfg
+Configuration: Reading existing config file from /home/pi/drx-2.3/main/config/kneespa.cfg
+Configuration: Loaded 17 CMarks calibration points
+Configuration: Loaded 1 AMarks calibration points
+Configuration: Loaded 1 BMarks calibration points
+Configuration: Loaded flexion_position = 1978
+Configuration: Loaded a_factor = 3640
+Configuration: Loaded b_factor = 3640
+Configuration: Loaded c_factor = 3640
+Configuration: Loaded unlock = 123
+Configuration: Loaded calibration = -28369.0
+Loading main UI file
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+QFont::setPointSize: Point size <= 0 (-1), must be greater than 0
+Unknown property cursor
+Debug mode: Running in windowed mode
+Finding central widget 'central_widget'
+LoadingSpinner: Initializing spinner (size=300, speed=100%)
+LoadingSpinner: Hiding spinner
+LoadingSpinner: Initialization complete
+CSVHelper: Initializing CSV helper
+CSVHelper: Initializing user data
+CSVHelper: Loading user data from /home/pi/drx-demo/main/helpers/../data/user_pins.csv
+CSVHelper: Loading CSV file from /home/pi/drx-demo/main/helpers/../data/user_pins.csv
+CSVHelper: Successfully loaded 2 rows from /home/pi/drx-demo/main/helpers/../data/user_pins.csv
+CSVHelper: Loaded 2 user records
+User data loaded successfully.
+Setting up UI buttons and labels
+Setting up actuator controls...
+Actuator controls setup complete
+UI elements setup completed successfully
+Connecting UI element signals
+Connecting show_pressure_button
+Updating protocol image to number 1
+Signal connections completed successfully
+UI element signals connected
+Protocol controls setup completed successfully
+Setting up dialogs
+Initializing login dialog
+Showing home page
+Multithreading with maximum 4 threads
+TimerDialog: Initializing timer dialog
+TimerDialog: Initialization complete
+PressureDialog: Initializing pressure dialog
+PressureDialog: Initialization complete
+Setting up timers for protocol events
+Initializing GPIO setup process
+Setting GPIO mode to BCM
+Disabling GPIO warnings
+Setting up GPIO pins for EMERGENCYSTOP, EXTRAFORWARD, EXTRABACKWARD, and EXTRAENABLE
+Configuring default GPIO states
+GPIO setup completed successfully
+Showing loading spinner
+LoadingSpinner: Showing spinner
+LoadingSpinner: Animation started
+Disabling actuator controls...
+Setting up Arduino interface
+Arduino instance created
+Thread instance created for Arduino
+Connecting Arduino signals to corresponding slots
+Moving Arduino object to thread
+Connecting Arduino finished signal to thread quit
+Connecting thread started signal to Arduino run method
+Connecting Arduino position, status, and pressure signals
+Starting Arduino thread
+Thread started for Arduino
+Waiting for Arduino connection readiness
+Arduino initialized successfully
+Setting up initialization tasks to run on successful connection
+Connection attempt 1/3 to /dev/serial0
+Unknown property cursor
+Unknown property cursor
+Attempting to release busy port: /dev/serial0
+Port /dev/serial0 is not busy
+Resetting Arduino via DTR...
+Starting to read from serial communication
+Emergency input buffer flush performed
+Raw received data: OK
+Arduino sent OK acknowledgment
+Sent OK on attempt 1
+Connected to Arduino on /dev/serial0
+Reset Arduino requested...
+Showing loading spinner for reset
+LoadingSpinner: Showing spinner
+Disabling actuator controls...
+ResetWorker: Initializing reset worker thread
+ResetWorker: Initialization complete
+Starting ResetWorker in threadpool
+============================================================
+ResetWorker: Starting full reset sequence
+============================================================
+ResetWorker: [STEP 1/6] Sending 'Y' (Reset Command)
+Sending command: Y
+
+Command sent successfully.
+ResetWorker: Fixed delay after 'Y'...
+Raw received data: Re�
+Unrecognized data format: Re�
+Raw received data: Ready to Go
+Setting I2C status to ready
+Raw received data: STATUS_START|S|3327|1872|1367|10.03|STATUS_END
+Emitting status: A 3327 B 1872 C 1367 Pressure 10.03
+A 3327 B 1872 C 1367 Pressure 10.03
+Status acknowledgment sent
+ResetWorker: [STEP 1/6] Complete
+ResetWorker: [STEP 2/6] Sending zero mark ('L5')
+Attempting 'Zero Mark' with command: L5160  80
+Sending command: L5160  80
+
+Raw received data: DONE
+Setting I2C status to done - signal received from Arduino
+Scheduling controls to enable with delay...
+Actually enabling controls now
+Command sent successfully.
+Worker waiting for 'Zero Mark' completion (max 30.0s)...
+Worker detected 'Zero Mark' completed (event signaled).
+ResetWorker: [STEP 2/6] Complete
+ResetWorker: [STEP 3/6] Resetting Actuator C ('I14')
+Attempting 'Actuator C Reset' with command: I141400
+Sending command: I141400
+
+Command sent successfully.
+Worker waiting for 'Actuator C Reset' completion (max 30.0s)...
+Raw received data: STATUS_START|S|3327|1872|1425|10.45|STATUS_END
+Emitting status: A 3327 B 1872 C 1425 Pressure 10.45
+A 3327 B 1872 C 1425 Pressure 10.45
+Status acknowledgment sent
+Raw received data: DONE
+Setting I2C status to done - signal received from Arduino
+Scheduling controls to enable with delay...
+Worker detected 'Actuator C Reset' completed (event signaled).
+ResetWorker: [STEP 3/6] Complete
+ResetWorker: [STEP 4/6] Resetting Actuator B ('A13')
+Attempting 'Actuator B Reset' with command: A133
+Sending command: A133
+
+Actually enabling controls now
+Command sent successfully.
+Worker waiting for 'Actuator B Reset' completion (max 30.0s)...
+Raw received data: STATUS_START|S|3327|1871|1426|10.43|STATUS_END
+Emitting status: A 3327 B 1871 C 1426 Pressure 10.43
+A 3327 B 1871 C 1426 Pressure 10.43
+Status acknowledgment sent
+Raw received data: STATUS_START|S|3327|1852|1425|15.05|STATUS_END
+Emitting status: A 3327 B 1852 C 1425 Pressure 15.05
+A 3327 B 1852 C 1425 Pressure 15.05
+Status acknowledgment sent
+Raw received data: DONE
+Setting I2C status to done - signal received from Arduino
+Scheduling controls to enable with delay...
+Worker detected 'Actuator B Reset' completed (event signaled).
+ResetWorker: [STEP 4/6] Complete
+ResetWorker: [STEP 5/6] Resetting Actuator A ('I12')
+Attempting 'Actuator A Reset' with command: I120
+Sending command: I120
+
+Actually enabling controls now
+Command sent successfully.
+Worker waiting for 'Actuator A Reset' completion (max 60.0s)...
+Raw received data: STATUS_START|S|152|1852|1425|83.00|STATUS_END
+Emitting status: A 152 B 1852 C 1425 Pressure 83.0
+A 152 B 1852 C 1425 Pressure 83.0
+Status acknowledgment sent
+Raw received data: DONE
+Setting I2C status to done - signal received from Arduino
+Scheduling controls to enable with delay...
+Worker detected 'Actuator A Reset' completed (event signaled).
+ResetWorker: [STEP 5/6] Complete
+ResetWorker: [STEP 6/6] Sending Calibration ('L0')
+Attempting 'Calibration' with command: L0-28369.0
+Sending command: L0-28369.0
+
+Actually enabling controls now
+Command sent successfully.
+Worker waiting for 'Calibration' completion (max 30.0s)...
+Raw received data: STATUS_START|S|152|1852|1426|82.34|STATUS_END
+Emitting status: A 152 B 1852 C 1426 Pressure 82.34
+A 152 B 1852 C 1426 Pressure 82.34
+Status acknowledgment sent
+Raw received data: DONE
+Setting I2C status to done - signal received from Arduino
+Scheduling controls to enable with delay...
+Worker detected 'Calibration' completed (event signaled).
+ResetWorker: [STEP 6/6] Complete
+============================================================
+ResetWorker: Reset sequence completed successfully in 70.2 seconds
+============================================================
+ResetWorker: Finished with result: SUCCESS
+Reset sequence finished signal received. Success: True
+LoadingSpinner: Showing spinner
+Disabling actuator controls...
+Sending command: F0
+
+Raw received data: DONE
+Command sent successfully.
+LoadingSpinner: Hiding spinner
+LoadingSpinner: Animation stopped
+LoadingSpinner: Hiding spinner
+Status emit error: Arduino reset and actuators reinitialized.
+Reset sequence completed successfully via worker.
+Setting I2C status to done - signal received from Arduino
+Scheduling controls to enable with delay...
+Actually enabling controls now
+Showing login dialog
+LoadingSpinner: Showing spinner
+LoadingSpinner: Animation started
+Disabling actuator controls...
+Sending command: FR
+
+Command sent successfully.
+LoadingSpinner: Hiding spinner
+LoadingSpinner: Animation stopped
+Raw received data: STATUS_START|S|152|1851|1425|0.50|STATUS_END
+Emitting status: A 152 B 1851 C 1425 Pressure 0.5
+A 152 B 1851 C 1425 Pressure 0.5
+Status acknowledgment sent
+Raw received data: DONE
+Setting I2C status to done - signal received from Arduino
+Scheduling controls to enable with delay...
+Actually enabling controls now
+Appending value 1 to login input
+Appending value 2 to login input
+Appending value 3 to login input
+Handling login
+Login successful for PIN: 123
+Updating UI after login
+Admin user logged in: Enabling admin features
+Clearing login input field
+Showing setup page
+Speed factor: 20
+LoadingSpinner: Showing spinner
+LoadingSpinner: Animation started
+Disabling actuator controls...
+A position: 1
+Sending command: A121
+
+Command sent successfully.
+Axial flexion position 1
+Raw received data: STATUS_START|S|152|1852|1425|0.32|STATUS_END
+Emitting status: A 152 B 1852 C 1425 Pressure 0.32
+Status acknowledgment sent
+Sending command: L5
+
+Raw received data: DONE
+Command sent successfully.
+LoadingSpinner: Hiding spinner
+LoadingSpinner: Animation stopped
+A 152 B 1852 C 1425 Pressure 0.32
+Setting I2C status to done - signal received from Arduino
+Scheduling controls to enable with delay...
+Actually enabling controls now
+^[[BRaw received data: STATUS_START|S|440|1852|1425|5.34|STATUS_END
+A 440 B 1852 C 1425 Pressure 5.34
+Emitting status: A 440 B 1852 C 1425 Pressure 5.34
+Status acknowledgment sent
+Raw received data: DONE
+Setting I2C status to done - signal received from Arduino
+Scheduling controls to enable with delay...
+Actually enabling controls now
+Raw received data: STATUS_START|S|440|1852|1425|4.42|STATUS_END
+A 440 B 1852 C 1425 Pressure 4.42
+Emitting status: A 440 B 1852 C 1425 Pressure 4.42
+Status acknowledgment sent
+Speed factor: 20
+LoadingSpinner: Showing spinner
+LoadingSpinner: Animation started
+Disabling actuator controls...
+A position: 2
+Sending command: A122
+
+Command sent successfully.
+Axial flexion position 2
+Sending command: L5
+
+Raw received data: DONE
+Command sent successfully.
+LoadingSpinner: Hiding spinner
+LoadingSpinner: Animation stopped
+Setting I2C status to done - signal received from Arduino
+Scheduling controls to enable with delay...
+Actually enabling controls now
+Raw received data: STATUS_START|S|869|1852|1425|8.53|STATUS_END
+Emitting status: A 869 B 1852 C 1425 Pressure 8.53
+A 869 B 1852 C 1425 Pressure 8.53
+Status acknowledgment sent
+Raw received data: DONE
+Setting I2C status to done - signal received from Arduino
+Scheduling controls to enable with delay...
+Actually enabling controls now
+Raw received data: STATUS_START|S|869|1851|1425|8.37|STATUS_END
+Emitting status: A 869 B 1851 C 1425 Pressure 8.37
+A 869 B 1851 C 1425 Pressure 8.37
+Status acknowledgment sent
+Speed factor: 20
+LoadingSpinner: Showing spinner
+LoadingSpinner: Animation started
+Disabling actuator controls...
+A position: 1
+Sending command: A121
+
+Command sent successfully.
+Axial flexion position 1
+LoadingSpinner: Hiding spinner
+LoadingSpinner: Animation stopped
+^[[BRaw received data: STATUS_START|S|422|1852|1425|1.82|STATUS_END
+A 422 B 1852 C 1425 Pressure 1.82
+Emitting status: A 422 B 1852 C 1425 Pressure 1.82
+Status acknowledgment sent
+Raw received data: DONE
+Setting I2C status to done - signal received from Arduino
+Scheduling controls to enable with delay...
+Actually enabling controls now
+Raw received data: STATUS_START|S|422|1852|1426|1.83|STATUS_END
+Emitting status: A 422 B 1852 C 1426 Pressure 1.83
+A 422 B 1852 C 1426 Pressure 1.83
+Status acknowledgment sent
+Speed factor: 20
+LoadingSpinner: Showing spinner
+LoadingSpinner: Animation started
+Disabling actuator controls...
+ positioned to 5.0 degrees pos 1650
+Sending command: K1650
+
+Command sent successfully.
+LoadingSpinner: Hiding spinner
+LoadingSpinner: Animation stopped
+Raw received data: STATUS_START|S|422|1852|1669|3.87|STATUS_END
+Emitting status: A 422 B 1852 C 1669 Pressure 3.87
+A 422 B 1852 C 1669 Pressure 3.87
+Status acknowledgment sent
+Raw received data: DONE
+Setting I2C status to done - signal received from Arduino
+Scheduling controls to enable with delay...
+Actually enabling controls now
+Raw received data: STATUS_START|S|422|1852|1669|3.82|STATUS_END
+Emitting status: A 422 B 1852 C 1669 Pressure 3.82
+A 422 B 1852 C 1669 Pressure 3.82
+Status acknowledgment sent
+Speed factor: 20
+LoadingSpinner: Showing spinner
+LoadingSpinner: Animation started
+Disabling actuator controls...
+ positioned to 10.0 degrees pos 1900
+Sending command: K1900
+
+Command sent successfully.
+LoadingSpinner: Hiding spinner
+LoadingSpinner: Animation stopped
+Raw received data: STATUS_START|S|422|1852|1916|6.19|STATUS_END
+A 422 B 1852 C 1916 Pressure 6.19
+Emitting status: A 422 B 1852 C 1916 Pressure 6.19
+Status acknowledgment sent
+Raw received data: DONE
+Setting I2C status to done - signal received from Arduino
+Scheduling controls to enable with delay...
+Actually enabling controls now
+LoadingSpinner: Showing spinner
+LoadingSpinner: Animation started
+Disabling actuator controls...
+14
+ positioned to 0 degrees pos 1400
+Sending command: I141400
+
+Command sent successfully.
+LoadingSpinner: Hiding spinner
+LoadingSpinner: Animation stopped
+Raw received data: STATUS_START|S|422|1852|1917|5.93|STATUS_END
+Emitting status: A 422 B 1852 C 1917 Pressure 5.93
+A 422 B 1852 C 1917 Pressure 5.93
+Status acknowledgment sent
+Raw received data: STATUS_START|S|422|1852|1386|2.15|STATUS_END
+Emitting status: A 422 B 1852 C 1386 Pressure 2.15
+A 422 B 1852 C 1386 Pressure 2.15
+Status acknowledgment sent
+Raw received data: DONE
+Setting I2C status to done - signal received from Arduino
+Scheduling controls to enable with delay...
+Actually enabling controls now
+LoadingSpinner: Showing spinner
+LoadingSpinner: Animation started
+Disabling actuator controls...
+13
+Sending command: A132
+
+Raw received data: STATUS_START|S|422|1852|1386|2.32|STATUS_END
+Emitting status: A 422 B 1852 C 1386 Pressure 2.32
+Command sent successfully.
+LoadingSpinner: Hiding spinner
+LoadingSpinner: Animation stopped
+A 422 B 1852 C 1386 Pressure 2.32
+Status acknowledgment sent
+Raw received data: STATUS_START|S|422|1223|1386|4.08|STATUS_END
+A 422 B 1223 C 1386 Pressure 4.08
+Emitting status: A 422 B 1223 C 1386 Pressure 4.08
+Status acknowledgment sent
+Raw received data: DONE
+Setting I2C status to done - signal received from Arduino
+Scheduling controls to enable with delay...
+Actually enabling controls now
+Raw received data: STATUS_START|S|422|1222|1385|6.98|STATUS_END
+A 422 B 1222 C 1385 Pressure 6.98
+Emitting status: A 422 B 1222 C 1385 Pressure 6.98
+Status acknowledgment sent
+Showing setup page
+Showing main page
+Raw received data: STATUS_START|S|422|1223|1385|1.14|STATUS_END
+Emitting status: A 422 B 1223 C 1385 Pressure 1.14
+A 422 B 1223 C 1385 Pressure 1.14
+Status acknowledgment sent
+Showing setup page
+LoadingSpinner: Showing spinner
+LoadingSpinner: Animation started
+forward_fast_button_clicked
+Disabling actuator controls...
+Sending command: FF
+
+Raw received data: DONE
+Command sent successfully.
+LoadingSpinner: Hiding spinner
+LoadingSpinner: Animation stopped
+Setting I2C status to done - signal received from Arduino
+Scheduling controls to enable with delay...
+Actually enabling controls now
+Raw received data: STATUS_START|S|422|1223|1385|7.10|STATUS_END
+A 422 B 1223 C 1385 Pressure 7.1
+Emitting status: A 422 B 1223 C 1385 Pressure 7.1
+Status acknowledgment sent
+Raw received data: STATUS_START|S|422|1222|1386|26.14|STATUS_END
+Emitting status: A 422 B 1222 C 1386 Pressure 26.14
+A 422 B 1222 C 1386 Pressure 26.14
+Status acknowledgment sent
+Raw received data: STATUS_START|S|422|1223|1386|23.67|STATUS_END
+Emitting status: A 422 B 1223 C 1386 Pressure 23.67
+A 422 B 1223 C 1386 Pressure 23.67
+Status acknowledgment sent
+Showing main page
+Raw received data: STATUS_START|S|422|1223|1385|21.80|STATUS_END
+Emitting status: A 422 B 1223 C 1385 Pressure 21.8
+A 422 B 1223 C 1385 Pressure 21.8
+Status acknowledgment sent
+Showing next protocol image
+Updating protocol image to number 2
+Raw received data: STATUS_START|S|422|1222|1386|21.47|STATUS_END
+Emitting status: A 422 B 1222 C 1386 Pressure 21.47
+A 422 B 1222 C 1386 Pressure 21.47
+Status acknowledgment sent
+Raw received data: STATUS_START|S|422|1223|1385|20.75|STATUS_END
+Emitting status: A 422 B 1223 C 1385 Pressure 20.75
+A 422 B 1223 C 1385 Pressure 20.75
+Status acknowledgment sent
+Raw received data: STATUS_START|S|422|1223|1386|20.69|STATUS_END
+Emitting status: A 422 B 1223 C 1386 Pressure 20.69
+A 422 B 1223 C 1386 Pressure 20.69
+Status acknowledgment sent
+Showing PressureDialog
+TimerDialog: Dialog shown
+Toggling protocol start/stop
+Verifying Arduino connection before protocol start...
+Raw received data: OK
+Arduino sent OK acknowledgment
+Sent OK on attempt 1
+Arduino connection verified.
+Protocol duration: 12 minutes
+TimerDialog: Initializing protocol timer - Duration: 720s (12m 0s)
+TimerDialog: Time remaining 12:00 [NORMAL]
+LoadingSpinner: Showing spinner
+LoadingSpinner: Animation started
+Disabling actuator controls...
+ positioned to 0.0 degrees pos 1400
+Sending command: K1400
+
+Command sent successfully.
+cmd K1400
+End set to c.
+Scheduling controls to enable with delay...
+LoadingSpinner: Hiding spinner
+LoadingSpinner: Animation stopped
+Initializing Protocols class...
+Protocol: Connected Arduino status_emit signal to update_status method
+Protocols class initialized with use_pulse=True
+MAIN APP: Connected worker.signals.pressure_emit to pressure_dialog.update_pressure
+MAIN APP: Connected arduino.status_emit directly to pressure_dialog.update_pressure
+Starting protocol execution...
+Sending command: HF1
+
+Actually enabling controls now
+Raw received data: STATUS_START|S|422|1223|1368|20.14|STATUS_END
+Emitting status: A 422 B 1223 C 1368 Pressure 20.14
+A 422 B 1223 C 1368 Pressure 20.14
+Protocol update_status received: A=422, B=1223, C=1368, Pressure=20.14
+Protocol emitting pressure_emit with pressure=20.14
+PressureDialog: Pressure update 20.1 lbs [NORMAL]
+Protocol emitting status_emit with all values
+Command sent successfully.
+Running protocol 2...
+Duration check - Elapsed: 0.4s / Total: 720s
+Setting higher initial pressure of 20.0 lbs for max_pressure=40
+Setting pressure to: 20.0 lbs
+Status acknowledgment sent
+Sending command: P20.0
+
+Command sent successfully.
+Pressure stabilized at 20.14 lbs
+Increasing pressure to: 10 lbs
+Sending command: P10
+
+Command sent successfully.
+Increasing pressure to: 20 lbs
+Sending command: P20
+
+Raw received data: STATUS_START|S|422|1223|1368|20.18|STATUS_END
+Emitting status: A 422 B 1223 C 1368 Pressure 20.18
+A 422 B 1223 C 1368 Pressure 20.18
+Protocol update_status received: A=422, B=1223, C=1368, Pressure=20.18
+Protocol emitting pressure_emit with pressure=20.18
+Protocol emitting status_emit with all values
+Command sent successfully.
+Pressure increment stabilized at 20.18 lbs
+Status acknowledgment sent
+Raw received data: DONE
+Setting I2C status to done - signal received from Arduino
+Protocol running, controls will not be enabled
+Raw received data: STATUS_START|S|422|1222|1369|20.48|STATUS_END
+Emitting status: A 422 B 1222 C 1369 Pressure 20.48
+A 422 B 1222 C 1369 Pressure 20.48
+Protocol update_status received: A=422, B=1222, C=1369, Pressure=20.48
+Protocol emitting pressure_emit with pressure=20.48
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Increasing pressure to: 30 lbs
+Sending command: P30
+
+Raw received data: STATUS_START|S|422|1223|1368|19.21|STATUS_END
+Emitting status: A 422 B 1223 C 1368 Pressure 19.21
+A 422 B 1223 C 1368 Pressure 19.21
+Protocol update_status received: A=422, B=1223, C=1368, Pressure=19.21
+Protocol emitting pressure_emit with pressure=19.21
+PressureDialog: Pressure update 19.2 lbs [NORMAL]
+Protocol emitting status_emit with all values
+Command sent successfully.
+Status acknowledgment sent
+Raw received data: STATUS_START|S|479|1223|1367|24.10|STATUS_END
+Emitting status: A 479 B 1223 C 1367 Pressure 24.1
+A 479 B 1223 C 1367 Pressure 24.1
+Protocol update_status received: A=479, B=1223, C=1367, Pressure=24.1
+Protocol emitting pressure_emit with pressure=24.1
+PressureDialog: Pressure update 24.1 lbs [NORMAL]
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Raw received data: DONE
+Setting I2C status to done - signal received from Arduino
+Protocol running, controls will not be enabled
+Warning: Pressure increment 30 not fully stabilized
+TimerDialog: Time remaining 11:50 [NORMAL]
+Raw received data: STATUS_START|S|479|1222|1368|23.85|STATUS_END
+Emitting status: A 479 B 1222 C 1368 Pressure 23.85
+A 479 B 1222 C 1368 Pressure 23.85
+Protocol update_status received: A=479, B=1222, C=1368, Pressure=23.85
+Protocol emitting pressure_emit with pressure=23.85
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Increasing pressure to: 40 lbs
+Sending command: P40
+
+Raw received data: STATUS_START|S|478|1223|1367|17.60|STATUS_END
+Emitting status: A 478 B 1223 C 1367 Pressure 17.6
+A 478 B 1223 C 1367 Pressure 17.6
+Protocol update_status received: A=478, B=1223, C=1367, Pressure=17.6
+Protocol emitting pressure_emit with pressure=17.6
+PressureDialog: Pressure update 17.6 lbs [NORMAL]
+Protocol emitting status_emit with all values
+Command sent successfully.
+Status acknowledgment sent
+Raw received data: STATUS_START|S|410|1222|1367|23.52|STATUS_END
+Emitting status: A 410 B 1222 C 1367 Pressure 23.52
+A 410 B 1222 C 1367 Pressure 23.52
+Protocol update_status received: A=410, B=1222, C=1367, Pressure=23.52
+Protocol emitting pressure_emit with pressure=23.52
+PressureDialog: Pressure update 23.5 lbs [NORMAL]
+Protocol emitting status_emit with all values
+Warning: Pressure increment 40 not fully stabilized
+Status acknowledgment sent
+Raw received data: DONE
+Setting I2C status to done - signal received from Arduino
+Protocol running, controls will not be enabled
+Setting final pressure: 40 lbs
+Sending command: P40
+
+Command sent successfully.
+Pressure check - Target: 40, Current: 23.52, Difference: 16.48 lbs
+TimerDialog: Time remaining 11:40 [NORMAL]
+Pressure check - Target: 40, Current: 23.52, Difference: 16.48 lbs
+Pressure check - Target: 40, Current: 23.52, Difference: 16.48 lbs
+Raw received data: STATUS_START|S|539|1223|1368|28.87|STATUS_END
+A 539 B 1223 C 1368 Pressure 28.87
+Protocol update_status received: A=539, B=1223, C=1368, Pressure=28.87
+Protocol emitting pressure_emit with pressure=28.87
+PressureDialog: Pressure update 28.9 lbs [NORMAL]
+Emitting status: A 539 B 1223 C 1368 Pressure 28.87
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Pressure check - Target: 40, Current: 28.87, Difference: 11.129999999999999 lbs
+Pressure check - Target: 40, Current: 28.87, Difference: 11.129999999999999 lbs
+Pressure check - Target: 40, Current: 28.87, Difference: 11.129999999999999 lbs
+Pressure check - Target: 40, Current: 28.87, Difference: 11.129999999999999 lbs
+Raw received data: STATUS_START|S|657|1223|1368|30.52|STATUS_END
+Emitting status: A 657 B 1223 C 1368 Pressure 30.52
+A 657 B 1223 C 1368 Pressure 30.52
+Protocol update_status received: A=657, B=1223, C=1368, Pressure=30.52
+Protocol emitting pressure_emit with pressure=30.52
+PressureDialog: Pressure update 30.5 lbs [NORMAL]
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Pressure check - Target: 40, Current: 30.52, Difference: 9.48 lbs
+Pressure check - Target: 40, Current: 30.52, Difference: 9.48 lbs
+Retrying final pressure command (attempt 2/5)
+Sending command: P40
+
+Command sent successfully.
+Pressure check - Target: 40, Current: 30.52, Difference: 9.48 lbs
+Raw received data: STATUS_START|S|777|1222|1367|24.68|STATUS_END
+Emitting status: A 777 B 1222 C 1367 Pressure 24.68
+A 777 B 1222 C 1367 Pressure 24.68
+Protocol update_status received: A=777, B=1222, C=1367, Pressure=24.68
+Protocol emitting pressure_emit with pressure=24.68
+PressureDialog: Pressure update 24.7 lbs [NORMAL]
+Protocol emitting status_emit with all values
+Pressure check - Target: 40, Current: 24.68, Difference: 15.32 lbs
+Status acknowledgment sent
+Pressure check - Target: 40, Current: 24.68, Difference: 15.32 lbs
+Pressure check - Target: 40, Current: 24.68, Difference: 15.32 lbs
+Pressure check - Target: 40, Current: 24.68, Difference: 15.32 lbs
+Raw received data: STATUS_START|S|900|1222|1367|22.94|STATUS_END
+A 900 B 1222 C 1367 Pressure 22.94
+Protocol update_status received: A=900, B=1222, C=1367, Pressure=22.94
+Protocol emitting pressure_emit with pressure=22.94
+PressureDialog: Pressure update 22.9 lbs [NORMAL]
+Emitting status: A 900 B 1222 C 1367 Pressure 22.94
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Pressure check - Target: 40, Current: 22.94, Difference: 17.06 lbs
+Pressure check - Target: 40, Current: 22.94, Difference: 17.06 lbs
+Pressure check - Target: 40, Current: 22.94, Difference: 17.06 lbs
+Pressure check - Target: 40, Current: 22.94, Difference: 17.06 lbs
+Retrying final pressure command (attempt 3/5)
+Sending command: P40
+
+TimerDialog: Time remaining 11:30 [NORMAL]
+Command sent successfully.
+Pressure check - Target: 40, Current: 22.94, Difference: 17.06 lbs
+Pressure check - Target: 40, Current: 22.94, Difference: 17.06 lbs
+Pressure check - Target: 40, Current: 22.94, Difference: 17.06 lbs
+Pressure check - Target: 40, Current: 22.94, Difference: 17.06 lbs
+Raw received data: STATUS_START|S|1198|1223|1368|22.06|STATUS_END
+Emitting status: A 1198 B 1223 C 1368 Pressure 22.06
+A 1198 B 1223 C 1368 Pressure 22.06
+Protocol update_status received: A=1198, B=1223, C=1368, Pressure=22.06
+Protocol emitting pressure_emit with pressure=22.06
+PressureDialog: Pressure update 22.1 lbs [NORMAL]
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Pressure check - Target: 40, Current: 22.06, Difference: 17.94 lbs
+Pressure check - Target: 40, Current: 22.06, Difference: 17.94 lbs
+Pressure check - Target: 40, Current: 22.06, Difference: 17.94 lbs
+Pressure check - Target: 40, Current: 22.06, Difference: 17.94 lbs
+Pressure check - Target: 40, Current: 22.06, Difference: 17.94 lbs
+Retrying final pressure command (attempt 4/5)
+Sending command: P40
+
+Command sent successfully.
+Pressure check - Target: 40, Current: 22.06, Difference: 17.94 lbs
+Pressure check - Target: 40, Current: 22.06, Difference: 17.94 lbs
+Pressure check - Target: 40, Current: 22.06, Difference: 17.94 lbs
+Pressure check - Target: 40, Current: 22.06, Difference: 17.94 lbs
+Raw received data: STATUS_START|S|1486|1223|1368|36.06|STATUS_END
+Emitting status: A 1486 B 1223 C 1368 Pressure 36.06
+A 1486 B 1223 C 1368 Pressure 36.06
+Protocol update_status received: A=1486, B=1223, C=1368, Pressure=36.06
+Protocol emitting pressure_emit with pressure=36.06
+PressureDialog: Pressure update 36.1 lbs [NORMAL]
+Protocol emitting status_emit with all values
+Pressure close enough after extended attempts: 36.06/40 lbs
+Status acknowledgment sent
+TimerDialog: Time remaining 11:20 [NORMAL]
+Pressure sequence complete. Final pressure: 36.06 lbs
+Moving to left -10°
+Setting C actuator to -10 degrees
+Sending command: K720
+
+Command sent successfully.
+Position check - Target: 720, Current: 1368, Difference: 648
+Position check - Target: 720, Current: 1368, Difference: 648
+Position check - Target: 720, Current: 1368, Difference: 648
+Position check - Target: 720, Current: 1368, Difference: 648
+Position check - Target: 720, Current: 1368, Difference: 648
+Position check - Target: 720, Current: 1368, Difference: 648
+Position check - Target: 720, Current: 1368, Difference: 648
+Position check - Target: 720, Current: 1368, Difference: 648
+Position check - Target: 720, Current: 1368, Difference: 648
+Position check - Target: 720, Current: 1368, Difference: 648
+Position check - Target: 720, Current: 1368, Difference: 648
+Position check - Target: 720, Current: 1368, Difference: 648
+Position check - Target: 720, Current: 1368, Difference: 648
+Position check - Target: 720, Current: 1368, Difference: 648
+Position check - Target: 720, Current: 1368, Difference: 648
+Position check - Target: 720, Current: 1368, Difference: 648
+Raw received data: STATUS_START|S|1757|1222|1367|35.27|STATUS_END
+Emitting status: A 1757 B 1222 C 1367 Pressure 35.27
+A 1757 B 1222 C 1367 Pressure 35.27
+Protocol update_status received: A=1757, B=1222, C=1367, Pressure=35.27
+Protocol emitting pressure_emit with pressure=35.27
+PressureDialog: Pressure update 35.3 lbs [NORMAL]
+Protocol emitting status_emit with all values
+Position check - Target: 720, Current: 1367, Difference: 647
+Status acknowledgment sent
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Raw received data: DONE
+Setting I2C status to done - signal received from Arduino
+Protocol running, controls will not be enabled
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Position check - Target: 720, Current: 1367, Difference: 647
+Warning: Angle position not verified within timeout
+Protocol 2 (1762904694.825592): Entering final phase loop (pulse/hold). Initial self.use_pulse=True
+Protocol 2 (1762904694.8256521): self.use_pulse is True, attempting to run apply_continuous_pulse.
+Protocol 2 (1762904694.8256845): Starting continuous pulse sequence (self.use_pulse=True)...
+Sending command: J
+
+Command sent successfully.
+Protocol 2 (1762904695.1527445): Sent 'J' (start pulse) to Arduino.
+Duration check - Elapsed: 45.1s / Total: 720s
+Duration check - Elapsed: 45.3s / Total: 720s
+Raw received data: STATUS_START|S|1874|1222|1368|37.35|STATUS_END
+Emitting status: A 1874 B 1222 C 1368 Pressure 37.35
+A 1874 B 1222 C 1368 Pressure 37.35
+Protocol update_status received: A=1874, B=1222, C=1368, Pressure=37.35
+Protocol emitting pressure_emit with pressure=37.35
+PressureDialog: Pressure update 37.4 lbs [NORMAL]
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Duration check - Elapsed: 45.5s / Total: 720s
+Duration check - Elapsed: 45.7s / Total: 720s
+Duration check - Elapsed: 45.9s / Total: 720s
+Raw received data: DONE
+Setting I2C status to done - signal received from Arduino
+Protocol running, controls will not be enabled
+Raw received data: STATUS_START|S|1987|1223|1368|39.77|STATUS_END
+Emitting status: A 1987 B 1223 C 1368 Pressure 39.77
+A 1987 B 1223 C 1368 Pressure 39.77
+Protocol update_status received: A=1987, B=1223, C=1368, Pressure=39.77
+Protocol emitting pressure_emit with pressure=39.77
+PressureDialog: Pressure update 39.8 lbs [NORMAL]
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+TimerDialog: Time remaining 11:10 [NORMAL]
+Raw received data: STATUS_START|S|2038|1223|1368|44.35|STATUS_END
+Emitting status: A 2038 B 1223 C 1368 Pressure 44.35
+A 2038 B 1223 C 1368 Pressure 44.35
+Protocol update_status received: A=2038, B=1223, C=1368, Pressure=44.35
+Protocol emitting pressure_emit with pressure=44.35
+PressureDialog: Pressure update 44.4 lbs [NORMAL]
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Raw received data: DONE
+Setting I2C status to done - signal received from Arduino
+Protocol running, controls will not be enabled
+Raw received data: STATUS_START|S|2038|1223|1368|43.93|STATUS_END
+Emitting status: A 2038 B 1223 C 1368 Pressure 43.93
+A 2038 B 1223 C 1368 Pressure 43.93
+Protocol update_status received: A=2038, B=1223, C=1368, Pressure=43.93
+Protocol emitting pressure_emit with pressure=43.93
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Raw received data: STATUS_START|S|2039|1223|1258|43.39|STATUS_END
+Emitting status: A 2039 B 1223 C 1258 Pressure 43.39
+A 2039 B 1223 C 1258 Pressure 43.39
+Protocol update_status received: A=2039, B=1223, C=1258, Pressure=43.39
+Protocol emitting pressure_emit with pressure=43.39
+PressureDialog: Pressure update 43.4 lbs [NORMAL]
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Raw received data: STATUS_START|S|2038|1223|1154|42.98|STATUS_END
+Emitting status: A 2038 B 1223 C 1154 Pressure 42.98
+A 2038 B 1223 C 1154 Pressure 42.98
+Protocol update_status received: A=2038, B=1223, C=1154, Pressure=42.98
+Protocol emitting pressure_emit with pressure=42.98
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Raw received data: STATUS_START|S|2039|1223|1063|42.17|STATUS_END
+Emitting status: A 2039 B 1223 C 1063 Pressure 42.17
+A 2039 B 1223 C 1063 Pressure 42.17
+Protocol update_status received: A=2039, B=1223, C=1063, Pressure=42.17
+Protocol emitting pressure_emit with pressure=42.17
+PressureDialog: Pressure update 42.2 lbs [NORMAL]
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+TimerDialog: Time remaining 11:00 [NORMAL]
+Raw received data: STATUS_START|S|2039|1223|967|41.58|STATUS_END
+Emitting status: A 2039 B 1223 C 967 Pressure 41.58
+A 2039 B 1223 C 967 Pressure 41.58
+Protocol update_status received: A=2039, B=1223, C=967, Pressure=41.58
+Protocol emitting pressure_emit with pressure=41.58
+PressureDialog: Pressure update 41.6 lbs [NORMAL]
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Duration check - Elapsed: 60.2s / Total: 720s
+Duration check - Elapsed: 60.4s / Total: 720s
+Duration check - Elapsed: 60.6s / Total: 720s
+Duration check - Elapsed: 60.8s / Total: 720s
+Duration check - Elapsed: 61.0s / Total: 720s
+Raw received data: STATUS_START|S|2039|1223|890|40.81|STATUS_END
+Emitting status: A 2039 B 1223 C 890 Pressure 40.81
+A 2039 B 1223 C 890 Pressure 40.81
+Protocol update_status received: A=2039, B=1223, C=890, Pressure=40.81
+Protocol emitting pressure_emit with pressure=40.81
+PressureDialog: Pressure update 40.8 lbs [NORMAL]
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Raw received data: STATUS_START|S|2039|1223|800|40.43|STATUS_END
+Emitting status: A 2039 B 1223 C 800 Pressure 40.43
+A 2039 B 1223 C 800 Pressure 40.43
+Protocol update_status received: A=2039, B=1223, C=800, Pressure=40.43
+Protocol emitting pressure_emit with pressure=40.43
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Raw received data: STATUS_START|S|2038|1223|720|39.97|STATUS_END
+Emitting status: A 2038 B 1223 C 720 Pressure 39.97
+A 2038 B 1223 C 720 Pressure 39.97
+Protocol update_status received: A=2038, B=1223, C=720, Pressure=39.97
+Protocol emitting pressure_emit with pressure=39.97
+PressureDialog: Pressure update 40.0 lbs [NORMAL]
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Raw received data: DONE
+Setting I2C status to done - signal received from Arduino
+Protocol running, controls will not be enabled
+Raw received data: STATUS_START|S|2038|1223|662|40.01|STATUS_END
+Emitting status: A 2038 B 1223 C 662 Pressure 40.01
+A 2038 B 1223 C 662 Pressure 40.01
+Protocol update_status received: A=2038, B=1223, C=662, Pressure=40.01
+Protocol emitting pressure_emit with pressure=40.01
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Raw received data: STATUS_START|S|2038|1223|660|39.72|STATUS_END
+Emitting status: A 2038 B 1223 C 660 Pressure 39.72
+A 2038 B 1223 C 660 Pressure 39.72
+Protocol update_status received: A=2038, B=1223, C=660, Pressure=39.72
+Protocol emitting pressure_emit with pressure=39.72
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+TimerDialog: Time remaining 10:50 [NORMAL]
+Raw received data: STATUS_START|S|2038|1223|661|39.75|STATUS_END
+Emitting status: A 2038 B 1223 C 661 Pressure 39.75
+A 2038 B 1223 C 661 Pressure 39.75
+Protocol update_status received: A=2038, B=1223, C=661, Pressure=39.75
+Protocol emitting pressure_emit with pressure=39.75
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Raw received data: STATUS_START|S|2038|1222|661|40.41|STATUS_END
+Emitting status: A 2038 B 1222 C 661 Pressure 40.41
+A 2038 B 1222 C 661 Pressure 40.41
+Protocol update_status received: A=2038, B=1222, C=661, Pressure=40.41
+Protocol emitting pressure_emit with pressure=40.41
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Raw received data: STATUS_START|S|2038|1223|661|39.74|STATUS_END
+Emitting status: A 2038 B 1223 C 661 Pressure 39.74
+A 2038 B 1223 C 661 Pressure 39.74
+Protocol update_status received: A=2038, B=1223, C=661, Pressure=39.74
+Protocol emitting pressure_emit with pressure=39.74
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Duration check - Elapsed: 75.2s / Total: 720s
+Sending command: T
+
+Raw received data: STATUS_START|S|2038|1223|661|39.64|STATUS_END
+Emitting status: A 2038 B 1223 C 661 Pressure 39.64
+A 2038 B 1223 C 661 Pressure 39.64
+Protocol update_status received: A=2038, B=1223, C=661, Pressure=39.64
+Protocol emitting pressure_emit with pressure=39.64
+Protocol emitting status_emit with all values
+Command sent successfully.
+Status acknowledgment sent
+Raw received data: OK
+Arduino sent OK acknowledgment
+Duration check - Elapsed: 75.7s / Total: 720s
+Duration check - Elapsed: 75.9s / Total: 720s
+Raw received data: STATUS_START|S|2038|1222|661|39.49|STATUS_END
+Emitting status: A 2038 B 1222 C 661 Pressure 39.49
+A 2038 B 1222 C 661 Pressure 39.49
+Protocol update_status received: A=2038, B=1222, C=661, Pressure=39.49
+Protocol emitting pressure_emit with pressure=39.49
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+TimerDialog: Time remaining 10:40 [NORMAL]
+Raw received data: STATUS_START|S|2038|1223|660|39.05|STATUS_END
+Emitting status: A 2038 B 1223 C 660 Pressure 39.05
+A 2038 B 1223 C 660 Pressure 39.05
+Protocol update_status received: A=2038, B=1223, C=660, Pressure=39.05
+Protocol emitting pressure_emit with pressure=39.05
+PressureDialog: Pressure update 39.0 lbs [NORMAL]
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Raw received data: STATUS_START|S|2038|1223|660|38.81|STATUS_END
+Emitting status: A 2038 B 1223 C 660 Pressure 38.81
+A 2038 B 1223 C 660 Pressure 38.81
+Protocol update_status received: A=2038, B=1223, C=660, Pressure=38.81
+Protocol emitting pressure_emit with pressure=38.81
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Raw received data: STATUS_START|S|2038|1223|659|38.68|STATUS_END
+Emitting status: A 2038 B 1223 C 659 Pressure 38.68
+A 2038 B 1223 C 659 Pressure 38.68
+Protocol update_status received: A=2038, B=1223, C=659, Pressure=38.68
+Protocol emitting pressure_emit with pressure=38.68
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Raw received data: STATUS_START|S|2038|1223|659|38.54|STATUS_END
+Emitting status: A 2038 B 1223 C 659 Pressure 38.54
+A 2038 B 1223 C 659 Pressure 38.54
+Protocol update_status received: A=2038, B=1223, C=659, Pressure=38.54
+Protocol emitting pressure_emit with pressure=38.54
+PressureDialog: Pressure update 38.5 lbs [NORMAL]
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Raw received data: STATUS_START|S|2038|1223|659|38.52|STATUS_END
+Emitting status: A 2038 B 1223 C 659 Pressure 38.52
+A 2038 B 1223 C 659 Pressure 38.52
+Protocol update_status received: A=2038, B=1223, C=659, Pressure=38.52
+Protocol emitting pressure_emit with pressure=38.52
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+TimerDialog: Time remaining 10:30 [NORMAL]
+Duration check - Elapsed: 90.2s / Total: 720s
+Raw received data: STATUS_START|S|2038|1223|659|38.30|STATUS_END
+Emitting status: A 2038 B 1223 C 659 Pressure 38.3
+A 2038 B 1223 C 659 Pressure 38.3
+Protocol update_status received: A=2038, B=1223, C=659, Pressure=38.3
+Protocol emitting pressure_emit with pressure=38.3
+Protocol emitting status_emit with all values
+Status acknowledgment sent
+Duration check - Elapsed: 90.4s / Total: 720s
+Duration check - Elapsed: 90.6s / Total: 720s
+Duration check - Elapsed: 90.8s / Total: 720s
+Duration check - Elapsed: 91.0s / Total: 720s
+^C^CTraceback (most recent call last):
+  File "kneespa.py", line 1996, in update_protocol_time
+    def update_protocol_time(self):
+KeyboardInterrupt

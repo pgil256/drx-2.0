@@ -124,3 +124,7 @@ This is a **medical device control system** for knee rehabilitation therapy, con
 - **GPIO Mock**: Use mock GPIO for testing outside Raspberry Pi
 - **Protocol Testing**: Verify timing and sequence accuracy
 - **Thread Safety**: Test concurrent access to shared resources
+
+### Development Preferences
+
+- **Testing**: Do not write test scripts for changes. User will test manually.

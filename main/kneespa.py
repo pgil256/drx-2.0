@@ -197,10 +197,12 @@ class KneeSpa(QMainWindow):
         self.reset_done_event = threading.Event()
         self.initial_setup_complete = False
         self.reset_in_progress = False  # Flag to prevent overlapping resets
-        self.mid_protocol_warning_shown = False 
+        self.mid_protocol_warning_shown = False
         self._prev_pressure = None                   #  for rollback
         self._prev_left   = None
         self._prev_right  = None
+        self.actuator_command_in_progress = False  # Prevent multiple simultaneous commands
+        self.controls_enable_timer = None  # Single timer for control re-enabling
 
         try:
             print("Loading main UI file")
@@ -534,15 +536,47 @@ class KneeSpa(QMainWindow):
             raise
 
     def disable_actuator_controls(self):
+        """Disable all actuator control buttons with safety check."""
+        print("Disabling actuator controls...")
+
+        # Cancel any pending enable timer
+        if self.controls_enable_timer:
+            self.controls_enable_timer.stop()
+            self.controls_enable_timer = None
+
+        # Mark command as in progress
+        self.actuator_command_in_progress = True
+
+        # Disable all controls
         for w in self.actuator_controls:
             w.setEnabled(False)
 
     def enable_actuator_controls(self):
-        if self.protocol_running == False:
-            print("Scheduling controls to enable with delay...") # Add for debugging
+        """Enable actuator controls with proper timing."""
+        if self.protocol_running:
+            print("Protocol running, controls will not be enabled")
+            return
+
+        # Cancel any existing timer first
+        if self.controls_enable_timer:
+            self.controls_enable_timer.stop()
+            self.controls_enable_timer = None
+
+        print("Scheduling controls to enable with delay...")
+
+        # Create a new timer
+        self.controls_enable_timer = QTimer()
+        self.controls_enable_timer.setSingleShot(True)
+
+        def do_enable():
+            print("Actually enabling controls now")
+            self.actuator_command_in_progress = False
             for w in self.actuator_controls:
-                # Use a default argument to capture the current value of 'w'
-                QTimer.singleShot(200, lambda widget=w: widget.setEnabled(True))
+                w.setEnabled(True)
+            self.controls_enable_timer = None
+
+        self.controls_enable_timer.timeout.connect(do_enable)
+        self.controls_enable_timer.start(200)
 
     def connect_buttons_and_labels(self):
         """Connect signals and slots for all UI elements."""
@@ -787,11 +821,36 @@ class KneeSpa(QMainWindow):
     def emergency_stop_clicked(self, event):
         """Handle emergency stop button press."""
         print("Emergency stop triggered")
+
+        # First, immediately stop all actuators
         self.stop_actuators()
-        time.sleep(1)
-        if self.worker:
-            self.worker.stop()
-        time.sleep(1)
+
+        # If protocol is running, stop it and wait for clean exit
+        if self.worker and hasattr(self.worker, 'is_running') and self.worker.is_running:
+            print("Stopping running protocol...")
+            self.worker.stop()  # Clean stop for reset, not an emergency
+
+            # Give the protocol worker time to cleanly exit its loops
+            # Check periodically if it has stopped
+            max_wait = 3.0  # Maximum wait time in seconds
+            check_interval = 0.1  # Check every 100ms
+            elapsed = 0
+
+            while elapsed < max_wait:
+                if not self.worker.is_running:
+                    print(f"Protocol stopped cleanly after {elapsed:.1f} seconds")
+                    break
+                time.sleep(check_interval)
+                elapsed += check_interval
+
+            if self.worker.is_running:
+                print(f"Warning: Protocol did not stop cleanly after {max_wait} seconds")
+
+        # Small delay to ensure serial communication is stable
+        time.sleep(0.5)
+
+        # Now start the reset sequence
+        print("Starting reset sequence after emergency stop")
         self.reset_arduino()
 
     def start_or_stop_protocol(self):
@@ -1212,7 +1271,7 @@ class KneeSpa(QMainWindow):
         print("Cleaning up resources.")
 
         if self.worker:
-            self.worker.stop()
+            self.worker.stop(emergency=True)  # Application closing, ensure everything stops
 
         # Force Arduino disconnect
         if hasattr(self, "arduino"):
@@ -1229,6 +1288,16 @@ class KneeSpa(QMainWindow):
         """
         Move an actuator in the specified direction
         """
+        # Prevent multiple simultaneous commands
+        if self.actuator_command_in_progress:
+            print(f"Command already in progress, ignoring actuator movement request")
+            return
+
+        # Safety check for disabled controls
+        if not all(w.isEnabled() for w in self.actuator_controls[:1]):
+            print(f"Controls are disabled, ignoring actuator movement request")
+            return
+
         print(f"Speed factor: {speed_factor}")
         if actuator == self.actuator_b:  # Horizontal Flexion
             step = 10 if int(speed_factor) > 4 else 5
@@ -1686,10 +1755,13 @@ class KneeSpa(QMainWindow):
 
     @QtCore.pyqtSlot()
     def set_done(self):
-        """Set the I2C status to done."""
+        """Set the I2C status to done with proper control re-enabling."""
         print("Setting I2C status to done - signal received from Arduino")
         self.I2Cstatus = 1
         self.I2Cstatus_event.set()  # Signal the thread-safe event
+
+        # Clear the command in progress flag and enable controls
+        self.actuator_command_in_progress = False
         self.enable_actuator_controls()
 
     def ready_to_go(self):
@@ -1967,7 +2039,7 @@ class KneeSpa(QMainWindow):
         self.protocol_timer.stop()
 
         if self.worker:
-            self.worker.stop()
+            self.worker.stop()  # Normal completion, not an emergency
 
         # Update UI
         self.ui.show_timer_button.setChecked(False)
@@ -1996,7 +2068,7 @@ class KneeSpa(QMainWindow):
         self.protocol_running = False # Ensure flag is set here too
         self.mid_protocol_warning_shown = False # <-- Add this line
         if self.worker:
-            self.worker.stop()
+            self.worker.stop(emergency=True)  # User-initiated stop is treated as emergency
         time.sleep(0.5)
         self.start_button.setEnabled(True)
         self.reset_arduino()
@@ -2042,7 +2114,7 @@ class KneeSpa(QMainWindow):
                 if position_a > AXIAL_MAX or (self.initial_setup_complete and pressure > PRESSURE_MAX):
                     self._show_timed_error("Emergency stop triggered: Axial limit exceeded")
                     if self.worker is not None:
-                        self.worker.stop()
+                        self.worker.stop(emergency=True)  # Safety limit exceeded
                     success = False
                     self.initial_setup_complete = False
                     self.reset_arduino()
@@ -2051,7 +2123,7 @@ class KneeSpa(QMainWindow):
                 if position_b < HORIZONTAL_MIN or position_b > HORIZONTAL_MAX:
                     self._show_timed_error("Emergency stop triggered: Horizontal position limit exceeded")
                     if self.worker is not None:
-                        self.worker.stop()
+                        self.worker.stop(emergency=True)  # Safety limit exceeded
                     success = False
                     self.initial_setup_complete = False
                     self.reset_arduino()
@@ -2060,7 +2132,7 @@ class KneeSpa(QMainWindow):
                 if steps < LATERAL_MIN or steps > LATERAL_MAX:
                     self._show_timed_error("Emergency stop triggered: Lateral position limit exceeded")
                     if self.worker is not None:
-                        self.worker.stop()
+                        self.worker.stop(emergency=True)  # Safety limit exceeded
                     success = False
                     self.initial_setup_complete = False
                     self.reset_arduino()
@@ -2184,6 +2256,18 @@ class KneeSpa(QMainWindow):
         if self.reset_in_progress:
             print("Reset already in progress, ignoring duplicate request")
             return
+
+        # Check if protocol is still running
+        if self.worker and hasattr(self.worker, 'is_running') and self.worker.is_running:
+            print("Warning: Cannot start reset while protocol is still running!")
+            print("Attempting to stop protocol first...")
+            self.worker.stop()  # Clean stop before reset, not an emergency
+            # Give it a brief moment to stop
+            time.sleep(1.0)
+            if self.worker.is_running:
+                print("Error: Protocol failed to stop. Aborting reset.")
+                self._show_timed_error(self, "Error", "Cannot reset while protocol is running. Please try again.")
+                return
 
         self.reset_in_progress = True  # Set flag to prevent overlapping resets
         self.initial_setup_complete = False

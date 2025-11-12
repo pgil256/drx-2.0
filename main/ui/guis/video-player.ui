@@ -6,8 +6,8 @@
       <rect>
         <x>0</x>
         <y>0</y>
-        <width>500</width>
-        <height>400</height>
+        <width>750</width>
+        <height>600</height>
       </rect>
     </property>
     <property name="sizePolicy">
@@ -18,14 +18,14 @@
     </property>
     <property name="minimumSize">
       <size>
-        <width>500</width>
-        <height>400</height>
+        <width>750</width>
+        <height>600</height>
       </size>
     </property>
     <property name="maximumSize">
       <size>
-        <width>550</width>
-        <height>405</height>
+        <width>825</width>
+        <height>608</height>
       </size>
     </property>
     <property name="windowTitle">
@@ -39,20 +39,20 @@
         <rect>
           <x>0</x>
           <y>0</y>
-          <width>500</width>
-          <height>400</height>
+          <width>750</width>
+          <height>600</height>
         </rect>
       </property>
       <property name="minimumSize">
         <size>
-          <width>400</width>
-          <height>400</height>
+          <width>600</width>
+          <height>600</height>
         </size>
       </property>
       <property name="maximumSize">
         <size>
-          <width>500</width>
-          <height>250</height>
+          <width>750</width>
+          <height>600</height>
         </size>
       </property>
       <property name="styleSheet">
@@ -72,14 +72,14 @@
           <widget class="QWidget" name="video_container" native="true">
             <property name="minimumSize">
               <size>
-                <width>400</width>
-                <height>200</height>
+                <width>600</width>
+                <height>400</height>
               </size>
             </property>
             <property name="maximumSize">
               <size>
-                <width>500</width>
-                <height>250</height>
+                <width>750</width>
+                <height>500</height>
               </size>
             </property>
             <property name="styleSheet">

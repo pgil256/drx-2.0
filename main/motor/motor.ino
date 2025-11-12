@@ -86,7 +86,7 @@ bool jerking = false;
 int jerkDirection = 1;
 int jerksCompleted = 0;
 unsigned long lastJerkTime = 0;
-unsigned long jerkInterval = 400;  // 400ms delay between direction changes (controlls smoothness)
+unsigned long jerkInterval = 500;  // 500ms delay between direction changes (controlls smoothness)
 bool jerkDirectionChanged = false;
 
 // Makes Arduino restart
@@ -750,19 +750,22 @@ void loop() {
   }
 
   if (jerking) {
-  // Jerking motion handler
-  if (jerksCompleted >= MAX_JERKS) {
-    // Reset counter but continue jerking
-    jerksCompleted = 0;
-    // Send a status update periodically
+    // Jerking motion handler
+    if (jerksCompleted >= MAX_JERKS) {
+      // Reset counter but continue jerking
+      jerksCompleted = 0;
+    }
+
+    // Perform the jerk motion
+    smcDeviceNumber = 12;
+    setMotorSpeed(3200 * jerkDirection);
+    jerkDirection = -jerkDirection;
+    delay(jerkInterval);
+    jerksCompleted++;  // INCREMENT THE COUNTER
+
+    // Send status update periodically
     if (jerksCompleted % 2 == 0) {
-        sendStatus();
-      }
-    } else {
-      smcDeviceNumber = 12;
-      setMotorSpeed(3200 * jerkDirection);
-      jerkDirection = -jerkDirection;
-      delay(jerkInterval);
+      sendStatus();
     }
   }
 

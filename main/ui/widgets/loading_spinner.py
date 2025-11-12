@@ -24,6 +24,7 @@ class LoadingSpinner(QWidget):
         speed_pct: int = 500                    # 100 = normal, >100 faster
     ) -> None:
         super().__init__(parent, Qt.SubWindow | Qt.FramelessWindowHint)
+        print(f"LoadingSpinner: Initializing spinner (size={size}, speed={speed_pct}%)")
 
         # --- transparent & mouse-through ---
         for w in (self,):                       # QWidget itself
@@ -56,19 +57,24 @@ class LoadingSpinner(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
 
         self.hide()
+        print("LoadingSpinner: Initialization complete")
 
     # ------------------------
     # public control
     # ------------------------
     def show(self) -> None:
+        print("LoadingSpinner: Showing spinner")
         if self._movie.state() != QMovie.Running:
             self._movie.start()
+            print("LoadingSpinner: Animation started")
         super().show()
         self.raise_()
 
     def hide(self) -> None:
+        print("LoadingSpinner: Hiding spinner")
         if self._movie.state() == QMovie.Running:
             self._movie.stop()
+            print("LoadingSpinner: Animation stopped")
         super().hide()
 
     # ------------------------

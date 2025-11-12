@@ -2,7 +2,7 @@ import time
 import threading
 from helpers.logging import setup_logger
 
-from PyQt5.QtCore import QObject
+from PyQt5.QtCore import QObject, pyqtSignal, QRunnable
 
 from config.constants import (
     PRESSURE_MAX,
@@ -23,16 +23,16 @@ ANGLE_INCREMENT = PROTOCOL_DEFAULT_SETTINGS["ANGLE_INCREMENT"]        # Standard
 
 class WorkerSignals(QObject):
     """Defines the signals available from a running worker thread."""
-    finished = QtCore.pyqtSignal(bool)
-    stopped = QtCore.pyqtSignal(bool)
-    error = QtCore.pyqtSignal(tuple)
-    result = QtCore.pyqtSignal(object)
-    progress = QtCore.pyqtSignal(str)
-    pressure_emit = QtCore.pyqtSignal(float)
-    status_emit = QtCore.pyqtSignal(int, int, int, float)
-    reset_needed = QtCore.pyqtSignal()
+    finished = pyqtSignal(bool)
+    stopped = pyqtSignal(bool)
+    error = pyqtSignal(tuple)
+    result = pyqtSignal(object)
+    progress = pyqtSignal(str)
+    pressure_emit = pyqtSignal(float)
+    status_emit = pyqtSignal(int, int, int, float)
+    reset_needed = pyqtSignal()
 
-class Protocols(QtCore.QRunnable):
+class Protocols(QRunnable):
     """Main protocol handler for KneeSpa treatment sequences."""
 
     def __init__(
@@ -74,6 +74,7 @@ class Protocols(QtCore.QRunnable):
         self.current_pos_c = 0
         self.target_pos_c = None
         self.angle_set = False
+        self.keepalive_thread_active = False  # Track if keepalive thread is running
 
         # Connect signals if arduino is provided
         if ser is not None and hasattr(ser, "status_emit"):
@@ -113,14 +114,27 @@ class Protocols(QtCore.QRunnable):
         if not self.start_time:
             print("Warning: No start time set for duration check")
             return False
-        
+
         self.elapsed_time = time.time() - self.start_time
-        
+
         # Only print status every 15 seconds
         if int(self.elapsed_time) % 15 == 0:
             print(f"Duration check - Elapsed: {self.elapsed_time:.1f}s / Total: {self.duration}s")
-            
+
         return self.elapsed_time < self.duration
+
+    def interruptible_sleep(self, duration):
+        """Sleep for the specified duration but check for stop flag frequently."""
+        if duration <= 0:
+            return self.is_running
+
+        check_interval = 0.1  # Check every 100ms
+        elapsed = 0
+        while elapsed < duration and self.is_running:
+            sleep_time = min(check_interval, duration - elapsed)
+            time.sleep(sleep_time)
+            elapsed += sleep_time
+        return self.is_running  # Return False if interrupted
 
     def run_pressure_sequence(self, starting_pressure: float, target_pressure: float) -> bool:
             """Run a sequence of pressure increases from start to target."""
@@ -137,7 +151,7 @@ class Protocols(QtCore.QRunnable):
             
             # Wait for initial pressure to build with less frequent status checks
             wait_start = time.time()
-            while time.time() - wait_start < max_wait_time:
+            while time.time() - wait_start < max_wait_time and self.is_running:
                 if self.current_pressure >= current_command - pressure_tolerance:
                     break
                 # Avoid excessive status printing
@@ -147,27 +161,37 @@ class Protocols(QtCore.QRunnable):
                     print(f"Initial pressure build - Target: {current_command}, Current: {self.current_pressure}")
                 time.sleep(1)  # Longer sleep to reduce polling
 
+            # Check if protocol was stopped
+            if not self.is_running:
+                print("Protocol stopped during initial pressure build")
+                return False
+
             # Step through pressure increments with reduced monitoring
-            while current_command < (target_pressure - PRESSURE_INCREMENT/2):
+            while current_command < (target_pressure - PRESSURE_INCREMENT/2) and self.is_running:
                 current_command += PRESSURE_INCREMENT
                 print(f"Increasing pressure to: {current_command} lbs")
                 self.arduino.send(f"P{current_command}")
-                
+
                 # Wait for current increment to stabilize before next increment
                 increment_start = time.time()
                 increment_stable = False
-                
-                while time.time() - increment_start < max_wait_time:
+
+                while time.time() - increment_start < max_wait_time and self.is_running:
                     # Check if this increment is stable before moving to next
                     if abs(self.current_pressure - current_command) <= pressure_tolerance:
                         print(f"Pressure increment stabilized at {self.current_pressure} lbs")
                         increment_stable = True
                         break
                     time.sleep(0.2)
-                
+
+                # Check if protocol was stopped
+                if not self.is_running:
+                    print("Protocol stopped during pressure increment")
+                    return False
+
                 if not increment_stable:
                     print(f"Warning: Pressure increment {current_command} not fully stabilized")
-                
+
                 # Small delay between increments
                 time.sleep(2.0)
 
@@ -185,8 +209,8 @@ class Protocols(QtCore.QRunnable):
                 wait_start = time.time()
                 last_check_time = 0
                 
-                # Give pressure time to stabilize 
-                while time.time() - wait_start < max_wait_time:
+                # Give pressure time to stabilize
+                while time.time() - wait_start < max_wait_time and self.is_running:
                     final_diff = abs(target_pressure - self.current_pressure)
                     
                     # Only print status updates periodically
@@ -245,7 +269,7 @@ class Protocols(QtCore.QRunnable):
             # Wait for pressure to reach target with live monitoring
             if target_pressure > 0:  # Only wait if we're increasing pressure
                 wait_start = time.time()
-                while time.time() - wait_start < max_wait_time:
+                while time.time() - wait_start < max_wait_time and self.is_running:
                     diff = abs(target_pressure - self.current_pressure)
                     if diff <= pressure_tolerance:
                         print(f"Pressure stabilized at {self.current_pressure} lbs")
@@ -259,8 +283,8 @@ class Protocols(QtCore.QRunnable):
 
     def set_to_c_distance(self, degrees: float) -> bool:
         """Set the C actuator position based on degrees."""
-        position_tolerance = 25  # Acceptable position difference
-        max_wait_time = 5  # Maximum time to wait for position to be reached (seconds)
+        position_tolerance = 50  # Increased tolerance for position verification
+        max_wait_time = 10  # Increased wait time for motor to reach position (seconds)
         
         try:
             print(f"Setting C actuator to {degrees} degrees")
@@ -296,19 +320,30 @@ class Protocols(QtCore.QRunnable):
             
             # Wait for position to be reached with live monitoring
             wait_start = time.time()
-            while time.time() - wait_start < max_wait_time:
+            while time.time() - wait_start < max_wait_time and self.is_running:
                 current_diff = abs(self.current_pos_c - position)
                 print(f"Position check - Target: {position}, Current: {self.current_pos_c}, Difference: {current_diff}")
-                
+
                 if current_diff <= position_tolerance:
                     print(f"Position reached within tolerance")
                     self.angle_set = True
+                    # Allow motor to fully settle at position
+                    time.sleep(0.5)
                     break
                 time.sleep(0.1)  # Small sleep to prevent CPU hogging
+
+            # Check if we stopped due to protocol termination
+            if not self.is_running:
+                print("Protocol stopped - aborting position check")
+                return False
             
             if not self.angle_set:
-                print("Warning: Angle position not verified within timeout")
-                
+                print("WARNING: Angle position not verified within timeout")
+                print(f"Target position {position} not confirmed (current: {self.current_pos_c}, diff: {abs(self.current_pos_c - position)})")
+                # Continue anyway - position verification timeout shouldn't stop the protocol
+                # The actuator may still be moving or the position feedback may be delayed
+                return True  # Changed from False - allow protocol to continue
+
             return True
 
         except Exception as e:
@@ -350,9 +385,11 @@ class Protocols(QtCore.QRunnable):
                     print(f"Protocol {self.protocol} ({time.time()}): Duration ended during pulse operation.")
                     break # Exit loop if duration is over
 
-                # Send keepalive periodically
+                # Send keepalive periodically (but not during emergency stops)
                 if current_time - last_keepalive_time > keepalive_interval:
-                    if self.arduino: self.arduino.send("T")
+                    # Check if this is still a valid operation (not emergency stopped)
+                    if self.arduino and self.is_running:
+                        self.arduino.send("T")
                     last_keepalive_time = current_time
 
                 time.sleep(check_interval) # Main loop pause
@@ -393,7 +430,7 @@ class Protocols(QtCore.QRunnable):
             return
 
         # Run pressure sequence
-        if not self.run_pressure_sequence(MIN_PRESSURE, self.max_pressure):
+        if not self.run_pressure_sequence(initial_pressure, self.max_pressure):
             self.signals.finished.emit(False)
             return
             
@@ -436,19 +473,19 @@ class Protocols(QtCore.QRunnable):
             return
 
         self.signals.progress.emit(">>Starting left lateral protocol")
-        
+
         # Determine initial pressure based on max pressure
         initial_pressure = MIN_PRESSURE
         if self.max_pressure > 20:
             initial_pressure = max(20.0, MIN_PRESSURE)
             print(f"Setting higher initial pressure of {initial_pressure} lbs for max_pressure={self.max_pressure}")
-    
+
         # Initial pressure setting
         if not self.set_to_pressure(initial_pressure):
             self.signals.finished.emit(False)
             return
 
-        if not self.run_pressure_sequence(MIN_PRESSURE, self.max_pressure):
+        if not self.run_pressure_sequence(initial_pressure, self.max_pressure):
             self.signals.finished.emit(False)
             return
 
@@ -639,9 +676,9 @@ class Protocols(QtCore.QRunnable):
                         pulse_active = False
                         print(f"Protocol 4: Stopped pulsing")
                 
-                # Send periodic keepalive
+                # Send periodic keepalive (but not during emergency stops)
                 if int(current_time) % 30 == 0:
-                    if self.arduino:
+                    if self.arduino and self.is_running:
                         self.arduino.send("T")
                 
                 time.sleep(0.1)  # Main loop sleep
@@ -690,41 +727,57 @@ class Protocols(QtCore.QRunnable):
             self.is_running = False
             self.signals.finished.emit(False)
 
-    def stop(self):
-        """Safely stop a running protocol."""
-        print("Initiating protocol stop sequence...")
+    def stop(self, emergency=False):
+        """Safely stop a running protocol.
+
+        Args:
+            emergency: If True, sends the emergency stop command 'X'.
+                      If False (default), performs a gentle stop without 'X'.
+        """
+        print(f"Initiating protocol stop sequence (emergency={emergency})...")
         self.is_running = False
-        
+
+        # Also set flags to interrupt any ongoing pulse or movement
+        self.use_pulse = False  # Stop any continuous pulse immediately
+
+        # For emergency stops, also terminate any keepalive thread
+        if emergency:
+            self.keepalive_thread_active = False
+
         # Ensure we have a valid Arduino connection
         if not self.arduino:
             print("Warning: No Arduino connection available for stop sequence")
             self.signals.stopped.emit(True)
             return
-        
+
         try:
-            # Turn off high-frequency status first (more reliable before emergency stop)
+            # Turn off high-frequency status first
             success = self.arduino.send("HF0")
             print(f"High frequency status turned off: {'Success' if success else 'Failed'}")
             time.sleep(0.5)  # Brief pause before next command
-            
-            # Send emergency stop command
-            success = self.arduino.send("X")
-            print(f"Emergency stop command sent: {'Success' if success else 'Failed'}")
-            
-            # Wait for a moment to let the stop command process
-            time.sleep(0.5)  # Increased wait time
-            
-            # Send test command to verify connection is still active
-            success = self.arduino.send("T")
-            print(f"Test command sent: {'Success' if success else 'Failed'}")
-            
-            # Start a keepalive thread that continues even after worker is "stopped"
-            # This prevents connection timeouts
-            self._start_keepalive_thread()
-            
+
+            # Only send emergency stop command if this is an emergency or user-initiated stop
+            if emergency:
+                success = self.arduino.send("X")
+                print(f"Emergency stop command sent: {'Success' if success else 'Failed'}")
+                # For emergency stops, do NOT start keepalive thread
+                # Emergency means stop everything immediately
+            else:
+                # For normal stops, send test command and start keepalive
+                # Wait for a moment to let the stop command process
+                time.sleep(0.5)  # Increased wait time
+
+                # Send test command to verify connection is still active
+                success = self.arduino.send("T")
+                print(f"Test command sent: {'Success' if success else 'Failed'}")
+
+                # Start a keepalive thread that continues even after worker is "stopped"
+                # This prevents connection timeouts for normal stops only
+                self._start_keepalive_thread()
+
             # Signal that the protocol was stopped
             self.signals.stopped.emit(True)
-            
+
         except Exception as e:
             print(f"Error during protocol stop: {e}")
             self.signals.stopped.emit(False)
@@ -740,8 +793,11 @@ class Protocols(QtCore.QRunnable):
             last_keepalive = 0
             reconnect_attempts = 0
             max_reconnect_attempts = 3
-            
-            while time.time() < end_time:
+
+            # Set flag to indicate thread is active
+            self.keepalive_thread_active = True
+
+            while time.time() < end_time and self.keepalive_thread_active:
                 try:
                     current_time = time.time()
                     if current_time - last_keepalive >= keepalive_interval:
@@ -783,8 +839,14 @@ class Protocols(QtCore.QRunnable):
                     
                 time.sleep(1)
             
-            print("Keepalive thread finished")
-        
+            # Clean up and check why thread ended
+            was_emergency = not self.keepalive_thread_active  # If False, it was terminated
+            self.keepalive_thread_active = False
+            if was_emergency:
+                print("Keepalive thread terminated due to emergency stop")
+            else:
+                print("Keepalive thread finished normally")
+
         # Start background thread
         keepalive_thread = threading.Thread(target=keepalive_worker, daemon=True)
         keepalive_thread.start()

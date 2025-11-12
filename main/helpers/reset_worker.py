@@ -14,11 +14,13 @@ class ResetWorker(QRunnable):
     # Add main_window parameter to accept the KneeSpa instance
     def __init__(self, arduino_instance, config_instance, main_window):
         super().__init__()
+        print("ResetWorker: Initializing reset worker thread")
         self.signals = ResetWorkerSignals()
         self.arduino = arduino_instance
         self.config = config_instance
         # Store the reference to the main KneeSpa instance
         self.main_window = main_window # Reference to access I2Cstatus
+        print("ResetWorker: Initialization complete")
 
     def _wait_for_done(self, timeout=10.0, operation_name="operation"):
         """
@@ -111,10 +113,23 @@ class ResetWorker(QRunnable):
     @pyqtSlot()
     def run(self):
         """Execute the reset sequence steps."""
+        print("=" * 60)
+        print("ResetWorker: Starting full reset sequence")
+        print("=" * 60)
+
+        # Safety check: Ensure no protocol is running
+        if hasattr(self.main_window, 'worker') and self.main_window.worker:
+            if hasattr(self.main_window.worker, 'is_running') and self.main_window.worker.is_running:
+                print("ResetWorker: ERROR - Protocol is still running! Aborting reset.")
+                self.signals.error.emit("Cannot reset while protocol is running")
+                self.signals.finished.emit(False)
+                return
+
         success = True
+        start_time = time.time()
         try:
             # --- Step 1: Send 'Y' (Reset Command) ---
-            print("ResetWorker: Sending 'Y'")
+            print("ResetWorker: [STEP 1/6] Sending 'Y' (Reset Command)")
             if not self.arduino.send("Y"): 
                 # Try DTR reset and retry
                 print("Failed to send 'Y', trying DTR reset...")
@@ -129,41 +144,56 @@ class ResetWorker(QRunnable):
             # Assuming 'Y' doesn't send 'DONE', use a fixed delay. Adjust if needed.
             print("ResetWorker: Fixed delay after 'Y'...")
             time.sleep(5)
+            print("ResetWorker: [STEP 1/6] Complete")
 
             # --- Step 2: Send Zero Mark ('L5') ---
-            print("ResetWorker: Sending zero mark ('L5')")
+            print("ResetWorker: [STEP 2/6] Sending zero mark ('L5')")
             zero_cmd = "L5{:3} {:3}".format(self.config.AMarks["0.0"], self.config.BMarks["0.0"])
             if not self._try_command_with_retry(zero_cmd, "Zero Mark", 30.0):
                 raise TimeoutError("Failed to complete Zero Mark setup even after retry")
+            print("ResetWorker: [STEP 2/6] Complete")
 
             # --- Step 3: Reset Actuator C ('I14') ---
-            print("ResetWorker: Resetting Actuator C ('I14')")
+            print("ResetWorker: [STEP 3/6] Resetting Actuator C ('I14')")
             pos_c = self.config.CMarks["{:.1f}".format(0)]
             cmd_c = f"I14{pos_c}"
             if not self._try_command_with_retry(cmd_c, "Actuator C Reset", 30.0):
                 raise TimeoutError("Failed to reset Actuator C even after retry")
+            print("ResetWorker: [STEP 3/6] Complete")
 
             # --- Step 4: Reset Actuator B ('A13') ---
-            print("ResetWorker: Resetting Actuator B ('A13')")
+            print("ResetWorker: [STEP 4/6] Resetting Actuator B ('A13')")
             cmd_b = f"A13{3}" # Equivalent inches for -10 degrees
             if not self._try_command_with_retry(cmd_b, "Actuator B Reset", 30.0):
                 raise TimeoutError("Failed to reset Actuator B even after retry")
+            print("ResetWorker: [STEP 4/6] Complete")
 
             # --- Step 5: Reset Actuator A ('I12') ---
-            print("ResetWorker: Resetting Actuator A ('I12')")
+            print("ResetWorker: [STEP 5/6] Resetting Actuator A ('I12')")
             cmd_a = f"I12{0}"
             if not self._try_command_with_retry(cmd_a, "Actuator A Reset", 60.0):
                 raise TimeoutError("Failed to reset Actuator A even after retry")
+            print("ResetWorker: [STEP 5/6] Complete")
 
             # --- Step 6: Send Calibration ('L0') ---
-            print("ResetWorker: Sending Calibration ('L0')")
+            print("ResetWorker: [STEP 6/6] Sending Calibration ('L0')")
             calib_cmd = f"L0{self.config.calibration}"
             if not self._try_command_with_retry(calib_cmd, "Calibration", 30.0):
                 raise TimeoutError("Failed to complete calibration even after retry")
+            print("ResetWorker: [STEP 6/6] Complete")
+
+            elapsed_time = time.time() - start_time
+            print("=" * 60)
+            print(f"ResetWorker: Reset sequence completed successfully in {elapsed_time:.1f} seconds")
+            print("=" * 60)
 
         except Exception as e:
+            elapsed_time = time.time() - start_time
             error_msg = f"Error during reset sequence in worker: {e}"
-            print(error_msg)
+            print("=" * 60)
+            print(f"ResetWorker: ERROR - Reset sequence failed after {elapsed_time:.1f} seconds")
+            print(f"ResetWorker: Error details: {error_msg}")
+            print("=" * 60)
             # Try one last DTR reset to ensure system is in a clean state
             if hasattr(self.arduino, "reset_dtr") and callable(self.arduino.reset_dtr):
                 try:
@@ -176,5 +206,6 @@ class ResetWorker(QRunnable):
             success = False
         finally:
             # Emit finished signal regardless of success/failure
-            print(f"ResetWorker finished. Success: {success}")
+            result_msg = "SUCCESS" if success else "FAILURE"
+            print(f"ResetWorker: Finished with result: {result_msg}")
             self.signals.finished.emit(success)

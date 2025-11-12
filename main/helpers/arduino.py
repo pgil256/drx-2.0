@@ -201,16 +201,18 @@ class Arduino(QObject):
                 if not self.reset_dtr():
                     print("DTR reset failed")
 
-                if not self._running:               
+                if not self._running:
                     self._running = True
                     threading.Thread(target=self.read_from_com,
                                     daemon=True).start()
 
-                # Verify Arduino responds after reset
-                self.verify_connection(tries=3, timeout_s=10.0)
+                # Clear any startup messages after DTR reset
+                time.sleep(1)
+                if self.serial_com:
+                    self.serial_com.reset_input_buffer()
 
-                # Verify connection
-                if self.verify_connection():
+                # Verify Arduino responds after reset - SINGLE CALL
+                if self.verify_connection(tries=3, timeout_s=10.0):
                     print(f"Connected to Arduino on {self.ARDUINO_PORT}")
                     self.connected = True
                     self._running = True
