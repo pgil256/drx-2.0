@@ -3,6 +3,7 @@ import logging.handlers
 import os
 import sys
 import traceback
+import time
 from datetime import datetime
 from typing import Optional, Dict, Any
 from config.constants import APP_NAME, APP_BASE_DIR, LOG_LEVEL
@@ -176,3 +177,241 @@ def setup_logger(
 
 # Create global logger instance
 logger = setup_logger()
+
+
+# =============================================================================
+# ENHANCED DEBUG FUNCTIONS FOR REAL-TIME VISIBILITY
+# =============================================================================
+
+def debug(message: str, component: str = "", level: str = "DEBUG", **kwargs):
+    """
+    Universal debug function that prints AND logs.
+    Used for general debugging information.
+
+    Args:
+        message: Debug message to output
+        component: Component name for context (e.g., "Arduino", "Protocol")
+        level: Log level (DEBUG, INFO, WARNING, ERROR, CRITICAL)
+        **kwargs: Additional context (e.g., values={'pressure': 50, 'position': 100})
+    """
+    timestamp = datetime.now().strftime('%H:%M:%S.%f')[:-3]
+
+    # Build formatted message with optional context
+    context_str = ""
+    if kwargs:
+        context_items = []
+        for key, value in kwargs.items():
+            if key == 'values' and isinstance(value, dict):
+                # Special handling for values dict
+                context_items.extend([f"{k}={v}" for k, v in value.items()])
+            else:
+                context_items.append(f"{key}={value}")
+        if context_items:
+            context_str = f" [{', '.join(context_items)}]"
+
+    comp_str = f"[{component}] " if component else ""
+    formatted_msg = f"[{timestamp}] {comp_str}{message}{context_str}"
+
+    # Always print for real-time visibility
+    print(formatted_msg)
+
+    # Also log for persistence
+    try:
+        comp_logger = setup_logger(component=component)
+        level_method = getattr(comp_logger, level.lower(), comp_logger.info)
+        level_method(f"{message}{context_str}")
+    except Exception as e:
+        print(f"[{timestamp}] [LOGGING ERROR] Failed to log: {e}")
+
+
+def debug_serial(message: str, data: str = None, **kwargs):
+    """
+    Specialized debug for serial communication.
+
+    Args:
+        message: Description of serial event
+        data: Raw serial data (will be safely formatted)
+        **kwargs: Additional context
+    """
+    if data is not None:
+        # Safely format serial data (handle non-printable chars)
+        safe_data = repr(data) if data else "EMPTY"
+        debug(f"SERIAL: {message} | Data: {safe_data}", component="Arduino", **kwargs)
+    else:
+        debug(f"SERIAL: {message}", component="Arduino", **kwargs)
+
+
+def debug_protocol(message: str, state: dict = None, **kwargs):
+    """
+    Specialized debug for protocol execution.
+
+    Args:
+        message: Protocol event description
+        state: Current protocol state dictionary
+        **kwargs: Additional context
+    """
+    if state:
+        state_str = ', '.join([f"{k}={v}" for k, v in state.items()])
+        debug(f"PROTOCOL: {message} | State: [{state_str}]", component="Protocol", **kwargs)
+    else:
+        debug(f"PROTOCOL: {message}", component="Protocol", **kwargs)
+
+
+def debug_safety(message: str, limits: dict = None, current: dict = None, **kwargs):
+    """
+    Specialized debug for safety-critical operations.
+
+    Args:
+        message: Safety event description
+        limits: Dictionary of safety limits
+        current: Dictionary of current values
+        **kwargs: Additional context
+    """
+    level = kwargs.pop('level', 'WARNING')  # Default to WARNING for safety
+
+    info_parts = [f"SAFETY: {message}"]
+    if current:
+        info_parts.append(f"Current: {current}")
+    if limits:
+        info_parts.append(f"Limits: {limits}")
+
+    debug(' | '.join(info_parts), component="Safety", level=level, **kwargs)
+
+
+def debug_thread(message: str, thread_name: str = None, state: str = None, **kwargs):
+    """
+    Specialized debug for threading operations.
+
+    Args:
+        message: Thread event description
+        thread_name: Name of the thread
+        state: Thread state (STARTING, RUNNING, STOPPING, etc.)
+        **kwargs: Additional context
+    """
+    import threading
+    current = threading.current_thread().name
+
+    parts = [f"THREAD: {message}"]
+    if thread_name:
+        parts.append(f"Thread: {thread_name}")
+    if state:
+        parts.append(f"State: {state}")
+    parts.append(f"Current: {current}")
+
+    debug(' | '.join(parts), component="Threading", **kwargs)
+
+
+def debug_state_change(component: str, old_state: Any, new_state: Any, reason: str = ""):
+    """
+    Log state transitions with before/after values.
+
+    Args:
+        component: Component experiencing state change
+        old_state: Previous state value
+        new_state: New state value
+        reason: Optional reason for change
+    """
+    reason_str = f" | Reason: {reason}" if reason else ""
+    debug(f"STATE CHANGE: {old_state} -> {new_state}{reason_str}",
+          component=component, level="INFO")
+
+
+def debug_timing(message: str, start_time: float = None, component: str = "", **kwargs):
+    """
+    Log timing information for performance analysis.
+
+    Args:
+        message: Timing event description
+        start_time: Start time from time.time() to calculate elapsed
+        component: Component being timed
+        **kwargs: Additional context
+    """
+    import time
+
+    if start_time:
+        elapsed = time.time() - start_time
+        debug(f"TIMING: {message} | Elapsed: {elapsed:.3f}s",
+              component=component, **kwargs)
+    else:
+        debug(f"TIMING: {message}", component=component, **kwargs)
+
+
+def debug_gpio(message: str, pin: int = None, state: Any = None, **kwargs):
+    """
+    Debug GPIO operations.
+
+    Args:
+        message: GPIO event description
+        pin: GPIO pin number
+        state: Pin state (HIGH/LOW, 1/0, etc.)
+        **kwargs: Additional context
+    """
+    parts = [f"GPIO: {message}"]
+    if pin is not None:
+        parts.append(f"Pin: {pin}")
+    if state is not None:
+        parts.append(f"State: {state}")
+
+    debug(' | '.join(parts), component="GPIO", **kwargs)
+
+
+def debug_signal(message: str, signal_name: str = None, data: Any = None, **kwargs):
+    """
+    Debug PyQt signal emissions and connections.
+
+    Args:
+        message: Signal event description
+        signal_name: Name of the signal
+        data: Data being emitted
+        **kwargs: Additional context
+    """
+    parts = [f"SIGNAL: {message}"]
+    if signal_name:
+        parts.append(f"Signal: {signal_name}")
+    if data is not None:
+        parts.append(f"Data: {data}")
+
+    debug(' | '.join(parts), component="Qt", **kwargs)
+
+
+def debug_error(message: str, exception: Exception = None, component: str = "", **kwargs):
+    """
+    Log errors with full traceback.
+
+    Args:
+        message: Error description
+        exception: Exception object
+        component: Component where error occurred
+        **kwargs: Additional context
+    """
+    import traceback
+
+    if exception:
+        tb_str = ''.join(traceback.format_tb(exception.__traceback__))
+        full_msg = f"ERROR: {message} | Exception: {str(exception)}\nTraceback:\n{tb_str}"
+    else:
+        full_msg = f"ERROR: {message}"
+
+    debug(full_msg, component=component, level="ERROR", **kwargs)
+
+
+def debug_lock(message: str, lock_name: str = None, acquired: bool = None, wait_time: float = None, **kwargs):
+    """
+    Debug lock operations for thread safety analysis.
+
+    Args:
+        message: Lock event description
+        lock_name: Name/ID of the lock
+        acquired: Whether lock was successfully acquired
+        wait_time: Time spent waiting for lock
+        **kwargs: Additional context
+    """
+    parts = [f"LOCK: {message}"]
+    if lock_name:
+        parts.append(f"Lock: {lock_name}")
+    if acquired is not None:
+        parts.append(f"Acquired: {acquired}")
+    if wait_time is not None:
+        parts.append(f"Wait: {wait_time:.3f}s")
+
+    debug(' | '.join(parts), component="Threading", **kwargs)

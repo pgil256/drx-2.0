@@ -1,6 +1,10 @@
 import configparser
 import os
 from config.constants import CONFIG_PATH
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 
 class Configuration:
@@ -86,7 +90,7 @@ class Configuration:
                     "a_factor": {"default": getattr(self, "a_factor", 1900), "type": int},
                     "b_factor": {"default": getattr(self, "b_factor", 1900), "type": int},
                     "c_factor": {"default": self.c_factor, "type": int},
-                    "unlock": {"default": getattr(self, "unlock", "false"), "type": str},
+                    "unlock": {"default": os.getenv("SYSTEM_UNLOCK_CODE", "false"), "type": str},
                     "calibration": {"default": getattr(self, "calibration", 1.0), "type": float}
                 }
                 

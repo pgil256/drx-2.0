@@ -1,25 +1,30 @@
-# For GPIO control on Raspberry Pi
-RPi.GPIO
+# Minimal Requirements for KneeSPA Application
+# For Raspberry Pi 4 with Raspbian Buster and Python 3.7
+# This is the essential package list only
 
-# Core GUI framework
-#remove:PyQt5
+# === ESSENTIAL PACKAGES ONLY ===
 
-# Serial communication (e.g., with Arduino)
-pyserial
+# Hardware Control
+RPi.GPIO==0.7.1
+pyserial==3.5
 
-# Video processing (used in video player for camera)
-# remove:opencv-python
+# Environment Variables
+python-dotenv==0.19.2
 
-# Video playback library (used in video player)
-python-vlc
+# Configuration Management
+configparser==5.0.2  # Enhanced config file parsing
 
-#pip install --upgrade pip setuptools wheel
+# Video Playback
+python-vlc==3.0.12118
 
-#sudo apt-get update
-#sudo apt-get install build-essential python3-dev qtbase5-dev qttools5-dev libqt5svg5-dev sip-build libqt5x11extras5-dev libxcb-xinerama0-dev
-#sudo apt-get install python3-pyqt5 python3-pyqt5.qtmultimedia python3-pyqt5.qtmultimediawidgets
-#remove: sudo apt-get install python3-opencv
+# Testing (Optional - remove for production)
+pytest==6.2.5
+pytest-cov==2.12.1
 
-#pip cache purge
-
-#pip install sip-build
+# NOTES:
+# ------
+# PyQt5 MUST be installed via apt-get:
+#   sudo apt-get install python3-pyqt5
+#
+# For full package list, see ../requirements.txt
+# Run ../setup_system.sh for complete system setup

@@ -2,6 +2,7 @@ import csv
 import logging
 import os
 from helpers.logging import setup_logger
+from helpers.secure_auth import SecureAuthHelper
 from PyQt5.QtWidgets import QMessageBox
 
 
@@ -14,13 +15,23 @@ class CSVHelper:
     def initialize_data(self):
         """Initialize CSV data by loading user data."""
         print("CSVHelper: Initializing user data")
-        # Get the directory of the current file
-        current_dir = os.path.dirname(os.path.abspath(__file__))
-        # Navigate to the data/users directory relative to the current file
-        users_file = os.path.join(current_dir, "..", "data", "user_pins.csv")
-        print(f"CSVHelper: Loading user data from {users_file}")
-        self.users = self.load_csv(users_file)
-        print(f"CSVHelper: Loaded {len(self.users)} user records")
+
+        # Try to load from secure authentication first
+        secure_auth = SecureAuthHelper()
+        if secure_auth.users:
+            print("CSVHelper: Using secure authentication from environment variables")
+            self.users = secure_auth.users
+            print(f"CSVHelper: Loaded {len(self.users)} user records from secure auth")
+        else:
+            # Fall back to CSV for backwards compatibility
+            print("CSVHelper: Falling back to CSV file (not recommended for production)")
+            # Get the directory of the current file
+            current_dir = os.path.dirname(os.path.abspath(__file__))
+            # Navigate to the data/users directory relative to the current file
+            users_file = os.path.join(current_dir, "..", "data", "user_pins.csv")
+            print(f"CSVHelper: Loading user data from {users_file}")
+            self.users = self.load_csv(users_file)
+            print(f"CSVHelper: Loaded {len(self.users)} user records from CSV")
         
     def load_csv(self, filename):
         """

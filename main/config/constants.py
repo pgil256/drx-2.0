@@ -85,12 +85,12 @@ ACTUATORS = {
 }
 
 # Safety Limits
-PRESSURE_MAX = 80  # Maximum safe pressure in lbs
-AXIAL_MAX = 4600  # Maximum axial position
-LATERAL_MIN = 500  # Minimum lateral position
-LATERAL_MAX = 2400  # Maximum lateral position
-HORIZONTAL_MIN = 50  # Minimum horizontal position (-5 degrees)
-HORIZONTAL_MAX = 4500  # Maximum horizontal position (-25 degrees)
+PRESSURE_MAX = 100 #80   Maximum safe pressure in lbs
+AXIAL_MAX = 5400 #4600   Maximum axial position
+LATERAL_MIN = 600 #500   Minimum lateral position
+LATERAL_MAX = 2800 #2400   Maximum lateral position
+HORIZONTAL_MIN = 0 #50   Minimum horizontal position (-5 degrees)
+HORIZONTAL_MAX = 5500 #4500   Maximum horizontal position (-25 degrees)
 
 # Actuator Command Speed
 LEG_LENGTH_SPEED_NORMAL = 0.5  # inches per second
@@ -161,12 +161,18 @@ ARDUINO_SETTINGS = {
 }
 
 # Email Configuration
+import os
+from dotenv import load_dotenv
+
+# Load environment variables from .env file
+load_dotenv()
+
 EMAIL_CONFIG = {
-    "SENDER_EMAIL": "ksdrxsmtp@gmail.com",
-    "SENDER_PASSWORD": "nujyxfajvgouwvux",
-    "RECEIVER_EMAIL": "ksdrxsmtp@gmail.com",
-    "SMTP_SERVER": "smtp.gmail.com",
-    "SMTP_PORT": 465,
+    "SENDER_EMAIL": os.getenv("SMTP_SENDER_EMAIL", ""),
+    "SENDER_PASSWORD": os.getenv("SMTP_SENDER_PASSWORD", ""),
+    "RECEIVER_EMAIL": os.getenv("SMTP_RECEIVER_EMAIL", ""),
+    "SMTP_SERVER": os.getenv("SMTP_SERVER", "smtp.gmail.com"),
+    "SMTP_PORT": int(os.getenv("SMTP_PORT", "465")),
 }
 
 # Error Messages
