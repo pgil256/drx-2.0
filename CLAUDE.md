@@ -4,7 +4,6 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Build Commands
 
-- Install dependencies: `pip install -r requirements.txt`
 - Run application: `python main/kneespa.py`
 - Run with debug mode: `python main/kneespa.py --debug --print-logs`
 - Additional options: `--config PATH` (custom config), `--sync-logs DIR` (sync logs)
@@ -22,6 +21,56 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 - Run single test file: `python -m pytest tests/unit/test_arduino.py`
 - Run single test: `python -m pytest tests/unit/test_arduino.py::TestArduino::test_connect`
 - Generate coverage report: `python -m pytest --cov=main tests/`
+
+## Architecture
+
+### Overview
+KneeSpa is a PyQt5-based medical device control application for a knee treatment system running on Raspberry Pi. It controls three actuators (axial, horizontal, lateral) via serial communication with an Arduino.
+
+### Core Components
+
+**`main/kneespa.py`** - Main application entry point and UI controller (`KneeSpa` class)
+- Manages PyQt5 UI loaded from `.ui` files in `main/ui/guis/`
+- Handles GPIO for emergency stop and controls
+- Coordinates protocol execution via thread pool
+
+**`main/helpers/arduino.py`** - Serial communication layer (`Arduino` class)
+- Manages `/dev/serial0` connection to Arduino
+- Uses PyQt signals (`status_emit`, `pressure_emit`, `connection_lost`) for async communication
+- Thread-safe command sending with `_lock`
+- Automatic reconnection and connection verification with `T` test commands
+
+**`main/helpers/protocols.py`** - Treatment protocol execution (`Protocols` class)
+- `QRunnable` implementation for background thread execution
+- Four protocols: axial-only (1), left lateral (2), right lateral (3), oscillating (4)
+- Pressure ramping via `run_pressure_sequence()` with tolerance-based verification
+- Real-time pulse mode toggling via `use_pulse` flag
+
+**`main/config/constants.py`** - All configuration constants
+- Actuator definitions with limits, command prefixes, units
+- Safety limits: `PRESSURE_MAX=80`, `AXIAL_MAX=4600`, lateral range 500-2400
+- Arduino settings, GPIO pins, UI paths
+
+**`main/config/config.py`** - Runtime configuration (`Configuration` class)
+- Reads/writes `kneespa.cfg` for calibration data
+- Stores actuator position marks (`CMarks`, `AMarks`, `BMarks`) for degree-to-position mapping
+
+### Arduino Communication Protocol
+Commands are single-letter prefixed strings sent via serial:
+- `P<value>` - Set pressure (lbs)
+- `K<position>` - Move lateral actuator (C) to position
+- `A<actuator><inches>` - Move actuator to distance
+- `J` / `JS` - Start/stop pulsing
+- `X` - Emergency stop
+- `T` - Test/keepalive (expects "OK" response)
+- `HF1` / `HF0` - Enable/disable high-frequency status updates
+
+Status responses: `STATUS_START|S|posA|posB|posC|pressure|STATUS_END`
+
+### UI Components
+- `main/ui/dialogs/` - Modal dialogs (timer, pressure, video player)
+- `main/ui/widgets/` - Reusable widgets (loading spinner)
+- Qt UI files in `main/ui/guis/` loaded via `uic.loadUi()`
 
 ## Code Style Guidelines
 
@@ -42,7 +91,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - Order: built-in libs → third-party libs → local modules
 - Group imports by category with a blank line between groups
-- Always import constants from `main.config.core.constants`
+- Always import constants from `main.config.constants`
 
 ### Type Annotations
 
@@ -51,6 +100,5 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ### Error Handling
 
-- Use custom exceptions from `utils/exceptions.py`
-- Log errors with context information
+- Log errors with context information using `helpers.logging.setup_logger()`
 - Classify exceptions by safety criticality

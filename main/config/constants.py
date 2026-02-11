@@ -85,6 +85,7 @@ ACTUATORS = {
 }
 
 # Safety Limits
+MIN_PRESSURE = 10  # Minimum pressure in lbs
 PRESSURE_MAX = 80  # Maximum safe pressure in lbs
 AXIAL_MAX = 4600  # Maximum axial position
 LATERAL_MIN = 500  # Minimum lateral position

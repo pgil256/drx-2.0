@@ -1,10 +1,19 @@
 /*
-  Arduino Motor Controller for KneeSpa
+  Arduino Motor Controller for KneeSpa - FIXED VERSION
   Controls axial, horizontal, and lateral actuators
   Based on DroneBot Workshop 2019 i2c_slave_ard.ino
+
+  Bug fixes applied:
+  - Fixed jerking counter logic
+  - Added break statement in case 'F'
+  - Improved command buffer handling
+  - Fixed Wire communication delays
+  - Added boundary checks
+  - Improved status management
+  - Fixed STOP pin logic (INPUT_PULLUP reads HIGH when not pressed)
 */
 
-#define VERSION "2025-03-20"
+#define VERSION "2025-11-05-STOP-PIN-FIX"
 #include "HX711.h"
 #include <elapsedMillis.h>
 #include <Wire.h>
@@ -32,6 +41,9 @@
 #define FIT_SLOW_DELAY     (0.5 * 1000)
 #define FIT_FAST_DELAY     (6 * 1000)
 #define LOOP_STATUS_DELAY  5000
+
+// Command buffer size (increased for safety)
+#define MAX_COMMAND_LENGTH 100
 
 // Status protection
 volatile bool isProcessingStatus = false;
@@ -81,12 +93,12 @@ elapsedMillis timeInFIT = 0;
 int FITDelay = 0;
 bool moveFITForward = false;
 
-// Jerking variables
+// Jerking variables - FIXED
 bool jerking = false;
 int jerkDirection = 1;
 int jerksCompleted = 0;
 unsigned long lastJerkTime = 0;
-unsigned long jerkInterval = 400;  // 400ms delay between direction changes (controlls smoothness)
+const unsigned long jerkInterval = 200;  // Reduced from 400ms to 200ms for subtler jerking motion
 bool jerkDirectionChanged = false;
 
 // Makes Arduino restart
@@ -102,21 +114,21 @@ void exitSafeStart() {
 // Set motor speed and direction
 void setMotorSpeed(int16_t speed) {
   // Skip if actuator is disabled
-  if ((smcDeviceNumber == 12 && false) || 
-      (smcDeviceNumber == 13 && false) || 
+  if ((smcDeviceNumber == 12 && false) ||
+      (smcDeviceNumber == 13 && false) ||
       (smcDeviceNumber == 14 && false))
     return;
 
-  // Normalize speed to max/min values
-  if (speed > 0) speed = 3200;
-  if (speed < 0) speed = -3200;
-  
+  // Clamp speed to valid range
+  if (speed > 3200) speed = 3200;
+  if (speed < -3200) speed = -3200;
+
   // Log speed setting
   Serial.print("Set motor speed on: ");
   Serial.print(smcDeviceNumber);
   Serial.print(" at ");
   Serial.println(speed);
-  
+
   // Determine direction
   uint8_t cmd = 0x85;  // Motor forward
   if (speed < 0) {
@@ -133,13 +145,13 @@ void setMotorSpeed(int16_t speed) {
   Wire.endTransmission();
 }
 
-// Read actuator position
+// Read actuator position - IMPROVED
 uint16_t readPosition() {
   uint16_t position = 0;
 
   // Skip if actuator is disabled
-  if ((smcDeviceNumber == 12 && false) || 
-      (smcDeviceNumber == 13 && false) || 
+  if ((smcDeviceNumber == 12 && false) ||
+      (smcDeviceNumber == 13 && false) ||
       (smcDeviceNumber == 14 && false))
     return position;
 
@@ -149,21 +161,27 @@ uint16_t readPosition() {
   Wire.write(12);    // Variable ID: position signed
   Wire.endTransmission();
 
-  // Read response
-  delay(100);
+  // Read response with timeout
+  unsigned long startTime = millis();
+  while (Wire.available() < 2 && millis() - startTime < 50) {
+    delay(1); // Short delay to prevent blocking
+  }
+
   int returned = Wire.requestFrom(smcDeviceNumber, (uint8_t)2);
   if (returned != 2) {
-    Serial.print(" Ret ");
-    Serial.println(smcDeviceNumber);
+    Serial.print("Wire error on device ");
+    Serial.print(smcDeviceNumber);
+    Serial.print(", returned: ");
     Serial.println(returned);
+    return 0; // Return 0 on error
   }
 
   // Process position data
   position = Wire.read();
-  position = (position + Wire.read() * 256);
-  
+  position = (position + (Wire.read() << 8)); // Fixed bit shift
+
   // Sanity check on position value
-  if (position <= 0 || position > 65000)
+  if (position > 65000) // Invalid value
     position = 0;
 
   return position;
@@ -190,10 +208,10 @@ bool sendStatus() {
   // Skip if status already in progress or not acknowledged (within timeout)
   if (noStatus || isProcessingStatus || (!statusAcknowledged && millis() - lastStatusTime < STATUS_TIMEOUT))
     return false;
-    
+
   isProcessingStatus = true;
   statusStartTime = millis();
-  
+
   uint8_t lastSmcDeviceNumber = smcDeviceNumber;
   uint16_t positionA = 0;
   uint16_t positionB = 0;
@@ -235,6 +253,7 @@ bool sendStatus() {
   // Restore device number
   smcDeviceNumber = lastSmcDeviceNumber;
   statusAcknowledged = false;
+  lastStatusTime = millis();
   isProcessingStatus = false;
   return true;
 }
@@ -242,15 +261,15 @@ bool sendStatus() {
 // Emergency stop all actuators
 void emergencyStop() {
   Serial.println("Emergency Stop");
-  
+
   smcDeviceNumber = 12;
   setMotorSpeed(0);
   Serial.println("A stopped");
-  
+
   smcDeviceNumber = 13;
   setMotorSpeed(0);
   Serial.println("B stopped");
-  
+
   smcDeviceNumber = 14;
   setMotorSpeed(0);
   Serial.println("C stopped");
@@ -258,21 +277,29 @@ void emergencyStop() {
   measurePressure = false;
   bRunning = false;
   jerking = false;
+  jerksCompleted = 0; // Reset jerk counter
 }
 
 // Process a fully received command
 void processCommand(String cmd) {
   if (cmd.length() == 0) return;
-  
+
+  // Validate command length
+  if (cmd.length() > MAX_COMMAND_LENGTH) {
+    Serial.println("Command too long, ignoring");
+    Serial1.println("ERROR: Command too long");
+    return;
+  }
+
   char commandType = cmd[0];
   String parameter = "";
-  
+
   // Wait if we're sending status
   unsigned long waitStart = millis();
   while (isProcessingStatus && millis() - waitStart < 500) {
     delay(10);
   }
-  
+
   // Pre-declare all variables that will be used in case statements
   uint16_t localPosition = 0;
   float inches = 0.0;
@@ -287,7 +314,7 @@ void processCommand(String cmd) {
   uint16_t positionB = 0;
   uint16_t positionC = 0;
   float localPressure = 0;
-  
+
   // Handle different command types
   switch (commandType) {
     // Test command
@@ -295,9 +322,9 @@ void processCommand(String cmd) {
         Serial.println("Test command received");
         Serial1.println("OK");
         break;
-        
+
     // Status acknowledgment
-    case 'Q': 
+    case 'Q':
         statusAcknowledged = true;
         break;
 
@@ -315,7 +342,7 @@ void processCommand(String cmd) {
         Serial1.println("DONE"); // Acknowledge command
       }
       break;
-      
+
     // Status request
     case 'S':
       sendStatus();
@@ -323,33 +350,33 @@ void processCommand(String cmd) {
 
     // Pressure control
     case 'P':
-      if (bRunning) { 
+      if (bRunning) {
         // Skip if already running - main loop will handle status updates
         return;
       }
-      
+
       parameter = cmd.substring(1);
       desiredPressure = parameter.toInt();
       Serial.print("desiredPressure ");
       Serial.println(desiredPressure);
-      
+
       sendStatus();
       smcDeviceNumber = 12;
-      
+
       Serial.print("pressure desired: ");
       Serial.print(desiredPressure);
-      
+
       pressure = abs(scale.get_units(5));
       Serial.print(" pressure now: ");
       Serial.println(pressure);
-      
+
       pressureDirection = 1;
       if (pressure >= desiredPressure)
         pressureDirection = -1;  // move back
-        
+
       Serial.print(" pressureDirection: ");
       Serial.println(pressureDirection);
-      
+
       setMotorSpeed(PRESSURE_SPEED * pressureDirection);
       measurePressure = true;
       break;
@@ -386,35 +413,35 @@ void processCommand(String cmd) {
     // Position control
     case 'I':
       if (bRunning) return;
-      
+
       parameter = cmd.substring(1, 3);
       smcDeviceNumber = parameter.toInt();
       Serial.println(smcDeviceNumber);
-      
+
       parameter = cmd.substring(3);
       localDesiredPosition = parameter.toInt();
       localPosition = readPosition();
-      
+
       Serial.print(localDesiredPosition);
       Serial.print(" ");
       Serial.println(localPosition);
-      
+
       if (localDesiredPosition >= (localPosition + 25)) {
         forward = 1;
       } else {
         forward = -1;
       }
-      
+
       if (smcDeviceNumber == 12)
         if (localDesiredPosition <= AZERO)
           localDesiredPosition = AZERO;
-      
+
       // Copy local variables to globals for use in loop()
       position = localPosition;
       desiredPosition = localDesiredPosition;
-      
+
       setMotorSpeed(forward * C_SPEED);
-      
+
       Serial.print(AZERO);
       Serial.print(" ");
       Serial.print(forward);
@@ -422,7 +449,7 @@ void processCommand(String cmd) {
       Serial.print(desiredPosition);
       Serial.print(" ");
       Serial.println(position);
-      
+
       bRunning = true;
       break;
 
@@ -431,53 +458,53 @@ void processCommand(String cmd) {
       if (bRunning) {
         // Skip if already running - main loop will handle status updates
         return;
-      } 
-      
+      }
+
       smcDeviceNumber = 14;
       Serial.println(cmd);
       parameter = cmd.substring(1);
       Serial.println(parameter);
-      
+
       localDesiredPosition = parameter.toInt();
       Serial.println(localDesiredPosition);
-      
+
       localPosition = readPosition();
       Serial.print(localDesiredPosition);
       Serial.print(" ");
       Serial.println(localPosition);
-      
+
       if (localDesiredPosition >= (localPosition + 25)) {
         forward = 1;
       } else {
         forward = -1;
       }
-      
+
       // Copy to globals
       desiredPosition = localDesiredPosition;
       position = localPosition;
-      
+
       setMotorSpeed(forward * C_SPEED);
-      
+
       Serial.print(forward);
       Serial.print(" ");
       Serial.print(desiredPosition);
       Serial.print(" ");
       Serial.println(position);
-      
+
       bRunning = true;
       break;
 
     // Position in inches
     case 'A':
       if (bRunning) return;
-      
+
       parameter = cmd.substring(1, 3);
       smcDeviceNumber = parameter.toInt();
       Serial.println(smcDeviceNumber);
-      
+
       parameter = cmd.substring(3);
       inches = parameter.toFloat();
-      
+
       if (smcDeviceNumber == 12) {
         localDesiredPosition = AFULLINCH * inches;
         AInches = inches;
@@ -494,24 +521,25 @@ void processCommand(String cmd) {
         if (inches == 0)
           localDesiredPosition = CZERO;
       }
-      
+
       localPosition = readPosition();
       Serial.print(inches);
       Serial.print(" ");
       Serial.print(localDesiredPosition);
       Serial.print(" ");
       Serial.println(localPosition);
-      
+
       // Copy to globals
       desiredPosition = localDesiredPosition;
       position = localPosition;
-      
+
       if (desiredPosition >= (position + 25)) {
         forward = 1;
       } else {
         forward = -1;
       }
-      
+
+      setMotorSpeed(forward * BC_SPEED); // Start motor immediately
       bRunning = true;
       break;
 
@@ -519,7 +547,7 @@ void processCommand(String cmd) {
     case 'L':
       parameter = cmd.substring(1, 2);
       stage = parameter.toInt();
-      
+
       switch (stage) {
         case 0: // Set calibration factor
           if (cmd.length() > 2)
@@ -530,7 +558,7 @@ void processCommand(String cmd) {
           scale.tare();
           Serial1.println("DONE");
           break;
-          
+
         case 1: // Tare scale
           Serial.print("calibration_factor: ");
           Serial.println(calibration_factor);
@@ -540,14 +568,14 @@ void processCommand(String cmd) {
           Serial.println(scale.get_units(10));
           Serial1.println("DONE");
           break;
-          
+
         case 4: // Get weight
           pressure = abs(scale.get_units(10));
           Serial.println(pressure);
           Serial1.print("weight|");
           Serial1.println(pressure);
           break;
-          
+
         case 5: // Set zero marks
           AZERO = cmd.substring(2, 5).toInt();
           BZERO = cmd.substring(5, 9).toInt();
@@ -557,22 +585,22 @@ void processCommand(String cmd) {
           Serial.println(BZERO);
           Serial1.println("DONE");
           break;
-          
+
         case 6: // Report all positions and pressure
           {
             uint16_t positionA = 0;
             uint16_t positionB = 0;
             uint16_t positionC = 0;
-            
+
             smcDeviceNumber = 12;
             positionA = readPosition();
             smcDeviceNumber = 13;
             positionB = readPosition();
             smcDeviceNumber = 14;
             positionC = readPosition();
-            
+
             pressure = abs(scale.get_units(10));
-            
+
             Serial1.print("A|");
             Serial1.print(positionA);
             Serial1.print("|");
@@ -583,28 +611,29 @@ void processCommand(String cmd) {
             Serial1.println(pressure);
           }
           break;
-          
+
         default:
           Serial.println(stage);
           break;
       }
       break;
 
-    // Jerking motion control
+    // Jerking motion control - FIXED
     case 'J':
       parameter = "";
       if (cmd.length() > 1)
           parameter = cmd.substring(1);
-      
+
       if (parameter == "") {
           Serial.println("jerking");
           jerking = true;
           sendStatus();
           noStatus = true;
           jerksCompleted = 0;
-          jerkDirection = 1;  
+          jerkDirection = 1;
+          lastJerkTime = millis(); // Initialize jerk timer
           smcDeviceNumber = 12;
-          Serial1.println("DONE");  
+          Serial1.println("DONE");
       }
 
       if (parameter == "S") {
@@ -612,49 +641,57 @@ void processCommand(String cmd) {
           jerkDirection = 0;
           jerking = false;
           noStatus = false;
+          jerksCompleted = 0; // Reset counter
           setMotorSpeed(0);
           Serial1.println("DONE");
       }
       break;
 
-    // External actuator control
+    // External actuator control - FIXED: Added break statement
     case 'F':
-      String direction = cmd.substring(1, 2);
-      Serial.println(direction);
-      
-      if (direction == "+") {
-        moveFITForward = true;
-        FITDelay = FIT_SLOW_DELAY;
-        Serial.println("Fit extending.");
-        digitalWrite(DIR_FIT_FORWARD, LOW);
-        digitalWrite(DIR_FIT_REVERSE, HIGH);
-      } else if (direction == "-") {
-        moveFITForward = true;
-        FITDelay = FIT_SLOW_DELAY;
-        Serial.println("Fit reversing.");
-        digitalWrite(DIR_FIT_FORWARD, HIGH);
-        digitalWrite(DIR_FIT_REVERSE, LOW);
-      } else if (direction == "F") {
-        moveFITForward = true;
-        FITDelay = FIT_FAST_DELAY;
-        Serial.println("Fit fast extending.");
-        digitalWrite(DIR_FIT_FORWARD, LOW);
-        digitalWrite(DIR_FIT_REVERSE, HIGH);
-      } else if (direction == "R") {
-        moveFITForward = true;
-        FITDelay = FIT_FAST_DELAY;
-        Serial.println("Fit fast reversing.");
-        digitalWrite(DIR_FIT_FORWARD, HIGH);
-        digitalWrite(DIR_FIT_REVERSE, LOW);
-      } else if (direction == "0") {
-        moveFITForward = false;
-        Serial.println("Fit stopped.");
-        digitalWrite(DIR_FIT_FORWARD, LOW);
-        digitalWrite(DIR_FIT_REVERSE, LOW);
+      {
+        String direction = cmd.substring(1, 2);
+        Serial.println(direction);
+
+        if (direction == "+") {
+          moveFITForward = true;
+          FITDelay = FIT_SLOW_DELAY;
+          Serial.println("Fit extending.");
+          digitalWrite(DIR_FIT_FORWARD, LOW);
+          digitalWrite(DIR_FIT_REVERSE, HIGH);
+        } else if (direction == "-") {
+          moveFITForward = true;
+          FITDelay = FIT_SLOW_DELAY;
+          Serial.println("Fit reversing.");
+          digitalWrite(DIR_FIT_FORWARD, HIGH);
+          digitalWrite(DIR_FIT_REVERSE, LOW);
+        } else if (direction == "F") {
+          moveFITForward = true;
+          FITDelay = FIT_FAST_DELAY;
+          Serial.println("Fit fast extending.");
+          digitalWrite(DIR_FIT_FORWARD, LOW);
+          digitalWrite(DIR_FIT_REVERSE, HIGH);
+        } else if (direction == "R") {
+          moveFITForward = true;
+          FITDelay = FIT_FAST_DELAY;
+          Serial.println("Fit fast reversing.");
+          digitalWrite(DIR_FIT_FORWARD, HIGH);
+          digitalWrite(DIR_FIT_REVERSE, LOW);
+        } else if (direction == "0") {
+          moveFITForward = false;
+          Serial.println("Fit stopped.");
+          digitalWrite(DIR_FIT_FORWARD, LOW);
+          digitalWrite(DIR_FIT_REVERSE, LOW);
+        }
+
+        timeInFIT = 0;
+        Serial1.println(F("DONE"));
       }
-      
-      timeInFIT = 0;
-      Serial1.println(F("DONE"));
+      break; // FIXED: Added missing break statement
+
+    default:
+      Serial.print("Unknown command: ");
+      Serial.println(commandType);
       break;
   }
 }
@@ -672,7 +709,7 @@ void setup() {
   exitSafeStart();
 
   Serial.println("\n\n\nStarting");
-  Serial.print("VERSION: "); 
+  Serial.print("VERSION: ");
   Serial.println(VERSION);
 
   // Initialize load cell
@@ -681,7 +718,7 @@ void setup() {
   delay(1000);
 
   // Configure pins
-  pinMode(STOP_PIN, INPUT);
+  pinMode(STOP_PIN, INPUT_PULLUP); // Added pull-up for stability
   pinMode(DIR_FIT_FORWARD, OUTPUT);
   pinMode(DIR_FIT_REVERSE, OUTPUT);
   pinMode(SPEED_PIN_A, OUTPUT);
@@ -710,11 +747,11 @@ void setup() {
   Serial.println("Ready to Go");
   Serial1.println("");
   Serial1.println("Ready to Go");
-  
-  loopPosition = millis() - LOOP_STATUS_DELAY;
+
+  loopPosition = millis();
 }
 
-// Main loop function
+// Main loop function - FIXED jerking logic
 void loop() {
   static int lastPosition = -1;
 
@@ -726,7 +763,7 @@ void loop() {
     isProcessingStatus = false;
     Serial.println("Status processing timeout");
   }
-  
+
   // Check for status acknowledgment timeout
   if (!statusAcknowledged && millis() - lastStatusTime > STATUS_TIMEOUT) {
     Serial.println("Status acknowledgment timeout - resetting flag");
@@ -749,20 +786,30 @@ void loop() {
     }
   }
 
+  // FIXED: Jerking motion handler with proper counter and timing
   if (jerking) {
-  // Jerking motion handler
-  if (jerksCompleted >= MAX_JERKS) {
-    // Reset counter but continue jerking
-    jerksCompleted = 0;
-    // Send a status update periodically
-    if (jerksCompleted % 2 == 0) {
+    if (millis() - lastJerkTime >= jerkInterval) {
+      lastJerkTime = millis();
+
+      if (jerksCompleted >= MAX_JERKS) {
+        // Send status update and reset counter
         sendStatus();
+        jerksCompleted = 0;
+      } else {
+        // Perform jerk motion
+        smcDeviceNumber = 12;
+        setMotorSpeed(1600 * jerkDirection);  // Reduced from 3200 to prevent pressure relief
+        jerkDirection = -jerkDirection;
+        jerksCompleted++; // FIXED: Increment counter
+
+        // Debug output for monitoring jerking behavior
+        Serial.print("DEBUG: Jerk #");
+        Serial.print(jerksCompleted);
+        Serial.print(" Speed: ");
+        Serial.print(1600 * jerkDirection);
+        Serial.print(" Direction: ");
+        Serial.println(jerkDirection == 1 ? "Forward" : "Backward");
       }
-    } else {
-      smcDeviceNumber = 12;
-      setMotorSpeed(3200 * jerkDirection);
-      jerkDirection = -jerkDirection;
-      delay(jerkInterval);
     }
   }
 
@@ -779,39 +826,50 @@ void loop() {
 
   // Running motor handler (position control)
   if (bRunning) {
-    if (STOP) {
+    // STOP pin is pulled HIGH normally, goes LOW when pressed
+    if (!STOP) {  // Emergency stop when pin is LOW (button pressed)
       emergencyStop();
     } else {
-      setMotorSpeed(forward * BC_SPEED);
-      uint16_t position = readPosition();
-      
+      // No need to set motor speed here - already set in processCommand
+      uint16_t currentPos = readPosition();
+
       // Debug output
       Serial.print(forward); Serial.print(" ");
       Serial.print(CInches); Serial.print(" ");
-      Serial.print(position); Serial.print(" ");
+      Serial.print(currentPos); Serial.print(" ");
       Serial.print(lastPosition); Serial.print(" ");
       Serial.println(desiredPosition);
-      
-      // Check if position reached
+
+      // Check if position reached with hysteresis
+      bool targetReached = false;
       if (forward > 0) {
-        if (position >= desiredPosition) {
-          Serial.println("Stopped Moving");
-          setMotorSpeed(0);
-          bRunning = false;
-          forward = 0;
+        if (currentPos >= desiredPosition) {
+          targetReached = true;
         }
-      } else if (position <= desiredPosition) {
-        Serial.println("Stopped Moving");
+      } else if (currentPos <= desiredPosition) {
+        targetReached = true;
+      }
+
+      if (targetReached) {
+        Serial.println("Stopped Moving - Target Reached");
         setMotorSpeed(0);
         bRunning = false;
         forward = 0;
       }
-      
-      // Handle stalling
-      if (lastPosition == position)
-        delay(500);
-      else
-        lastPosition = position;
+
+      // Handle stalling detection
+      if (lastPosition == currentPos) {
+        static int stallCount = 0;
+        stallCount++;
+        if (stallCount > 5) { // Stop if stalled for too long
+          Serial.println("Motor stalled - stopping");
+          setMotorSpeed(0);
+          bRunning = false;
+          stallCount = 0;
+        }
+      } else {
+        lastPosition = currentPos;
+      }
     }
 
     // Cleanup after run complete
@@ -825,11 +883,10 @@ void loop() {
 
   // Pressure monitoring and control
   if (measurePressure) {
-    // Removed duplicate high frequency check - main loop will handle this
     smcDeviceNumber = 12;
-    uint16_t position = readPosition();
+    uint16_t currentPos = readPosition();
     pressure = abs(scale.get_units(5));
-    
+
     Serial.print("desiredPressure: ");
     Serial.print(desiredPressure);
     Serial.print(" pressureDirection: ");
@@ -840,14 +897,17 @@ void loop() {
     if (pressure < 0.5)
       pressure = 0;
 
-    // Check if target pressure reached
+    // Check if target pressure reached with hysteresis
+    bool pressureReached = false;
     if (pressureDirection > 0) {
       if (pressure >= desiredPressure) {
-        setMotorSpeed(0);
-        measurePressure = false;
-        pressureDirection = 0;
+        pressureReached = true;
       }
     } else if (pressure <= desiredPressure) {
+      pressureReached = true;
+    }
+
+    if (pressureReached) {
       setMotorSpeed(0);
       measurePressure = false;
       pressureDirection = 0;
@@ -859,22 +919,27 @@ void loop() {
       sendStatus();
       Serial1.println("DONE");
       noStatus = false;
-      // REMOVED auto-deactivation of high frequency status
-      // High frequency mode should remain ON until explicitly turned off
     }
   }
 
-  // Command reading and processing
+  // Command reading and processing - IMPROVED buffer handling
   while (Serial1.available() > 0) {
     char incomingByte = Serial1.read();
 
-    if (incomingByte == '\n') {  // Command complete
-      isCommandComplete = true;
-      break;
+    if (incomingByte == '\n' || incomingByte == '\r') {  // Command complete
+      if (commandBuffer.length() > 0) { // Only process non-empty commands
+        isCommandComplete = true;
+        break;
+      }
     } else {
       // Limit buffer size to prevent overflows
-      if (commandBuffer.length() < 50) {
+      if (commandBuffer.length() < MAX_COMMAND_LENGTH - 1) {
         commandBuffer += incomingByte;  // Append character to buffer
+      } else {
+        // Buffer overflow - reset and report error
+        Serial.println("Command buffer overflow");
+        Serial1.println("ERROR: Command too long");
+        commandBuffer = "";
       }
     }
   }

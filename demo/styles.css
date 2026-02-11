@@ -121,7 +121,7 @@ body {
 /* === Main Content === */
 .main-content {
   display: grid;
-  grid-template-columns: 1fr 380px;
+  grid-template-columns: 1fr 340px;
   gap: 1rem;
   flex: 1;
 }
@@ -162,18 +162,22 @@ body {
   flex-direction: column;
   align-items: center;
   justify-content: center;
+  padding: 1rem;
 }
 
 .knee-diagram {
   width: 100%;
-  max-width: 320px;
-  aspect-ratio: 3/4;
+  max-width: 600px;
+  aspect-ratio: 600/350;
   display: flex;
   align-items: center;
   justify-content: center;
+  background: linear-gradient(180deg, #f8f9fa 0%, #e9ecef 100%);
+  border-radius: var(--radius-md);
+  padding: 1rem;
 }
 
-.knee-svg {
+.device-svg {
   width: 100%;
   height: 100%;
 }

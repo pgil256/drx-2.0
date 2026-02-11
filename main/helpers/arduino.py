@@ -22,6 +22,7 @@ class Arduino(QObject):
     status_emit = pyqtSignal(int, int, int, float)
     buffer_warning = pyqtSignal(str)
     connection_lost = pyqtSignal()  # Signal for connection loss
+    display_weight_emit = pyqtSignal(str)  # Added missing signal for weight display
 
     def __init__(self):
         super().__init__()
@@ -451,11 +452,11 @@ class Arduino(QObject):
 
                 self.serial_com.reset_input_buffer()
                 command_with_newline = command + "\n"
-                print(f"Sending command: {command_with_newline}")
+                # Only log the command being sent once
                 self.serial_com.write(command_with_newline.encode())
                 self.serial_com.flush()
                 time.sleep(0.3)  # Increased from 0.1 to give more time for flush
-                print("Command sent successfully.")
+                # Remove redundant success message to reduce log noise
                 return True
 
             except Exception as ex:

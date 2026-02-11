@@ -66,9 +66,13 @@ htmlcov/
 *.backup
 *.old
 
+# Node
+node_modules/
+
 # Project specific
 *.db
 *.sqlite3
+*.Zone.Identifier
 
 # MCPs and Claude
 mcps/

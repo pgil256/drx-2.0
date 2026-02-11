@@ -60,7 +60,8 @@ from config.constants import (
     DEFAULT_LATERAL_POSITION,
     DEFAULT_HORIZONTAL_POSITION,
     DEFAULT_PRESSURE,
-    DEFAULT_LEG_LENGTH_POSITION
+    DEFAULT_LEG_LENGTH_POSITION,
+    MIN_PRESSURE  # Added for pressure safety validation
 )
 
 from config.config import Configuration
@@ -91,10 +92,12 @@ class KneeSpa(QMainWindow):
     def set_to_distance(self, inches, actuator, factor):
         position = int(inches * (factor / 8.0))
         print("Setting to {} in {} pos {} act".format(inches, position, actuator))
-        command = "A{}{}".format(actuator, inches)
+        # Format inches with at least 1 decimal place for proper Arduino parsing
+        command = "A{}{:.1f}".format(actuator, inches)
         self.arduino.send(command)
         print("Sent cmd {}".format(command.strip()))
         self.I2CStatus = 0
+        self.I2Cstatus_event.clear()  # Clear the thread-safe event
         print("End set to distance")
         self.enable_actuator_controls()
 
@@ -135,9 +138,13 @@ class KneeSpa(QMainWindow):
                         deg1, pos1 = marks[i]
                         deg2, pos2 = marks[i + 1]
 
-                        # Linear interpolation with explicit float conversion
-                        ratio = (float(degrees) - deg1) / (deg2 - deg1)
-                        position = pos1 + int((pos2 - pos1) * ratio)
+                        # Linear interpolation with safety check for division by zero
+                        if deg2 - deg1 == 0:
+                            # If degree values are the same, use the first position
+                            position = pos1
+                        else:
+                            ratio = (float(degrees) - deg1) / (deg2 - deg1)
+                            position = pos1 + int((pos2 - pos1) * ratio)
                         break
                 else:
                     raise ValueError(f"Degree value {degrees} outside valid range")
@@ -148,6 +155,7 @@ class KneeSpa(QMainWindow):
             print(f"cmd {command}")
 
             self.I2CStatus = 0
+            self.I2Cstatus_event.clear()  # Clear the thread-safe event
             print("End set to c.")
             self.enable_actuator_controls()
             self.loading_spinner.hide()
@@ -190,7 +198,8 @@ class KneeSpa(QMainWindow):
 
         # Backend initialization
         self.newC = True
-        self.I2Cstatus = 0
+        self.I2Cstatus = 0  # Keep for compatibility
+        self.I2Cstatus_event = threading.Event()  # Thread-safe event for synchronization
         self.config = Configuration()
         self.config.get_config()
         self.reset_done_event = threading.Event()
@@ -787,11 +796,15 @@ class KneeSpa(QMainWindow):
         """Handle emergency stop button press."""
         print("Emergency stop triggered")
         self.stop_actuators()
-        time.sleep(1)
+        # Use QTimer instead of sleep to avoid blocking UI
+        QTimer.singleShot(1000, self._emergency_stop_phase2)
+
+    def _emergency_stop_phase2(self):
+        """Phase 2 of emergency stop after 1 second delay."""
         if self.worker:
             self.worker.stop()
-        time.sleep(1)
-        self.reset_arduino()
+        # Continue to phase 3 after another second
+        QTimer.singleShot(1000, self.reset_arduino)
 
     def start_or_stop_protocol(self):
         """Start or stop the protocol with debouncing to prevent multiple rapid clicks."""
@@ -1266,8 +1279,9 @@ class KneeSpa(QMainWindow):
             step = 1 if int(speed_factor) > 4 else 0.5
             new_position = self.axial_flexion_position + (step * direction)
 
-            # Check position limits
-            if direction > 0 and new_position > 8:
+            # Check position limits - Fixed to use correct AXIAL_MAX constant
+            if direction > 0 and new_position > AXIAL_MAX:
+                self._show_timed_error(f"Axial position limited to {AXIAL_MAX} inches (max)")
                 return
             if direction < 0 and new_position < 0:
                 return
@@ -1287,13 +1301,15 @@ class KneeSpa(QMainWindow):
             )
 
             # Send command to Arduino
-            command = f"A12{self.axial_flexion_position}"
+            # Arduino expects: A[2-digit device][float value starting at position 3]
+            # Format position with at least 1 decimal place to ensure proper parsing
+            command = f"A12{self.axial_flexion_position:.1f}"
+            print(f"Sending axial command: {command}")
             self.arduino.send(command)
-            print("Axial flexion position", self.axial_flexion_position)
+            print(f"Axial flexion position: {self.axial_flexion_position} in")
 
-            if direction > 0:  # Only for forward movement
-                time.sleep(0.3)
-                self.arduino.send("L5")
+            # Removed problematic L5 command that was sent without proper parameters
+            # This was causing malformed commands after forward axial movement
 
             self.loading_spinner.hide()
 
@@ -1304,10 +1320,12 @@ class KneeSpa(QMainWindow):
             # Round to nearest 2.5 degree increment
             new_position = round(new_position / 2.5) * 2.5
 
-            # Check position limits
-            if direction > 0 and new_position > 20:
+            # Check position limits using constants
+            if direction > 0 and new_position > LATERAL_MAX:
+                self._show_timed_error(f"Lateral position limited to {LATERAL_MAX}° (max)")
                 return
-            if direction < 0 and new_position < -20:
+            if direction < 0 and new_position < LATERAL_MIN:
+                self._show_timed_error(f"Lateral position limited to {LATERAL_MIN}° (min)")
                 return
 
             self.loading_spinner.show()
@@ -1414,8 +1432,11 @@ class KneeSpa(QMainWindow):
 
             elif actuator == self.actuator_c:  # Lateral
                 degrees = self.ui.lateral_flexion_position_slider.value()
-                # Ensure degrees are within valid range
-                degrees = max(-20.0, min(20.0, degrees))
+                # Ensure degrees are within valid range using constants
+                degrees = max(LATERAL_MIN, min(LATERAL_MAX, degrees))
+                if degrees != self.ui.lateral_flexion_position_slider.value():
+                    self.logger.warning(f"Lateral position clamped to range [{LATERAL_MIN}, {LATERAL_MAX}]")
+                    self.ui.lateral_flexion_position_slider.setValue(degrees)
                 self.set_to_c_distance(degrees)
                 self.lateral_flexion_position = degrees
                 self.loading_spinner.hide()
@@ -1428,8 +1449,18 @@ class KneeSpa(QMainWindow):
             self.loading_spinner.hide()
 
     def adjust_pressure(self, target_pressure):
-        """Adjust axial pressure to target value."""
+        """Adjust axial pressure to target value with safety validation."""
         print(f"Adjusting pressure to {target_pressure} lbs")
+
+        # SAFETY VALIDATION - Fix for missing bounds check
+        if target_pressure > PRESSURE_MAX:
+            self.logger.warning(f"Pressure {target_pressure} exceeds max, clamping to {PRESSURE_MAX}")
+            target_pressure = PRESSURE_MAX
+            self._show_timed_error(f"Pressure limited to maximum {PRESSURE_MAX} lbs for safety")
+        elif target_pressure < 0:
+            self.logger.warning(f"Negative pressure requested, setting to 0")
+            target_pressure = 0
+
         self.loading_spinner.show()
         self.disable_actuator_controls()
         try:
@@ -1607,9 +1638,20 @@ class KneeSpa(QMainWindow):
         self.disable_actuator_controls()
         pressure = self.ui.axial_flexion_pressure_slider.value()
         print(pressure)
+
+        # CRITICAL SAFETY CHECK - Fix for pressure safety bypass
+        if pressure > PRESSURE_MAX:
+            pressure = PRESSURE_MAX
+            self.logger.warning(f"Pressure request {pressure} exceeds max {PRESSURE_MAX}, clamping")
+            self._show_timed_error(f"Pressure limited to maximum {PRESSURE_MAX} lbs for safety")
+        elif pressure < MIN_PRESSURE:
+            pressure = MIN_PRESSURE
+            self.logger.warning(f"Pressure request below minimum, setting to {MIN_PRESSURE}")
+
         command = "P{}".format(pressure)
         self.arduino.send(command)
         print("Pressure cmd sent {}".format(command.strip()))
+        self.ui.axial_flexion_pressure_slider.setValue(pressure)  # Update UI to show clamped value
         self.loading_spinner.hide()
 
     def horizontal_flexion_position_changed(self):
@@ -1634,35 +1676,53 @@ class KneeSpa(QMainWindow):
     def set_done(self):
         """Set the I2C status to done."""
         print("Setting I2C status to done - signal received from Arduino")
-        self.I2Cstatus = 1  
+        self.I2Cstatus = 1
+        self.I2Cstatus_event.set()  # Signal the thread-safe event
         self.enable_actuator_controls()
 
     def ready_to_go(self):
         """Set the I2C status to ready."""
         print("Setting I2C status to ready")
-        self.I2Cstatus = 1  
+        self.I2Cstatus = 1
+        self.I2Cstatus_event.set()  # Signal the thread-safe event  
 
     def read_position(self, position, steps, actuator):
-        """Read position data from the Arduino."""
+        """Read position data from the Arduino with safety checks."""
         print(
             f"Reading position: position={position}, steps={steps}, actuator={actuator}"
         )
-        if hasattr(self, "actuator_b") and actuator == self.actuator_b:
-            inches = (position * 6) / self.config.b_factor
-            inches = round(inches * 2.0) / 2.0
-            print(f"Inches (actuator B): {inches}")
-            degrees = int(-(25 - (inches / 5) * 25))
-            print(f"Degrees (actuator B): {degrees}")
-        elif hasattr(self, "actuator_a") and actuator == self.actuator_a:
-            inches = (position * 6) / self.config.a_factor
-            inches = round(inches * 2.0) / 2.0
-            print(f"Inches (actuator A): {inches}")
-        elif hasattr(self, "actuator_c") and actuator == self.actuator_c:
-            inches = steps / (self.config.c_factor / 6)
-            inches = round(inches * 2.0) / 2.0
-            print(f"Inches (actuator C): {inches}")
-            degrees = int((inches * 20) - 20)
-            print(f"Degrees (actuator C): {degrees}")
+
+        # Safety check calibration factors to prevent division by zero
+        if not hasattr(self.config, 'a_factor') or not hasattr(self.config, 'b_factor') or not hasattr(self.config, 'c_factor'):
+            self.logger.error("Missing calibration factors in config")
+            self._show_timed_error("Calibration error - please recalibrate system")
+            return
+
+        if self.config.a_factor == 0 or self.config.b_factor == 0 or self.config.c_factor == 0:
+            self.logger.error(f"Invalid calibration factors: a={self.config.a_factor}, b={self.config.b_factor}, c={self.config.c_factor}")
+            self._show_timed_error("Calibration error - factors cannot be zero. Please recalibrate.")
+            return
+
+        try:
+            if hasattr(self, "actuator_b") and actuator == self.actuator_b:
+                inches = (position * 6) / self.config.b_factor
+                inches = round(inches * 2.0) / 2.0
+                print(f"Inches (actuator B): {inches}")
+                degrees = int(-(25 - (inches / 5) * 25)) if inches != 0 else -25
+                print(f"Degrees (actuator B): {degrees}")
+            elif hasattr(self, "actuator_a") and actuator == self.actuator_a:
+                inches = (position * 6) / self.config.a_factor
+                inches = round(inches * 2.0) / 2.0
+                print(f"Inches (actuator A): {inches}")
+            elif hasattr(self, "actuator_c") and actuator == self.actuator_c:
+                inches = steps / (self.config.c_factor / 6)
+                inches = round(inches * 2.0) / 2.0
+                print(f"Inches (actuator C): {inches}")
+                degrees = int((inches * 20) - 20)
+                print(f"Degrees (actuator C): {degrees}")
+        except (ZeroDivisionError, ValueError) as e:
+            self.logger.error(f"Position calculation error: {e}")
+            self._show_timed_error(f"Error calculating position: {str(e)}")
 
     def ensure_arduino_connection(self):
         """
@@ -1922,12 +1982,20 @@ class KneeSpa(QMainWindow):
         """Stop protocol sequence."""
         print("Stopping protocol")
         self.stop_actuators()
-        time.sleep(0.5)
         self.protocol_running = False # Ensure flag is set here too
-        self.mid_protocol_warning_shown = False # <-- Add this line
+        self.mid_protocol_warning_shown = False
+        # Use QTimer to avoid blocking UI
+        QTimer.singleShot(500, self._stop_protocol_phase2)
+
+    def _stop_protocol_phase2(self):
+        """Phase 2 of stop protocol after 0.5 second delay."""
         if self.worker:
             self.worker.stop()
-        time.sleep(0.5)
+        # Continue to phase 3 after another 0.5 seconds
+        QTimer.singleShot(500, self._stop_protocol_phase3)
+
+    def _stop_protocol_phase3(self):
+        """Phase 3 of stop protocol - final cleanup."""
         self.start_button.setEnabled(True)
         self.reset_arduino()
 

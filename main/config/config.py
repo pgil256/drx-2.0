@@ -26,7 +26,8 @@ class Configuration:
 
         if not os.path.exists(self.configFile):
             self.config["Options"] = {"flexion_position": self.flexion_position}
-            self.config.write(open(self.configFile, "w"))
+            with open(self.configFile, "w") as config_file:
+                self.config.write(config_file)
         else:
 
             try:
@@ -35,10 +36,44 @@ class Configuration:
                 allSections = {
                     s: dict(self.config.items(s)) for s in self.config.sections()
                 }
-                # Convert CMarks values to integers
-                self.CMarks = {k: int(v) for k, v in allSections["CMarks"].items()}
-                self.AMarks = {k: int(v) for k, v in allSections["AMarks"].items()}
-                self.BMarks = {k: int(v) for k, v in allSections["BMarks"].items()}
+
+                # Safe section access with defaults
+                self.CMarks = {}
+                self.AMarks = {}
+                self.BMarks = {}
+
+                # Convert CMarks values to integers with error handling
+                if "CMarks" in allSections:
+                    try:
+                        self.CMarks = {k: int(v) for k, v in allSections["CMarks"].items()}
+                    except (ValueError, TypeError) as e:
+                        print(f"Error parsing CMarks: {e}, using defaults")
+                        self._set_default_c_marks()
+                else:
+                    print("CMarks section missing, using defaults")
+                    self._set_default_c_marks()
+
+                # Convert AMarks values to integers with error handling
+                if "AMarks" in allSections:
+                    try:
+                        self.AMarks = {k: int(v) for k, v in allSections["AMarks"].items()}
+                    except (ValueError, TypeError) as e:
+                        print(f"Error parsing AMarks: {e}, using defaults")
+                        self._set_default_a_marks()
+                else:
+                    print("AMarks section missing, using defaults")
+                    self._set_default_a_marks()
+
+                # Convert BMarks values to integers with error handling
+                if "BMarks" in allSections:
+                    try:
+                        self.BMarks = {k: int(v) for k, v in allSections["BMarks"].items()}
+                    except (ValueError, TypeError) as e:
+                        print(f"Error parsing BMarks: {e}, using defaults")
+                        self._set_default_b_marks()
+                else:
+                    print("BMarks section missing, using defaults")
+                    self._set_default_b_marks()
 
                 section = "Options"
 
@@ -92,7 +127,38 @@ class Configuration:
         
         print("Config updated")
         try:
-            self.config.write(open(self.configFile, "w"))
+            with open(self.configFile, "w") as config_file:
+                self.config.write(config_file)
         except Exception as e:
             print(str(e))
             print(f'Fatal error, could not write config file to "{self.configFile}"')
+
+    def _set_default_c_marks(self):
+        """Set default CMarks values for lateral actuator."""
+        self.CMarks = {}
+        for i in range(16):
+            angle = (i * 2.5) - 20
+            position = (i * 220) + 98
+            self.CMarks[str(angle)] = position
+
+    def _set_default_a_marks(self):
+        """Set default AMarks values for axial actuator."""
+        self.AMarks = {
+            "0": 0,
+            "1": 475,
+            "2": 950,
+            "3": 1425,
+            "4": 1900
+        }
+
+    def _set_default_b_marks(self):
+        """Set default BMarks values for horizontal actuator."""
+        self.BMarks = {
+            "-25": 0,
+            "-20": 380,
+            "-15": 760,
+            "-10": 1140,
+            "-5": 1520,
+            "0": 1900,
+            "5": 2280
+        }
