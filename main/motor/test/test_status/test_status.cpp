@@ -9,7 +9,7 @@
 MockWire Wire;
 MockSerial Serial;
 MockSerial Serial1;
-HX711 scale;
+// Note: HX711 scale is declared in motor.ino
 
 unsigned long _millis_value = 0;
 unsigned long millis() { return _millis_value; }

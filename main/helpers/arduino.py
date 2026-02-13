@@ -34,7 +34,8 @@ class Arduino(QObject):
         self.ARDUINO_BUFFER_SIZE = 64  # Standard Arduino buffer size
         self._running = False
         self.ARDUINO_PORT = "/dev/serial0"
-        self.ok_event = threading.Event() 
+        self.ok_event = threading.Event()
+        self._reader_ready = threading.Event()
 
     def release_busy_port(self):
         """Attempt to release the serial0 port if busy"""
@@ -205,13 +206,13 @@ class Arduino(QObject):
                 if not self.reset_dtr():
                     print("DTR reset failed")
 
-                if not self._running:               
+                if not self._running:
+                    self._reader_ready.clear()
                     self._running = True
                     threading.Thread(target=self.read_from_com,
                                     daemon=True).start()
-
-                # Verify Arduino responds after reset
-                self.verify_connection(tries=3, timeout_s=10.0)
+                    # Wait for reader thread to be ready before verifying
+                    self._reader_ready.wait(timeout=5.0)
 
                 # Verify connection
                 if self.verify_connection():
@@ -284,6 +285,7 @@ class Arduino(QObject):
     def read_from_com(self):
         """Continuously reads data from the serial connection."""
         print("Starting to read from serial communication")
+        self._reader_ready.set()
         last_data_time = time.time()
 
         while self._running and self.serial_com and self.serial_com.is_open:
@@ -408,11 +410,11 @@ class Arduino(QObject):
 
             if tokens[0] == "DONE":
                 self.done_emit.emit()
-            elif tokens[0] == "P":
+            elif tokens[0] == "P" and len(tokens) >= 2:
                 self.position_emit.emit(int(tokens[1]), 0, "", 0)
-            elif tokens[0] == "PR":
+            elif tokens[0] == "PR" and len(tokens) >= 2:
                 self.pressure_emit.emit(tokens[1])
-            elif tokens[0] == "E":
+            elif tokens[0] == "E" and len(tokens) >= 5:
                 self.position_emit.emit(
                     int(tokens[1]), int(tokens[2]), tokens[3], int(tokens[4])
                 )
@@ -422,14 +424,14 @@ class Arduino(QObject):
                 )
             elif tokens[0] == "Ready to Go" or "Ready to Go" in data:
                 self.ready_to_go_emit.emit()
-            elif tokens[0] == "weight":
+            elif tokens[0] == "weight" and len(tokens) >= 2:
                 self.display_weight_emit.emit(tokens[1])
             elif (
                 tokens[0] == "Test command received" or "Test command received" in data
             ):
                 print("Arduino acknowledged test command")
             elif "OK" in tokens[0] or tokens[0] == "OK":
-                self.ok_event.set()    
+                self.ok_event.set()
                 print("Arduino sent OK acknowledgment")
             else:
                 print(f"Unrecognized data format: {data}")
@@ -450,7 +452,6 @@ class Arduino(QObject):
                 if not self.serial_com:  # Double-check after reconnect
                     return False
 
-                self.serial_com.reset_input_buffer()
                 command_with_newline = command + "\n"
                 # Only log the command being sent once
                 self.serial_com.write(command_with_newline.encode())

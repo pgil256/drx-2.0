@@ -36,6 +36,8 @@ public:
     int _rxIndex = 0;
 
     void begin() {}
+    void begin(uint8_t) {}
+    void begin(int) {}
 
     void beginTransmission(uint8_t address) {
         _currentAddress = address;

@@ -23,6 +23,7 @@ public:
     int inputIndex = 0;
 
     void begin(long baud) {}
+    void setTimeout(long) {}
 
     int available() {
         if (inputIndex < (int)currentInput.length()) return 1;
@@ -81,6 +82,10 @@ public:
         return n;
     }
 
+    size_t print(const String& s) { return print(s.c_str()); }
+    size_t println(const String& s) { return println(s.c_str()); }
+    size_t print(uint16_t val) { return print((int)val); }
+    size_t println(uint16_t val) { return println((int)val); }
     size_t println() { return print("\n"); }
 
     // Test helpers

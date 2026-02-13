@@ -99,11 +99,12 @@ class TestProtocol1Axial:
 
     def test_finished_signal_emitted(self, protocol_env, qtbot):
         arduino, fake, config = protocol_env
-        p = make_protocol(arduino, config, protocol="1", max_pressure=20, duration=1)
+        # Use short duration (0.1 min = 6s) so hold phase completes within timeout
+        p = make_protocol(arduino, config, protocol="1", max_pressure=20, duration=0.1)
         # Bypass pressure ramp so protocol completes quickly
         bypass_pressure_ramp(p, 20)
 
-        with qtbot.waitSignal(p.signals.finished, timeout=90000):
+        with qtbot.waitSignal(p.signals.finished, timeout=30000):
             thread = threading.Thread(target=p.run, daemon=True)
             thread.start()
 

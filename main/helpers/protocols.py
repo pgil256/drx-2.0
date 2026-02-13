@@ -74,8 +74,9 @@ class Protocols(QtCore.QRunnable):
         self.is_running = False
         self.start_time = None
         self.elapsed_time = 0
-        self.current_pressure = 0
-        self.current_pos_c = 0
+        self._state_lock = threading.Lock()
+        self._current_pressure = 0.0
+        self._current_pos_c = 0
         self.target_pos_c = None
         self.angle_set = False
 
@@ -94,6 +95,26 @@ class Protocols(QtCore.QRunnable):
             print("WARNING: Arduino object missing status_emit signal - status updates won't work!")
 
         print(f"Protocols class initialized with use_pulse={use_pulse}")
+
+    @property
+    def current_pressure(self) -> float:
+        with self._state_lock:
+            return self._current_pressure
+
+    @current_pressure.setter
+    def current_pressure(self, value: float):
+        with self._state_lock:
+            self._current_pressure = float(value)
+
+    @property
+    def current_pos_c(self) -> int:
+        with self._state_lock:
+            return self._current_pos_c
+
+    @current_pos_c.setter
+    def current_pos_c(self, value: int):
+        with self._state_lock:
+            self._current_pos_c = int(value)
 
     def update_status(self, pos_a, pos_b, pos_c, pressure):
         """Update current status values from Arduino feedback."""
@@ -142,6 +163,9 @@ class Protocols(QtCore.QRunnable):
             # Wait for initial pressure to build with less frequent status checks
             wait_start = time.time()
             while time.time() - wait_start < max_wait_time:
+                if not self.is_running:
+                    print("Emergency stop during initial pressure build")
+                    return False
                 if self.current_pressure >= current_command - pressure_tolerance:
                     break
                 # Avoid excessive status printing
@@ -153,25 +177,33 @@ class Protocols(QtCore.QRunnable):
 
             # Step through pressure increments with reduced monitoring
             while current_command < (target_pressure - PRESSURE_INCREMENT/2):
+                if not self.is_running:
+                    print("Emergency stop during pressure ramp")
+                    return False
                 current_command += PRESSURE_INCREMENT
+                # Clamp to target to prevent floating-point overshoot
+                current_command = min(current_command, target_pressure)
                 print(f"Increasing pressure to: {current_command} lbs")
                 self.arduino.send(f"P{current_command}")
-                
+
                 # Wait for current increment to stabilize before next increment
                 increment_start = time.time()
                 increment_stable = False
-                
+
                 while time.time() - increment_start < max_wait_time:
+                    if not self.is_running:
+                        print("Emergency stop during pressure stabilization")
+                        return False
                     # Check if this increment is stable before moving to next
                     if abs(self.current_pressure - current_command) <= pressure_tolerance:
                         print(f"Pressure increment stabilized at {self.current_pressure} lbs")
                         increment_stable = True
                         break
                     time.sleep(0.2)
-                
+
                 if not increment_stable:
                     print(f"Warning: Pressure increment {current_command} not fully stabilized")
-                
+
                 # Small delay between increments
                 time.sleep(2.0)
 
@@ -186,11 +218,17 @@ class Protocols(QtCore.QRunnable):
             max_final_wait_time = 15  # Longer wait for final pressure to stabilize
             
             while retry_count < max_retries and not final_stabilized:
+                if not self.is_running:
+                    print("Emergency stop during final pressure verification")
+                    return False
                 wait_start = time.time()
                 last_check_time = 0
-                
-                # Give pressure time to stabilize 
+
+                # Give pressure time to stabilize
                 while time.time() - wait_start < max_wait_time:
+                    if not self.is_running:
+                        print("Emergency stop during final pressure wait")
+                        return False
                     final_diff = abs(target_pressure - self.current_pressure)
                     
                     # Only print status updates periodically
@@ -250,6 +288,9 @@ class Protocols(QtCore.QRunnable):
             if target_pressure > 0:  # Only wait if we're increasing pressure
                 wait_start = time.time()
                 while time.time() - wait_start < max_wait_time:
+                    if not self.is_running:
+                        print("Emergency stop during pressure stabilization")
+                        return False
                     diff = abs(target_pressure - self.current_pressure)
                     if diff <= pressure_tolerance:
                         print(f"Pressure stabilized at {self.current_pressure} lbs")
@@ -407,8 +448,9 @@ class Protocols(QtCore.QRunnable):
                     # and will also internally check self.use_pulse to stop early if it changes.
                     print(f"Protocol {self.protocol} ({time.time()}): Loop decides to pulse. Calling apply_continuous_pulse.")
                     if not self.apply_continuous_pulse():
-                        # Error during pulse
-                        return False # Signal protocol failure
+                        # Error during pulse - emit signal and return
+                        self.signals.finished.emit(False)
+                        return
                     # apply_continuous_pulse completed (either by duration, stop, or self.use_pulse becoming False)
                     # The function handles the timed part. We break the outer loop now.
                     main_phase_loop_active = False
