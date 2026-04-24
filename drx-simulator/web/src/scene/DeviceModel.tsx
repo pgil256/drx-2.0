@@ -1,8 +1,13 @@
 import { useGLTF } from '@react-three/drei';
 import { useFrame } from '@react-three/fiber';
 import { useEffect, useRef } from 'react';
-import type { Object3D } from 'three';
+import type { Mesh, MeshStandardMaterial, Object3D } from 'three';
 import { useAppStore } from '../store/useAppStore';
+
+const STRAP_MESH_NAMES = new Set(['Bent leg:1', 'Bent leg 2:1']);
+const PRESSURE_MAX_LBS = 80;
+const GLOW_MAX_INTENSITY = 0.8;
+const GLOW_COLOR = 0xff2a2a;
 
 const IN_TO_M = 0.0254;
 
@@ -21,6 +26,8 @@ export function DeviceModel() {
   const lateralBaseYRef = useRef(0);
   const horizontalBaseXRef = useRef(0);
 
+  const strapMatsRef = useRef<MeshStandardMaterial[]>([]);
+
   useEffect(() => {
     axialRef.current = scene.getObjectByName('axial_slider') ?? null;
     lateralRef.current = scene.getObjectByName('lateral_pivot') ?? null;
@@ -36,6 +43,22 @@ export function DeviceModel() {
     axialBaseZRef.current = axialRef.current.position.z;
     lateralBaseYRef.current = lateralRef.current.rotation.y;
     horizontalBaseXRef.current = horizontalRef.current.rotation.x;
+
+    const mats: MeshStandardMaterial[] = [];
+    scene.traverse((obj: Object3D) => {
+      const mesh = obj as Mesh;
+      if (!mesh.isMesh || !STRAP_MESH_NAMES.has(mesh.name)) return;
+      const src = mesh.material as MeshStandardMaterial;
+      const cloned = src.clone();
+      cloned.emissive.setHex(GLOW_COLOR);
+      cloned.emissiveIntensity = 0;
+      mesh.material = cloned;
+      mats.push(cloned);
+    });
+    strapMatsRef.current = mats;
+    if (mats.length === 0) {
+      console.warn('DeviceModel: no strap meshes matched for glow effect');
+    }
   }, [scene]);
 
   useFrame(() => {
@@ -48,6 +71,11 @@ export function DeviceModel() {
     }
     if (horizontalRef.current) {
       horizontalRef.current.rotation.x = horizontalBaseXRef.current + degToRad(d.horizontal.pos);
+    }
+
+    const glow = (d.pressure.lbs / PRESSURE_MAX_LBS) * GLOW_MAX_INTENSITY;
+    for (const mat of strapMatsRef.current) {
+      mat.emissiveIntensity = glow;
     }
   });
 
