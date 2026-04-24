@@ -12,7 +12,7 @@ if (typeof window !== 'undefined') {
 export default function App() {
   useSimTick();
   return (
-    <div className="relative w-screen h-screen bg-black">
+    <div className="dark relative w-screen h-screen bg-black text-white">
       <Scene />
       <div className="absolute inset-0 pointer-events-none">
         <TopBar />
