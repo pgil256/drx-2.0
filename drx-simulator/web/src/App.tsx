@@ -2,6 +2,7 @@ import { Scene } from './scene/Scene';
 import { useSimTick } from './sim/useSimTick';
 import { useAppStore } from './store/useAppStore';
 import { BottomNav } from './ui/BottomNav';
+import { PageRouter } from './ui/pages/PageRouter';
 import { TopBar } from './ui/TopBar';
 
 if (typeof window !== 'undefined') {
@@ -15,6 +16,7 @@ export default function App() {
       <Scene />
       <div className="absolute inset-0 pointer-events-none">
         <TopBar />
+        <PageRouter />
         <BottomNav />
       </div>
     </div>
