@@ -1,6 +1,7 @@
 import { Scene } from './scene/Scene';
 import { useSimTick } from './sim/useSimTick';
 import { useAppStore } from './store/useAppStore';
+import { TopBar } from './ui/TopBar';
 
 if (typeof window !== 'undefined') {
   (window as unknown as { store: typeof useAppStore }).store = useAppStore;
@@ -9,8 +10,11 @@ if (typeof window !== 'undefined') {
 export default function App() {
   useSimTick();
   return (
-    <div className="w-screen h-screen bg-black">
+    <div className="relative w-screen h-screen bg-black">
       <Scene />
+      <div className="absolute inset-0 pointer-events-none">
+        <TopBar />
+      </div>
     </div>
   );
 }
