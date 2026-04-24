@@ -9,6 +9,10 @@ const PRESSURE_MAX_LBS = 80;
 const GLOW_MAX_INTENSITY = 0.8;
 const GLOW_COLOR = 0xff2a2a;
 
+// Rest-pose calibration: the GLB authors the leg tilted up from horizontal.
+// This offset makes horizontal.pos = -15 (the initial store value) render parallel to the ground.
+const HORIZONTAL_REST_CALIBRATION_DEG = 15;
+
 const IN_TO_M = 0.0254;
 
 function degToRad(deg: number) {
@@ -70,7 +74,8 @@ export function DeviceModel() {
       lateralRef.current.rotation.y = lateralBaseYRef.current + degToRad(d.lateral.pos);
     }
     if (horizontalRef.current) {
-      horizontalRef.current.rotation.x = horizontalBaseXRef.current + degToRad(d.horizontal.pos);
+      horizontalRef.current.rotation.x =
+        horizontalBaseXRef.current + degToRad(d.horizontal.pos + HORIZONTAL_REST_CALIBRATION_DEG);
     }
 
     const glow = (d.pressure.lbs / PRESSURE_MAX_LBS) * GLOW_MAX_INTENSITY;
