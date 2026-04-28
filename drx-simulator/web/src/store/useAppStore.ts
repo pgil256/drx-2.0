@@ -4,13 +4,25 @@ import { INITIAL_DEVICE_STATE, type DeviceState } from '../sim/types';
 export type Page = 'home' | 'login' | 'setup' | 'protocols' | 'help';
 export type SetupTab = 'axial' | 'horizontal' | 'lateral';
 export type ProtocolId = 1 | 2 | 3 | 4;
+export type ProtocolPhase =
+  | 'idle'
+  | 'ramping'
+  | 'positioning'
+  | 'holding'
+  | 'pulsing'
+  | 'oscillating'
+  | 'cooling'
+  | 'done';
 
 type SessionState = {
   runningProtocol: ProtocolId | null;
+  phase: ProtocolPhase;
   progressPct: number;
   elapsedSec: number;
   durationSec: number;
   maxPressure: number;
+  maxLeft: number;
+  maxRight: number;
   usePulse: boolean;
 };
 
@@ -18,7 +30,6 @@ type UiState = {
   page: Page;
   setupTab: SetupTab;
   videoOpen: boolean;
-  helpOpen: boolean;
   cameraPreset: 'three-quarter' | 'side' | 'overhead';
 };
 
@@ -43,17 +54,19 @@ export const useAppStore = create<AppState>((set) => ({
   device: INITIAL_DEVICE_STATE,
   session: {
     runningProtocol: null,
+    phase: 'idle',
     progressPct: 0,
     elapsedSec: 0,
     durationSec: 30,
     maxPressure: 40,
+    maxLeft: 10,
+    maxRight: 10,
     usePulse: false,
   },
   ui: {
     page: 'home',
     setupTab: 'axial',
     videoOpen: false,
-    helpOpen: false,
     cameraPreset: 'three-quarter',
   },
 
