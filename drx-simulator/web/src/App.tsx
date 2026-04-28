@@ -4,6 +4,7 @@ import { useAppStore } from './store/useAppStore';
 import { BottomNav } from './ui/BottomNav';
 import { PageRouter } from './ui/pages/PageRouter';
 import { TopBar } from './ui/TopBar';
+import { VideoDialog } from './ui/VideoDialog';
 
 if (typeof window !== 'undefined') {
   (window as unknown as { store: typeof useAppStore }).store = useAppStore;
@@ -19,6 +20,7 @@ export default function App() {
         <PageRouter />
         <BottomNav />
       </div>
+      <VideoDialog />
     </div>
   );
 }
