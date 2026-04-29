@@ -15,9 +15,8 @@ const LEG_NODE_NAMES = new Set([
 ]);
 const PRESSURE_MAX_LBS = 80;
 const GLOW_MAX_INTENSITY = 0.8;
-const GLOW_COLOR = 0xff2a2a;
 const PULSE_HZ = 1.5;
-const PULSE_GLOW_AMPLITUDE = 1.2;
+const PULSE_GLOW_AMPLITUDE = 2.0;
 
 // Rest-pose calibration: the GLB authors the leg tilted up from horizontal.
 // This offset makes horizontal.pos = -15 (the initial store value) render parallel to the ground.
@@ -79,7 +78,7 @@ export function DeviceModel() {
       if (!mesh.isMesh || !STRAP_MESH_NAMES.has(mesh.name)) return;
       const src = mesh.material as MeshStandardMaterial;
       const cloned = src.clone();
-      cloned.emissive.setHex(GLOW_COLOR);
+      cloned.emissive.setRGB(1, 0, 0);
       cloned.emissiveIntensity = 0;
       mesh.material = cloned;
       mats.push(cloned);
@@ -104,13 +103,15 @@ export function DeviceModel() {
     }
 
     const pressureGlow = (d.pressure.lbs / PRESSURE_MAX_LBS) * GLOW_MAX_INTENSITY;
-    const pulseHighlight = d.pulsing
-      ? (0.5 + 0.5 * Math.sin(state.clock.getElapsedTime() * 2 * Math.PI * PULSE_HZ)) *
-        PULSE_GLOW_AMPLITUDE
+    const pulseT = d.pulsing
+      ? 0.5 + 0.5 * Math.sin(state.clock.getElapsedTime() * 2 * Math.PI * PULSE_HZ)
       : 0;
-    const glow = pressureGlow + pulseHighlight;
+    const intensity = pressureGlow + pulseT * PULSE_GLOW_AMPLITUDE;
     for (const mat of strapMatsRef.current) {
-      mat.emissiveIntensity = glow;
+      // Shift emissive toward yellow-white at pulse peaks so pulses look
+      // visually distinct from a steady pressure glow.
+      mat.emissive.setRGB(1, pulseT * 0.85, pulseT * 0.45);
+      mat.emissiveIntensity = intensity;
     }
   });
 
