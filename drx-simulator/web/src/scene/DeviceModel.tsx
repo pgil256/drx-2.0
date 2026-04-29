@@ -9,7 +9,7 @@ const PRESSURE_MAX_LBS = 80;
 const GLOW_MAX_INTENSITY = 0.8;
 const GLOW_COLOR = 0xff2a2a;
 const PULSE_HZ = 1.5;
-const PULSE_MIN_FACTOR = 0.4;
+const PULSE_GLOW_AMPLITUDE = 1.2;
 
 // Rest-pose calibration: the GLB authors the leg tilted up from horizontal.
 // This offset makes horizontal.pos = -15 (the initial store value) render parallel to the ground.
@@ -80,13 +80,12 @@ export function DeviceModel() {
         horizontalBaseXRef.current + degToRad(d.horizontal.pos + HORIZONTAL_REST_CALIBRATION_DEG);
     }
 
-    const baseGlow = (d.pressure.lbs / PRESSURE_MAX_LBS) * GLOW_MAX_INTENSITY;
-    const pulseFactor = d.pulsing
-      ? PULSE_MIN_FACTOR +
-        (1 - PULSE_MIN_FACTOR) *
-          (0.5 + 0.5 * Math.sin(state.clock.getElapsedTime() * 2 * Math.PI * PULSE_HZ))
-      : 1;
-    const glow = baseGlow * pulseFactor;
+    const pressureGlow = (d.pressure.lbs / PRESSURE_MAX_LBS) * GLOW_MAX_INTENSITY;
+    const pulseHighlight = d.pulsing
+      ? (0.5 + 0.5 * Math.sin(state.clock.getElapsedTime() * 2 * Math.PI * PULSE_HZ)) *
+        PULSE_GLOW_AMPLITUDE
+      : 0;
+    const glow = pressureGlow + pulseHighlight;
     for (const mat of strapMatsRef.current) {
       mat.emissiveIntensity = glow;
     }
