@@ -103,5 +103,6 @@ claude_old/
 
 # Binary assets (CAD source files, photo references)
 device-imgs/
-drx-simulator/STEP Files/
-drx-simulator/drx-body-imgs/
+
+# drx-simulator lives in its own repo: https://github.com/pgil256/drx-simulator
+drx-simulator/
