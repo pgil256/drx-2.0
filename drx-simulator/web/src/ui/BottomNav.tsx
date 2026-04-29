@@ -3,7 +3,6 @@ import { Button } from '@/components/ui/button';
 
 const PAGES: Array<{ id: Page; label: string }> = [
   { id: 'home', label: 'Home' },
-  { id: 'login', label: 'Login' },
   { id: 'setup', label: 'Setup' },
   { id: 'protocols', label: 'Protocols' },
   { id: 'help', label: 'Help' },
