@@ -100,3 +100,8 @@ claude_old/
 
 
 
+
+# Binary assets (CAD source files, photo references)
+device-imgs/
+drx-simulator/STEP Files/
+drx-simulator/drx-body-imgs/
