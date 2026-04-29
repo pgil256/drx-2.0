@@ -1,4 +1,4 @@
-import { Scene } from './scene/Scene';
+import { lazy, Suspense } from 'react';
 import { useSimTick } from './sim/useSimTick';
 import { useAppStore } from './store/useAppStore';
 import { BottomNav } from './ui/BottomNav';
@@ -6,8 +6,18 @@ import { PageRouter } from './ui/pages/PageRouter';
 import { TopBar } from './ui/TopBar';
 import { VideoDialog } from './ui/VideoDialog';
 
+const Scene = lazy(() => import('./scene/Scene').then((m) => ({ default: m.Scene })));
+
 if (typeof window !== 'undefined') {
   (window as unknown as { store: typeof useAppStore }).store = useAppStore;
+}
+
+function SceneFallback() {
+  return (
+    <div className="absolute inset-0 flex items-center justify-center text-white/40 text-sm">
+      Loading 3D model…
+    </div>
+  );
 }
 
 export default function App() {
@@ -20,7 +30,9 @@ export default function App() {
           <PageRouter />
         </aside>
         <main className="flex-1 relative min-h-0 min-w-0">
-          <Scene />
+          <Suspense fallback={<SceneFallback />}>
+            <Scene />
+          </Suspense>
         </main>
       </div>
       <BottomNav />
