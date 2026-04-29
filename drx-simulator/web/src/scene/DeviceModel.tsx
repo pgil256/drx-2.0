@@ -5,14 +5,10 @@ import type { Mesh, MeshStandardMaterial, Object3D } from 'three';
 import { useAppStore } from '../store/useAppStore';
 
 const STRAP_MESH_NAMES = new Set(['Bent leg:1', 'Bent leg 2:1']);
-const LEG_NODE_NAMES = new Set([
-  'Bent leg:1',
-  'Bent leg 2:1',
-  'Vertical leg 1:1',
-  'Vertical leg 1:2',
-  'Vertical leg 2:1',
-  'Vertical leg 2:2',
-]);
+// Only the Bent leg meshes are the cuff straps that should follow the hinge.
+// "Vertical leg N:M" are the chair frame's structural supports — they stay
+// static with the rest of the chassis.
+const LEG_NODE_NAMES = new Set(['Bent leg:1', 'Bent leg 2:1']);
 const PRESSURE_MAX_LBS = 80;
 const GLOW_MAX_INTENSITY = 0.8;
 const PULSE_HZ = 1.5;
