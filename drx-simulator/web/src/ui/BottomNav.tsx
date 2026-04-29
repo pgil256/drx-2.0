@@ -14,7 +14,7 @@ export function BottomNav() {
   const setUi = useAppStore((s) => s.setUi);
 
   return (
-    <div className="absolute bottom-0 left-0 right-0 h-16 flex items-center justify-center gap-2 px-6 bg-black/40 backdrop-blur-md border-t border-white/10 pointer-events-auto">
+    <div className="h-16 shrink-0 flex items-center justify-center gap-2 px-6 bg-black/40 backdrop-blur-md border-t border-white/10">
       {PAGES.map((p) => (
         <Button
           key={p.id}

@@ -51,7 +51,7 @@ export function ActuatorPanel({ actuator }: { actuator: Actuator }) {
   };
 
   return (
-    <div className="grid grid-cols-2 gap-6">
+    <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
       <div className="space-y-4">
         <div>
           <div className="text-sm text-white/60">Position</div>
