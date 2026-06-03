@@ -1,0 +1,300 @@
+COMPREHENSIVE UNUSED CODE DETAILED LIST WITH ABSOLUTE PATHS
+============================================================================
+
+This document lists all 24 unused code items with exact file paths and 
+line numbers for quick reference during cleanup.
+
+============================================================================
+UNUSED IMPORTS - 22 ITEMS
+============================================================================
+
+1. FILE: /mnt/c/users/user/desktop/drx-demo-final/main/config/config.py
+   LINE: 2
+   ITEM: serial
+   CODE: import serial
+   CATEGORY: Unused Import - Serial Communication Library
+   REASON: Serial module never used in Configuration class
+   SAFE_TO_REMOVE: YES
+
+2. FILE: /mnt/c/users/user/desktop/drx-demo-final/main/config/config.py
+   LINE: 3
+   ITEM: time
+   CODE: import time
+   CATEGORY: Unused Import - Standard Library
+   REASON: No timing operations in config module
+   SAFE_TO_REMOVE: YES
+
+3. FILE: /mnt/c/users/user/desktop/drx-demo-final/main/config/config.py
+   LINE: 6
+   ITEM: sys
+   CODE: import sys
+   CATEGORY: Unused Import - Standard Library
+   REASON: No sys module functions called
+   SAFE_TO_REMOVE: YES
+
+4. FILE: /mnt/c/users/user/desktop/drx-demo-final/main/config/config.py
+   LINE: 7
+   ITEM: QApplication, QWidget, QInputDialog, QLineEdit, QFileDialog
+   CODE: from PyQt5.QtWidgets import QApplication, QWidget, QInputDialog, QLineEdit, QFileDialog
+   CATEGORY: Unused Import - PyQt5 Widgets
+   REASON: Configuration class does not create UI components
+   SAFE_TO_REMOVE: YES
+
+5. FILE: /mnt/c/users/user/desktop/drx-demo-final/main/config/config.py
+   LINE: 8
+   ITEM: QtCore, QtGui, QtWidgets
+   CODE: from PyQt5 import QtCore, QtGui, QtWidgets
+   CATEGORY: Unused Import - PyQt5 Modules
+   REASON: Framework modules not used in configuration
+   SAFE_TO_REMOVE: YES
+
+6. FILE: /mnt/c/users/user/desktop/drx-demo-final/main/helpers/arduino.py
+   LINE: 1
+   ITEM: sys
+   CODE: import sys
+   CATEGORY: Unused Import - Standard Library
+   REASON: No sys module functions called in Arduino communication
+   SAFE_TO_REMOVE: YES
+
+7. FILE: /mnt/c/users/user/desktop/drx-demo-final/main/helpers/arduino.py
+   LINE: 3
+   ITEM: traceback
+   CODE: import traceback
+   CATEGORY: Unused Import - Standard Library
+   REASON: Exception handling uses print(), not traceback module
+   SAFE_TO_REMOVE: YES
+
+8. FILE: /mnt/c/users/user/desktop/drx-demo-final/main/helpers/protocols.py
+   LINE: 1
+   ITEM: datetime
+   CODE: from datetime import datetime
+   CATEGORY: Unused Import - Standard Library Class
+   REASON: Protocol uses time.time() not datetime objects
+   SAFE_TO_REMOVE: YES
+
+9. FILE: /mnt/c/users/user/desktop/drx-demo-final/main/helpers/protocols.py
+   LINE: 6
+   ITEM: Optional
+   CODE: from typing import Optional
+   CATEGORY: Unused Import - Type Hint
+   REASON: Method signatures do not use Optional type hints
+   SAFE_TO_REMOVE: YES
+
+10. FILE: /mnt/c/users/user/desktop/drx-demo-final/main/helpers/protocols.py
+    LINE: 8
+    ITEM: QtGui, QtWidgets, uic
+    CODE: from PyQt5 import QtGui, QtWidgets, uic
+    CATEGORY: Unused Import - PyQt5 Modules
+    REASON: Worker thread does not interact with UI components
+    SAFE_TO_REMOVE: YES
+
+11. FILE: /mnt/c/users/user/desktop/drx-demo-final/main/helpers/protocols.py
+    LINE: 9
+    ITEM: QUrl, Qt
+    CODE: from PyQt5.QtCore import QUrl, Qt
+    CATEGORY: Unused Import - PyQt5 Classes
+    REASON: Protocol handler does not use URL or Qt constants
+    SAFE_TO_REMOVE: YES
+
+12. FILE: /mnt/c/users/user/desktop/drx-demo-final/main/kneespa.py
+    LINE: 12
+    ITEM: timedelta
+    CODE: from datetime import ... timedelta
+    CATEGORY: Unused Import - Standard Library Class
+    REASON: Time calculations use start_time and current time, not timedelta
+    SAFE_TO_REMOVE: YES
+
+13. FILE: /mnt/c/users/user/desktop/drx-demo-final/main/kneespa.py
+    LINE: 70
+    ITEM: ResetWorkerSignals
+    CODE: from helpers.reset_worker import ResetWorker, ResetWorkerSignals
+    CATEGORY: Unused Import - Application Class
+    REASON: Main app only needs ResetWorker, not its signals class
+    SAFE_TO_REMOVE: YES (partial - remove from import)
+
+14. FILE: /mnt/c/users/user/desktop/drx-demo-final/main/ui/dialogs/pressure_dialog.py
+    LINE: 1
+    ITEM: QtGui, uic
+    CODE: from PyQt5 import QtCore, QtGui, QtWidgets, uic
+    CATEGORY: Unused Import - PyQt5 Modules
+    REASON: Dialog uses specific classes, not full module imports
+    SAFE_TO_REMOVE: YES
+
+15. FILE: /mnt/c/users/user/desktop/drx-demo-final/main/ui/dialogs/pressure_dialog.py
+    LINE: 2
+    ITEM: QPushButton
+    CODE: from PyQt5.QtWidgets import QDialog, QVBoxLayout, QLabel, QPushButton, QApplication
+    CATEGORY: Unused Import - PyQt5 Widget
+    REASON: Pressure dialog is read-only, has no buttons
+    SAFE_TO_REMOVE: YES
+
+16. FILE: /mnt/c/users/user/desktop/drx-demo-final/main/ui/dialogs/pressure_dialog.py
+    LINE: 3
+    ITEM: QMediaPlayer, QMediaContent
+    CODE: from PyQt5.QtMultimedia import QMediaPlayer, QMediaContent
+    CATEGORY: Unused Import - PyQt5 Multimedia
+    REASON: Camera/streaming features were removed
+    SAFE_TO_REMOVE: YES
+
+17. FILE: /mnt/c/users/user/desktop/drx-demo-final/main/ui/dialogs/pressure_dialog.py
+    LINE: 4
+    ITEM: QVideoWidget
+    CODE: from PyQt5.QtMultimediaWidgets import QVideoWidget
+    CATEGORY: Unused Import - PyQt5 Multimedia Widget
+    REASON: No video display in pressure dialog
+    SAFE_TO_REMOVE: YES
+
+18. FILE: /mnt/c/users/user/desktop/drx-demo-final/main/ui/dialogs/pressure_dialog.py
+    LINE: 5
+    ITEM: QUrl
+    CODE: from PyQt5.QtCore import QUrl, Qt
+    CATEGORY: Unused Import - PyQt5 Core Class
+    REASON: Pressure dialog does not work with URLs
+    SAFE_TO_REMOVE: YES
+
+19. FILE: /mnt/c/users/user/desktop/drx-demo-final/main/ui/dialogs/timer_dialog.py
+    LINE: 9
+    ITEM: QTimer
+    CODE: from PyQt5.QtCore import Qt, QTimer
+    CATEGORY: Unused Import - PyQt5 Timer
+    REASON: Timer tracking uses callback method, not QTimer object
+    SAFE_TO_REMOVE: YES
+
+20. FILE: /mnt/c/users/user/desktop/drx-demo-final/main/ui/dialogs/video_player.py
+    LINE: 12
+    ITEM: QPixmap
+    CODE: from PyQt5.QtGui import QPixmap
+    CATEGORY: Unused Import - PyQt5 Image Class
+    REASON: Camera frame display was completely removed
+    SAFE_TO_REMOVE: YES
+
+21. FILE: /mnt/c/users/user/desktop/drx-demo-final/main/ui/dialogs/video_player.py
+    LINE: 17
+    ITEM: APP_BASE_DIR
+    CODE: from config.constants import APP_BASE_DIR, UI_PATHS
+    CATEGORY: Unused Import - Constant
+    REASON: Code uses UI_PATHS, not APP_BASE_DIR
+    SAFE_TO_REMOVE: YES
+
+22. FILE: /mnt/c/users/user/desktop/drx-demo-final/test_critical_fixes.py
+    LINE: 10
+    ITEM: MagicMock
+    CODE: from unittest.mock import Mock, patch, MagicMock
+    CATEGORY: Unused Import - Test Mock
+    REASON: Test only uses Mock and patch
+    SAFE_TO_REMOVE: YES
+
+============================================================================
+UNUSED METHODS - 1 ITEM
+============================================================================
+
+1. FILE: /mnt/c/users/user/desktop/drx-demo-final/main/config/config.py
+   LINE: 13-14
+   ITEM: get_list
+   CODE:
+   def get_list(option, sep=",", chars=None):
+       return [chunk.strip(chars) for chunk in option.split(sep)]
+   
+   CATEGORY: Unused Method
+   TYPE: Static/Class method (defined without self)
+   REASON: Leftover from older implementation, never called
+   SAFE_TO_REMOVE: YES
+
+============================================================================
+COMMENTED OUT CODE - 1 ITEM
+============================================================================
+
+1. FILE: /mnt/c/users/user/desktop/drx-demo-final/main/helpers/arduino.py
+   LINE: 141
+   ITEM: reconnect() method call
+   CODE:
+   # --- REMOVE THE RECONNECT CALL ---
+   # self.reconnect()
+   
+   CONTEXT: Inside disconnect() method
+   CATEGORY: Commented Code (Intentionally Disabled)
+   REASON: Explicitly marked for removal in comment
+   SAFE_TO_REMOVE: YES
+
+============================================================================
+SUMMARY BY FILE PATH
+============================================================================
+
+/mnt/c/users/user/desktop/drx-demo-final/main/config/config.py
+  Total Items: 11
+  - Unused Imports: 10 (Lines 2, 3, 6, 7, 8)
+  - Unused Methods: 1 (Line 13)
+  
+  Quick Fix: Delete lines 2, 3, 6, 7, 8, 13-14
+
+/mnt/c/users/user/desktop/drx-demo-final/main/helpers/arduino.py
+  Total Items: 3
+  - Unused Imports: 2 (Lines 1, 3)
+  - Commented Code: 1 (Line 141)
+  
+  Quick Fix: Delete lines 1, 3, and clean up lines 140-141
+
+/mnt/c/users/user/desktop/drx-demo-final/main/helpers/protocols.py
+  Total Items: 4
+  - Unused Imports: 4 (Lines 1, 6, 8, 9)
+  
+  Quick Fix: Delete imports from lines 1, 6, 8-9
+
+/mnt/c/users/user/desktop/drx-demo-final/main/kneespa.py
+  Total Items: 2
+  - Unused Imports: 2 (Lines 12, 70)
+  
+  Quick Fix: Remove timedelta from line 12, remove ResetWorkerSignals from line 70
+
+/mnt/c/users/user/desktop/drx-demo-final/main/ui/dialogs/pressure_dialog.py
+  Total Items: 5
+  - Unused Imports: 5 (Lines 1, 2, 3, 4, 5)
+  
+  Quick Fix: Clean up imports in lines 1-5
+
+/mnt/c/users/user/desktop/drx-demo-final/main/ui/dialogs/timer_dialog.py
+  Total Items: 1
+  - Unused Imports: 1 (Line 9)
+  
+  Quick Fix: Remove QTimer from line 9 import
+
+/mnt/c/users/user/desktop/drx-demo-final/main/ui/dialogs/video_player.py
+  Total Items: 2
+  - Unused Imports: 2 (Lines 12, 17)
+  
+  Quick Fix: Remove QPixmap from line 12, remove APP_BASE_DIR from line 17
+
+/mnt/c/users/user/desktop/drx-demo-final/test_critical_fixes.py
+  Total Items: 1
+  - Unused Imports: 1 (Line 10)
+  
+  Quick Fix: Remove MagicMock from line 10 import
+
+============================================================================
+CLEANUP CHECKLIST
+============================================================================
+
+PRIORITY 1 (Critical):
+  [ ] /mnt/c/users/user/desktop/drx-demo-final/main/config/config.py - Remove get_list() (line 13-14)
+  [ ] /mnt/c/users/user/desktop/drx-demo-final/main/helpers/arduino.py - Clean up commented code (line 140-141)
+
+PRIORITY 2 (High):
+  [ ] /mnt/c/users/user/desktop/drx-demo-final/main/config/config.py - Remove 10 imports (lines 2,3,6,7,8)
+  [ ] /mnt/c/users/user/desktop/drx-demo-final/main/ui/dialogs/pressure_dialog.py - Remove 5 imports
+  [ ] /mnt/c/users/user/desktop/drx-demo-final/main/helpers/protocols.py - Remove 4 imports
+
+PRIORITY 3 (Medium):
+  [ ] /mnt/c/users/user/desktop/drx-demo-final/main/kneespa.py - Remove 2 imports
+  [ ] /mnt/c/users/user/desktop/drx-demo-final/main/helpers/arduino.py - Remove 2 imports
+  [ ] /mnt/c/users/user/desktop/drx-demo-final/main/ui/dialogs/timer_dialog.py - Remove 1 import
+  [ ] /mnt/c/users/user/desktop/drx-demo-final/main/ui/dialogs/video_player.py - Remove 2 imports
+  [ ] /mnt/c/users/user/desktop/drx-demo-final/test_critical_fixes.py - Remove 1 import
+
+VERIFICATION:
+  [ ] Run: python -m pytest tests/
+  [ ] Verify all tests pass
+  [ ] Run linter: pylint or flake8
+
+============================================================================
+END OF DETAILED LIST
+============================================================================

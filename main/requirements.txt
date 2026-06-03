@@ -1,0 +1,30 @@
+# Minimal Requirements for KneeSPA Application
+# For Raspberry Pi 4 with Raspbian Buster and Python 3.7
+# This is the essential package list only
+
+# === ESSENTIAL PACKAGES ONLY ===
+
+# Hardware Control
+RPi.GPIO==0.7.1
+pyserial==3.5
+
+# Environment Variables
+python-dotenv==0.19.2
+
+# Configuration Management
+configparser==5.0.2  # Enhanced config file parsing
+
+# Video Playback
+python-vlc==3.0.12118
+
+# Testing (Optional - remove for production)
+pytest==6.2.5
+pytest-cov==2.12.1
+
+# NOTES:
+# ------
+# PyQt5 MUST be installed via apt-get:
+#   sudo apt-get install python3-pyqt5
+#
+# For full package list, see ../requirements.txt
+# Run ../setup_system.sh for complete system setup

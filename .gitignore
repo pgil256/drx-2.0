@@ -1,0 +1,102 @@
+# Python
+kneespa_env/
+
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual Environment
+venv/
+env/
+ENV/
+.env
+.venv
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# Logs
+*.log
+logs/
+log/
+
+# Local development
+*.local
+.env.local
+.env.development.local
+.env.test.local
+.env.production.local
+
+# Testing
+.coverage
+htmlcov/
+.pytest_cache/
+.tox/
+
+# Distribution
+*.tar.gz
+*.zip
+*.rar
+
+# Temporary files
+*.tmp
+*.temp
+*.bak
+*.backup
+*.old
+
+# Node
+node_modules/
+
+# Project specific
+*.db
+*.sqlite3
+*.Zone.Identifier
+
+# MCPs and Claude
+mcps/
+claude.md
+CLAUDE.md
+*.mcp
+*.claude
+model_control_parameters/
+claude_config/
+claude_settings/
+claude_cache/
+claude_logs/
+claude_models/
+claude_training/
+claude_weights/
+claude_checkpoints/
+claude_metrics/
+claude_experiments/
+claude_results/
+claude_outputs/
+claude_tmp/
+claude_temp/
+claude_backup/
+claude_old/
+
+
+

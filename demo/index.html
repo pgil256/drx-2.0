@@ -1,0 +1,152 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>KneeSpa Decompression Therapy Simulator</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div class="app-container">
+    <!-- Header -->
+    <header class="app-header">
+      <div class="header-left">
+        <h1>KneeSpa<span class="trademark">&#8482;</span> Simulator</h1>
+        <span class="subtitle">Knee Decompression Therapy Demo</span>
+      </div>
+      <div class="header-right">
+        <span class="badge">Built with Vanilla JS</span>
+        <a href="https://github.com" class="github-link" target="_blank" rel="noopener">View Source</a>
+      </div>
+    </header>
+
+    <!-- Main Content -->
+    <main class="main-content">
+      <!-- Left Panel - Visualization -->
+      <section class="panel visualization-panel">
+        <div class="panel-header">
+          <h2>Device Visualization</h2>
+        </div>
+        <div class="panel-content">
+          <div id="knee-diagram" class="knee-diagram"></div>
+
+          <div class="status-section">
+            <p id="status-text" class="status-text">Select a protocol to begin</p>
+
+            <div class="progress-container">
+              <div id="progress-bar" class="progress-bar">
+                <div id="progress-fill" class="progress-fill"></div>
+              </div>
+              <span id="time-display" class="time-display">0:00</span>
+            </div>
+          </div>
+        </div>
+      </section>
+
+      <!-- Right Panel - Controls -->
+      <section class="panel controls-panel">
+        <!-- Protocol Selection -->
+        <div class="control-group">
+          <h3>Protocol</h3>
+          <div class="protocol-buttons">
+            <button class="protocol-btn" data-protocol="1">
+              <span class="protocol-num">1</span>
+              <span class="protocol-name">Axial</span>
+            </button>
+            <button class="protocol-btn" data-protocol="2">
+              <span class="protocol-num">2</span>
+              <span class="protocol-name">Left</span>
+            </button>
+            <button class="protocol-btn" data-protocol="3">
+              <span class="protocol-num">3</span>
+              <span class="protocol-name">Right</span>
+            </button>
+            <button class="protocol-btn" data-protocol="4">
+              <span class="protocol-num">4</span>
+              <span class="protocol-name">Oscillate</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Gauges -->
+        <div class="control-group gauges-group">
+          <h3>Status</h3>
+          <div class="gauges-container">
+            <!-- Pressure Gauge -->
+            <div class="gauge-wrapper">
+              <svg id="pressure-gauge" class="gauge" viewBox="0 0 100 100">
+                <circle class="gauge-bg" cx="50" cy="50" r="45"/>
+                <circle class="gauge-fill" cx="50" cy="50" r="45"/>
+              </svg>
+              <div class="gauge-label">
+                <span id="pressure-value" class="gauge-value">0 lbs</span>
+                <span class="gauge-name">Pressure</span>
+              </div>
+            </div>
+
+            <!-- Angle Gauge -->
+            <div class="gauge-wrapper">
+              <svg id="angle-gauge" class="gauge" viewBox="0 0 100 100">
+                <circle class="gauge-bg" cx="50" cy="50" r="45"/>
+                <circle class="gauge-fill" cx="50" cy="50" r="45"/>
+                <line class="gauge-center" x1="50" y1="5" x2="50" y2="15"/>
+              </svg>
+              <div class="gauge-label">
+                <span id="angle-value" class="gauge-value">0.0°</span>
+                <span class="gauge-name">Lateral</span>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Settings -->
+        <div class="control-group settings-group">
+          <h3>Settings</h3>
+
+          <div class="setting-row">
+            <label for="pressure-slider">Max Pressure</label>
+            <input type="range" id="pressure-slider" min="20" max="80" value="50">
+            <span id="pressure-slider-value" class="slider-value">50 lbs</span>
+          </div>
+
+          <div class="setting-row">
+            <label for="angle-slider">Max Angle</label>
+            <input type="range" id="angle-slider" min="5" max="20" value="15">
+            <span id="angle-slider-value" class="slider-value">±15°</span>
+          </div>
+
+          <div class="setting-row checkbox-row">
+            <label for="pulse-toggle">
+              <input type="checkbox" id="pulse-toggle" checked>
+              <span class="checkbox-label">Pulse Mode</span>
+            </label>
+          </div>
+        </div>
+
+        <!-- Action Buttons -->
+        <div class="control-group actions-group">
+          <button id="start-btn" class="action-btn start-btn">
+            <span class="btn-icon">&#9658;</span>
+            START
+          </button>
+          <button id="stop-btn" class="action-btn stop-btn" disabled>
+            <span class="btn-icon">&#9632;</span>
+            STOP
+          </button>
+        </div>
+      </section>
+    </main>
+
+    <!-- Footer -->
+    <footer class="app-footer">
+      <p>Demo simulation of the KneeSpa knee decompression therapy device.
+         This is a portfolio project demonstrating the control system architecture.</p>
+    </footer>
+  </div>
+
+  <!-- Scripts -->
+  <script src="js/simulation.js"></script>
+  <script src="js/visualization.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>

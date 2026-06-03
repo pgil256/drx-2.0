@@ -1,0 +1,9 @@
+# requirements-test.txt
+pytest>=7.0
+pytest-mock
+pytest-qt
+pytest-cov
+pytest-timeout
+pyserial
+PyQt5
+python-dotenv
