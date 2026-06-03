@@ -40,6 +40,9 @@ ENV/
 *.log
 logs/
 log/
+main/logs/
+debug.txt
+*_log.txt
 
 # Local development
 *.local
@@ -68,14 +71,19 @@ htmlcov/
 
 # Node
 node_modules/
+package-lock.json
 
 # Project specific
 *.db
 *.sqlite3
 *.Zone.Identifier
+*Zone.Identifier
+git
+~/
 
 # MCPs and Claude
 mcps/
+.claude/
 claude.md
 CLAUDE.md
 *.mcp

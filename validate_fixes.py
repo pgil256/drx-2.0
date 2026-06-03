@@ -28,6 +28,12 @@ def check(path, patterns, description):
     return True, description
 
 
+def check_absent(path, description):
+    if path.exists():
+        return False, f"{description}: still present at {path}"
+    return True, description
+
+
 def validate_fixes():
     checks = [
         check(
@@ -77,14 +83,9 @@ def validate_fixes():
             ],
             "Primary firmware has hard clamps",
         ),
-        check(
+        check_absent(
             MAIN / "arduino" / "motor" / "motor.ino",
-            [
-                r"#define MAX_PRESSURE_LBS\s+80",
-                r"clampPressureTarget",
-                r"clampPositionTarget",
-            ],
-            "Secondary firmware has hard clamps",
+            "Duplicate motor firmware tree removed",
         ),
         check(
             MAIN / "helpers" / "secure_auth.py",

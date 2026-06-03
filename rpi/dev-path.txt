@@ -1,1 +1,4 @@
-cd /mnt/c/Users/user/Desktop/drx/main
+From the project root:
+
+cd main
+python3 kneespa.py

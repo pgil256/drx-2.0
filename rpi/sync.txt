@@ -1,2 +1,7 @@
-rsync -avz /mnt/c/Users/user/Desktop/drx/main/ \
-      pi@100.111.162.21:/home/pi/drx-2.3/main/
+Example single-device sync:
+
+rsync -avz ./main/ pi@100.111.162.21:/home/pi/drx-2.0/main/
+
+For multi-device sync, use:
+
+./rpi/sync_pis.sh

@@ -1,29 +1,26 @@
-#!/bin/bash
+#!/usr/bin/env bash
+set -euo pipefail
 
-# --- Configuration ---
-# WARNING: Storing passwords in scripts is a security risk.
-# Source directory on your Windows machine (format for WSL/Git Bash)
-SOURCE_DIR="/mnt/c/Users/user/Desktop/drx/main/"
+# Sync the current repo's main/ directory to one or more Raspberry Pi devices.
+# Override defaults with environment variables:
+#   SOURCE_DIR=/path/to/main/ DEST_DIR=/home/pi/drx-2.0/main/ PI_HOSTS="host1 host2" ./sync_pis.sh
 
-# Destination directory on the Raspberry Pi devices
-DEST_DIR="/home/pi/drx-2.3/main/"
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 
-# Array of Raspberry Pi IP addresses
-PI_HOSTS=("100.111.162.21" "100.93.117.101" "100.95.232.121")
+SOURCE_DIR="${SOURCE_DIR:-$PROJECT_DIR/main/}"
+DEST_DIR="${DEST_DIR:-/home/pi/drx-2.0/main/}"
+PI_USER="${PI_USER:-pi}"
+PI_HOSTS="${PI_HOSTS:-100.111.162.21 100.93.117.101 100.95.232.121}"
+SSH_OPTS="${SSH_OPTS:--o StrictHostKeyChecking=no}"
 
-# Credentials
-USER="pi"
-PASS="Abbygal01"
+echo "Starting sync from $SOURCE_DIR to $DEST_DIR"
 
-# --- Sync Logic ---
-echo "Starting sync process..."
-
-for host in "${PI_HOSTS[@]}"; do
+for host in $PI_HOSTS; do
     echo "----------------------------------------"
-    echo "🔄 Syncing to $host..."
-    sshpass -p "$PASS" rsync -avzu --progress -e 'ssh -o StrictHostKeyChecking=no' "$SOURCE_DIR" "$USER@$host:$DEST_DIR"
-    echo "✅ Sync to $host complete."
-    echo "----------------------------------------"
+    echo "Syncing to $host..."
+    rsync -avzu --progress -e "ssh $SSH_OPTS" "$SOURCE_DIR" "$PI_USER@$host:$DEST_DIR"
+    echo "Sync to $host complete."
 done
 
 echo "All devices have been synced."

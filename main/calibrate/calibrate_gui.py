@@ -226,9 +226,13 @@ class CalibrationGUI(QMainWindow):
 
     def __init__(self):
         super().__init__()
-        self.base_path = Path("/home/pi/drx-2.3/")
-        self.config_path = self.base_path / "main" / "config" / "kneespa.cfg"
-        self.motor_ino_path = self.base_path / "main" / "motor" / "motor.ino"
+        project_root = Path(
+            os.environ.get("KNEESPA_PROJECT_DIR", Path(__file__).resolve().parents[2])
+        )
+        main_dir = Path(os.environ.get("KNEESPA_BASE_DIR", project_root / "main"))
+        self.base_path = project_root
+        self.config_path = main_dir / "config" / "kneespa.cfg"
+        self.motor_ino_path = main_dir / "motor" / "motor.ino"
 
         # Current values storage
         self.arduino_values = {}

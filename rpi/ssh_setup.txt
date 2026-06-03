@@ -1,24 +1,21 @@
+SSH / VNC Quick Notes
+=====================
+
+Start the Windows SSH agent if needed:
+
 Get-Service ssh-agent
 Start-Service ssh-agent
 Set-Service -Name ssh-agent -StartupType Automatic
 
-# Run this line in RDP
-x11vnc -display :0 -auth guess -forever -loop -noxdamage -repeat -rfbauth ~/.vnc/passwd -rfbport 5900 -shared
+Connect to a Pi:
 
 ssh pi@100.111.162.21
 
-# turn HDMI back on in its preferred mode
-tvservice -p
+Run the app on the Pi:
 
-export DISPLAY=:0
+cd ~/drx-2.0/main
+python3 kneespa.py
 
-cd drx-2.3
+Start x11vnc from an RDP or local desktop session:
 
-#source kneespa_env/bin/activate
-
-cd main
-
-python3 kneespa.py 
-
-cd /mnt/c/Users/user/Desktop/drx/main
-
+x11vnc -display :0 -auth guess -forever -loop -noxdamage -repeat -rfbauth ~/.vnc/passwd -rfbport 5900 -shared

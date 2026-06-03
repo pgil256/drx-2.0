@@ -1,3 +1,5 @@
+Example systemd unit:
+
 ## Run: sudo nano /etc/systemd/system/kneespa.service
 
 [Unit]
@@ -5,11 +7,9 @@ Description=KneeSpa Python Script
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 /home/pi/drx-2.3/main/kneespa.py
+ExecStart=/usr/bin/python3 /home/pi/drx-2.0/main/kneespa.py
 Restart=always
 User=pi
 
 [Install]
 WantedBy=multi-user.target
-
-

@@ -21,13 +21,12 @@ sys.modules['PyQt5.QtMultimediaWidgets'] = MagicMock()
 # Mock vlc (video player dependency not available in test env)
 sys.modules['vlc'] = MagicMock()
 
-# Patch os.path.exists so constants.py's validate_paths() doesn't fail
-# (paths reference /home/pi/drx-2.3/main/ which doesn't exist in test env)
+# Patch os.path.exists so Pi-local validation paths do not fail in test env.
 _original_exists = os.path.exists
 
 
 def _patched_exists(path):
-    if '/home/pi/drx-2.3/' in str(path):
+    if str(path).startswith('/home/pi/'):
         return True
     return _original_exists(path)
 
@@ -39,7 +38,7 @@ _original_makedirs = os.makedirs
 
 
 def _patched_makedirs(name, mode=0o777, exist_ok=False):
-    if '/home/pi/drx-2.3/' in str(name):
+    if str(name).startswith('/home/pi/'):
         return  # Silently skip
     return _original_makedirs(name, mode=mode, exist_ok=exist_ok)
 

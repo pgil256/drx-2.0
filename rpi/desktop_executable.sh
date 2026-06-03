@@ -1,14 +1,15 @@
 #!/usr/bin/env bash
-# launch_kneespa.sh – double-click to start the KneeSpa app
+set -euo pipefail
 
-# --- adjust this path if your repo lives elsewhere ---
-APP_DIR="$HOME/drx-2.3"
+# Double-click launcher for the KneeSpa app.
+APP_DIR="${KNEESPA_APP_DIR:-$HOME/drx-2.0}"
 
-cd "$APP_DIR" || { echo "Cannot cd to $APP_DIR"; exit 1; }
+cd "$APP_DIR"
 
-# activate virtual-env
-source kneespa_env/bin/activate
+if [ -f kneespa_env/bin/activate ]; then
+    # shellcheck disable=SC1091
+    source kneespa_env/bin/activate
+fi
 
-# run the app
 cd main
 exec python3 kneespa.py
