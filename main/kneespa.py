@@ -84,6 +84,7 @@ from ui.dialogs import TimerDialog, PressureDialog, VideoPlayer
 from ui.widgets.loading_spinner import LoadingSpinner
 from ui.widgets.treatment_status_panel import TreatmentStatusPanel
 from helpers.conversions import lateral_degrees_to_position
+from controllers.safety_monitor import SafetyMonitor
 
 # Suppress Qt warnings
 os.environ["QT_LOGGING_RULES"] = "*.debug=False;qt.qpa.xcb=False"
@@ -222,6 +223,7 @@ class KneeSpa(QMainWindow):
         # and a permanent STOP control on every page while a protocol runs
         self.treatment_panel = TreatmentStatusPanel(parent=self)
         self.treatment_panel.stop_requested.connect(self.panel_stop_requested)
+        self.safety = SafetyMonitor(self)
         # Protocol lifecycle state: idle / starting / running / stopping / fault
         self.protocol_state = "idle"
 
@@ -2313,52 +2315,11 @@ class KneeSpa(QMainWindow):
             self.pressure_dialog.hide()
 
     def status_emit(self, position_a, position_b, steps, pressure):
-        """Handle status updates from Arduino with safety checks."""
-
-        success = True  # Track if processing was successful
-
-        # Feed the always-visible banner with MEASURED pressure (the rest
-        # of the UI shows commanded values)
-        self.treatment_panel.update_pressure(pressure)
-
-        if self.initial_setup_complete:
-            try:
-                # Check various safety conditions
-                if position_a > AXIAL_MAX or (self.initial_setup_complete and pressure > PRESSURE_MAX):
-                    self._trigger_safety_stop("Axial/pressure limit exceeded")
-                    success = False
-
-                # Check horizontal position (B actuator)
-                if position_b < HORIZONTAL_MIN or position_b > HORIZONTAL_MAX:
-                    self._trigger_safety_stop("Horizontal position limit exceeded")
-                    success = False
-
-                # Check lateral position (C actuator)
-                if steps < LATERAL_MIN or steps > LATERAL_MAX:
-                    self._trigger_safety_stop("Lateral position limit exceeded")
-                    success = False
-
-            except Exception as e:
-                print(f"Error in status monitoring: {str(e)}")
-                self.stop_actuators()
-                self.initial_setup_complete = False
-                self.reset_arduino()
-                self._show_safety_alert(
-                    f"Emergency stop: Error monitoring system status\n{str(e)}"
-                )
-                success = False
-
-        return success
+        """Device status -> safety supervision (see controllers.safety_monitor)."""
+        return self.safety.on_status(position_a, position_b, steps, pressure)
 
     def _trigger_safety_stop(self, reason):
-        """Pi-side limit breach: stop, alert persistently, reset."""
-        self._show_safety_alert(f"Emergency stop triggered: {reason}")
-        self.treatment_panel.set_fault(reason)
-        self.set_protocol_state("fault")
-        if self.worker is not None:
-            self.worker.stop()
-        self.initial_setup_complete = False
-        self.reset_arduino()
+        self.safety.trigger_safety_stop(reason)
 
     def _show_timed_error(self, message):
         """Show error message that automatically closes after a timeout."""
@@ -2383,75 +2344,19 @@ class KneeSpa(QMainWindow):
 
     @QtCore.pyqtSlot(str)
     def handle_firmware_error(self, message):
-        """Firmware ERROR:/BUSY lines. These are safety events (pressure
-        limit, stop button, heartbeat loss, sensor faults) that used to be
-        logged as 'unrecognized data' and never reached the operator."""
-        print(f"FIRMWARE ERROR: {message}")
-        self.logger.error(f"Firmware error: {message}")
-
-        if message == "BUSY":
-            # A command was refused because a move is running; transient
-            return
-
-        # The firmware has already stopped itself and begun releasing
-        # traction; align the application state with that.
-        if self.protocol_running and self.worker:
-            try:
-                self.worker.is_running = False
-            except Exception as e:
-                print(f"Error flagging worker stop: {e}")
-        self.treatment_panel.set_fault(message)
-        self.set_protocol_state("fault")
-        self._show_safety_alert(f"DEVICE SAFETY STOP: {message}")
+        self.safety.on_firmware_error(message)
 
     @QtCore.pyqtSlot()
     def handle_pressure_released(self):
-        """Firmware completed its autonomous post-fault pressure release."""
-        print("Firmware reports traction released")
-        self.logger.info("Firmware reports traction released")
+        self.safety.on_pressure_released()
 
     @QtCore.pyqtSlot(int, int)
     def handle_zeros_echo(self, a_zero, b_zero):
-        """Verify the zero marks the firmware applied match the config."""
-        try:
-            expected_a = int(self.config.AMarks.get("0.0", self.config.AMarks.get("0", 0)))
-            expected_b = int(self.config.BMarks.get("0.0", self.config.BMarks.get("0", 0)))
-            if (a_zero, b_zero) != (expected_a, expected_b):
-                msg = (
-                    f"Zero-mark mismatch: firmware applied A={a_zero} B={b_zero}, "
-                    f"config has A={expected_a} B={expected_b}"
-                )
-                print(msg)
-                self.logger.error(msg)
-                self._show_timed_error(msg)
-            else:
-                print(f"Zero marks verified: A={a_zero} B={b_zero}")
-        except Exception as e:
-            print(f"Error verifying zero marks: {e}")
+        self.safety.on_zeros_echo(a_zero, b_zero)
 
     @QtCore.pyqtSlot()
     def handle_connection_lost(self):
-        """Serial link declared lost by the transport watchdog."""
-        print("Arduino connection lost")
-        self.logger.error("Arduino connection lost")
-        # Stop the protocol state machine; the firmware's own heartbeat
-        # timeout has already stopped motion and released traction on its
-        # side within ~3 seconds of losing us.
-        if self.protocol_running and self.worker:
-            try:
-                self.worker.is_running = False
-            except Exception as e:
-                print(f"Error flagging worker stop: {e}")
-        was_treating = self.protocol_running
-        self.treatment_panel.set_fault("CONNECTION LOST")
-        self.set_protocol_state("fault")
-        if was_treating:
-            self._show_safety_alert(
-                "CONNECTION LOST during treatment. The device stops and "
-                "releases traction on its own within 3 seconds. Verify the "
-                "patient, then reconnect."
-            )
-        self.reset_arduino()
+        self.safety.on_connection_lost()
 
     def setup_arduino(self, auto_reset=True):
         """Setup Arduino interface."""
