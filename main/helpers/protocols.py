@@ -345,8 +345,12 @@ class Protocols(QtCore.QRunnable):
                     if marks[i][0] <= degrees <= marks[i + 1][0]:
                         deg1, pos1 = marks[i]
                         deg2, pos2 = marks[i + 1]
-                        ratio = (degrees - deg1) / (deg2 - deg1)
-                        position = pos1 + int((pos2 - pos1) * ratio)
+                        # Linear interpolation with safety check for division by zero
+                        if deg2 - deg1 == 0:
+                            position = pos1
+                        else:
+                            ratio = (degrees - deg1) / (deg2 - deg1)
+                            position = pos1 + int((pos2 - pos1) * ratio)
                         break
                 else:
                     raise ValueError(f"Degree value {degrees} outside valid range")
