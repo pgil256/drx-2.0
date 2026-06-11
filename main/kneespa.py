@@ -85,6 +85,7 @@ from ui.widgets.loading_spinner import LoadingSpinner
 from ui.widgets.treatment_status_panel import TreatmentStatusPanel
 from helpers.conversions import lateral_degrees_to_position
 from controllers.safety_monitor import SafetyMonitor
+from controllers.auth_controller import AuthController
 
 # Suppress Qt warnings
 os.environ["QT_LOGGING_RULES"] = "*.debug=False;qt.qpa.xcb=False"
@@ -224,6 +225,7 @@ class KneeSpa(QMainWindow):
         self.treatment_panel = TreatmentStatusPanel(parent=self)
         self.treatment_panel.stop_requested.connect(self.panel_stop_requested)
         self.safety = SafetyMonitor(self)
+        self.auth = AuthController(self)
         # Protocol lifecycle state: idle / starting / running / stopping / fault
         self.protocol_state = "idle"
 
@@ -928,33 +930,50 @@ class KneeSpa(QMainWindow):
 
         # Connect numeric keypad buttons (0-9)
         self.login_pin = ""  # Initialize PIN storage
+        keypad_buttons = []
         for i in range(10):
             button_name = f"pushButton_{i}"
             button = self.login_dialog.findChild(QtWidgets.QPushButton, button_name)
             if button:
+                keypad_buttons.append(button)
                 # Use lambda with default argument to capture current value of i
                 button.clicked.connect(
                     lambda checked, num=str(i): self.append_login_star(num)
                 )
 
-    def append_login_star(self, value):
-        """Append a PIN digit; the field's password echo mode masks it.
+        # Touch-target pass: enforce a finger-sized minimum on the keypad,
+        # but only where a layout can redistribute space (fixed-geometry
+        # widgets would overlap if resized blind)
+        for button in keypad_buttons + [
+            self.login_enter_button,
+            self.clear_login_pin_button,
+            self.login_help_button,
+        ]:
+            if button is None:
+                continue
+            parent = button.parentWidget()
+            if parent is not None and parent.layout() is not None:
+                button.setMinimumSize(80, 56)
 
-        Appending a literal '*' on top of echoMode=Password used to
-        double-mask the entry (each keypress displayed the mask of a
-        mask), and the displayed length was all an operator had.
-        """
-        print("Appending digit to login input")
+        # Backspace for single mis-keyed digits (Clear used to force a
+        # full re-entry): a trailing action inside the PIN field, which
+        # is placement-safe regardless of the dialog's layout style
         if self.login_line_edit:
-            self.login_line_edit.setEchoMode(QtWidgets.QLineEdit.Password)
-            self.login_line_edit.setText(self.login_line_edit.text() + value)
-            self.login_pin += value
+            backspace_icon = self.login_dialog.style().standardIcon(
+                QtWidgets.QStyle.SP_ArrowBack
+            )
+            backspace_action = self.login_line_edit.addAction(
+                backspace_icon, QtWidgets.QLineEdit.TrailingPosition
+            )
+            backspace_action.setToolTip("Delete last digit")
+            backspace_action.triggered.connect(self.auth.backspace_digit)
+
+    def append_login_star(self, value):
+        """PIN digit entry (see controllers.auth_controller)."""
+        self.auth.append_digit(value)
 
     def clear_login_line_edit(self):
-        """Clear the login input field."""
-        print("Clearing login input field")
-        self.login_line_edit.clear()
-        self.login_pin = ""
+        self.auth.clear_pin()
 
     def show_login_help_dialog(self):
         """Show login help dialog."""
@@ -1010,46 +1029,8 @@ class KneeSpa(QMainWindow):
         threading.Thread(target=_send, daemon=True).start()
 
     def handle_login(self):
-        """Sequence events to handle login event"""
-        print("Handling login")
-
-        # Lockout: a kiosk with a short numeric PIN and unlimited instant
-        # retries is brute-forceable in minutes
-        now = time.time()
-        if now < getattr(self, "_lockout_until", 0):
-            wait_s = int(self._lockout_until - now) + 1
-            self._show_timed_error(
-                f"Too many failed attempts. Try again in {wait_s} seconds."
-            )
-            self.clear_login_line_edit()
-            return
-
-        matched_user = None
-        for stored_hash, user in self.users.items():
-            if SecureAuthHelper.verify_pin(self.login_pin, stored_hash):
-                matched_user = user
-                break
-
-        if matched_user:
-            print("Login successful")
-            self._failed_logins = 0
-            self.current_user = matched_user
-            self.login_pin = ""
-            self.update_ui_after_login()
-            self.login_dialog.accept()
-            self.clear_login_line_edit()
-        else:
-            print("Login failed: Invalid PIN")
-            self._failed_logins = getattr(self, "_failed_logins", 0) + 1
-            if self._failed_logins >= 5:
-                self._lockout_until = time.time() + 60
-                self._failed_logins = 0
-                self._show_timed_error(
-                    "Too many failed attempts. Login locked for 60 seconds."
-                )
-            else:
-                self._show_timed_error("Invalid PIN. Please try again.")
-            self.clear_login_line_edit()
+        """PIN validation with lockout (see controllers.auth_controller)."""
+        self.auth.handle_login()
 
     def update_ui_after_login(self):
         """Update user interface with user details after login"""

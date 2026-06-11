@@ -1,8 +1,9 @@
 # tests/unit/test_secure_auth.py
 import pytest
+from unittest.mock import MagicMock
 
 from helpers.secure_auth import SecureAuthHelper
-from kneespa import KneeSpa
+from controllers.auth_controller import AuthController
 
 
 @pytest.mark.unit
@@ -38,10 +39,8 @@ class _DialogStub:
         pass
 
 
-class LoginHarness:
-    """Bare object binding the real handle_login without the full UI."""
-
-    handle_login = KneeSpa.handle_login
+class StubWindow:
+    """Minimal window surface the AuthController operates on."""
 
     def __init__(self, users):
         self.users = users
@@ -49,14 +48,11 @@ class LoginHarness:
         self.current_user = None
         self.errors = []
         self.login_dialog = _DialogStub()
-        self._failed_logins = 0
-        self._lockout_until = 0
+        self.login_line_edit = MagicMock()
+        self.login_line_edit.text.return_value = ""
 
     def _show_timed_error(self, message):
         self.errors.append(message)
-
-    def clear_login_line_edit(self):
-        self.login_pin = ""
 
     def update_ui_after_login(self):
         pass
@@ -64,36 +60,52 @@ class LoginHarness:
 
 @pytest.mark.unit
 class TestLoginLockout:
-    def _make_harness(self):
+    def _make(self):
         stored = SecureAuthHelper.hash_pin_secure("7531")
         users = {stored: {"pin_hash": stored, "username": "T", "email": "t@x", "status": "user"}}
-        return LoginHarness(users)
+        window = StubWindow(users)
+        return AuthController(window), window
 
     def test_successful_login(self):
-        h = self._make_harness()
-        h.login_pin = "7531"
-        h.handle_login()
-        assert h.current_user is not None
+        auth, w = self._make()
+        w.login_pin = "7531"
+        auth.handle_login()
+        assert w.current_user is not None
 
     def test_lockout_after_five_failures(self):
-        h = self._make_harness()
+        auth, w = self._make()
         for _ in range(5):
-            h.login_pin = "0000"
-            h.handle_login()
-        assert h._lockout_until > 0
-        assert any("locked" in e.lower() for e in h.errors)
+            w.login_pin = "0000"
+            auth.handle_login()
+        assert auth.lockout_until > 0
+        assert any("locked" in e.lower() for e in w.errors)
 
         # Even the correct PIN is refused during the lockout window
-        h.login_pin = "7531"
-        h.handle_login()
-        assert h.current_user is None
+        w.login_pin = "7531"
+        auth.handle_login()
+        assert w.current_user is None
 
     def test_success_resets_counter(self):
-        h = self._make_harness()
+        auth, w = self._make()
         for _ in range(3):
-            h.login_pin = "0000"
-            h.handle_login()
-        h.login_pin = "7531"
-        h.handle_login()
-        assert h.current_user is not None
-        assert h._failed_logins == 0
+            w.login_pin = "0000"
+            auth.handle_login()
+        w.login_pin = "7531"
+        auth.handle_login()
+        assert w.current_user is not None
+        assert auth.failed_logins == 0
+
+    def test_backspace_removes_last_digit(self):
+        auth, w = self._make()
+        w.login_pin = "753"
+        w.login_line_edit.text.return_value = "753"
+        auth.backspace_digit()
+        assert w.login_pin == "75"
+        w.login_line_edit.setText.assert_called_with("75")
+
+    def test_backspace_on_empty_pin_is_safe(self):
+        auth, w = self._make()
+        w.login_pin = ""
+        w.login_line_edit.text.return_value = ""
+        auth.backspace_digit()
+        assert w.login_pin == ""
