@@ -168,7 +168,6 @@ BUTTON_STYLES = {
 ARDUINO_SETTINGS = {
     "CALIBRATION_DELAY": 2000,  # ms
     "ZERO_MARK_DELAY": 5000,  # ms
-    "COMMAND_DELAY": 1500,  # ms
     "BUFFER_WARNING_THRESHOLD": 0.8,  # 80% full
     "ARDUINO_BUFFER_SIZE": 64,  # Standard Arduino buffer size
     "ARDUINO_PORT": os.environ.get("KNEESPA_ARDUINO_PORT", "/dev/serial0"),

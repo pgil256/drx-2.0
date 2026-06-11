@@ -3,14 +3,13 @@ import logging
 import traceback
 import sys
 import os
-import csv
 import RPi.GPIO as GPIO
 import time
 import smtplib
 import threading 
 import shutil
 from email.mime.text import MIMEText
-from datetime import datetime, timedelta
+from datetime import datetime
 from PyQt5 import QtWidgets, uic, QtCore
 from PyQt5.QtCore import (
     Qt,
@@ -97,7 +96,10 @@ class KneeSpa(QMainWindow):
     def exit_app(self):
         GPIO.cleanup()  # clean up GPIO on normal exit
         self.cleanup()
-        os._exit(1)
+        # Exit 0: a nonzero code here made systemd (Restart=always /
+        # on-failure) treat the operator's deliberate "Exit" as a crash
+        # and immediately relaunch the app
+        os._exit(0)
 
     def set_to_distance(self, inches, actuator, factor):
         position = int(inches * (factor / 8.0))
@@ -106,7 +108,6 @@ class KneeSpa(QMainWindow):
         command = "A{}{:.1f}".format(actuator, inches)
         self.arduino.send(command)
         print("Sent cmd {}".format(command.strip()))
-        self.I2CStatus = 0
         self.I2Cstatus_event.clear()  # Clear the thread-safe event
         print("End set to distance")
         self.enable_actuator_controls()
@@ -130,7 +131,6 @@ class KneeSpa(QMainWindow):
             self.arduino.send(command)
             print(f"cmd {command}")
 
-            self.I2CStatus = 0
             self.I2Cstatus_event.clear()  # Clear the thread-safe event
             print("End set to c.")
             self.enable_actuator_controls()
@@ -155,7 +155,6 @@ class KneeSpa(QMainWindow):
 
         self.protocol_value = ""
         self.protocol_running = False
-        self.mid_protocol_warning_shown = False # <-- Add this
         self.button_value = 0
         self.protocol_start_time = None  # Initialize as None
         self.current_use_pulse_setting = True
@@ -166,14 +165,8 @@ class KneeSpa(QMainWindow):
         self.actuator_b = ACTUATORS["HORIZONTAL"]["ID"]
         self.actuator_c = ACTUATORS["LATERAL"]["ID"]
         self.protocol_timer = QTimer()
-        self.elapsed_timer = QTimer()
-        self.complete_timer = QTimer()
-        self.stop_timer = QTimer()
-        self.go_timer = QTimer()
-        self.reset_timer = QTimer()
 
         # Backend initialization
-        self.newC = True
         self.I2Cstatus = 0  # Keep for compatibility
         self.I2Cstatus_event = threading.Event()  # Thread-safe event for synchronization
         self.config = Configuration(config_path=config_path)
@@ -267,12 +260,6 @@ class KneeSpa(QMainWindow):
         self.pressure_dialog = PressureDialog(self)
 
         self.setup_timers()
-
-        self.CMarks = {}
-        for i in range(16):
-            u = (i * 220) + 98
-            angle = (i * 2.5) - 20
-            self.CMarks[angle] = u
 
         # Initialize GPIO setup
         self.setup_gpio()
@@ -2171,7 +2158,6 @@ class KneeSpa(QMainWindow):
             # Start timers
             self.protocol_timer.start()
             QApplication.processEvents()
-            self.elapsed_timer.start(1000)
 
             # Update status
             self.ui.status_label.setText("Protocol Started")

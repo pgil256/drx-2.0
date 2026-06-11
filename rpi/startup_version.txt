@@ -7,9 +7,22 @@ Description=KneeSpa Python Script
 After=network.target
 
 [Service]
-ExecStart=/usr/bin/python3 /home/pi/drx-2.0/main/kneespa.py
-Restart=always
+# Use the SAME interpreter environment as the desktop launcher
+# (desktop_executable.sh activates the kneespa_env venv; running the
+# system python here meant two different dependency environments
+# depending on how the app was started)
+ExecStart=/home/pi/kneespa_env/bin/python /home/pi/drx-2.0/main/kneespa.py
+# on-failure (not always): the app exits 0 on a deliberate operator
+# "Exit", which must not be treated as a crash and relaunched
+Restart=on-failure
+RestartSec=5
 User=pi
 
 [Install]
 WantedBy=multi-user.target
+
+Notes:
+- Deploys go through rpi/sync_pis.sh, which stops this service before
+  syncing and restarts it after; never rsync over a running app.
+- If the venv lives elsewhere, adjust ExecStart accordingly; verify with:
+  sudo systemctl daemon-reload && sudo systemctl restart kneespa.service
