@@ -2,6 +2,7 @@
 """Tests for the user-PIN CSV loader (the audit's last 0%-coverage
 helper with a named missing test: the legacy plaintext-pin migration)."""
 import pytest
+from unittest.mock import patch
 
 from helpers.csv import CSVHelper
 from helpers.secure_auth import SecureAuthHelper
@@ -47,8 +48,12 @@ class TestLoadCsv:
         assert not SecureAuthHelper.verify_pin("0000", stored_hash)
 
     def test_missing_file_returns_empty(self, tmp_path):
-        users = CSVHelper().load_csv(str(tmp_path / "nope.csv"))
+        # The error path pops a QMessageBox; creating a real widget
+        # without a QApplication aborts the interpreter
+        with patch("helpers.csv.QMessageBox") as box:
+            users = CSVHelper().load_csv(str(tmp_path / "nope.csv"))
         assert users == {}
+        assert box.critical.called
 
     def test_missing_pin_columns_handled(self, tmp_path):
         path = write_csv(
@@ -56,5 +61,7 @@ class TestLoadCsv:
             "username,email,status\n"
             "Ghost,g@x.test,user\n",
         )
-        users = CSVHelper().load_csv(path)
+        with patch("helpers.csv.QMessageBox") as box:
+            users = CSVHelper().load_csv(path)
         assert users == {}
+        assert box.critical.called
