@@ -1,0 +1,66 @@
+name: CI
+
+on:
+  push:
+    branches: [main, improvement-plan]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  python-tests:
+    name: Python tests (unit + integration)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: requirements-test.txt
+
+      - name: Install Qt runtime libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libgl1 libegl1 libxkbcommon0 libdbus-1-3 libfontconfig1
+
+      - name: Install Python dependencies
+        run: pip install -r requirements-test.txt
+
+      # On Linux the pty-based integration tests run for real
+      # (they skip on Windows dev machines)
+      - name: Run test suite
+        run: python -m pytest -q
+
+  firmware-native-tests:
+    name: Firmware native tests (g++ + Unity)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build and run firmware test suites
+        run: bash main/motor/run_native_tests.sh
+
+  firmware-avr-build:
+    name: Firmware AVR build check (Mega 2560)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+
+      - name: Install PlatformIO
+        run: pip install platformio
+
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('main/motor/platformio.ini') }}
+
+      - name: Compile firmware for target hardware
+        working-directory: main/motor
+        run: pio run -e mega
