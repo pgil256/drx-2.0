@@ -1,17 +1,25 @@
-import sys
-import time
-import traceback
-import threading
-import serial
-import logging
 import os
-import subprocess
+import time
+import threading
+from collections import deque
+
+import serial
+from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot
+
 from helpers.logging import setup_logger
 from config.constants import ARDUINO_SETTINGS
-from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot
 
 
 class Arduino(QObject):
+    """Serial link to the motor-controller firmware.
+
+    Single-owner transport: exactly one I/O thread reads and writes the
+    port. Other threads interact only through send() (which enqueues),
+    the threading.Events, and Qt signals. This removes the historical
+    races between the reader thread, UI-thread sends, reconnects spawned
+    from inside the reader, and per-protocol keepalive threads.
+    """
+
     connection_ready = pyqtSignal()  # Signal for successful connection
     connection_failed = pyqtSignal(str)  # Signal for connection failure
     finished = pyqtSignal()
@@ -24,366 +32,268 @@ class Arduino(QObject):
     buffer_warning = pyqtSignal(str)
     connection_lost = pyqtSignal()  # Signal for connection loss
     display_weight_emit = pyqtSignal(str)  # Added missing signal for weight display
+    error_emit = pyqtSignal(str)  # Firmware ERROR:/BUSY lines (safety events)
+    released_emit = pyqtSignal()  # Firmware finished an autonomous pressure release
+    zeros_emit = pyqtSignal(int, int)  # Firmware echo of applied AZERO/BZERO
+
+    # The firmware processes at most one command per 200 ms
+    # (MIN_COMMAND_INTERVAL); X and Q bypass its limiter
+    SEND_INTERVAL_S = 0.22
+    # Healthy firmware emits idle status every 5 s; silence beyond this
+    # triggers an active probe
+    RX_SILENCE_LIMIT_S = 15.0
+    PROBE_TIMEOUT_S = 5.0
 
     def __init__(self):
         super().__init__()
         self.logger = setup_logger(component="Arduino Communication")
         self.serial_com = None
         self.connected = False
-        self._lock = threading.RLock()
-        self.BUFFER_WARNING_THRESHOLD = 0.8  # 80% full
-        self.ARDUINO_BUFFER_SIZE = 64  # Standard Arduino buffer size
+        self._lock = threading.RLock()  # guards queues + connection state
         self._running = False
         self.ARDUINO_PORT = ARDUINO_SETTINGS["ARDUINO_PORT"]
         self.ok_event = threading.Event()
+        self.ready_event = threading.Event()  # set on firmware "Ready to Go"
         self._reader_ready = threading.Event()
         self.connection_ready_event = threading.Event()
+        self._tx_queue = deque()
+        self._priority_queue = deque()  # emergency stop jumps the line
+        self._last_tx = 0.0
+        self._io_thread = None
 
-    def release_busy_port(self):
-        """Attempt to release the serial0 port if busy"""
-        try:
-            port = self.ARDUINO_PORT
-            print(f"Attempting to release busy port: {port}")
-
-            # Check if port is busy using lsof
-            result = subprocess.run(
-                ["lsof", port], capture_output=True, text=True, check=False
-            )
-
-            if result.returncode == 0:  # Port is busy
-                print(f"Port {port} is busy. Current users:")
-                print(result.stdout)
-
-                # Try to kill processes using fuser
-                print(f"Attempting to kill processes using port {port}")
-                subprocess.run(["fuser", "-k", port], check=False)
-
-                # For serial0, stop getty service
-                print("Stopping serial-getty@serial0.service")
-                subprocess.run(
-                    ["systemctl", "stop", "serial-getty@serial0.service"], check=False
-                )
-
-                # Wait for port to be released
-                time.sleep(2)
-
-                # Check if release was successful
-                result = subprocess.run(
-                    ["lsof", port], capture_output=True, text=True, check=False
-                )
-                if result.returncode == 0:
-                    print(
-                        f"Failed to release port {port}. Still in use by:"
-                    )
-                    print(result.stdout)
-                    return False
-                else:
-                    print(f"Successfully released port {port}")
-                    return True
-            else:
-                print(f"Port {port} is not busy")
-                return True
-
-        except Exception as e:
-            print(f"Error attempting to release port {self.ARDUINO_PORT}: {e}")
-            return False
-
-    def reset_dtr(self):
-        """Reset Arduino by toggling DTR line (simulates opening serial monitor)."""
-        try:
-            if not self.serial_com:
-                return False
-
-            print("Resetting Arduino via DTR...")
-
-            # Save current DTR state
-            original_dtr = self.serial_com.dtr
-
-            # Toggle DTR
-            self.serial_com.dtr = False
-            time.sleep(0.1)  # Brief delay
-            self.serial_com.dtr = True
-            time.sleep(5)  # Allow Arduino to initialize
-
-            # Restore original DTR state
-            self.serial_com.dtr = original_dtr
-
-            return True
-
-        except Exception as e:
-            print(f"Error resetting Arduino: {e}")
-            return False
-
+    # ------------------------------------------------------------------
+    # Connection lifecycle
+    # ------------------------------------------------------------------
 
     def disconnect(self):
-        """Forcefully closes the current serial connection if open."""
+        """Close the serial connection and stop the I/O thread."""
+        self._running = False
+        io_thread = self._io_thread
+        if io_thread and io_thread.is_alive() and io_thread is not threading.current_thread():
+            io_thread.join(timeout=3.0)
         with self._lock:
+            self._tx_queue.clear()
+            self._priority_queue.clear()
             if self.serial_com:
-                print("Forcefully closing existing serial connection")
+                self.logger.info("Closing serial connection")
                 try:
-                    # Stop the reader thread *before* closing the port
-                    self._running = False
-                    time.sleep(0.1) # Give thread a moment to exit loop
-
                     self.serial_com.close()
-                    print("Serial connection closed successfully.")
-                    time.sleep(1)  # Give system time to reset port (can be shorter now)
-                except Exception as ex:
-                    print(f"Error closing the serial port: {ex}")
+                except Exception:
+                    self.logger.exception("Error closing the serial port")
                 finally:
-                    # Ensure these are reset even if close fails
                     self.serial_com = None
-                    self.connected = False
-                    self.connection_ready_event.clear()
-                    # Don't reset self._running here if it's controlled by the reader thread loop condition
-            else:
-                 # If no serial_com object, ensure flags are false
-                  self._running = False
-                  self.connected = False
-                  self.connection_ready_event.clear()
-
-        # --- REMOVE THE RECONNECT CALL ---
-        # self.reconnect()
+            self.connected = False
+            self.connection_ready_event.clear()
 
     @pyqtSlot()
-    def verify_connection(self, tries=3, timeout_s=10.0):
-        """
-        1. Runs both during initial connect *and* from inside the reader loop.
-        2. Never resets the input buffer after sending 'T' (prevents eating the reply).
-        3. Uses a single blocking readline() with a per-call timeout = deadline.
-        4. Holds self._lock only around the WRITE, so other threads can’t interleave.
-        """
-        if not self.serial_com or not self.serial_com.is_open:
+    def verify_connection(self, tries=3, timeout_s=5.0):
+        """Send 'T' probes and wait for the firmware's OK."""
+        if not self.serial_com or not getattr(self.serial_com, "is_open", False):
             self.connection_ready_event.clear()
             return False
 
-        for n in range(tries):
-            self.ok_event.clear()   
+        for attempt in range(1, tries + 1):
+            self.ok_event.clear()
             with self._lock:
-                self.serial_com.reset_input_buffer()   # flush junk *before* we talk
-                self.serial_com.write(b"T\n")
-                self.serial_com.flush()
-            if self.ok_event.wait(timeout_s):  
-                print(f"Sent OK on attempt {n+1}")
+                self._priority_queue.append("T")
+            if self.ok_event.wait(timeout_s):
+                self.logger.debug("Connection verified on attempt %d", attempt)
                 return True
-            print(f"No OK on attempt {n+1}")
-            time.sleep(0.5)
+            self.logger.warning("No OK on verify attempt %d", attempt)
         return False
-
-
 
     def connect_to_arduino(self, max_retries=3, retry_delay=3, emit_connection_failed=True):
+        """Establish the Arduino connection with retries.
+
+        Emits connection_failed at most once, after the final attempt,
+        instead of stacking one dialog per retry.
         """
-        Unified method to establish Arduino connection with retries.
-        
-        Args:
-            max_retries: Number of connection attempts before giving up
-            retry_delay: Delay in seconds between retry attempts
-            emit_connection_failed: Whether to emit connection_failed signal on failure
-            
-        Returns:
-            bool: True if connection was established, False otherwise
-        """
+        last_error = ""
         for attempt in range(1, max_retries + 1):
-            print(f"Connection attempt {attempt}/{max_retries} to {self.ARDUINO_PORT}")
-            
-            # Check if port exists
+            self.logger.info(
+                "Connection attempt %d/%d to %s", attempt, max_retries, self.ARDUINO_PORT
+            )
+
             if not os.path.exists(self.ARDUINO_PORT):
-                print(f"Port {self.ARDUINO_PORT} does not exist")
-                if emit_connection_failed:
-                    self.connection_failed.emit(f"Port {self.ARDUINO_PORT} not found")
+                last_error = f"Port {self.ARDUINO_PORT} not found"
+                self.logger.error(last_error)
                 time.sleep(retry_delay)
                 continue
-                
+
             try:
-                # Close any existing connection
                 self.disconnect()
-                time.sleep(1)
-                
-                # Release port if busy
-                self.release_busy_port()
 
-                # Open new connection
-                self.serial_com = serial.Serial(self.ARDUINO_PORT, 115200, timeout=10, write_timeout=1)
-                time.sleep(5)  # Wait for Arduino initialization
+                # Short read timeout keeps the I/O loop responsive: a
+                # partial line can no longer pin the thread for 10 s
+                self.serial_com = serial.Serial(
+                    self.ARDUINO_PORT, 115200, timeout=1, write_timeout=1
+                )
+                # Boot grace: USB-serial Arduinos auto-reset on open
+                time.sleep(2)
 
-                # Reset Arduino via DTR
-                if not self.reset_dtr():
-                    print("DTR reset failed")
+                self._start_io_thread()
 
-                if not self._running:
-                    self._reader_ready.clear()
-                    self._running = True
-                    threading.Thread(target=self.read_from_com,
-                                    daemon=True).start()
-                    # Wait for reader thread to be ready before verifying
-                    self._reader_ready.wait(timeout=5.0)
-
-                # Verify connection
                 if self.verify_connection():
-                    print(f"Connected to Arduino on {self.ARDUINO_PORT}")
+                    self.logger.info("Connected to Arduino on %s", self.ARDUINO_PORT)
                     self.connected = True
-                    self._running = True
                     self.connection_ready_event.set()
-                    # Successfully connected
                     self.connection_ready.emit()
                     return True
-                    
-                # Clean up failed connection
+
+                last_error = "Arduino did not answer the test command"
                 self.disconnect()
-                
+
             except Exception as e:
-                print(f"Connection attempt to {self.ARDUINO_PORT} failed: {e}")
+                last_error = str(e)
+                self.logger.exception("Connection attempt to %s failed", self.ARDUINO_PORT)
                 self.disconnect()
-            
-            # Wait before next attempt
+
             time.sleep(retry_delay)
-            
-        # All attempts failed
-        print(f"Failed to establish Arduino connection after {max_retries} attempts")
+
+        self.logger.error(
+            "Failed to establish Arduino connection after %d attempts", max_retries
+        )
         if emit_connection_failed:
-            self.connection_failed.emit(f"Failed to connect to {self.ARDUINO_PORT} after {max_retries} attempts")
+            self.connection_failed.emit(
+                f"Failed to connect to {self.ARDUINO_PORT}: {last_error}"
+            )
         self.connection_ready_event.clear()
         return False
-        
-    def reconnect(self, max_retries=3): # Accept argument, default to 3
-        """Attempt to reestablish Arduino connection if lost."""
-        print("Attempting to reconnect to Arduino...")
-        # *** USE THE ARGUMENT HERE ***
+
+    def reconnect(self, max_retries=3):
+        """Attempt to reestablish the Arduino connection."""
+        self.logger.info("Attempting to reconnect to Arduino...")
         return self.connect_to_arduino(max_retries=max_retries, emit_connection_failed=False)
-        
+
     def run(self):
         """Connect to Arduino and start reading data."""
         self.connect_to_arduino()
 
-            
     # Keeping compatibility with old method name
     def try_connect(self):
         """Try to connect to serial0 (compatibility method)."""
         return self.connect_to_arduino(max_retries=1, emit_connection_failed=False)
 
-    def monitor_buffer(self):
-        if not self.serial_com:
+    def _start_io_thread(self):
+        if self._io_thread and self._io_thread.is_alive():
             return
+        self._reader_ready.clear()
+        self._running = True
+        self._io_thread = threading.Thread(target=self.read_from_com, daemon=True)
+        self._io_thread.start()
+        self._reader_ready.wait(timeout=5.0)
 
-        try:
-            in_waiting = self.serial_com.in_waiting
-            in_buffer_usage = in_waiting / self.ARDUINO_BUFFER_SIZE
+    # ------------------------------------------------------------------
+    # I/O loop (the only code that touches the port)
+    # ------------------------------------------------------------------
 
-            # Only check output buffer if input is OK
-            if in_buffer_usage <= self.BUFFER_WARNING_THRESHOLD:
-                out_waiting = self.serial_com.out_waiting
-                out_buffer_usage = out_waiting / self.ARDUINO_BUFFER_SIZE
+    def _write_now(self, command):
+        """Write one command from the I/O thread. Raises on port failure."""
+        payload = (command + "\n").encode()
+        self.serial_com.write(payload)
+        self.serial_com.flush()
+        self.logger.debug("TX: %s", command)
 
-                if out_buffer_usage > self.BUFFER_WARNING_THRESHOLD:
-                    warning = f"Output buffer at {out_buffer_usage*100:.1f}% capacity"
-                    self.buffer_warning.emit(warning)
-                    print(warning)
+    def _service_tx_queue(self):
+        """Send queued commands, pacing normal traffic to the firmware's
+        command interval. Priority commands (X, T probes) skip pacing."""
+        while True:
+            with self._lock:
+                if not self._priority_queue:
+                    break
+                cmd = self._priority_queue.popleft()
+            self._write_now(cmd)
 
-            # Emergency flush if input buffer critical
-            if in_buffer_usage > 0.9:
-                self.serial_com.reset_input_buffer()
-                print("Emergency input buffer flush performed")
-
-        except Exception as ex:
-            print(f"Buffer monitoring error: {ex}")
-            self.connection_failed.emit(str(ex))
+        with self._lock:
+            due = (
+                self._tx_queue
+                and time.time() - self._last_tx >= self.SEND_INTERVAL_S
+            )
+            cmd = self._tx_queue.popleft() if due else None
+            if cmd is not None:
+                self._last_tx = time.time()
+        if cmd is not None:
+            self._write_now(cmd)
 
     def read_from_com(self):
-        """Continuously reads data from the serial connection."""
-        print("Starting to read from serial communication")
+        """I/O loop: services the TX queue, reads lines, watches for
+        silence. Runs until disconnect() or a port failure."""
+        self.logger.info("Starting to read from serial communication")
         self._reader_ready.set()
-        last_data_time = time.time()
+        last_rx = time.time()
+        probe_sent_at = None
 
-        while self._running and self.serial_com and self.serial_com.is_open:
+        while self._running and self.serial_com and getattr(self.serial_com, "is_open", False):
             try:
-                # Monitor buffer before reading
-                self.monitor_buffer()
+                self._service_tx_queue()
 
-                # Check for connection timeout (no data received in 120 seconds)
-                current_time = time.time()
-                if current_time - last_data_time > 120:
-                    print("Connection timeout: No data received in 120 seconds. Verifying connection...")
-                    
-                    # Try to send a test command directly
-                    try:
-                        with self._lock:
-                            self.serial_com.reset_input_buffer()
-                            self.serial_com.write(b"T\n")
-                            self.serial_com.flush()
-                        print("Sent direct test command")
-                        
-                        # Update last_data_time to give more time for a response
-                        last_data_time = current_time - 60  # Give 60 more seconds
-                        continue  # Skip verification for now and check again later
-                        
-                    except Exception as test_err:
-                        print(f"Error sending test command: {test_err}")
-                    
-                    # Only verify connection if direct test failed
-                    if not self.verify_connection():
-                        print("Connection verification failed. Connection is lost.")
-                        
-                        # Try reconnecting once before giving up
-                        print("Attempting emergency reconnect...")
-                        if self.reconnect(max_retries=1):
-                            print("Emergency reconnect successful!")
-                            last_data_time = time.time()  # Reset timer
-                            continue
-                        
-                        # If reconnect failed, signal loss
-                        self.connected = False
-                        self.connection_ready_event.clear()
-                        self.connection_lost.emit()
-                        self.connection_failed.emit("Connection timeout (verification failed)")
-                        break
-                    else:
-                        print("Connection verified after timeout. Resetting timeout timer.")
-                        last_data_time = current_time  # Reset the timer since connection is actually OK
-
-                if self.serial_com and self.serial_com.in_waiting > 0:
-                    try:
-                        data = (
-                            self.serial_com.readline().decode(errors="replace").strip()
-                        )
-                        last_data_time = time.time()  # Update last data time
-
-                        if len(data) > 0:
-                            print(f"Raw received data: {data}")
-                            self.handle_com(data)
-                    except Exception as e:
-                        print(f"Error reading data: {e}")
+                if self.serial_com.in_waiting > 0:
+                    data = (
+                        self.serial_com.readline().decode(errors="replace").strip()
+                    )
+                    if data:
+                        last_rx = time.time()
+                        probe_sent_at = None
+                        self.handle_com(data)
                 else:
                     time.sleep(0.01)
 
-            except serial.SerialException as ex:
-                print(f"Serial connection error: {ex}")
-                self.connected = False
-                self.connection_ready_event.clear()
-                self.connection_lost.emit()
+                # RX-silence watchdog: probe, then declare the link lost.
+                # (The previous implementation extended its own deadline
+                # after every probe write, so a dead link was never
+                # detected -- writes succeed on a UART with the cable cut.)
+                now = time.time()
+                if now - last_rx > self.RX_SILENCE_LIMIT_S:
+                    if probe_sent_at is None:
+                        self.logger.warning(
+                            "No data for %.0fs - probing Arduino", self.RX_SILENCE_LIMIT_S
+                        )
+                        self._write_now("T")
+                        probe_sent_at = now
+                    elif now - probe_sent_at > self.PROBE_TIMEOUT_S:
+                        raise serial.SerialException(
+                            "No response to probe after RX silence"
+                        )
+
+            except serial.SerialException:
+                self.logger.exception("Serial connection error")
+                self._handle_link_lost()
                 break
-            except Exception as ex:
-                print(f"Unexpected error in read loop: {ex}")
-                # Try to continue, but mark time so we don't timeout
-                last_data_time = time.time()
+            except Exception:
+                # Do NOT touch last_rx here: a persistently failing loop
+                # must still be able to trip the silence watchdog
+                self.logger.exception("Unexpected error in I/O loop")
+                time.sleep(0.1)
+
+        self.logger.info("I/O loop exited")
+
+    def _handle_link_lost(self):
+        self.connected = False
+        self.connection_ready_event.clear()
+        self._running = False
+        with self._lock:
+            self._tx_queue.clear()
+            self._priority_queue.clear()
+        self.connection_lost.emit()
+
+    # ------------------------------------------------------------------
+    # Message handling
+    # ------------------------------------------------------------------
 
     def handle_com(self, data):
         """Handles incoming serial messages."""
         try:
             # Handle STATUS_START format messages
             if "STATUS_START|" in data:
+                if "|STATUS_END" not in data:
+                    # A truncated frame means corrupted values; never feed
+                    # them into the safety-limit checks
+                    self.logger.warning("Rejected truncated status frame: %s", data)
+                    return
                 try:
-                    # Extract data between markers
-                    if "|STATUS_END" in data:
-                        status_data = data.replace("STATUS_START|", "").replace(
-                            "|STATUS_END", ""
-                        )
-
-                    else:
-                        # Handle truncated message
-                        status_data = data.replace("STATUS_START|", "")
-                        print(f"Warning: Truncated status message: {status_data}")
-
+                    status_data = data.replace("STATUS_START|", "").replace(
+                        "|STATUS_END", ""
+                    )
                     tokens = status_data.split("|")
 
                     if tokens[0] == "S" and len(tokens) >= 5:
@@ -392,95 +302,103 @@ class Arduino(QObject):
                         pos_c = int(tokens[3])
                         pressure = float(tokens[4])
 
-                        # Emit status signal with explicit type conversion
-                        self.status_emit.emit(int(pos_a), int(pos_b), int(pos_c), float(pressure))
-                        print(f"Emitting status: A {pos_a} B {pos_b} C {pos_c} Pressure {pressure}")
-                        
-                        # Send acknowledgment to Arduino that we processed the status
+                        self.status_emit.emit(pos_a, pos_b, pos_c, pressure)
+
+                        # Acknowledge so the firmware sends the next frame.
+                        # Written by the I/O thread inline: no lock dance,
+                        # no sleep while holding a lock.
                         if self.connected and self.serial_com:
                             try:
-                                # Use with lock to ensure exclusive access to serial port
-                                with self._lock:
-                                    self.serial_com.write(b"Q\n")
-                                    self.serial_com.flush()
-                                    time.sleep(0.1)  # Small delay to ensure flush completes
-                                print("Status acknowledgment sent")
-                            except Exception as ack_err:
-                                print(f"ERROR sending acknowledgment: {ack_err}")
-                        else:
-                            print("Cannot send status acknowledgment - not connected")
-                        return
-                except Exception as e:
-                    print(f"Error parsing status data: {e}")
-                    return
+                                self._write_now("Q")
+                            except Exception:
+                                self.logger.exception("Error sending status ack")
+                except Exception:
+                    self.logger.exception("Error parsing status data: %s", data)
+                return
+
+            # Firmware safety/error lines must reach the operator; they
+            # were previously logged as "unrecognized" and dropped
+            if data.startswith("ERROR:"):
+                message = data[len("ERROR:"):].strip()
+                self.logger.error("Firmware error: %s", message)
+                self.error_emit.emit(message)
+                return
+            if data == "BUSY":
+                self.logger.warning("Firmware dropped a command: BUSY")
+                self.error_emit.emit("BUSY")
+                return
+            if data == "RELEASED":
+                self.logger.info("Firmware completed autonomous pressure release")
+                self.released_emit.emit()
+                return
 
             # Handle regular messages
             tokens = data.split("|")
 
             if tokens[0] == "DONE":
                 self.done_emit.emit()
+            elif tokens[0] == "ZEROS" and len(tokens) >= 3:
+                self.zeros_emit.emit(int(tokens[1]), int(tokens[2]))
             elif tokens[0] == "P" and len(tokens) >= 2:
                 self.position_emit.emit(int(tokens[1]), 0, "", 0)
             elif tokens[0] == "PR" and len(tokens) >= 2:
                 self.pressure_emit.emit(tokens[1])
-            elif tokens[0] == "E" and len(tokens) >= 5:
-                self.position_emit.emit(
-                    int(tokens[1]), int(tokens[2]), tokens[3], int(tokens[4])
-                )
             elif tokens[0] == "S" and len(tokens) >= 5:
                 self.status_emit.emit(
                     int(tokens[1]), int(tokens[2]), int(tokens[3]), float(tokens[4])
                 )
+            elif tokens[0] == "A" and len(tokens) >= 5:
+                # L6 report: positions + pressure
+                self.status_emit.emit(
+                    int(tokens[1]), int(tokens[2]), int(tokens[3]), float(tokens[4])
+                )
             elif tokens[0] == "Ready to Go" or "Ready to Go" in data:
+                self.ready_event.set()
                 self.ready_to_go_emit.emit()
             elif tokens[0] == "weight" and len(tokens) >= 2:
                 self.display_weight_emit.emit(tokens[1])
             elif (
                 tokens[0] == "Test command received" or "Test command received" in data
             ):
-                print("Arduino acknowledged test command")
-            elif "OK" in tokens[0] or tokens[0] == "OK":
+                self.logger.debug("Arduino acknowledged test command")
+            elif tokens[0] == "OK":
                 self.ok_event.set()
-                print("Arduino sent OK acknowledgment")
             else:
-                print(f"Unrecognized data format: {data}")
-        except Exception as ex:
-            print(f"Error handling data '{data}': {ex}")
+                self.logger.debug("Unrecognized data format: %s", data)
+        except Exception:
+            self.logger.exception("Error handling data '%s'", data)
+
+    # ------------------------------------------------------------------
+    # Sending
+    # ------------------------------------------------------------------
 
     def send(self, command):
-        """Send a command to the Arduino with reconnection capability."""
+        """Queue a command for the I/O thread.
+
+        Returns True if the command was queued on a live connection,
+        False if there is no usable link. Never blocks on the port and
+        never attempts a reconnect: a multi-second reconnect inside
+        send() used to freeze the UI thread exactly when the device was
+        misbehaving, and the caller could not tell.
+        """
         command = str(command).strip()
         if not command:
-            print("Refusing to send empty Arduino command")
+            self.logger.warning("Refusing to send empty Arduino command")
             return False
 
-        needs_reconnect = (
-            not self.connected
-            or not self.serial_com
-            or not getattr(self.serial_com, "is_open", False)
+        usable = (
+            self._running
+            and self.serial_com is not None
+            and getattr(self.serial_com, "is_open", False)
         )
-        if needs_reconnect:
-            print("Not connected - attempting to reconnect")
-            if not self.reconnect(max_retries=3):
-                print("Cannot send command - not connected")
-                return False
+        if not usable:
+            self.logger.error("Cannot send '%s' - not connected", command)
+            return False
 
         with self._lock:
-            try:
-                if not self.serial_com or not getattr(self.serial_com, "is_open", False):
-                    self.connected = False
-                    self.connection_ready_event.clear()
-                    return False
-
-                command_with_newline = command + "\n"
-                self.serial_com.write(command_with_newline.encode())
-                self.serial_com.flush()
-                time.sleep(0.3)
-                return True
-
-            except Exception as ex:
-                print(f"Failed to send command '{command}': {ex}")
-                self.connected = False
-                self.connection_ready_event.clear()
-                self.connection_lost.emit()
-                return False
+            if command.startswith("X"):
+                # An emergency stop never waits in line
+                self._priority_queue.append(command)
+            else:
+                self._tx_queue.append(command)
+        return True

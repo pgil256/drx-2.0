@@ -1551,24 +1551,42 @@ class KneeSpa(QMainWindow):
         """Emergency stop for all actuators."""
         print("Emergency stop triggered")
         try:
-            self.arduino.send("X")  # Stop all movement
+            if not self.arduino.send("X"):  # Stop all movement
+                # A stop that could not even be queued is an alarm, not a
+                # log line: the link is down. The firmware's heartbeat
+                # timeout stops motion on its side within ~3 seconds.
+                self.logger.error("Emergency stop could not be sent - link down")
+                self._show_timed_error(
+                    "STOP NOT DELIVERED - connection down. "
+                    "Device stops itself within 3 seconds."
+                )
         except Exception as e:
             print(f"Error in emergency stop: {str(e)}")
-            print(f"Emergency stop failed: {str(e)}")
+            self._show_timed_error(f"Emergency stop failed: {str(e)}")
 
     def stop_pressure_adjustment(self):
         """Stop pressure adjustment."""
         print("Stopping pressure adjustment")
         try:
-            time.sleep(0.1)
-            self.arduino.send("X")  # Stop pressure adjustment
+            if not self.arduino.send("X"):  # Stop pressure adjustment
+                self.logger.error("Pressure stop could not be sent - link down")
+                self._show_timed_error(
+                    "STOP NOT DELIVERED - connection down. "
+                    "Device stops itself within 3 seconds."
+                )
             print("Pressure adjustment stopped")
         except Exception as e:
             print(f"Error stopping pressure adjustment: {str(e)}")
-            print(f"Pressure stop failed: {str(e)}")
+            self._show_timed_error(f"Pressure stop failed: {str(e)}")
 
     def stop_position_flexion_button(self, actuator):
-        self.arduino.send("X{}".format(actuator))
+        # Firmware 'X' stops all actuators regardless of suffix
+        if not self.arduino.send("X"):
+            self.logger.error("Actuator stop could not be sent - link down")
+            self._show_timed_error(
+                "STOP NOT DELIVERED - connection down. "
+                "Device stops itself within 3 seconds."
+            )
 
     def update_leg_position(self, direction, fast=False):
         """
@@ -1928,6 +1946,9 @@ class KneeSpa(QMainWindow):
 
             # Connect signals
             self.worker.signals.finished.connect(self.protocol_completed)
+            # Safety recovery after a failed pulse phase (emitted by
+            # protocols 2/3); was never connected to anything before
+            self.worker.signals.reset_needed.connect(self.reset_arduino)
 
             # Connect pressure dialog regardless of visibility
             # We'll connect it now so it's ready when the checkbox is checked
@@ -2163,6 +2184,67 @@ class KneeSpa(QMainWindow):
     def handle_buffer_warning(self, warning):
         print(f"Buffer warning: {warning}")
 
+    @QtCore.pyqtSlot(str)
+    def handle_firmware_error(self, message):
+        """Firmware ERROR:/BUSY lines. These are safety events (pressure
+        limit, stop button, heartbeat loss, sensor faults) that used to be
+        logged as 'unrecognized data' and never reached the operator."""
+        print(f"FIRMWARE ERROR: {message}")
+        self.logger.error(f"Firmware error: {message}")
+
+        if message == "BUSY":
+            # A command was refused because a move is running; transient
+            return
+
+        # The firmware has already stopped itself and begun releasing
+        # traction; align the application state with that.
+        if self.protocol_running and self.worker:
+            try:
+                self.worker.is_running = False
+            except Exception as e:
+                print(f"Error flagging worker stop: {e}")
+        self._show_timed_error(f"DEVICE SAFETY STOP: {message}")
+
+    @QtCore.pyqtSlot()
+    def handle_pressure_released(self):
+        """Firmware completed its autonomous post-fault pressure release."""
+        print("Firmware reports traction released")
+        self.logger.info("Firmware reports traction released")
+
+    @QtCore.pyqtSlot(int, int)
+    def handle_zeros_echo(self, a_zero, b_zero):
+        """Verify the zero marks the firmware applied match the config."""
+        try:
+            expected_a = int(self.config.AMarks.get("0.0", self.config.AMarks.get("0", 0)))
+            expected_b = int(self.config.BMarks.get("0.0", self.config.BMarks.get("0", 0)))
+            if (a_zero, b_zero) != (expected_a, expected_b):
+                msg = (
+                    f"Zero-mark mismatch: firmware applied A={a_zero} B={b_zero}, "
+                    f"config has A={expected_a} B={expected_b}"
+                )
+                print(msg)
+                self.logger.error(msg)
+                self._show_timed_error(msg)
+            else:
+                print(f"Zero marks verified: A={a_zero} B={b_zero}")
+        except Exception as e:
+            print(f"Error verifying zero marks: {e}")
+
+    @QtCore.pyqtSlot()
+    def handle_connection_lost(self):
+        """Serial link declared lost by the transport watchdog."""
+        print("Arduino connection lost")
+        self.logger.error("Arduino connection lost")
+        # Stop the protocol state machine; the firmware's own heartbeat
+        # timeout has already stopped motion and released traction on its
+        # side within ~3 seconds of losing us.
+        if self.protocol_running and self.worker:
+            try:
+                self.worker.is_running = False
+            except Exception as e:
+                print(f"Error flagging worker stop: {e}")
+        self.reset_arduino()
+
     def setup_arduino(self, auto_reset=True):
         """Setup Arduino interface."""
         try:
@@ -2200,8 +2282,11 @@ class KneeSpa(QMainWindow):
             print("Connecting Arduino position, status, and pressure signals")
             self.arduino.position_emit.connect(self.read_position)
             self.arduino.status_emit.connect(self.status_emit)
-            self.arduino.connection_lost.connect(self.reset_arduino)
+            self.arduino.connection_lost.connect(self.handle_connection_lost)
             self.arduino.connection_failed.connect(self.handle_connection_failed)
+            self.arduino.error_emit.connect(self.handle_firmware_error)
+            self.arduino.released_emit.connect(self.handle_pressure_released)
+            self.arduino.zeros_emit.connect(self.handle_zeros_echo)
 
             # 6 - Start the thread
             print("Starting Arduino thread")

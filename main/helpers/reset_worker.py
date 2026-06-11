@@ -73,56 +73,27 @@ class ResetWorker(QRunnable):
             
     def _try_command_with_retry(self, command, operation_name="operation", timeout=30.0):
         """
-        Send a command and wait for completion. If it fails, try resetting DTR and retry once.
-        Returns True if successful on either try, False if both attempts fail.
+        Send a command and wait for its DONE. Retries the send once on a
+        completion timeout. (The old DTR-reset recovery between attempts
+        was a no-op on /dev/serial0 -- the Pi UART has no modem lines
+        wired to the Arduino RESET pin -- and only added ~8s of delay.)
         """
-        # First attempt
-        print(f"Attempting '{operation_name}' with command: {command}")
-        self.main_window.I2Cstatus = 0  # Reset flag BEFORE sending command
-        if hasattr(self.main_window, 'I2Cstatus_event'):
-            self.main_window.I2Cstatus_event.clear()  # Clear event before sending command
-        if not self.arduino.send(command):
-            print(f"Failed to send command for {operation_name}")
-            
-            # Try DTR reset
-            print("Resetting Arduino via DTR and retrying...")
-            if hasattr(self.arduino, "reset_dtr") and callable(self.arduino.reset_dtr):
-                self.arduino.reset_dtr()
-                time.sleep(3)  # Wait for Arduino to initialize after reset
-                
-                # Second attempt after DTR reset
-                print(f"Retrying '{operation_name}' after DTR reset")
-                self.main_window.I2Cstatus = 0  # Reset flag again
-                if not self.arduino.send(command):
-                    print(f"Failed to send command for {operation_name} after DTR reset")
-                    return False
-            else:
-                print("DTR reset method not available")
-                return False
-        
-        # Wait for completion
-        if not self._wait_for_done(timeout=timeout, operation_name=operation_name):
-            print(f"Timeout waiting for {operation_name} completion")
-            
-            # Try DTR reset if we haven't already
-            if not hasattr(self.arduino, "reset_dtr") or not callable(self.arduino.reset_dtr):
-                return False
-                
-            print("Resetting Arduino via DTR due to timeout and retrying...")
-            self.arduino.reset_dtr()
-            time.sleep(3)  # Wait for Arduino to initialize after reset
-            
-            # Retry the command after DTR reset
-            print(f"Retrying '{operation_name}' after timeout and DTR reset")
-            self.main_window.I2Cstatus = 0  # Reset flag again
+        for attempt in (1, 2):
+            debug(f"Attempting '{operation_name}' with command: {command}",
+                  component="ResetWorker", attempt=attempt)
+            self.main_window.I2Cstatus = 0  # Reset flag BEFORE sending command
+            if hasattr(self.main_window, 'I2Cstatus_event'):
+                self.main_window.I2Cstatus_event.clear()
             if not self.arduino.send(command):
-                print(f"Failed to send command for {operation_name} after DTR reset and timeout")
+                debug(f"Failed to send command for {operation_name}",
+                      component="ResetWorker", level="ERROR")
                 return False
-                
-            # Wait for completion again
-            return self._wait_for_done(timeout=timeout, operation_name=f"{operation_name} (retry)")
-            
-        return True  # First attempt was successful
+
+            if self._wait_for_done(timeout=timeout, operation_name=operation_name):
+                return True
+            debug(f"Timeout waiting for {operation_name} completion (attempt {attempt})",
+                  component="ResetWorker", level="WARNING")
+        return False
 
     @pyqtSlot()
     def run(self):
@@ -146,20 +117,23 @@ class ResetWorker(QRunnable):
             # --- Step 1: Send 'Y' (Reset Command) ---
             step_start = time.time()
             debug("[STEP 1/6] Sending 'Y' (Reset Command)", component="ResetWorker", level="INFO")
+            ready_event = getattr(self.arduino, "ready_event", None)
+            if ready_event is not None:
+                ready_event.clear()
             if not self.arduino.send("Y"):
-                # Try DTR reset and retry
-                debug("Failed to send 'Y', trying DTR reset...", component="ResetWorker", level="WARNING")
-                if hasattr(self.arduino, "reset_dtr") and callable(self.arduino.reset_dtr):
-                    self.arduino.reset_dtr()
-                    time.sleep(3)  # Wait for Arduino to initialize
-                    if not self.arduino.send("Y"):
-                        raise RuntimeError("Failed to send Y even after DTR reset")
-                else:
-                    raise RuntimeError("Failed to send Y and DTR reset not available")
+                raise RuntimeError("Failed to send Y reset command")
 
-            # Assuming 'Y' doesn't send 'DONE', use a fixed delay. Adjust if needed.
-            debug("Fixed 5s delay after 'Y' command", component="ResetWorker")
-            time.sleep(5)
+            # 'Y' never acks with DONE (the MCU resets first); wait for the
+            # boot banner instead of the old blind 5s sleep
+            if ready_event is not None:
+                if ready_event.wait(timeout=15.0):
+                    debug("Arduino announced 'Ready to Go' after reset",
+                          component="ResetWorker")
+                else:
+                    debug("No 'Ready to Go' seen within 15s after 'Y'; continuing",
+                          component="ResetWorker", level="WARNING")
+            else:
+                time.sleep(5)
             debug_timing("[STEP 1/6] Reset command complete", start_time=step_start, component="ResetWorker")
             self.step_times.append(("Reset Command", time.time() - step_start))
 
@@ -237,17 +211,6 @@ class ResetWorker(QRunnable):
                     debug(f"  {step_name}: {step_time:.1f}s", component="ResetWorker")
 
             debug("="*60, component="ResetWorker", level="ERROR")
-
-            # Try one last DTR reset to ensure system is in a clean state
-            if hasattr(self.arduino, "reset_dtr") and callable(self.arduino.reset_dtr):
-                try:
-                    debug("Performing final DTR reset to clean up after error...",
-                         component="ResetWorker", level="WARNING")
-                    self.arduino.reset_dtr()
-                    debug("Final DTR reset completed", component="ResetWorker")
-                except Exception as reset_err:
-                    debug_error("Final DTR reset also failed", exception=reset_err,
-                              component="ResetWorker")
 
             self.signals.error.emit(str(e)) # Emit error signal
             success = False

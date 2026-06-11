@@ -79,6 +79,7 @@ class Protocols(QtCore.QRunnable):
         self._current_pos_c = 0
         self.target_pos_c = None
         self.angle_set = False
+        self._last_overpressure_correction = 0.0
 
         # Connect signals if arduino is provided
         if ser is not None and hasattr(ser, "status_emit"):
@@ -118,15 +119,30 @@ class Protocols(QtCore.QRunnable):
 
     def update_status(self, pos_a, pos_b, pos_c, pressure):
         """Update current status values from Arduino feedback."""
-        print(f"Protocol update_status received: A={pos_a}, B={pos_b}, C={pos_c}, Pressure={pressure}")
-        
         # Store values with explicit type conversion
         self.current_pressure = float(pressure)
         self.current_pos_c = int(pos_c)
-        
+
+        # Honor a lowered setpoint in ANY phase: if the operator reduced
+        # max_pressure mid-protocol and the applied load exceeds it,
+        # actively command a back-off (rate-limited to avoid spamming)
+        try:
+            max_p = float(self.max_pressure)
+            if (
+                self.is_running
+                and float(pressure) > max_p + 3
+                and time.time() - self._last_overpressure_correction > 3.0
+            ):
+                self._last_overpressure_correction = time.time()
+                print(
+                    f"Applied pressure {pressure} exceeds setpoint {max_p}; "
+                    "commanding back-off"
+                )
+                self.arduino.send(f"P{max_p}")
+        except Exception as e:
+            print(f"Setpoint check error: {e}")
+
         # Emit separate pressure signal for dialogs and UI updates
-        # Make sure to use float for pressure to avoid type conversion issues
-        print(f"Protocol emitting pressure_emit with pressure={float(pressure)}")
         self.signals.pressure_emit.emit(float(pressure))
         
         # Also emit the full status update for other components
@@ -187,11 +203,17 @@ class Protocols(QtCore.QRunnable):
                 )
                 return False
 
-            # Step through pressure increments with reduced monitoring
-            while current_command < (target_pressure - PRESSURE_INCREMENT/2):
+            # Step through pressure increments with reduced monitoring.
+            # The target re-reads self.max_pressure each step so an
+            # operator's mid-protocol setpoint change takes effect during
+            # the ramp instead of being silently ignored.
+            while True:
                 if not self.is_running:
                     print("Emergency stop during pressure ramp")
                     return False
+                target_pressure = min(float(self.max_pressure), float(MAX_SAFE_PRESSURE))
+                if current_command >= (target_pressure - PRESSURE_INCREMENT / 2):
+                    break
                 current_command += PRESSURE_INCREMENT
                 # Clamp to target to prevent floating-point overshoot
                 current_command = min(current_command, target_pressure)
@@ -222,7 +244,8 @@ class Protocols(QtCore.QRunnable):
                 # Small delay between increments
                 time.sleep(2.0)
 
-            # Send final pressure command
+            # Send final pressure command (re-read the live setpoint)
+            target_pressure = min(float(self.max_pressure), float(MAX_SAFE_PRESSURE))
             print(f"Setting final pressure: {target_pressure} lbs")
             final_attempt_start = time.time()
             if not self.arduino.send(f"P{target_pressure}"):
@@ -794,101 +817,40 @@ class Protocols(QtCore.QRunnable):
             self.signals.finished.emit(False)
 
     def stop(self):
-        """Safely stop a running protocol."""
+        """Safely stop a running protocol and release applied traction.
+
+        The screw actuators hold whatever force was applied when motion
+        stops, so a stop is not safe until the load is actively backed
+        off ("P0"). Connection health is owned by the Arduino transport;
+        the old 60s keepalive thread this method used to spawn per stop
+        flushed buffers and fought reconnects concurrently with whatever
+        the user started next.
+        """
         print("Initiating protocol stop sequence...")
         self.is_running = False
-        
-        # Ensure we have a valid Arduino connection
+
         if not self.arduino:
             print("Warning: No Arduino connection available for stop sequence")
             self.signals.stopped.emit(True)
             return
-        
+
         try:
-            # Turn off high-frequency status first (more reliable before emergency stop)
-            success = self.arduino.send("HF0")
-            print(f"High frequency status turned off: {'Success' if success else 'Failed'}")
-            time.sleep(0.5)  # Brief pause before next command
-            
-            # Send emergency stop command
-            success = self.arduino.send("X")
-            print(f"Emergency stop command sent: {'Success' if success else 'Failed'}")
-            
-            # Wait for a moment to let the stop command process
-            time.sleep(0.5)  # Increased wait time
-            
-            # Send test command to verify connection is still active
-            success = self.arduino.send("T")
-            print(f"Test command sent: {'Success' if success else 'Failed'}")
-            
-            # Start a keepalive thread that continues even after worker is "stopped"
-            # This prevents connection timeouts
-            self._start_keepalive_thread()
-            
-            # Signal that the protocol was stopped
-            self.signals.stopped.emit(True)
-            
+            # Emergency stop first: halts pulsing/motion immediately
+            # (X jumps the transport's queue and the firmware's limiter)
+            stop_sent = self.arduino.send("X")
+            print(f"Emergency stop command sent: {'Success' if stop_sent else 'FAILED'}")
+
+            # Actively release traction; the firmware ramps the axial
+            # actuator back until the load cell reads zero
+            release_sent = self.arduino.send("P0")
+            print(f"Pressure release command sent: {'Success' if release_sent else 'FAILED'}")
+
+            # Telemetry continues during the release via the firmware's
+            # active-motion status path even after HF mode is off
+            self.arduino.send("HF0")
+
+            self.signals.stopped.emit(stop_sent and release_sent)
+
         except Exception as e:
             print(f"Error during protocol stop: {e}")
             self.signals.stopped.emit(False)
-    
-    def _start_keepalive_thread(self):
-        """Start a separate thread to send periodic keepalive signals to Arduino."""
-        def keepalive_worker():
-            print("Starting keepalive worker thread")
-            # Run for 60 seconds to ensure Arduino connection is maintained
-            # even after the QRunnable is removed from the threadpool
-            end_time = time.time() + 60  # Extended duration to 60 seconds
-            keepalive_interval = 3  # More frequent - every 3 seconds
-            last_keepalive = 0
-            reconnect_attempts = 0
-            max_reconnect_attempts = 3
-            
-            while time.time() < end_time:
-                try:
-                    current_time = time.time()
-                    if current_time - last_keepalive >= keepalive_interval:
-                        if self.arduino and hasattr(self.arduino, "send"):
-                            # Try to verify connection first
-                            success = False
-                            if hasattr(self.arduino, "verify_connection"):
-                                try:
-                                    success = self.arduino.verify_connection(tries=3, timeout_s=5.0)
-                                except Exception as ve:
-                                    print(f"Error verifying connection: {ve}")
-                            
-                            # If verification fails or unavailable, try basic send
-                            if not success:
-                                success = self.arduino.send("T")  # Test command as keepalive
-                            
-                            if success:
-                                # Only print keepalive message on first success or after failures
-                                if reconnect_attempts > 0 or last_keepalive == 0:
-                                    print("Sent keepalive after protocol stop")
-                                last_keepalive = current_time
-                                reconnect_attempts = 0  # Reset counter on success
-                            else:
-                                # Try reconnecting if connection seems lost
-                                reconnect_attempts += 1
-                                if reconnect_attempts <= max_reconnect_attempts:
-                                    print(f"Keepalive failed, trying reconnect ({reconnect_attempts}/{max_reconnect_attempts})...")
-                                    if hasattr(self.arduino, "reconnect"):
-                                        self.arduino.reconnect(max_retries=1)
-                                else:
-                                    print("Maximum reconnect attempts reached, stopping keepalive")
-                                    break
-                except Exception as e:
-                    print(f"Error in keepalive thread: {e}")
-                    reconnect_attempts += 1
-                    if reconnect_attempts > max_reconnect_attempts:
-                        print("Too many errors in keepalive thread, stopping")
-                        break
-                    
-                time.sleep(1)
-            
-            print("Keepalive thread finished")
-        
-        # Start background thread
-        keepalive_thread = threading.Thread(target=keepalive_worker, daemon=True)
-        keepalive_thread.start()
-        print("Keepalive thread started")
