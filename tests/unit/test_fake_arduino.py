@@ -260,15 +260,24 @@ class TestFakeArduinoFirmwareParity:
 
     def test_command_rate_limited(self):
         """Two back-to-back commands are processed >= min_command_interval
-        apart, mirroring the firmware's MIN_COMMAND_INTERVAL."""
+        apart, mirroring the firmware's MIN_COMMAND_INTERVAL.
+
+        Asserted via the pending queue rather than wall-clock read
+        windows: fixed windows flaked under CI scheduling jitter."""
         fake = FakeArduino()
+        fake.min_command_interval = 5.0  # detection lag cannot outrun this
         fake.start()
         try:
             send_cmd(fake, b"T\nT\n")
-            output = read_output(fake, duration=0.15)
+            output = ""
+            deadline = time.time() + 3.0
+            while output.count("OK") < 1 and time.time() < deadline:
+                output += read_output(fake, duration=0.1)
             assert output.count("OK") == 1, f"got: {output!r}"
+            # The second command is still held by the limiter
+            assert len(fake._pending_commands) == 1
             output += read_output(fake, duration=0.3)
-            assert output.count("OK") == 2
+            assert output.count("OK") == 1, "second command was not rate-limited"
         finally:
             fake.stop()
 
