@@ -1,6 +1,6 @@
 # Flash Batch 1 — Hardware Checkout Checklist
 
-**Firmware:** `main/motor/motor.ino` VERSION `2026-06-11-FAILSAFE-1`
+**Firmware:** `main/motor/motor.ino` VERSION `2026-06-11-FAILSAFE-2`
 **Pi software:** same branch (the delimited `L5|a|b` zero-mark command requires the new firmware; everything else is backward compatible).
 **Precondition:** no patient attached for ANY item below. Keep actuators free to move through full travel.
 
@@ -8,7 +8,7 @@ Flash the Mega, deploy the Pi software, then run these in order. Each item maps 
 
 ## A. Boot and watchdog
 
-- [ ] **A1. Normal boot.** Power-cycle. Debug serial shows `All actuators stopped` before the load-cell init, then `VERSION: 2026-06-11-FAILSAFE-1` and `Ready to Go`. No motor twitch during boot.
+- [ ] **A1. Normal boot.** Power-cycle. Debug serial shows `All actuators stopped` before the load-cell init, then `VERSION: 2026-06-11-FAILSAFE-2` and `Ready to Go`. No motor twitch during boot.
 - [ ] **A2. Watchdog recovery (CRITICAL — do first, motors disconnected from load).** Temporarily unplug the load cell DOUT wire mid `L1` tare (forces a blocking read) or otherwise wedge the loop. The board must reset itself within ~2 s and come back to `Ready to Go`. **If it boot-loops** (old stk500v2 bootloader bug): reflash the bootloader, or set `ENABLE_WDT 0` and re-flash, and record that the watchdog is unavailable.
 - [ ] **A3. WDT reset is safe.** Trigger A2 while an actuator is mid-move: motion must stop at reset and NOT resume after boot.
 
@@ -35,6 +35,7 @@ States: (1) position move (`I14...`), (2) pressure ramp (`P30`), (3) pulsing (`J
 - [ ] **D2. Reject corrupt commands.** From a serial console send `A12-1.0`, `Kabc`, `I991000`: each must answer `ERROR: ...` and nothing may move. (Previously `A12-1.0` commanded FULL EXTENSION.)
 - [ ] **D3. Stall counter.** Run ≥ 10 normal moves in a row; none may stop early with `Motor stalled` (the counter used to accumulate across moves). Then physically block an actuator (carefully): it must stop with `ERROR: Motor stalled` rather than grind.
 - [ ] **D4. Small-move behavior.** Command a move ≤ 25 counts from current position: immediate `DONE`, no motion, UI does not hang.
+- [ ] **D5a. Protocol v2 smoke test (optional, enables checksummed link).** With `KNEESPA_PROTOCOL_V2=1` in the app environment: commands flow normally, acks show `DONE|<seq>` in the debug log, status frames end in `*XX`, and a deliberately corrupted command (send `#1:P70*FF` from a console) is rejected with `ERR|1|Checksum mismatch` and nothing moves. Leave the env var OFF if anything misbehaves.
 - [ ] **D5. BUSY visibility.** Send a second move while one runs: host receives `BUSY` (previously silent drop → 30 s UI timeout).
 
 ## E. Measurements to bring back (blocking items for later phases)

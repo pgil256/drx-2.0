@@ -19,6 +19,9 @@ Behavior mirrors main/motor/motor.ino:
 - L5 zero marks accept the delimited form (L5|a|b) and echo "ZEROS|a|b".
 - Pressure above 80 lbs during a ramp emits
   "ERROR: Pressure limit exceeded" and stops everything.
+- Protocol v2 frames ("#<seq>:<CMD>*<XX>") are verified and acked with
+  the sequence echoed (DONE|<seq>, BUSY|<seq>, OK|<seq>, ERR|<seq>|...);
+  status frames then carry a trailing "*<XX>" checksum.
 Timing constants are attributes so individual tests may tighten them.
 """
 import os
@@ -52,6 +55,9 @@ class FakeArduino:
         self.measure_pressure: bool = False
         self.high_frequency_status: bool = False
         self.status_acknowledged: bool = True
+        self.host_v2: bool = False
+        self._current_seq = None  # seq of command being processed
+        self._active_seq = None   # seq of motion/pressure command in flight
 
         # Configurable behavior (defaults mirror motor.ino timing)
         self.movement_speed: float = 5000.0  # units per second (fast for tests)
@@ -152,8 +158,8 @@ class FakeArduino:
                 # like the firmware's rate limiter. 'Q' acks and 'X'
                 # (emergency stop) bypass the limiter, as on the device.
                 now = time.time()
-                while self._pending_commands and (
-                    self._pending_commands[0][0] in ('Q', 'X')
+                while self._pending_commands and self._is_priority(
+                    self._pending_commands[0]
                 ):
                     self._process_command(self._pending_commands.popleft())
                 if self._pending_commands and (
@@ -192,6 +198,9 @@ class FakeArduino:
         self.jerking = False
         self.status_acknowledged = True
         self.high_frequency_status = False
+        self.host_v2 = False
+        self._current_seq = None
+        self._active_seq = None
         self._target_position_a = None
         self._target_position_b = None
         self._target_position_c = None
@@ -201,18 +210,64 @@ class FakeArduino:
         self._write("\n")
         self._write("Ready to Go\n")
 
-    def _process_command(self, cmd: str):
+    @staticmethod
+    def _xor(payload: str) -> int:
+        value = 0
+        for byte in payload.encode():
+            value ^= byte
+        return value
+
+    def _ack(self, token: str, seq=None):
+        if seq is not None:
+            self._write(f"{token}|{seq}\n")
+        else:
+            self._write(f"{token}\n")
+
+    @staticmethod
+    def _is_priority(raw: str) -> bool:
+        """Q acks and X (framed or not) bypass the rate limiter."""
+        if not raw:
+            return False
+        if raw[0] in ("Q", "X"):
+            return True
+        if raw[0] == "#":
+            inner = raw.partition(":")[2]
+            return inner[:1] in ("Q", "X")
+        return False
+
+    def _unframe(self, raw: str):
+        """Return (inner_cmd, seq); (None, None) after a checksum reject."""
+        if not raw.startswith("#"):
+            return raw, None
+        self.host_v2 = True
+        try:
+            body, star, checksum_hex = raw[1:].rpartition("*")
+            if not star:
+                raise ValueError("no checksum")
+            seq_str, _, inner = body.partition(":")
+            seq = int(seq_str)
+            if int(checksum_hex, 16) != self._xor(body):
+                self._write(f"ERR|{seq}|Checksum mismatch\n")
+                return None, None
+            return inner, seq
+        except (ValueError, TypeError):
+            self._write("ERROR: Malformed frame\n")
+            return None, None
+
+    def _process_command(self, raw: str):
         """Handle an incoming command string."""
         if self._delay_ms > 0:
             time.sleep(self._delay_ms / 1000.0)
 
-        if len(cmd) == 0:
+        cmd, seq = self._unframe(raw)
+        if cmd is None or len(cmd) == 0:
             return
+        self._current_seq = seq
 
         cmd_type = cmd[0]
 
         if cmd_type == 'T':
-            self._write("OK\n")
+            self._ack("OK", self._current_seq)
 
         elif cmd_type == 'Q':
             self.status_acknowledged = True
@@ -225,23 +280,24 @@ class FakeArduino:
                 self.high_frequency_status = True
                 self.status_acknowledged = True  # firmware resets the flag
                 self._send_status()
-                self._write("DONE\n")
+                self._ack("DONE", self._current_seq)
             elif len(cmd) > 2 and cmd[1:3] == "F0":
                 self.high_frequency_status = False
-                self._write("DONE\n")
+                self._ack("DONE", self._current_seq)
 
         elif cmd_type == 'P':
             if self.b_running:
-                self._write("BUSY\n")
+                self._ack("BUSY", self._current_seq)
                 return
             target = float(cmd[1:]) if len(cmd) > 1 else 0
             self._target_pressure = target
             self.measure_pressure = True
+            self._active_seq = self._current_seq
             self._send_status()
 
         elif cmd_type == 'I':
             if self.b_running:
-                self._write("BUSY\n")
+                self._ack("BUSY", self._current_seq)
                 return
             actuator_id = cmd[1:3]
             position = int(cmd[3:]) if len(cmd) > 3 else 0
@@ -251,19 +307,21 @@ class FakeArduino:
                 self._target_position_b = position
             elif actuator_id == "14":
                 self._target_position_c = position
+            self._active_seq = self._current_seq
             self.b_running = True
 
         elif cmd_type == 'K':
             if self.b_running:
-                self._write("BUSY\n")
+                self._ack("BUSY", self._current_seq)
                 return
             position = int(cmd[1:]) if len(cmd) > 1 else 0
             self._target_position_c = position
+            self._active_seq = self._current_seq
             self.b_running = True
 
         elif cmd_type == 'A':
             if self.b_running:
-                self._write("BUSY\n")
+                self._ack("BUSY", self._current_seq)
                 return
             actuator_id = cmd[1:3]
             inches = float(cmd[3:]) if len(cmd) > 3 else 0
@@ -275,6 +333,7 @@ class FakeArduino:
                 self._target_position_b = position
             elif actuator_id == "14":
                 self._target_position_c = position
+            self._active_seq = self._current_seq
             self.b_running = True
 
         elif cmd_type == 'J':
@@ -282,10 +341,10 @@ class FakeArduino:
             # noStatus suppression blinded the pressure ceiling check)
             if len(cmd) > 1 and cmd[1] == 'S':
                 self.jerking = False
-                self._write("DONE\n")
+                self._ack("DONE", self._current_seq)
             else:
                 self.jerking = True
-                self._write("DONE\n")
+                self._ack("DONE", self._current_seq)
 
         elif cmd_type == 'X':
             self.b_running = False
@@ -295,7 +354,8 @@ class FakeArduino:
             self._target_position_b = None
             self._target_position_c = None
             self._target_pressure = None
-            self._write("DONE\n")
+            self._active_seq = None
+            self._ack("DONE", self._current_seq)
 
         elif cmd_type == 'Y':
             self._write("Reset|\n")
@@ -309,7 +369,7 @@ class FakeArduino:
                 "14": self.position_c,
             }.get(actuator_id, 0)
             self._write(f"P|{pos}\n")
-            self._write("DONE\n")
+            self._ack("DONE", self._current_seq)
 
         elif cmd_type == 'L':
             stage = cmd[1] if len(cmd) > 1 else '0'
@@ -325,14 +385,14 @@ class FakeArduino:
                     a_zero = int(cmd[2:5]) if cmd[2:5].strip() else 0
                     b_zero = int(cmd[5:9]) if cmd[5:9].strip() else 0
                 self._write(f"ZEROS|{a_zero}|{b_zero}\n")
-                self._write("DONE\n")
+                self._ack("DONE", self._current_seq)
             elif stage == '6':
                 self._write(
                     f"A|{self.position_a}|{self.position_b}"
                     f"|{self.position_c}|{self.pressure:.1f}\n"
                 )
             else:
-                self._write("DONE\n")
+                self._ack("DONE", self._current_seq)
 
     def _update_movement(self, dt: float):
         """Gradually move actuators toward their targets."""
@@ -366,7 +426,8 @@ class FakeArduino:
                     self.b_running = False
                 # Firmware: sendStatus() then "DONE" on completion
                 self._send_status()
-                self._write("DONE\n")
+                self._ack("DONE", self._active_seq)
+                self._active_seq = None
             elif current < target:
                 setattr(self, attr, current + step)
             else:
@@ -395,7 +456,8 @@ class FakeArduino:
             self.measure_pressure = False
             # Firmware: sendStatus() then "DONE" when pressure reached
             self._send_status()
-            self._write("DONE\n")
+            self._ack("DONE", self._active_seq)
+            self._active_seq = None
         elif diff > 0:
             self.pressure += step
         else:
@@ -418,10 +480,13 @@ class FakeArduino:
             self._corrupt_next = False
             self._write("STATUS_START|GARBAGE|STATUS_END\n")
         else:
-            self._write(
+            frame = (
                 f"STATUS_START|S|{self.position_a}|{self.position_b}"
-                f"|{self.position_c}|{self.pressure:.1f}|STATUS_END\n"
+                f"|{self.position_c}|{self.pressure:.1f}|STATUS_END"
             )
+            if self.host_v2:
+                frame += f"*{self._xor(frame):02X}"
+            self._write(frame + "\n")
         self.status_acknowledged = False
         self._last_status_time = now
         return True

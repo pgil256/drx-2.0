@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
-from helpers.arduino import Arduino
+from helpers.arduino import Arduino, xor_checksum
 
 
 @pytest.fixture
@@ -128,6 +128,79 @@ class TestSendQueueing:
     def test_empty_command_refused(self, arduino):
         arduino._running = True
         assert arduino.send("  ") is False
+
+
+def _frame(seq, cmd):
+    body = f"{seq}:{cmd}"
+    return f"#{body}*{xor_checksum(body):02X}"
+
+
+@pytest.mark.unit
+class TestProtocolV2Send:
+    """With protocol_v2 enabled, commands are framed with seq + checksum."""
+
+    def test_commands_are_framed(self, arduino):
+        arduino._running = True
+        arduino.protocol_v2 = True
+        arduino.send("P50")
+        assert list(arduino._tx_queue) == [_frame(1, "P50")]
+
+    def test_framed_x_still_jumps_the_queue(self, arduino):
+        arduino._running = True
+        arduino.protocol_v2 = True
+        arduino.send("K1500")
+        arduino.send("X")
+        assert list(arduino._priority_queue) == [_frame(2, "X")]
+        assert list(arduino._tx_queue) == [_frame(1, "K1500")]
+
+    def test_sequence_increments(self, arduino):
+        arduino._running = True
+        arduino.protocol_v2 = True
+        arduino.send("T")
+        arduino.send("T")
+        assert list(arduino._tx_queue) == [_frame(1, "T"), _frame(2, "T")]
+
+
+@pytest.mark.unit
+class TestProtocolV2Receive:
+    """Seq-bearing acks and checksummed status frames."""
+
+    def test_done_with_seq(self, arduino, qtbot):
+        with qtbot.waitSignal(arduino.done_emit, timeout=1000):
+            arduino.handle_com("DONE|17")
+        assert arduino.last_done_seq == 17
+
+    def test_busy_with_seq_emits_error(self, arduino, qtbot):
+        with qtbot.waitSignal(arduino.error_emit, timeout=1000) as blocker:
+            arduino.handle_com("BUSY|4")
+        assert blocker.args == ["BUSY"]
+
+    def test_err_with_seq_and_reason(self, arduino, qtbot):
+        with qtbot.waitSignal(arduino.error_emit, timeout=1000) as blocker:
+            arduino.handle_com("ERR|9|Invalid P value")
+        assert blocker.args == ["Invalid P value"]
+
+    def test_ok_with_seq_sets_event(self, arduino):
+        arduino.ok_event.clear()
+        arduino.handle_com("OK|3")
+        assert arduino.ok_event.is_set()
+
+    def test_status_with_valid_checksum_accepted(self, arduino, qtbot):
+        frame = "STATUS_START|S|1500|2000|1200|45.3|STATUS_END"
+        line = f"{frame}*{xor_checksum(frame):02X}"
+        with qtbot.waitSignal(arduino.status_emit, timeout=1000) as blocker:
+            arduino.handle_com(line)
+        assert blocker.args == [1500, 2000, 1200, 45.3]
+
+    def test_status_with_bad_checksum_rejected(self, arduino, qtbot):
+        """A corrupted in-flight value must never reach the safety checks."""
+        frame = "STATUS_START|S|1500|2000|1200|45.3|STATUS_END"
+        checksum = xor_checksum(frame)
+        corrupted = frame.replace("|45.3|", "|85.3|")  # flipped digit
+        line = f"{corrupted}*{checksum:02X}"
+        with qtbot.assertNotEmitted(arduino.status_emit, wait=100):
+            arduino.handle_com(line)
+        assert arduino.checksum_failures == 1
 
 
 @pytest.mark.unit

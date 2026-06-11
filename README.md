@@ -46,7 +46,7 @@ native tests, and an AVR compile check of `motor.ino` for the Mega 2560.
                      # calibration/PINs/logs), restarts the service
 ```
 
-## Safety architecture (since firmware `2026-06-11-FAILSAFE-1`)
+## Safety architecture (since firmware `2026-06-11-FAILSAFE-2`)
 
 The firmware fails safe on its own: AVR watchdog, a 3 s host-heartbeat
 timeout, the physical STOP pin and the 80 lb pressure ceiling enforced
@@ -57,6 +57,11 @@ disconnect detection, firmware `ERROR:` lines surfaced as persistent
 operator alarms, an always-visible treatment banner with a permanent
 STOP, and calibration-state gating (an uncalibrated or corrupt config
 blocks treatment loudly instead of running on generated defaults).
+
+Protocol v2 (per-command sequence numbers + XOR checksums on commands
+and status frames) is built into the firmware and the Pi transport but
+disabled by default; enable with `KNEESPA_PROTOCOL_V2=1` after the
+hardware checkout. Legacy unframed traffic keeps working either way.
 
 **Before flashing firmware to a device**, run the checkout list in
 [docs/plans/2026-06-11-batch1-hardware-checklist.md](docs/plans/2026-06-11-batch1-hardware-checklist.md)

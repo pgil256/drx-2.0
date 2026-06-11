@@ -59,6 +59,9 @@ void setUp(void) {
     scale._raw = 0;
     _pin_levels[STOP_PIN] = HIGH;  // button not pressed
     _wdt_enabled = false;
+    hostV2 = false;
+    currentCmdSeq = -1;
+    activeCmdSeq = -1;
 }
 
 void tearDown(void) {}
@@ -371,6 +374,104 @@ void test_pressure_stall_detected(void) {
     TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: No pressure progress"));
 }
 
+// --- Protocol v2 framing (loop-driven) ---
+
+static String v2Frame(int seq, const char *cmd) {
+    String body = String(seq);
+    body += ":";
+    body += cmd;
+    char buf[64];
+    snprintf(buf, sizeof(buf), "#%s*%02X", body.c_str(),
+             xorChecksum(body, 0, body.length()));
+    return String(buf);
+}
+
+void test_v2_framed_T_acks_with_seq(void) {
+    keepAlive();
+    _millis_value = 300;  // past the rate-limit window
+    keepAlive();
+    Serial1.injectCommand(std::string(v2Frame(7, "T").c_str()));
+
+    loop();
+
+    TEST_ASSERT_TRUE(Serial1.outputContains("OK|7"));
+}
+
+void test_v2_framed_X_bypasses_rate_limiter(void) {
+    bRunning = true;
+    desiredPosition = 60000;  // unreachable: the move cannot self-complete
+    keepAlive();
+    lastCommandTime = _millis_value;  // limiter window closed
+    Serial1.injectCommand(std::string(v2Frame(9, "X").c_str()));
+
+    loop();
+
+    TEST_ASSERT_FALSE(bRunning);
+    TEST_ASSERT_TRUE(Serial1.outputContains("DONE|9"));
+}
+
+void test_v2_corrupt_command_does_not_execute(void) {
+    keepAlive();
+    _millis_value = 300;
+    keepAlive();
+    // Frame for P10 with a flipped payload digit (P70)
+    String frame = v2Frame(11, "P10");
+    int colon = frame.indexOf(':');
+    String corrupted = frame.substring(0, colon + 2);
+    corrupted += "7";
+    corrupted += frame.substring(colon + 3);
+    Serial1.injectCommand(std::string(corrupted.c_str()));
+
+    loop();
+
+    TEST_ASSERT_FALSE(measurePressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERR|11|Checksum mismatch"));
+}
+
+void test_v2_deferred_done_carries_seq(void) {
+    keepAlive();
+    _millis_value = 300;
+    keepAlive();
+    Wire.position_12 = 100;
+    Serial1.injectCommand(std::string(v2Frame(15, "I121500").c_str()));
+
+    loop();  // command accepted, move starts
+    TEST_ASSERT_TRUE(bRunning);
+    TEST_ASSERT_EQUAL(15, (int)activeCmdSeq);
+
+    Wire.position_12 = 1500;  // target reached
+    keepAlive();
+    loop();
+
+    TEST_ASSERT_FALSE(bRunning);
+    TEST_ASSERT_TRUE(Serial1.outputContains("DONE|15"));
+    TEST_ASSERT_EQUAL(-1, (int)activeCmdSeq);
+}
+
+void test_v2_status_carries_checksum(void) {
+    hostV2 = true;
+    sendStatus();
+    std::string out = Serial1.getOutput();
+    size_t start = out.find("STATUS_START");
+    size_t star = out.find('*', start);
+    TEST_ASSERT_TRUE(start != std::string::npos);
+    TEST_ASSERT_TRUE(star != std::string::npos);
+    // Recompute the checksum over the frame and compare
+    std::string frame = out.substr(start, star - start);
+    uint8_t expected = 0;
+    for (char c : frame) expected ^= (uint8_t)c;
+    unsigned int got = (unsigned int)strtol(out.substr(star + 1, 2).c_str(), NULL, 16);
+    TEST_ASSERT_EQUAL((int)expected, (int)got);
+}
+
+void test_v1_status_has_no_checksum(void) {
+    hostV2 = false;
+    sendStatus();
+    std::string out = Serial1.getOutput();
+    TEST_ASSERT_TRUE(out.find("STATUS_END") != std::string::npos);
+    TEST_ASSERT_TRUE(out.find('*') == std::string::npos);
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
 
@@ -396,6 +497,13 @@ int main(int argc, char **argv) {
     RUN_TEST(test_commands_not_merged_under_rate_limit);
     RUN_TEST(test_pressure_move_time_bound);
     RUN_TEST(test_pressure_stall_detected);
+
+    RUN_TEST(test_v2_framed_T_acks_with_seq);
+    RUN_TEST(test_v2_framed_X_bypasses_rate_limiter);
+    RUN_TEST(test_v2_corrupt_command_does_not_execute);
+    RUN_TEST(test_v2_deferred_done_carries_seq);
+    RUN_TEST(test_v2_status_carries_checksum);
+    RUN_TEST(test_v1_status_has_no_checksum);
 
     return UNITY_END();
 }

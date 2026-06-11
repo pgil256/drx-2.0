@@ -65,6 +65,11 @@ Commands are single-letter prefixed strings sent via serial:
 
 Status responses: `STATUS_START|S|posA|posB|posC|pressure|STATUS_END`
 
+Protocol v2 (opt-in via `KNEESPA_PROTOCOL_V2=1`, firmware FAILSAFE-2+):
+commands are framed `#<seq>:<CMD>*<XX>` (XX = two-hex XOR of `<seq>:<CMD>`),
+acks echo the sequence (`DONE|<seq>`, `BUSY|<seq>`, `OK|<seq>`,
+`ERR|<seq>|<reason>`), and status frames carry a trailing `*<XX>` checksum.
+
 ### UI Components
 - `main/ui/dialogs/` - Modal dialogs (timer, pressure, video player)
 - `main/ui/widgets/` - Reusable widgets (loading spinner)

@@ -10,6 +10,14 @@ from helpers.logging import setup_logger
 from config.constants import ARDUINO_SETTINGS
 
 
+def xor_checksum(payload: str) -> int:
+    """XOR of all payload bytes; mirrors the firmware's frame checksum."""
+    value = 0
+    for byte in payload.encode():
+        value ^= byte
+    return value
+
+
 class Arduino(QObject):
     """Serial link to the motor-controller firmware.
 
@@ -60,6 +68,15 @@ class Arduino(QObject):
         self._priority_queue = deque()  # emergency stop jumps the line
         self._last_tx = 0.0
         self._io_thread = None
+        # Protocol v2: per-command sequence numbers + checksums on
+        # commands and status frames. Requires firmware
+        # 2026-06-11-FAILSAFE-2+; disabled by default so the Batch-1
+        # flash behavior is unchanged until the hardware checkout
+        # enables it (KNEESPA_PROTOCOL_V2=1).
+        self.protocol_v2 = os.environ.get("KNEESPA_PROTOCOL_V2", "0") == "1"
+        self._seq = 0
+        self.last_done_seq = None
+        self.checksum_failures = 0
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -290,6 +307,25 @@ class Arduino(QObject):
                     # them into the safety-limit checks
                     self.logger.warning("Rejected truncated status frame: %s", data)
                     return
+                # Protocol v2 status frames carry a trailing "*XX"
+                # checksum; verify it whenever present so a corrupted
+                # in-flight value can never reach the safety checks
+                end_marker = data.rindex("|STATUS_END") + len("|STATUS_END")
+                trailer = data[end_marker:]
+                if trailer.startswith("*"):
+                    frame = data[:end_marker]
+                    try:
+                        expected = int(trailer[1:3], 16)
+                    except ValueError:
+                        self.logger.warning("Bad status checksum field: %s", data)
+                        return
+                    if xor_checksum(frame) != expected:
+                        self.checksum_failures += 1
+                        self.logger.warning(
+                            "Rejected status frame with bad checksum: %s", data
+                        )
+                        return
+                    data = frame
                 try:
                     status_data = data.replace("STATUS_START|", "").replace(
                         "|STATUS_END", ""
@@ -323,10 +359,6 @@ class Arduino(QObject):
                 self.logger.error("Firmware error: %s", message)
                 self.error_emit.emit(message)
                 return
-            if data == "BUSY":
-                self.logger.warning("Firmware dropped a command: BUSY")
-                self.error_emit.emit("BUSY")
-                return
             if data == "RELEASED":
                 self.logger.info("Firmware completed autonomous pressure release")
                 self.released_emit.emit()
@@ -335,7 +367,24 @@ class Arduino(QObject):
             # Handle regular messages
             tokens = data.split("|")
 
-            if tokens[0] == "DONE":
+            if tokens[0] == "BUSY":
+                # v1: bare BUSY; v2: BUSY|<seq>
+                self.logger.warning("Firmware dropped a command: %s", data)
+                self.error_emit.emit("BUSY")
+            elif tokens[0] == "ERR" and len(tokens) >= 3:
+                # v2 command error: ERR|<seq>|<reason>
+                reason = tokens[2]
+                self.logger.error(
+                    "Firmware rejected command seq=%s: %s", tokens[1], reason
+                )
+                self.error_emit.emit(reason)
+            elif tokens[0] == "DONE":
+                # v1: bare DONE; v2: DONE|<seq>
+                if len(tokens) >= 2:
+                    try:
+                        self.last_done_seq = int(tokens[1])
+                    except ValueError:
+                        pass
                 self.done_emit.emit()
             elif tokens[0] == "ZEROS" and len(tokens) >= 3:
                 self.zeros_emit.emit(int(tokens[1]), int(tokens[2]))
@@ -395,8 +444,13 @@ class Arduino(QObject):
             self.logger.error("Cannot send '%s' - not connected", command)
             return False
 
+        is_emergency = command.startswith("X")
         with self._lock:
-            if command.startswith("X"):
+            if self.protocol_v2:
+                self._seq = (self._seq + 1) % 1000000
+                body = f"{self._seq}:{command}"
+                command = f"#{body}*{xor_checksum(body):02X}"
+            if is_emergency:
                 # An emergency stop never waits in line
                 self._priority_queue.append(command)
             else:

@@ -271,3 +271,69 @@ class TestFakeArduinoFirmwareParity:
             assert output.count("OK") == 2
         finally:
             fake.stop()
+
+
+def make_frame(seq, cmd):
+    body = f"{seq}:{cmd}"
+    checksum = 0
+    for byte in body.encode():
+        checksum ^= byte
+    return f"#{body}*{checksum:02X}"
+
+
+@pytest.mark.unit
+class TestFakeArduinoProtocolV2:
+    """v2 framing parity with motor.ino."""
+
+    def test_framed_t_acks_with_seq(self):
+        fake = FakeArduino()
+        fake.start()
+        try:
+            send_cmd(fake, (make_frame(7, "T") + "\n").encode())
+            output = read_output(fake, duration=0.4)
+            assert "OK|7" in output
+        finally:
+            fake.stop()
+
+    def test_corrupt_frame_rejected_not_executed(self):
+        fake = FakeArduino()
+        fake.start()
+        try:
+            frame = make_frame(11, "P10")
+            corrupted = frame.replace(":P10*", ":P70*")  # flipped digit
+            send_cmd(fake, (corrupted + "\n").encode())
+            output = read_output(fake, duration=0.4)
+            assert "ERR|11|Checksum mismatch" in output
+            assert fake.measure_pressure is False
+        finally:
+            fake.stop()
+
+    def test_deferred_done_carries_seq(self):
+        fake = FakeArduino()
+        fake.position_c = 1200
+        fake.start()
+        try:
+            send_cmd(fake, (make_frame(21, "K1300") + "\n").encode())
+            output = read_output(fake, duration=0.8)
+            assert "DONE|21" in output
+            assert fake.position_c == 1300
+        finally:
+            fake.stop()
+
+    def test_status_checksummed_for_v2_host(self):
+        fake = FakeArduino()
+        fake.start()
+        try:
+            send_cmd(fake, (make_frame(3, "HF1") + "\n").encode())
+            output = read_output(fake, duration=0.5)
+            line = next(
+                l for l in output.splitlines() if l.startswith("STATUS_START")
+            )
+            frame_part, _, checksum_hex = line.rpartition("*")
+            assert frame_part.endswith("|STATUS_END")
+            expected = 0
+            for byte in frame_part.encode():
+                expected ^= byte
+            assert int(checksum_hex, 16) == expected
+        finally:
+            fake.stop()

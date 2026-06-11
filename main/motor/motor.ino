@@ -13,7 +13,7 @@
   - Fixed STOP pin logic (INPUT_PULLUP reads HIGH when not pressed)
 */
 
-#define VERSION "2026-06-11-FAILSAFE-1"
+#define VERSION "2026-06-11-FAILSAFE-2"
 #ifndef UNIT_TEST
 // Hardware libraries; native unit tests supply mocks and arduino_shim.h
 // (see test/) before including this file
@@ -106,6 +106,17 @@ unsigned long pressureProgressTime = 0;
 float pressureProgressValue = 0;
 bool positionReadValid = false;      // last readPosition() I2C result ok
 
+// Protocol v2 framing. The host opts in per command by sending
+// "#<seq>:<CMD>*<XX>" where XX is the two-hex-digit XOR of "<seq>:<CMD>".
+// Acks then echo the sequence (DONE|<seq>, BUSY|<seq>, OK|<seq>,
+// ERR|<seq>|<reason>) and status frames carry a trailing "*<XX>"
+// checksum. A flipped digit in a command or status line was previously
+// undetectable ("P10" -> "P70" passed every check on both sides).
+// Unframed commands keep the exact legacy behavior.
+bool hostV2 = false;        // host has sent at least one framed command
+long currentCmdSeq = -1;    // seq of the command being processed (-1 = v1)
+long activeCmdSeq = -1;     // seq of the motion/pressure command in flight
+
 // Global variables
 uint8_t smcDeviceNumber = 13;
 int AZERO = 0;
@@ -145,6 +156,14 @@ int jerksCompleted = 0;
 unsigned long lastJerkTime = 0;
 const unsigned long jerkInterval = 200;  // Reduced from 400ms to 200ms for subtler jerking motion
 bool jerkDirectionChanged = false;
+
+// Forward declarations (the native test build has no Arduino-IDE
+// prototype generation)
+uint8_t xorChecksum(const String &s, unsigned int from, unsigned int to);
+void emitAck(const char *token, long seq);
+void emitCmdError(const char *reason);
+bool parseV2Frame(const String &raw, String &inner);
+bool isEmergencyBuffer(const String &b);
 
 // Makes Arduino restart
 void(* resetFunc) (void) = 0;
@@ -292,16 +311,25 @@ bool sendStatus() {
   Serial.print(F(" pressure: "));
   Serial.println(pressure);
 
-  // Send to Serial1 (Pi communication)
-  Serial1.print("STATUS_START|S|");
-  Serial1.print(positionA);
-  Serial1.print("|");
-  Serial1.print(positionB);
-  Serial1.print("|");
-  Serial1.print(positionC);
-  Serial1.print("|");
-  Serial1.print(pressure);
-  Serial1.println("|STATUS_END");
+  // Send to Serial1 (Pi communication). Built as one string so a
+  // checksum can cover the whole frame for v2 hosts.
+  String frame = "STATUS_START|S|";
+  frame += String((int)positionA);
+  frame += "|";
+  frame += String((int)positionB);
+  frame += "|";
+  frame += String((int)positionC);
+  frame += "|";
+  frame += String(pressure);
+  frame += "|STATUS_END";
+  Serial1.print(frame);
+  if (hostV2) {
+    char suffix[5];
+    snprintf(suffix, sizeof(suffix), "*%02X",
+             xorChecksum(frame, 0, frame.length()));
+    Serial1.print(suffix);
+  }
+  Serial1.println("");
 
   // Restore device number
   smcDeviceNumber = lastSmcDeviceNumber;
@@ -314,6 +342,10 @@ bool sendStatus() {
 // Emergency stop all actuators
 void emergencyStop() {
   Serial.println("Emergency Stop");
+
+  // Aborted motion/pressure commands never get a DONE (v1 behavior);
+  // drop the in-flight sequence so a later completion cannot echo it
+  activeCmdSeq = -1;
 
   smcDeviceNumber = 12;
   setMotorSpeed(0);
@@ -352,6 +384,78 @@ void emergencyStopAndRelease(const char *reason) {
   releaseStart = millis();
   smcDeviceNumber = 12;
   setMotorSpeed(-PRESSURE_SPEED);  // negative = back off / reduce pressure
+}
+
+// XOR checksum over s[from..to)
+uint8_t xorChecksum(const String &s, unsigned int from, unsigned int to) {
+  uint8_t x = 0;
+  for (unsigned int i = from; i < to && i < s.length(); i++)
+    x ^= (uint8_t)s.charAt(i);
+  return x;
+}
+
+// Emit an ack token, with "|<seq>" appended for v2-framed commands
+void emitAck(const char *token, long seq) {
+  Serial1.print(token);
+  if (seq >= 0) {
+    Serial1.print("|");
+    Serial1.print((int)seq);
+  }
+  Serial1.println("");
+}
+
+// Emit an error for the command being processed: "ERR|<seq>|<reason>"
+// for v2, the legacy "ERROR: <reason>" otherwise
+void emitCmdError(const char *reason) {
+  if (currentCmdSeq >= 0) {
+    Serial1.print("ERR|");
+    Serial1.print((int)currentCmdSeq);
+    Serial1.print("|");
+    Serial1.println(reason);
+  } else {
+    Serial1.print("ERROR: ");
+    Serial1.println(reason);
+  }
+}
+
+// Parse "#<seq>:<CMD>*<XX>" into inner CMD; verifies the checksum.
+// Returns false (after emitting an error) on a malformed/corrupt frame.
+bool parseV2Frame(const String &raw, String &inner) {
+  int colon = raw.indexOf(':');
+  int star = raw.indexOf('*');
+  if (colon < 2 || star < colon + 2 || star + 1 >= (int)raw.length()) {
+    currentCmdSeq = -1;
+    emitCmdError("Malformed frame");
+    return false;
+  }
+  hostV2 = true;
+  long seq = raw.substring(1, colon).toInt();
+  uint8_t expected =
+      (uint8_t)strtol(raw.substring(star + 1).c_str(), NULL, 16);
+  uint8_t actual = xorChecksum(raw, 1, (unsigned int)star);
+  if (actual != expected) {
+    currentCmdSeq = seq;
+    emitCmdError("Checksum mismatch");
+    currentCmdSeq = -1;
+    return false;
+  }
+  currentCmdSeq = seq;
+  inner = raw.substring(colon + 1, star);
+  return true;
+}
+
+// Emergency stop must bypass the rate limiter whether framed or not
+bool isEmergencyBuffer(const String &b) {
+  if (b.length() == 0)
+    return false;
+  if (b.charAt(0) == 'X')
+    return true;
+  if (b.charAt(0) == '#') {
+    int colon = b.indexOf(':');
+    if (colon > 0 && colon + 1 < (int)b.length() && b.charAt(colon + 1) == 'X')
+      return true;
+  }
+  return false;
 }
 
 // True if s is a plain decimal number (optional leading -, one optional .)
@@ -450,7 +554,7 @@ void processCommand(String cmd) {
   // Validate command length
   if (cmd.length() > MAX_COMMAND_LENGTH) {
     Serial.println("Command too long, ignoring");
-    Serial1.println("ERROR: Command too long");
+    emitCmdError("Command too long");
     return;
   }
 
@@ -483,7 +587,7 @@ void processCommand(String cmd) {
     // Test command
     case 'T':
         Serial.println("Test command received");
-        Serial1.println("OK");
+        emitAck("OK", currentCmdSeq);
         break;
 
     // Status acknowledgment
@@ -498,11 +602,11 @@ void processCommand(String cmd) {
         timeSinceLastStatus = 0; // Reset timer immediately
         statusAcknowledged = true; // Reset flag to allow immediate status
         sendStatus(); // Send status once when activated
-        Serial1.println("DONE"); // Acknowledge command
+        emitAck("DONE", currentCmdSeq); // Acknowledge command
       } else if (cmd.length() > 2 && cmd.substring(1,3) == "F0") {
         highFrequencyStatus = false;
         Serial.println("High frequency status OFF");
-        Serial1.println("DONE"); // Acknowledge command
+        emitAck("DONE", currentCmdSeq); // Acknowledge command
       }
       break;
 
@@ -514,13 +618,13 @@ void processCommand(String cmd) {
     // Pressure control
     case 'P':
       if (bRunning || releasingPressure) {
-        Serial1.println("BUSY");  // never silently drop a motion command
+        emitAck("BUSY", currentCmdSeq);  // never silently drop a motion command
         return;
       }
 
       parameter = cmd.substring(1);
       if (!isNumeric(parameter)) {
-        Serial1.println("ERROR: Invalid P value");
+        emitCmdError("Invalid P value");
         return;
       }
       desiredPressure = clampPressureTarget(parameter.toFloat());
@@ -549,6 +653,7 @@ void processCommand(String cmd) {
       pressureProgressValue = pressure;
       setMotorSpeed(PRESSURE_SPEED * pressureDirection);
       measurePressure = true;
+      activeCmdSeq = currentCmdSeq;
       break;
 
     // Reset/restart
@@ -569,7 +674,7 @@ void processCommand(String cmd) {
       emergencyStop();
       Serial.print(F("Stopped at Position: "));
       Serial.println(readPosition());
-      Serial1.println("DONE");
+      emitAck("DONE", currentCmdSeq);
       break;
 
     // Get position
@@ -581,19 +686,19 @@ void processCommand(String cmd) {
       Serial.print(localPosition);
       Serial1.print("P|");
       Serial1.println(localPosition);
-      Serial1.println("DONE");
+      emitAck("DONE", currentCmdSeq);
       break;
 
     // Position control
     case 'I':
       if (bRunning || releasingPressure) {
-        Serial1.println("BUSY");  // never silently drop a motion command
+        emitAck("BUSY", currentCmdSeq);  // never silently drop a motion command
         return;
       }
 
       parameter = cmd.substring(1, 3);
       if (parameter.toInt() < 12 || parameter.toInt() > 14) {
-        Serial1.println("ERROR: Invalid device");
+        emitCmdError("Invalid device");
         return;
       }
       smcDeviceNumber = parameter.toInt();
@@ -602,7 +707,7 @@ void processCommand(String cmd) {
       parameter = cmd.substring(3);
       if (!isNumeric(parameter) || parameter.toInt() < 0) {
         // Reject corrupt input: toInt() garbage would become position 0
-        Serial1.println("ERROR: Invalid I value");
+        emitCmdError("Invalid I value");
         return;
       }
       localDesiredPosition = parameter.toInt();
@@ -614,7 +719,7 @@ void processCommand(String cmd) {
 
       localPosition = readPosition();
       if (!positionReadValid) {
-        Serial1.println("ERROR: Position read failed");
+        emitCmdError("Position read failed");
         return;
       }
 
@@ -629,7 +734,7 @@ void processCommand(String cmd) {
         position = localPosition;
         desiredPosition = localDesiredPosition;
         sendStatus();
-        Serial1.println("DONE");
+        emitAck("DONE", currentCmdSeq);
         break;
       }
       forward = (localDesiredPosition > localPosition) ? 1 : -1;
@@ -648,13 +753,14 @@ void processCommand(String cmd) {
       Serial.print(" ");
       Serial.println(position);
 
+      activeCmdSeq = currentCmdSeq;
       bRunning = true;
       break;
 
     // C Position (lateral flexion) control
     case 'K':
       if (bRunning || releasingPressure) {
-        Serial1.println("BUSY");  // never silently drop a motion command
+        emitAck("BUSY", currentCmdSeq);  // never silently drop a motion command
         return;
       }
 
@@ -666,7 +772,7 @@ void processCommand(String cmd) {
       if (!isNumeric(parameter) || parameter.toInt() < 0) {
         // Reject corrupt input: toInt() garbage would drive the lateral
         // actuator to its clamp floor (500)
-        Serial1.println("ERROR: Invalid K value");
+        emitCmdError("Invalid K value");
         return;
       }
       localDesiredPosition = parameter.toInt();
@@ -675,7 +781,7 @@ void processCommand(String cmd) {
 
       localPosition = readPosition();
       if (!positionReadValid) {
-        Serial1.println("ERROR: Position read failed");
+        emitCmdError("Position read failed");
         return;
       }
       Serial.print(localDesiredPosition);
@@ -688,7 +794,7 @@ void processCommand(String cmd) {
         desiredPosition = localDesiredPosition;
         position = localPosition;
         sendStatus();
-        Serial1.println("DONE");
+        emitAck("DONE", currentCmdSeq);
         break;
       }
       forward = (localDesiredPosition > localPosition) ? 1 : -1;
@@ -705,19 +811,20 @@ void processCommand(String cmd) {
       Serial.print(" ");
       Serial.println(position);
 
+      activeCmdSeq = currentCmdSeq;
       bRunning = true;
       break;
 
     // Position in inches
     case 'A':
       if (bRunning || releasingPressure) {
-        Serial1.println("BUSY");  // never silently drop a motion command
+        emitAck("BUSY", currentCmdSeq);  // never silently drop a motion command
         return;
       }
 
       parameter = cmd.substring(1, 3);
       if (parameter.toInt() < 12 || parameter.toInt() > 14) {
-        Serial1.println("ERROR: Invalid device");
+        emitCmdError("Invalid device");
         return;
       }
       smcDeviceNumber = parameter.toInt();
@@ -725,14 +832,14 @@ void processCommand(String cmd) {
 
       parameter = cmd.substring(3);
       if (!isNumeric(parameter)) {
-        Serial1.println("ERROR: Invalid A value");
+        emitCmdError("Invalid A value");
         return;
       }
       inches = parameter.toFloat();
       if (inches < 0.0 || inches > 12.0) {
         // Reject instead of letting the float->uint16_t conversion wrap
         // a corrupted negative value to full extension
-        Serial1.println("ERROR: A value out of range");
+        emitCmdError("A value out of range");
         return;
       }
 
@@ -760,7 +867,7 @@ void processCommand(String cmd) {
 
       localPosition = readPosition();
       if (!positionReadValid) {
-        Serial1.println("ERROR: Position read failed");
+        emitCmdError("Position read failed");
         return;
       }
       Serial.print(inches);
@@ -777,12 +884,13 @@ void processCommand(String cmd) {
       if (desiredPosition + POSITION_DEADBAND >= position &&
           position + POSITION_DEADBAND >= desiredPosition) {
         sendStatus();
-        Serial1.println("DONE");
+        emitAck("DONE", currentCmdSeq);
         break;
       }
       forward = (desiredPosition > position) ? 1 : -1;
 
       setMotorSpeed(forward * BC_SPEED); // Start motor immediately
+      activeCmdSeq = currentCmdSeq;
       bRunning = true;
       break;
 
@@ -799,7 +907,7 @@ void processCommand(String cmd) {
           Serial.println(calibration_factor);
           scale.set_scale(calibration_factor);
           scale.tare();
-          Serial1.println("DONE");
+          emitAck("DONE", currentCmdSeq);
           break;
 
         case 1: // Tare scale
@@ -809,7 +917,7 @@ void processCommand(String cmd) {
           scale.tare();
           Serial.print("UNITS: ");
           Serial.println(scale.get_units(10));
-          Serial1.println("DONE");
+          emitAck("DONE", currentCmdSeq);
           break;
 
         case 4: // Get weight
@@ -840,7 +948,7 @@ void processCommand(String cmd) {
           Serial1.print(AZERO);
           Serial1.print("|");
           Serial1.println(BZERO);
-          Serial1.println("DONE");
+          emitAck("DONE", currentCmdSeq);
           break;
 
         case 6: // Report all positions and pressure
@@ -891,7 +999,7 @@ void processCommand(String cmd) {
           jerkDirection = 1;
           lastJerkTime = millis(); // Initialize jerk timer
           smcDeviceNumber = 12;
-          Serial1.println("DONE");
+          emitAck("DONE", currentCmdSeq);
       }
 
       if (parameter == "S") {
@@ -900,7 +1008,7 @@ void processCommand(String cmd) {
           jerking = false;
           jerksCompleted = 0; // Reset counter
           setMotorSpeed(0);
-          Serial1.println("DONE");
+          emitAck("DONE", currentCmdSeq);
       }
       break;
 
@@ -942,7 +1050,7 @@ void processCommand(String cmd) {
         }
 
         timeInFIT = 0;
-        Serial1.println(F("DONE"));
+        emitAck("DONE", currentCmdSeq);
       }
       break; // FIXED: Added missing break statement
 
@@ -1221,7 +1329,8 @@ void loop() {
       position = readPosition();
       Serial.println(position);
       sendStatus();
-      Serial1.println("DONE");
+      emitAck("DONE", activeCmdSeq);
+      activeCmdSeq = -1;
     }
   }
 
@@ -1298,7 +1407,8 @@ void loop() {
     // Cleanup after pressure adjustment complete
     if (!measurePressure) {
       sendStatus();
-      Serial1.println("DONE");
+      emitAck("DONE", activeCmdSeq);
+      activeCmdSeq = -1;
     }
   }
 
@@ -1335,11 +1445,18 @@ void loop() {
   // is exempt from both the rate limiter and the status-in-progress
   // gate: a stop must never wait in line behind an ack
   if (isCommandComplete) {
-    bool isEmergency = commandBuffer.charAt(0) == 'X';
+    bool isEmergency = isEmergencyBuffer(commandBuffer);
     if (isEmergency ||
         (millis() - lastCommandTime > MIN_COMMAND_INTERVAL && !isProcessingStatus)) {
       lastCommandTime = millis();
-      processCommand(commandBuffer);
+      String execBuffer = commandBuffer;
+      currentCmdSeq = -1;
+      bool frameOk = true;
+      if (commandBuffer.charAt(0) == '#')
+        frameOk = parseV2Frame(commandBuffer, execBuffer);
+      if (frameOk)
+        processCommand(execBuffer);
+      currentCmdSeq = -1;
       commandBuffer = "";
       isCommandComplete = false;
     }

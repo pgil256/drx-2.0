@@ -35,6 +35,9 @@ void setUp(void) {
     statusAcknowledged = true;
     isProcessingStatus = false;
     AZERO = 0;
+    hostV2 = false;
+    currentCmdSeq = -1;
+    activeCmdSeq = -1;
     _millis_value = 0;
 }
 
@@ -203,6 +206,68 @@ void test_K_within_deadband_completes_immediately(void) {
     TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
 }
 
+// --- Protocol v2 framing (function level) ---
+
+static String makeFrame(int seq, const char *cmd) {
+    String body = String(seq);
+    body += ":";
+    body += cmd;
+    char buf[64];
+    snprintf(buf, sizeof(buf), "#%s*%02X", body.c_str(),
+             xorChecksum(body, 0, body.length()));
+    return String(buf);
+}
+
+void test_v2_parse_valid_frame(void) {
+    String inner = "";
+    String frame = makeFrame(42, "P50");
+    TEST_ASSERT_TRUE(parseV2Frame(frame, inner));
+    TEST_ASSERT_TRUE(inner == "P50");
+    TEST_ASSERT_EQUAL(42, (int)currentCmdSeq);
+    TEST_ASSERT_TRUE(hostV2);
+    currentCmdSeq = -1;
+}
+
+void test_v2_rejects_corrupt_checksum(void) {
+    String inner = "UNTOUCHED";
+    // Valid frame for "P10" but flip a payload digit -> "P70"
+    String frame = makeFrame(7, "P10");
+    int colon = frame.indexOf(':');
+    String corrupted = frame.substring(0, colon + 2);
+    corrupted += "7";
+    corrupted += frame.substring(colon + 3);
+    TEST_ASSERT_FALSE(parseV2Frame(corrupted, inner));
+    TEST_ASSERT_TRUE(inner == "UNTOUCHED");
+    TEST_ASSERT_EQUAL(-1, (int)currentCmdSeq);
+    TEST_ASSERT_TRUE(Serial1.outputContains("Checksum mismatch"));
+}
+
+void test_v2_emitAck_formats(void) {
+    emitAck("DONE", 13);
+    TEST_ASSERT_TRUE(Serial1.outputContains("DONE|13"));
+    Serial1.reset();
+    emitAck("DONE", -1);
+    TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
+    TEST_ASSERT_FALSE(Serial1.outputContains("DONE|"));
+}
+
+void test_v2_emitCmdError_formats(void) {
+    currentCmdSeq = 21;
+    emitCmdError("Invalid P value");
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERR|21|Invalid P value"));
+    currentCmdSeq = -1;
+    Serial1.reset();
+    emitCmdError("Invalid P value");
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Invalid P value"));
+}
+
+void test_v2_emergency_buffer_detection(void) {
+    TEST_ASSERT_TRUE(isEmergencyBuffer(String("X")));
+    TEST_ASSERT_TRUE(isEmergencyBuffer(makeFrame(5, "X")));
+    TEST_ASSERT_FALSE(isEmergencyBuffer(String("K1500")));
+    TEST_ASSERT_FALSE(isEmergencyBuffer(makeFrame(5, "K1500")));
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
 
@@ -228,6 +293,11 @@ int main(int argc, char **argv) {
     RUN_TEST(test_I_busy_replies_busy);
     RUN_TEST(test_I_within_deadband_completes_immediately);
     RUN_TEST(test_K_within_deadband_completes_immediately);
+    RUN_TEST(test_v2_parse_valid_frame);
+    RUN_TEST(test_v2_rejects_corrupt_checksum);
+    RUN_TEST(test_v2_emitAck_formats);
+    RUN_TEST(test_v2_emitCmdError_formats);
+    RUN_TEST(test_v2_emergency_buffer_detection);
 
     return UNITY_END();
 }

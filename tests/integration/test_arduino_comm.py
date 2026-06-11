@@ -111,3 +111,33 @@ class TestArduinoCorruptData:
         # Should not crash - verify arduino is still functional
         result = arduino.verify_connection(tries=1, timeout_s=3.0)
         assert result is True
+
+
+@pytest.mark.integration
+class TestProtocolV2EndToEnd:
+    """Full v2 round-trip: framed command -> seq-echoed ack -> checksummed
+    status accepted by the transport."""
+
+    def test_v2_move_round_trip(self, connected_pair, qtbot):
+        arduino, fake = connected_pair
+        arduino.protocol_v2 = True
+
+        with qtbot.waitSignal(arduino.done_emit, timeout=5000):
+            assert arduino.send("K1300") is True
+
+        # The DONE carried our sequence number
+        assert arduino.last_done_seq == 1
+        assert fake.position_c == 1300
+
+        # Status frames are now checksummed and still parse cleanly
+        with qtbot.waitSignal(arduino.status_emit, timeout=5000) as blocker:
+            arduino.send("S")
+        assert blocker.args[2] == 1300
+        assert arduino.checksum_failures == 0
+
+    def test_v2_verify_connection(self, connected_pair):
+        arduino, fake = connected_pair
+        arduino.protocol_v2 = True
+        # verify_connection's T probe stays unframed (v1); mixed traffic
+        # is supported by design and the bare OK must still satisfy it
+        assert arduino.verify_connection(tries=1, timeout_s=3.0) is True
