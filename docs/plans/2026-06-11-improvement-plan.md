@@ -6,7 +6,7 @@
 > **Implementation status (2026-06-11, branch `improvement-plan`):**
 > - **Phase 0 — DONE.** Firmware tests buildable+green (57 tests), Linux CI workflow, FakeArduino firmware parity, both verified regressions fixed, docs reconciled.
 > - **Phase 1 — DONE (code + tests); awaiting the Batch-1 hardware checkout** ([checklist](2026-06-11-batch1-hardware-checklist.md)) before flashing. Firmware `2026-06-11-FAILSAFE-1`.
-> - **Phase 2 — DONE** except §2.1 protocol v2 framing (seq/ack/CRC), deliberately deferred to Flash Batch 2.
+> - **Phase 2 — DONE**, including §2.1 protocol v2 framing (seq-echoed acks + XOR checksums both directions); the Pi side ships disabled behind `KNEESPA_PROTOCOL_V2=1` until checklist item D5a passes on hardware.
 > - **Phase 3 — DONE.** Treatment banner + STOP, state machine, persistent alarms, confirmation dialog, UI-thread unblocking.
 > - **Phase 4 — DONE** except items gated on hardware measurements (A-command zero-offset convention, AFULLINCH, B-axis direction — checklist items E1–E3).
 > - **Phase 5 — DONE** except the KneeSpa class decomposition (§5.1), deferred to its own session by engineering judgment (high-regression-risk UI refactor; its testability goal is partially met via harness-bound tests). Auth (PBKDF2 + lockout), the parameterized protocol engine, and deployment hygiene are in.
