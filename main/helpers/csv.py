@@ -57,8 +57,10 @@ class CSVHelper:
                 for row in reader:
                     pin_hash = row.get("pin_hash")
                     if not pin_hash and row.get("pin"):
-                        # Legacy CSV support: convert plaintext pins in memory only.
-                        pin_hash = SecureAuthHelper.hash_pin(row["pin"])
+                        # Legacy CSV support: convert plaintext pins in
+                        # memory only -- salted, so no reversible digest
+                        # is ever held
+                        pin_hash = SecureAuthHelper.hash_pin_secure(row["pin"])
                         row.pop("pin", None)
                     if not pin_hash:
                         raise KeyError("pin_hash")

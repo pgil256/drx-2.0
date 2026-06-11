@@ -939,11 +939,16 @@ class KneeSpa(QMainWindow):
                 )
 
     def append_login_star(self, value):
-        """Append star to login input field."""
-        print(f"Appending value {value} to login input")
+        """Append a PIN digit; the field's password echo mode masks it.
+
+        Appending a literal '*' on top of echoMode=Password used to
+        double-mask the entry (each keypress displayed the mask of a
+        mask), and the displayed length was all an operator had.
+        """
+        print("Appending digit to login input")
         if self.login_line_edit:
-            current_text = self.login_line_edit.text()
-            self.login_line_edit.setText(current_text + "*")
+            self.login_line_edit.setEchoMode(QtWidgets.QLineEdit.Password)
+            self.login_line_edit.setText(self.login_line_edit.text() + value)
             self.login_pin += value
 
     def clear_login_line_edit(self):
@@ -1008,17 +1013,43 @@ class KneeSpa(QMainWindow):
     def handle_login(self):
         """Sequence events to handle login event"""
         print("Handling login")
-        pin_hash = SecureAuthHelper.hash_pin(self.login_pin)
-        if pin_hash in self.users:
+
+        # Lockout: a kiosk with a short numeric PIN and unlimited instant
+        # retries is brute-forceable in minutes
+        now = time.time()
+        if now < getattr(self, "_lockout_until", 0):
+            wait_s = int(self._lockout_until - now) + 1
+            self._show_timed_error(
+                f"Too many failed attempts. Try again in {wait_s} seconds."
+            )
+            self.clear_login_line_edit()
+            return
+
+        matched_user = None
+        for stored_hash, user in self.users.items():
+            if SecureAuthHelper.verify_pin(self.login_pin, stored_hash):
+                matched_user = user
+                break
+
+        if matched_user:
             print("Login successful")
-            self.current_user = self.users[pin_hash]
+            self._failed_logins = 0
+            self.current_user = matched_user
             self.login_pin = ""
             self.update_ui_after_login()
             self.login_dialog.accept()
             self.clear_login_line_edit()
         else:
             print("Login failed: Invalid PIN")
-            self._show_timed_error("Invalid PIN. Please try again.")
+            self._failed_logins = getattr(self, "_failed_logins", 0) + 1
+            if self._failed_logins >= 5:
+                self._lockout_until = time.time() + 60
+                self._failed_logins = 0
+                self._show_timed_error(
+                    "Too many failed attempts. Login locked for 60 seconds."
+                )
+            else:
+                self._show_timed_error("Invalid PIN. Please try again.")
             self.clear_login_line_edit()
 
     def update_ui_after_login(self):
@@ -1753,11 +1784,15 @@ class KneeSpa(QMainWindow):
         self.arduino.send("F+")
         GPIO.output(EXTRAFORWARD, GPIO.HIGH)
         GPIO.output(EXTRABACKWARD, GPIO.LOW)
+        # Firmware auto-stops its FIT pins after FIT_SLOW_DELAY (0.5s);
+        # mirror that on the Pi pins, which used to latch HIGH until the
+        # next button press
+        QTimer.singleShot(600, self._release_leg_gpio)
 
         if self.leg_length >= self.LEG_LENGTH_MAX:
             return  # Already at max
-        # Update display
-        self.leg_length += 0.25  # Move 0.5 inches per press
+        # Update display (0.5s slow run ~= 0.25 in of travel)
+        self.leg_length += 0.25
         self.leg_length = min(self.leg_length, self.LEG_LENGTH_MAX)  # Don't exceed max
         self.ui.axial_flexion_position_label_2.setText(f"{self.leg_length:.1f} in")
         self.loading_spinner.hide()
@@ -1769,12 +1804,13 @@ class KneeSpa(QMainWindow):
         self.arduino.send("F-")
         GPIO.output(EXTRAFORWARD, GPIO.LOW)
         GPIO.output(EXTRABACKWARD, GPIO.HIGH)
+        QTimer.singleShot(600, self._release_leg_gpio)
 
         if self.leg_length <= 0:
             return  # Already at min
 
-        # Update display
-        self.leg_length -= 0.25  # Move 0.5 inches per press
+        # Update display (0.5s slow run ~= 0.25 in of travel)
+        self.leg_length -= 0.25
         self.leg_length = max(0, self.leg_length)  # Don't go below 0
         self.ui.axial_flexion_position_label_2.setText(f"{self.leg_length:.1f} in")
         self.loading_spinner.hide()
@@ -1790,9 +1826,11 @@ class KneeSpa(QMainWindow):
         self.arduino.send("FF")
         GPIO.output(EXTRAFORWARD, GPIO.HIGH)
         GPIO.output(EXTRABACKWARD, GPIO.LOW)
+        # Firmware fast run is FIT_FAST_DELAY (6s)
+        QTimer.singleShot(6100, self._release_leg_gpio)
 
-        # Update display
-        self.leg_length += 3.0  # Move 1.0 inches per press
+        # Update display (6s fast run ~= 3.0 in of travel)
+        self.leg_length += 3.0
         self.leg_length = min(self.leg_length, self.LEG_LENGTH_MAX)  # Don't exceed max
         self.ui.axial_flexion_position_label_2.setText(f"{self.leg_length:.1f} in")
         self.loading_spinner.hide()
@@ -1804,16 +1842,22 @@ class KneeSpa(QMainWindow):
         self.arduino.send("FR")
         GPIO.output(EXTRAFORWARD, GPIO.LOW)
         GPIO.output(EXTRABACKWARD, GPIO.HIGH)
+        QTimer.singleShot(6100, self._release_leg_gpio)
 
         if self.leg_length >= 3:
             # Update displays
             self.leg_length = 0
             self.ui.axial_flexion_position_label_2.setText(f"{self.leg_length:.1f} in")
         else:
-            self.leg_length -= 3.0  # Move 1.0 inches per press
+            self.leg_length -= 3.0  # 6s fast run ~= 3.0 in of travel
             self.leg_length = max(0, self.leg_length)  # Don't go below 0
 
         self.loading_spinner.hide()
+
+    def _release_leg_gpio(self):
+        """Drop the Pi-side leg-motor direction pins to a safe state."""
+        GPIO.output(EXTRAFORWARD, GPIO.LOW)
+        GPIO.output(EXTRABACKWARD, GPIO.LOW)
 
     def reset_extra_button_clicked(self):
         """Reset leg length position."""
