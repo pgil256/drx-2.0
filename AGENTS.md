@@ -11,16 +11,14 @@ This file provides guidance to Codex (Codex.ai/code) when working with code in t
 ## Testing
 
 - Run all tests: `python -m pytest`
-- Run specific test categories:
+- Run specific test categories (markers defined in pytest.ini):
   - Unit tests: `python -m pytest -m unit`
-  - Integration tests: `python -m pytest -m integration`
-  - UI tests: `python -m pytest -m ui`
-  - Arduino tests: `python -m pytest -m arduino`
-  - Protocol tests: `python -m pytest -m protocol`
-  - Actuator tests: `python -m pytest -m actuator`
-- Run single test file: `python -m pytest tests/unit/test_arduino.py`
-- Run single test: `python -m pytest tests/unit/test_arduino.py::TestArduino::test_connect`
+  - Integration tests: `python -m pytest -m integration` (require POSIX pty; they skip on Windows — run under WSL/Linux)
+  - Hardware tests: `python -m pytest -m hardware` (require real Pi + Arduino)
+- Run single test file: `python -m pytest tests/unit/test_arduino_parse.py`
+- Run single test: `python -m pytest tests/unit/test_protocol_logic.py::TestSetToCDistance::test_exact_mark_lookup`
 - Generate coverage report: `python -m pytest --cov=main tests/`
+- Firmware native tests: `bash main/motor/run_native_tests.sh` (g++ + vendored Unity; `pio test -e native` in `main/motor/` also works where PlatformIO is available)
 
 ## Architecture
 
