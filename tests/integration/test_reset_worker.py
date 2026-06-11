@@ -3,7 +3,7 @@ import pytest
 import time
 import serial
 import threading
-from unittest.mock import MagicMock
+from types import SimpleNamespace
 
 from helpers.reset_worker import ResetWorker
 from config.config import Configuration
@@ -16,10 +16,32 @@ pytestmark = pytest.mark.skipif(
 from helpers.arduino import Arduino
 
 
+class FakeMainWindow:
+    """Minimal stand-in for KneeSpa exposing only the DONE-synchronization
+    surface ResetWorker uses, wired to the real Arduino done_emit signal.
+
+    Unlike a MagicMock, attribute truthiness is real: `worker` is None so
+    the reset's protocol-running guard does not spuriously abort, and the
+    I2Cstatus_event is set by the genuine DONE chain
+    (firmware DONE -> reader thread -> done_emit -> set_done).
+    """
+
+    def __init__(self, arduino):
+        self.I2Cstatus = 0
+        self.I2Cstatus_event = threading.Event()
+        self.worker = None  # no protocol running
+        arduino.done_emit.connect(self.set_done)
+
+    def set_done(self):
+        self.I2Cstatus = 1
+        self.I2Cstatus_event.set()
+
+
 @pytest.fixture
 def reset_env():
     """Set up environment for reset worker testing."""
     fake = FakeArduino()
+    fake.boot_delay = 0.1  # shorten 'Y' reboot for test speed
     fake.start()
 
     arduino = Arduino()
@@ -41,9 +63,7 @@ def reset_env():
     config.AMarks["0.0"] = config.AMarks.get("0", 0)
     config.BMarks["0.0"] = config.BMarks.get("0", 1900)
 
-    # Mock main_window with I2Cstatus
-    main_window = MagicMock()
-    main_window.I2Cstatus = 0
+    main_window = FakeMainWindow(arduino)
 
     yield arduino, fake, config, main_window
 
@@ -54,73 +74,44 @@ def reset_env():
         arduino.serial_com.close()
 
 
-def auto_ack_i2c(fake, main_window, delay=0.1):
-    """Background thread that sets I2Cstatus=1 whenever FakeArduino receives new commands.
-
-    Monitors the command list and acks each new command after a short delay,
-    simulating the real Arduino's DONE response being processed by the main window.
-    """
-    def worker():
-        last_count = 0
-        while getattr(main_window, '_ack_running', True):
-            current_count = len(fake.commands_received)
-            if current_count > last_count:
-                last_count = current_count
-                time.sleep(delay)
-                main_window.I2Cstatus = 1
-            time.sleep(0.02)
-
-    main_window._ack_running = True
-    t = threading.Thread(target=worker, daemon=True)
-    t.start()
-    return t
-
-
 @pytest.mark.integration
 class TestResetWorkerSequence:
-    """Tests for the reset sequence command order."""
+    """Tests for the reset sequence against the real DONE signal chain."""
 
-    def test_sends_y_command(self, reset_env, qtbot):
+    def test_full_reset_sequence(self, reset_env, qtbot):
+        """The complete 6-step sequence runs to success, each step gated by
+        a genuine firmware DONE (no artificial acks)."""
         arduino, fake, config, main_window = reset_env
-        ack_thread = auto_ack_i2c(fake, main_window, delay=0.1)
 
         worker = ResetWorker(arduino, config, main_window)
 
-        thread = threading.Thread(target=worker.run, daemon=True)
-        thread.start()
-
-        # Y should be the first command
-        assert fake.wait_for_command("Y", timeout=10.0)
-
-        # Wait for worker to finish
-        thread.join(timeout=60)
-        main_window._ack_running = False
-
-    def test_sends_calibration_command(self, reset_env, qtbot):
-        arduino, fake, config, main_window = reset_env
-        ack_thread = auto_ack_i2c(fake, main_window, delay=0.1)
-
-        worker = ResetWorker(arduino, config, main_window)
-
-        thread = threading.Thread(target=worker.run, daemon=True)
-        thread.start()
-        thread.join(timeout=60)
-        main_window._ack_running = False
-
-        # L0 calibration should have been sent
-        assert fake.wait_for_command("L0", timeout=1.0)
-
-    def test_finished_signal_emitted(self, reset_env, qtbot):
-        arduino, fake, config, main_window = reset_env
-        ack_thread = auto_ack_i2c(fake, main_window, delay=0.1)
-
-        worker = ResetWorker(arduino, config, main_window)
-
-        with qtbot.waitSignal(worker.signals.finished, timeout=60000) as blocker:
+        with qtbot.waitSignal(worker.signals.finished, timeout=25000) as blocker:
             thread = threading.Thread(target=worker.run, daemon=True)
             thread.start()
 
         thread.join(timeout=5)
-        main_window._ack_running = False
-        # blocker.args[0] is the success boolean
         assert blocker.args[0] is True
+
+        # Command order (ignoring automatic 'Q' status acks): the reset
+        # sequence is Y, zero marks, lateral home, horizontal home,
+        # axial home, calibration.
+        cmds = [c for c in fake.commands_received if not c.startswith("Q")]
+        prefixes = ["Y", "L5", "I14", "A13", "I12", "L0"]
+        assert len(cmds) == len(prefixes), f"unexpected commands: {cmds}"
+        for cmd, prefix in zip(cmds, prefixes):
+            assert cmd.startswith(prefix), f"expected {prefix}, got {cmd} in {cmds}"
+
+    def test_reset_aborts_while_protocol_running(self, reset_env, qtbot):
+        """The protocol-running guard must refuse to reset and emit failure."""
+        arduino, fake, config, main_window = reset_env
+        main_window.worker = SimpleNamespace(is_running=True)
+
+        worker = ResetWorker(arduino, config, main_window)
+
+        with qtbot.waitSignal(worker.signals.finished, timeout=5000) as blocker:
+            thread = threading.Thread(target=worker.run, daemon=True)
+            thread.start()
+
+        thread.join(timeout=5)
+        assert blocker.args[0] is False
+        assert not any(c.startswith("Y") for c in fake.commands_received)
