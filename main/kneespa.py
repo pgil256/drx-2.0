@@ -86,6 +86,7 @@ from ui.widgets.treatment_status_panel import TreatmentStatusPanel
 from helpers.conversions import lateral_degrees_to_position
 from controllers.safety_monitor import SafetyMonitor
 from controllers.auth_controller import AuthController
+from controllers.protocol_controller import ProtocolController
 
 # Suppress Qt warnings
 os.environ["QT_LOGGING_RULES"] = "*.debug=False;qt.qpa.xcb=False"
@@ -226,6 +227,7 @@ class KneeSpa(QMainWindow):
         self.treatment_panel.stop_requested.connect(self.panel_stop_requested)
         self.safety = SafetyMonitor(self)
         self.auth = AuthController(self)
+        self.protocol = ProtocolController(self)
         # Protocol lifecycle state: idle / starting / running / stopping / fault
         self.protocol_state = "idle"
 
@@ -794,28 +796,10 @@ class KneeSpa(QMainWindow):
                 self.protocol_timer.stop()
 
     def emergency_stop_clicked(self, event):
-        """Handle emergency stop button press."""
-        print("Emergency stop triggered")
-        self.stop_actuators()
-        # Use QTimer instead of sleep to avoid blocking UI
-        QTimer.singleShot(1000, self._emergency_stop_phase2)
-
-    def _emergency_stop_phase2(self):
-        """Phase 2 of emergency stop after 1 second delay."""
-        if self.worker:
-            self.worker.stop()
-        # Continue to phase 3 after another second
-        QTimer.singleShot(1000, self.reset_arduino)
+        self.protocol.emergency_stop_clicked(event)
 
     def _update_status_label(self, text):
-        """Mirror worker phase messages on the persistent status label
-        and the treatment banner."""
-        clean = str(text).lstrip(">")
-        try:
-            self.ui.status_label.setText(clean)
-        except Exception as e:
-            print(f"Error updating status label: {e}")
-        self.treatment_panel.set_phase(clean.upper())
+        self.protocol.update_status_label(text)
 
     def _warn_uncalibrated(self):
         reasons = "\n".join(
@@ -828,73 +812,11 @@ class KneeSpa(QMainWindow):
         )
 
     def _confirm_protocol_start(self):
-        """Summarize the treatment parameters and require confirmation.
-
-        Starting traction on a patient used to be a single unguarded
-        touch event.
-        """
-        try:
-            protocol = self.protocol_number_field.text() if self.protocol_number_field else "?"
-            max_pressure = self.max_pressure_edit.value() if self.max_pressure_edit else "?"
-            max_left = self.max_left_edit.value() if self.max_left_edit else "?"
-            max_right = self.max_right_edit.value() if self.max_right_edit else "?"
-            duration = int(self.time_edit.value()) if self.time_edit else 12
-            pulse = "on" if self.current_use_pulse_setting else "off"
-        except Exception as e:
-            print(f"Error reading protocol parameters for confirmation: {e}")
-            return False
-
-        summary = (
-            f"Protocol {protocol}\n"
-            f"Max pressure: {max_pressure} lbs\n"
-            f"Lateral range: {max_left}° left / {max_right}° right\n"
-            f"Duration: {duration} min\n"
-            f"Pulse: {pulse}\n\n"
-            "Confirm the patient is positioned and start treatment?"
-        )
-        reply = QMessageBox.question(
-            self,
-            "Start treatment?",
-            summary,
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        return reply == QMessageBox.Yes
+        return self.protocol.confirm_start()
 
     def start_or_stop_protocol(self):
-        """Start or stop the protocol with debouncing to prevent multiple rapid clicks."""
-        print("Toggling protocol start/stop")
-
-        start_button = self.ui.start_button
-        # Prevent rapid clicking by disabling the button during operation
-        start_button.setEnabled(False)
-
-        try:
-            if self.protocol_state == "idle" or self.protocol_state == "fault":
-                if not self._confirm_protocol_start():
-                    start_button.setEnabled(True)
-                    return
-                self.set_protocol_state("starting")
-                if not self.ensure_arduino_connection():
-                    self._show_timed_error(
-                        "Arduino connection is not ready. Check connections and try again."
-                    )
-                    self.set_protocol_state("idle")
-                    return
-                if not self.start_protocol():
-                    self.set_protocol_state("idle")
-                    return
-                self.set_protocol_state("running")
-            else:
-                start_button.setText("Stop")
-                start_button.setStyleSheet(BUTTON_STYLES["STOP"])
-                self.stop_protocol()
-        except Exception as e:
-            print(f"Error during protocol operation: {e}")
-            # Reset the button state in case of error
-            start_button.setText("Start")
-            start_button.setStyleSheet(BUTTON_STYLES["START"])
-            start_button.setEnabled(True)
+        """Start/Stop button (see controllers.protocol_controller)."""
+        self.protocol.start_or_stop()
 
     def show_login_dialog(self):
         """Show the login dialog."""
@@ -1072,60 +994,14 @@ class KneeSpa(QMainWindow):
         )
 
     def set_protocol_state(self, state):
-        """Single source of truth for the protocol lifecycle.
-
-        Drives the Start/Stop button, the treatment banner, and navigation
-        gating together so they can no longer desync (the button text used
-        to be the de-facto state and could show "Stop" with nothing
-        running, or vice versa).
-        """
-        print(f"Protocol state: {self.protocol_state} -> {state}")
-        self.protocol_state = state
-        self.protocol_running = state in ("starting", "running", "stopping")
-
-        start_button = self.ui.start_button
-        if state == "idle":
-            start_button.setText("Start")
-            start_button.setStyleSheet(BUTTON_STYLES["START"])
-            start_button.setEnabled(True)
-            self.treatment_panel.set_idle()
-        elif state == "starting":
-            start_button.setText("Stop")
-            start_button.setStyleSheet(BUTTON_STYLES["STOP"])
-            start_button.setEnabled(False)
-        elif state == "running":
-            start_button.setText("Stop")
-            start_button.setStyleSheet(BUTTON_STYLES["STOP"])
-            start_button.setEnabled(True)
-        elif state == "stopping":
-            start_button.setEnabled(False)
-            self.treatment_panel.set_stopping()
-        elif state == "fault":
-            start_button.setText("Start")
-            start_button.setStyleSheet(BUTTON_STYLES["START"])
-            start_button.setEnabled(True)
-            # Banner stays up (red) until the next start/reset
+        """Protocol lifecycle (see controllers.protocol_controller)."""
+        self.protocol.set_state(state)
 
     def _block_nav_during_treatment(self):
-        """Navigation away from the treatment screen is blocked while a
-        protocol is active; the setup page's jog controls would conflict
-        with the running protocol."""
-        if self.protocol_state in ("starting", "running", "stopping"):
-            self._show_timed_error(
-                "Treatment in progress - press STOP before leaving this screen."
-            )
-            return True
-        return False
+        return self.protocol.block_nav()
 
     def panel_stop_requested(self):
-        """STOP pressed on the always-visible treatment banner."""
-        print("Panel STOP pressed")
-        if self.protocol_state in ("starting", "running"):
-            self.stop_protocol()
-        else:
-            # Fault/idle state: make sure the machine is stopped anyway
-            self.stop_actuators()
-            self.treatment_panel.set_idle()
+        self.protocol.panel_stop_requested()
 
     def _show_safety_alert(self, message):
         """Persistent, acknowledged alert for safety events.
@@ -2012,163 +1888,16 @@ class KneeSpa(QMainWindow):
             return False
 
     def start_protocol(self):
-        """Start protocol execution."""
-        if not self.current_user:
-            print("Access denied: User not logged in")
-            self._show_timed_error("Please login to proceed")
-            return False
+        return self.protocol.start_protocol()
 
-        if not self.config.calibrated:
-            # Treating a patient on generated default geometry or a
-            # default scale factor is never acceptable
-            self._warn_uncalibrated()
-            return False
+    def update_protocol_time(self):
+        self.protocol.update_protocol_time()
 
-        try:
-            # Validate protocol number
-            protocol = self.protocol_number_field.text()
-            if protocol not in ["1", "2", "3", "4"]:
-                raise ValueError(f"Invalid protocol number: {protocol}")
+    def protocol_completed(self, success=True):
+        self.protocol.protocol_completed(success)
 
-            # Get duration in minutes from time_edit
-            duration = 12  # Default to 12 minutes
-            if hasattr(self, "time_edit") and self.time_edit is not None:
-                try:
-                    duration = int(self.time_edit.value())
-                except Exception as e:
-                    print(f"Error getting time value: {e}, using default 5 minutes")
-
-            if duration == 0:
-                duration = 12  # Ensure we have a valid duration
-
-            print(f"Protocol duration: {duration} minutes")
-            self.protocol_duration = duration * 60  # Convert to seconds
-            self.protocol_start_time = time.time()
-
-            # Update timer dialog if visible
-            if hasattr(self, "timer_dialog") and self.timer_dialog and self.timer_dialog.isVisible():
-                self.timer_dialog.initialize_protocol_time(
-                    self.protocol_start_time, self.protocol_duration
-                )
-                self.protocol_timer.start(1000)  # Update every second
-
-            max_pressure = int(self.max_pressure_edit.value()) if self.max_pressure_edit else 50
-            max_left_from_slider = int(self.max_left_edit.value()) if self.max_left_edit else 10
-            max_right_from_slider = int(self.max_right_edit.value()) if self.max_right_edit else 10
-
-            # The worker expects max_left to be negative
-            max_left_for_worker = -abs(max_left_from_slider)
-            max_right_for_worker = abs(max_right_from_slider)
-
-            use_pulse = self.current_use_pulse_setting # Use the tracked state
-
-            if self.ui.forward_button_protocol_image:
-                self.ui.forward_button_protocol_image.setEnabled(False)
-            else:
-                print("Warning: Could not find forward_button_protocol_image to disable it.")
-
-            if self.ui.backward_button_protocol_image:
-                self.ui.backward_button_protocol_image.setEnabled(False)
-            else:
-                print("Warning: Could not find backward_button_protocol_image to disable it.")
-
-            self.ui.reset_arduino_main_button.setEnabled(False)
-            self.increase_time.setEnabled(False)
-            self.decrease_time.setEnabled(False)
-
-            self.mid_protocol_warning_shown = False
-            # Seed rollback values before starting: the mid-protocol
-            # change dialog's Cancel path restores _prev_* -- they were
-            # never initialized, so the first Cancel raised TypeError and
-            # silently left the unconfirmed value applied
-            self._prev_pressure = max_pressure
-            self._prev_left = max_left_from_slider
-            self._prev_right = max_right_from_slider
-
-            # Update UI
-            self.ui.start_button.setText("Stop")
-            self.ui.start_button.setStyleSheet(BUTTON_STYLES["STOP"])
-
-            self.set_to_c_distance(0)
-
-            # Create and start protocol
-            self.worker = protocols.Protocols(
-                self.config.a_factor,
-                protocol,
-                max_pressure,
-                max_left_for_worker,
-                max_right_for_worker,
-                duration,
-                use_pulse,  # Just the boolean flag
-                ser=self.arduino,
-                config=self.config,
-            )
-
-            # Connect signals
-            self.worker.signals.finished.connect(self.protocol_completed)
-            # Safety recovery after a failed pulse phase (emitted by
-            # protocols 2/3); was never connected to anything before
-            self.worker.signals.reset_needed.connect(self.reset_arduino)
-
-            # Connect pressure dialog regardless of visibility
-            # We'll connect it now so it's ready when the checkbox is checked
-            if hasattr(self, "pressure_dialog") and self.pressure_dialog:
-                # Disconnect any existing connections to avoid duplicate signals
-                try:
-                    self.worker.signals.pressure_emit.disconnect(self.pressure_dialog.update_pressure)
-                except Exception:
-                    pass  # Ignore if not previously connected
-
-                # Connect the pressure signal to the dialog's update method
-                self.worker.signals.pressure_emit.connect(self.pressure_dialog.update_pressure)
-                print("MAIN APP: Connected worker.signals.pressure_emit to pressure_dialog.update_pressure")
-
-                # Also connect the Arduino's status directly as a backup connection
-                if hasattr(self, "arduino") and self.arduino and hasattr(self.arduino, "status_emit"):
-                    try:
-                        self.arduino.status_emit.disconnect(self.pressure_dialog.update_pressure)
-                    except Exception:
-                        pass  # Ignore if not previously connected
-
-                    # Create a direct connection from Arduino to pressure dialog
-                    self.arduino.status_emit.connect(
-                        lambda pos_a, pos_b, pos_c, pressure: self.pressure_dialog.update_pressure(pressure)
-                    )
-                    print("MAIN APP: Connected arduino.status_emit directly to pressure_dialog.update_pressure")
-
-            self.protocol_running = True
-            self.mid_protocol_warning_shown = False
-
-            self.start_button.setEnabled(True)
-
-            # Always-visible treatment banner: live values arrive via
-            # status_emit; the countdown via update_protocol_time
-            self.treatment_panel.set_running(max_pressure, duration * 60)
-
-            # Start protocol execution
-            self.threadpool.start(self.worker)
-
-            # Start timers
-            self.protocol_timer.start()
-            QApplication.processEvents()
-
-            # Live phase text: the label used to read "Protocol Started"
-            # for the whole session because worker progress was never
-            # connected to anything
-            self.ui.status_label.setText("Protocol Started")
-            self.worker.signals.progress.connect(self._update_status_label)
-            return True
-
-        except ValueError as e:
-            print(f"Invalid parameter: {str(e)}")
-            self._show_timed_error(f"Invalid Parameters: {str(e)}")
-            return False
-        except Exception as e:
-            print(f"Failed to start protocol: {str(e)}")
-            import traceback
-            traceback.print_exc()  # Print full stack trace
-            self._show_timed_error(f"Protocol Error: {str(e)}")
-            return False
+    def stop_protocol(self):
+        self.protocol.stop_protocol()
 
     def _confirm_mid_protocol_change(self) -> bool:
         """
@@ -2189,81 +1918,6 @@ class KneeSpa(QMainWindow):
             self.mid_protocol_warning_shown = True  # don’t ask again
             self.enable_actuator_controls()
         return True
-
-    def update_protocol_time(self):
-        """Update the protocol timer display."""
-        if not self.protocol_start_time:
-            return
-
-        elapsed_time = int(time.time() - self.protocol_start_time)
-        remaining_time = max(0, self.protocol_duration - elapsed_time)
-
-        # Always-visible banner countdown (not gated on any dialog)
-        self.treatment_panel.update_remaining(remaining_time)
-
-        if self.timer_dialog.isVisible():
-            self.timer_dialog.update_time(remaining_time)
-
-        if remaining_time == 0:
-            self.protocol_timer.stop()
-            self.protocol_start_time = None
-
-    def protocol_completed(self, success=True):
-        """Handle protocol completion."""
-        print(f"Protocol completed; success={success}")
-        self.protocol_timer.stop()
-
-        if self.worker:
-            self.worker.stop()
-
-        # Update UI
-        self.ui.show_timer_button.setChecked(False)
-        self.ui.show_pressure_button.setChecked(False)
-        # self.ui.use_pulse_button.setChecked(False)
-        self.ui.use_pulse_button.setEnabled(True)
-        self.ui.forward_button_protocol_image.setEnabled(True)
-        self.ui.backward_button_protocol_image.setEnabled(True)
-        self.ui.reset_arduino_main_button.setEnabled(True)
-        self.increase_time.setEnabled(True)
-        self.decrease_time.setEnabled(True)
-
-        # (optional) be sure the dialogs disappear
-        self.timer_dialog.hide()
-        self.pressure_dialog.hide()
-        try:
-            self.ui.status_label.setText(
-                "Protocol complete" if success else "Protocol stopped"
-            )
-        except Exception as e:
-            print(f"Error updating status label: {e}")
-        self.set_protocol_state("idle")
-        self.mid_protocol_warning_shown = False
-        if not success:
-            self._show_safety_alert(
-                "Protocol did not complete normally. Traction has been "
-                "released; verify the patient before continuing."
-            )
-
-    def stop_protocol(self):
-        """Stop protocol sequence."""
-        print("Stopping protocol")
-        self.set_protocol_state("stopping")
-        self.stop_actuators()
-        self.mid_protocol_warning_shown = False
-        # Use QTimer to avoid blocking UI
-        QTimer.singleShot(500, self._stop_protocol_phase2)
-
-    def _stop_protocol_phase2(self):
-        """Phase 2 of stop protocol after 0.5 second delay."""
-        if self.worker:
-            self.worker.stop()
-        # Continue to phase 3 after another 0.5 seconds
-        QTimer.singleShot(500, self._stop_protocol_phase3)
-
-    def _stop_protocol_phase3(self):
-        """Phase 3 of stop protocol - final cleanup."""
-        self.set_protocol_state("idle")
-        self.reset_arduino()
 
     def show_pressure_dialog(self, state):
         """Show/hide pressure dialog during protocol execution."""

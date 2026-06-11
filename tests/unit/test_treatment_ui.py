@@ -5,7 +5,7 @@ import pytest
 from PyQt5.QtWidgets import QPushButton, QWidget
 
 from ui.widgets.treatment_status_panel import TreatmentStatusPanel
-from kneespa import KneeSpa
+from controllers.protocol_controller import ProtocolController
 from config.constants import BUTTON_STYLES  # noqa: F401  (style sanity)
 
 
@@ -71,11 +71,8 @@ class _UiStub:
         self.start_button = start_button
 
 
-class StateMachineHarness:
-    """Bare object binding the real lifecycle methods without the full UI."""
-
-    set_protocol_state = KneeSpa.set_protocol_state
-    _block_nav_during_treatment = KneeSpa._block_nav_during_treatment
+class _StubWindow:
+    """Window surface the ProtocolController's state machine touches."""
 
     def __init__(self, qtbot):
         self.protocol_state = "idle"
@@ -89,6 +86,30 @@ class StateMachineHarness:
 
     def _show_timed_error(self, message):
         self.errors.append(message)
+
+
+class StateMachineHarness:
+    """ProtocolController over a stub window, exposing test conveniences."""
+
+    def __init__(self, qtbot):
+        self.window = _StubWindow(qtbot)
+        self.controller = ProtocolController(self.window)
+        self.ui = self.window.ui
+        self.treatment_panel = self.window.treatment_panel
+
+    @property
+    def protocol_running(self):
+        return self.window.protocol_running
+
+    @property
+    def errors(self):
+        return self.window.errors
+
+    def set_protocol_state(self, state):
+        self.controller.set_state(state)
+
+    def _block_nav_during_treatment(self):
+        return self.controller.block_nav()
 
 
 @pytest.mark.unit
