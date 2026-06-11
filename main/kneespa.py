@@ -87,6 +87,7 @@ from helpers.conversions import lateral_degrees_to_position
 from controllers.safety_monitor import SafetyMonitor
 from controllers.auth_controller import AuthController
 from controllers.protocol_controller import ProtocolController
+from controllers.connection_manager import ConnectionManager
 
 # Suppress Qt warnings
 os.environ["QT_LOGGING_RULES"] = "*.debug=False;qt.qpa.xcb=False"
@@ -228,6 +229,7 @@ class KneeSpa(QMainWindow):
         self.safety = SafetyMonitor(self)
         self.auth = AuthController(self)
         self.protocol = ProtocolController(self)
+        self.connection = ConnectionManager(self)
         # Protocol lifecycle state: idle / starting / running / stopping / fault
         self.protocol_state = "idle"
 
@@ -1265,9 +1267,7 @@ class KneeSpa(QMainWindow):
         print("Actuator controls setup complete")
 
     def handle_connection_failed(self, message):
-        """Handle failure to connect to Arduino."""
-        print(message)
-        self._show_timed_error(message)
+        self.connection.handle_connection_failed(message)
 
     def cleanup(self):
         """Clean up resources, including VideoPlayer and GPIO."""
@@ -1789,17 +1789,10 @@ class KneeSpa(QMainWindow):
 
     @QtCore.pyqtSlot()
     def set_done(self):
-        """Set the I2C status to done."""
-        print("Setting I2C status to done - signal received from Arduino")
-        self.I2Cstatus = 1
-        self.I2Cstatus_event.set()  # Signal the thread-safe event
-        self.enable_actuator_controls()
+        self.connection.set_done()
 
     def ready_to_go(self):
-        """Set the I2C status to ready."""
-        print("Setting I2C status to ready")
-        self.I2Cstatus = 1
-        self.I2Cstatus_event.set()  # Signal the thread-safe event  
+        self.connection.ready_to_go()
 
     def read_position(self, position, steps, actuator):
         """Read position data from the Arduino with safety checks."""
@@ -1840,52 +1833,7 @@ class KneeSpa(QMainWindow):
             self._show_timed_error(f"Error calculating position: {str(e)}")
 
     def ensure_arduino_connection(self):
-        """
-        Ensure Arduino connection is reliable before starting a protocol.
-        Performs thorough reset and reconnection if needed.
-        
-        Returns:
-            bool: True if connection is established or restored, False otherwise
-        """
-        print("Verifying Arduino connection before protocol start...")
-
-        # Check if Arduino is responsive
-        if self.arduino and self.arduino.connected:
-            # Send a test command to verify responsiveness
-            if self.arduino.verify_connection():
-                print("Arduino connection verified.")
-                return True
-
-        # If we reach here, connection needs reset
-        print("Arduino connection needs reset, attempting reconnection...")
-
-        # Forcefully disconnect current connection (disconnect() joins the
-        # I/O thread itself; the long settling sleeps predate that)
-        if hasattr(self, 'arduino') and self.arduino:
-            self.arduino.disconnect()
-            time.sleep(0.5)  # Allow time for port to release
-
-        # Reset GPIO pins to safe state
-        self.setup_gpio()
-
-        # Reinitialize Arduino connection
-        connection_success = self.setup_arduino(auto_reset=False)
-
-        if connection_success:
-            print("Arduino successfully reset and reconnected.")
-
-            # Send calibration commands after reconnection
-            self.send_zero_mark()
-            time.sleep(1)
-            self.send_calibration()
-
-            return True
-        else:
-            print("Failed to restore Arduino connection.")
-            self._show_timed_error(
-                "Unable to establish reliable connection to Arduino. Please check connections and try again."
-            )
-            return False
+        return self.connection.ensure_arduino_connection()
 
     def start_protocol(self):
         return self.protocol.start_protocol()
@@ -1994,185 +1942,17 @@ class KneeSpa(QMainWindow):
         self.safety.on_connection_lost()
 
     def setup_arduino(self, auto_reset=True):
-        """Setup Arduino interface."""
-        try:
-            print("Showing loading spinner")
-            self.loading_spinner.show()
-            self.disable_actuator_controls()
-
-            print("Setting up Arduino interface")
-            # 1 - create Worker and Thread inside the Form
-            self.arduino = Arduino()  # no parent!
-            print("Arduino instance created")
-
-            self.thread = QThread()  # no parent!
-            print("Thread instance created for Arduino")
-
-            # 2 - Connect Worker's Signals to Form method slots to post data
-            print("Connecting Arduino signals to corresponding slots")
-            self.arduino.done_emit.connect(self.set_done)
-
-            # 3 - Move the Worker object to the Thread object
-            print("Moving Arduino object to thread")
-            self.arduino.moveToThread(self.thread)
-
-            # 4 - Connect Worker Signals to the Thread slots
-            print("Connecting Arduino finished signal to thread quit")
-            self.arduino.finished.connect(self.thread.quit)
-            self.arduino.ready_to_go_emit.connect(self.ready_to_go)
-            self.arduino.buffer_warning.connect(self.handle_buffer_warning)
-
-            # 5 - Connect Thread started signal to Worker operational slot method
-            print("Connecting thread started signal to Arduino run method")
-            self.thread.started.connect(self.arduino.run)
-
-            # Additional Arduino signal connections
-            print("Connecting Arduino position, status, and pressure signals")
-            self.arduino.position_emit.connect(self.read_position)
-            self.arduino.status_emit.connect(self.status_emit)
-            self.arduino.connection_lost.connect(self.handle_connection_lost)
-            self.arduino.connection_failed.connect(self.handle_connection_failed)
-            self.arduino.error_emit.connect(self.handle_firmware_error)
-            self.arduino.released_emit.connect(self.handle_pressure_released)
-            self.arduino.zeros_emit.connect(self.handle_zeros_echo)
-
-            # 6 - Start the thread
-            print("Starting Arduino thread")
-            self.thread.start()
-            print("Thread started for Arduino")
-
-            # Wait for "Ready to Go" signal with timeout
-            print("Waiting for Arduino connection readiness")
-            connection_ready = False
-            start_time = time.time()
-            timeout = ARDUINO_SETTINGS["CONNECTION_TIMEOUT_S"]
-            while time.time() - start_time < timeout:
-                if self.arduino.connection_ready_event.is_set():
-                    connection_ready = True
-                    break
-                QApplication.processEvents()
-                time.sleep(0.1)
-
-            if connection_ready:
-                print("Arduino initialized successfully")
-
-                print("Arduino connection verified by readiness event")
-                if auto_reset:
-                    QTimer.singleShot(0, self.reset_arduino)
-            else:
-                self.loading_spinner.hide()
-
-                print("Arduino initialization timed out")
-
-            return connection_ready  # Indicate success or failure
-
-        except Exception as e:
-            self.loading_spinner.hide()
-
-            print(f"An error occurred while setting up Arduino: {e}")
-            raise
+        """Arduino lifecycle (see controllers.connection_manager)."""
+        return self.connection.setup_arduino(auto_reset=auto_reset)
 
     def reset_arduino(self, event=None):
-        """Reset Arduino and reinitialize actuators using ResetWorker."""
-        print("Reset Arduino requested...")
-
-        # Check if reset is already in progress to avoid multiple overlapping resets
-        if self.reset_in_progress:
-            print("Reset already in progress, ignoring duplicate request")
-            return
-
-        self.reset_in_progress = True  # Set flag to prevent overlapping resets
-        self.initial_setup_complete = False
-
-        if not hasattr(self, 'arduino') or self.arduino is None:
-            print("Arduino object not ready for reset.")
-            self._show_timed_error("Arduino connection not initialized.")
-            self.reset_in_progress = False  # Reset flag
-            return
-
-        # Show the spinner
-        print("Showing loading spinner for reset")
-        self.loading_spinner.show()
-        self.disable_actuator_controls()
-        # Disable start button during reset to prevent crashes
-        self.start_button.setEnabled(False)
-        QApplication.processEvents() # Ensure spinner is visible
-
-        # Create and configure the worker, passing 'self'
-        reset_worker = ResetWorker(self.arduino, self.config, self)
-
-        # Connect signals from the worker to slots in this main class
-        reset_worker.signals.finished.connect(self._on_reset_finished)
-        reset_worker.signals.error.connect(self._on_reset_error)
-
-        # Run the worker in the thread pool
-        print("Starting ResetWorker in threadpool")
-        self.threadpool.start(reset_worker)
-        self.reset_setup_readings()
-
-    @QtCore.pyqtSlot(bool)
-    def _on_reset_finished(self, success):
-        """Slot called when ResetWorker finishes."""
-        print(f"Reset sequence finished signal received. Success: {success}")
-
-        # Clear the reset in progress flag
-        self.reset_in_progress = False
-
-        if success:
-            if self.initial_setup_complete == False:
-                self.reset_extra_button_clicked()
-            self.loading_spinner.hide() # Hide spinner when done
-            self.start_button.setText("Start")
-            self.start_button.setStyleSheet(BUTTON_STYLES["START"])
-            self.start_button.setEnabled(True)  # Re-enable start button
-            time.sleep(0.1)
-            self._show_timed_error(
-                "Arduino reset and actuators reinitialized."
-            )
-            self.initial_setup_complete = True
-            print("Reset sequence completed successfully via worker.")
-        else:
-            self.start_button.setEnabled(True)  # Re-enable start button even on failure
-            self._show_timed_error(
-             "Reset sequence failed. Check logs and Arduino connection."
-             )
-
-    @QtCore.pyqtSlot(str)
-    def _on_reset_error(self, error_message):
-        """Slot called if ResetWorker emits an error signal."""
-        print(f"Reset error signal received: {error_message}")
-        # Ensure spinner hides even if finished signal doesn't fire (though finally should handle it)
-        self.loading_spinner.hide()
-        # Make sure to clear the reset_in_progress flag in case of error too
-        self.reset_in_progress = False
-        self.start_button.setEnabled(True)  # Re-enable start button on error
-        self._show_timed_error(
-         f"Could not complete reset sequence:\n{error_message}"
-        )
+        self.connection.reset_arduino(event)
 
     def send_zero_mark(self):
-        print("send_zero_mark")
-        a_zero = self.config.AMarks.get("0.0", self.config.AMarks.get("0", 0))
-        b_zero = self.config.BMarks.get("0.0", self.config.BMarks.get("0", 0))
-        self.arduino.send(
-            "L5{:3} {:3}".format(a_zero, b_zero)
-        )
+        self.connection.send_zero_mark()
 
     def send_calibration(self):
-        print("send_calibration")
-        if not self.config.scale_calibrated:
-            # Never push an implausible/default factor: the firmware
-            # would happily produce raw-count "pressure" readings
-            print(
-                f"Refusing to send implausible scale factor "
-                f"{self.config.calibration}"
-            )
-            self.logger.error(
-                "Refusing to send implausible load-cell scale factor %s",
-                self.config.calibration,
-            )
-            return
-        self.arduino.send("L0{}".format(self.config.calibration))
+        self.connection.send_calibration()
 
     def setup_gpio(self):
         """Setup GPIO pins with proper error handling."""
