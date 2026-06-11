@@ -83,6 +83,7 @@ from helpers.logging import setup_logger
 # Import UI components
 from ui.dialogs import TimerDialog, PressureDialog, VideoPlayer
 from ui.widgets.loading_spinner import LoadingSpinner
+from ui.widgets.treatment_status_panel import TreatmentStatusPanel
 
 # Suppress Qt warnings
 os.environ["QT_LOGGING_RULES"] = "*.debug=False;qt.qpa.xcb=False"
@@ -252,6 +253,13 @@ class KneeSpa(QMainWindow):
             size=300,        # up to you
             speed_pct=100    # 2.5× normal
         )
+
+        # Always-visible treatment banner: live pressure, time remaining,
+        # and a permanent STOP control on every page while a protocol runs
+        self.treatment_panel = TreatmentStatusPanel(parent=self)
+        self.treatment_panel.stop_requested.connect(self.panel_stop_requested)
+        # Protocol lifecycle state: idle / starting / running / stopping / fault
+        self.protocol_state = "idle"
 
         self.login_pin = ""
 
@@ -837,6 +845,40 @@ class KneeSpa(QMainWindow):
         # Continue to phase 3 after another second
         QTimer.singleShot(1000, self.reset_arduino)
 
+    def _confirm_protocol_start(self):
+        """Summarize the treatment parameters and require confirmation.
+
+        Starting traction on a patient used to be a single unguarded
+        touch event.
+        """
+        try:
+            protocol = self.protocol_number_field.text() if self.protocol_number_field else "?"
+            max_pressure = self.max_pressure_edit.value() if self.max_pressure_edit else "?"
+            max_left = self.max_left_edit.value() if self.max_left_edit else "?"
+            max_right = self.max_right_edit.value() if self.max_right_edit else "?"
+            duration = int(self.time_edit.value()) if self.time_edit else 12
+            pulse = "on" if self.current_use_pulse_setting else "off"
+        except Exception as e:
+            print(f"Error reading protocol parameters for confirmation: {e}")
+            return False
+
+        summary = (
+            f"Protocol {protocol}\n"
+            f"Max pressure: {max_pressure} lbs\n"
+            f"Lateral range: {max_left}° left / {max_right}° right\n"
+            f"Duration: {duration} min\n"
+            f"Pulse: {pulse}\n\n"
+            "Confirm the patient is positioned and start treatment?"
+        )
+        reply = QMessageBox.question(
+            self,
+            "Start treatment?",
+            summary,
+            QMessageBox.Yes | QMessageBox.No,
+            QMessageBox.No,
+        )
+        return reply == QMessageBox.Yes
+
     def start_or_stop_protocol(self):
         """Start or stop the protocol with debouncing to prevent multiple rapid clicks."""
         print("Toggling protocol start/stop")
@@ -846,22 +888,21 @@ class KneeSpa(QMainWindow):
         start_button.setEnabled(False)
 
         try:
-            if start_button.text() == "Start":
+            if self.protocol_state == "idle" or self.protocol_state == "fault":
+                if not self._confirm_protocol_start():
+                    start_button.setEnabled(True)
+                    return
+                self.set_protocol_state("starting")
                 if not self.ensure_arduino_connection():
                     self._show_timed_error(
                         "Arduino connection is not ready. Check connections and try again."
                     )
-                    start_button.setText("Start")
-                    start_button.setStyleSheet(BUTTON_STYLES["START"])
-                    start_button.setEnabled(True)
+                    self.set_protocol_state("idle")
                     return
-                start_button.setText("Stop")
-                start_button.setStyleSheet(BUTTON_STYLES["STOP"])
                 if not self.start_protocol():
-                    start_button.setText("Start")
-                    start_button.setStyleSheet(BUTTON_STYLES["START"])
-                    start_button.setEnabled(True)
+                    self.set_protocol_state("idle")
                     return
+                self.set_protocol_state("running")
             else:
                 start_button.setText("Stop")
                 start_button.setStyleSheet(BUTTON_STYLES["STOP"])
@@ -948,6 +989,12 @@ class KneeSpa(QMainWindow):
         self.email_admin()
 
     def email_admin(self):
+        """Send the assistance-request email from a worker thread.
+
+        Blocking SMTP-over-SSL used to run on the UI thread, freezing the
+        kiosk up to the TCP timeout whenever the network was down -- and
+        the operator never learned whether help was actually summoned.
+        """
         sender_email = EMAIL_CONFIG["SENDER_EMAIL"]
         sender_password = EMAIL_CONFIG["SENDER_PASSWORD"]
         receiver_email = EMAIL_CONFIG["RECEIVER_EMAIL"]
@@ -963,15 +1010,19 @@ class KneeSpa(QMainWindow):
         message["From"] = sender_email
         message["To"] = receiver_email
 
-        try:
-            if not sender_email or not sender_password or not receiver_email:
-                raise RuntimeError("SMTP credentials are not configured")
-            with smtplib.SMTP_SSL(smtp_server, smtp_port) as server:
-                server.login(sender_email, sender_password)
-                server.sendmail(sender_email, receiver_email, message.as_string())
-            print("Assistance request email sent successfully.")
-        except Exception as e:
-            print(f"Failed to send assistance email: {e}")
+        def _send():
+            try:
+                if not sender_email or not sender_password or not receiver_email:
+                    raise RuntimeError("SMTP credentials are not configured")
+                with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15) as server:
+                    server.login(sender_email, sender_password)
+                    server.sendmail(sender_email, receiver_email, message.as_string())
+                print("Assistance request email sent successfully.")
+            except Exception as e:
+                print(f"Failed to send assistance email: {e}")
+                self.logger.error(f"Failed to send assistance email: {e}")
+
+        threading.Thread(target=_send, daemon=True).start()
 
     def handle_login(self):
         """Sequence events to handle login event"""
@@ -1028,8 +1079,84 @@ class KneeSpa(QMainWindow):
             self.home_page
         )
 
+    def set_protocol_state(self, state):
+        """Single source of truth for the protocol lifecycle.
+
+        Drives the Start/Stop button, the treatment banner, and navigation
+        gating together so they can no longer desync (the button text used
+        to be the de-facto state and could show "Stop" with nothing
+        running, or vice versa).
+        """
+        print(f"Protocol state: {self.protocol_state} -> {state}")
+        self.protocol_state = state
+        self.protocol_running = state in ("starting", "running", "stopping")
+
+        start_button = self.ui.start_button
+        if state == "idle":
+            start_button.setText("Start")
+            start_button.setStyleSheet(BUTTON_STYLES["START"])
+            start_button.setEnabled(True)
+            self.treatment_panel.set_idle()
+        elif state == "starting":
+            start_button.setText("Stop")
+            start_button.setStyleSheet(BUTTON_STYLES["STOP"])
+            start_button.setEnabled(False)
+        elif state == "running":
+            start_button.setText("Stop")
+            start_button.setStyleSheet(BUTTON_STYLES["STOP"])
+            start_button.setEnabled(True)
+        elif state == "stopping":
+            start_button.setEnabled(False)
+            self.treatment_panel.set_stopping()
+        elif state == "fault":
+            start_button.setText("Start")
+            start_button.setStyleSheet(BUTTON_STYLES["START"])
+            start_button.setEnabled(True)
+            # Banner stays up (red) until the next start/reset
+
+    def _block_nav_during_treatment(self):
+        """Navigation away from the treatment screen is blocked while a
+        protocol is active; the setup page's jog controls would conflict
+        with the running protocol."""
+        if self.protocol_state in ("starting", "running", "stopping"):
+            self._show_timed_error(
+                "Treatment in progress - press STOP before leaving this screen."
+            )
+            return True
+        return False
+
+    def panel_stop_requested(self):
+        """STOP pressed on the always-visible treatment banner."""
+        print("Panel STOP pressed")
+        if self.protocol_state in ("starting", "running"):
+            self.stop_protocol()
+        else:
+            # Fault/idle state: make sure the machine is stopped anyway
+            self.stop_actuators()
+            self.treatment_panel.set_idle()
+
+    def _show_safety_alert(self, message):
+        """Persistent, acknowledged alert for safety events.
+
+        Safety stops used to auto-dismiss after 5 seconds, so an operator
+        who looked away never knew an emergency stop fired.
+        """
+        print(f"SAFETY ALERT: {message}")
+        self.logger.error(f"Safety alert: {message}")
+        msg_box = QMessageBox(self)
+        msg_box.setIcon(QMessageBox.Critical)
+        msg_box.setWindowTitle("SAFETY STOP")
+        msg_box.setText(message)
+        msg_box.setStandardButtons(QMessageBox.Ok)
+        msg_box.setWindowFlags(msg_box.windowFlags() | Qt.WindowStaysOnTopHint)
+        msg_box.show()  # non-modal so STOP controls stay reachable
+        # Keep a reference so it is not garbage-collected
+        self._active_safety_alert = msg_box
+
     def show_home_page(self):
         """Show the home page."""
+        if self._block_nav_during_treatment():
+            return
         print("Showing home page")
         self.ui.findChild(QtWidgets.QStackedWidget, "stackedWidget").setCurrentIndex(
             self.home_page
@@ -1037,6 +1164,8 @@ class KneeSpa(QMainWindow):
 
     def return_to_home_page(self, event):
         """Return to the home page."""
+        if self._block_nav_during_treatment():
+            return
         print("Returning to home page")
         self.ui.findChild(QtWidgets.QStackedWidget, "stackedWidget").setCurrentIndex(
             self.home_page
@@ -1048,6 +1177,8 @@ class KneeSpa(QMainWindow):
         if not self.current_user:
             print("Access denied: User not logged in")
             self._show_timed_error("Please log in to proceed.")
+            return
+        if self._block_nav_during_treatment():
             return
 
         print("Showing setup page")
@@ -1076,6 +1207,8 @@ class KneeSpa(QMainWindow):
 
     def show_help_page(self):
         """Show the help page."""
+        if self._block_nav_during_treatment():
+            return
         print("Showing help page")
         self.ui.findChild(QtWidgets.QStackedWidget, "stackedWidget").setCurrentIndex(
             self.help_page
@@ -1083,6 +1216,8 @@ class KneeSpa(QMainWindow):
 
     def show_profile_page(self, event):
         """Show the profile page."""
+        if self._block_nav_during_treatment():
+            return
         print("Showing profile page")
         self.ui.findChild(QtWidgets.QStackedWidget, "stackedWidget").setCurrentIndex(
             self.profile_page
@@ -1454,8 +1589,11 @@ class KneeSpa(QMainWindow):
             return
 
         if actuator == self.actuator_a:
-            command = f"R{actuator}"
-            self.arduino.send(command)  # transmit data serially
+            # 'R12' was never a firmware command (parsed as Unknown); the
+            # UI then showed 0 in / 0 lb while nothing moved. Home the
+            # axial actuator for real, the way the reset sequence does.
+            command = "I120"
+            self.arduino.send(command)  # firmware floors this to AZERO
             self.axial_flexion_position = 0
             self.ui.axial_flexion_position_label.setText(
                 str(round(self.axial_flexion_position, 2))
@@ -1463,8 +1601,11 @@ class KneeSpa(QMainWindow):
             self.ui.axial_flexion_position_slider.setValue(0)
             self.ui.axial_flexion_pressure_slider.setValue(0)
             self.ui.axial_flexion_pressure_label.setText("0 lb")
-            time.sleep(5)
-            self.send_calibration()
+            # Re-send the scale factor once the move has had time to
+            # finish, without freezing the UI thread for 5 seconds.
+            # NOTE: the firmware tares on L0, so this must only happen
+            # in a no-load state -- which a completed axial home is.
+            QTimer.singleShot(5000, self.send_calibration)
             self.loading_spinner.hide()
 
             return
@@ -1829,15 +1970,14 @@ class KneeSpa(QMainWindow):
         # If we reach here, connection needs reset
         print("Arduino connection needs reset, attempting reconnection...")
 
-        # Forcefully disconnect current connection
+        # Forcefully disconnect current connection (disconnect() joins the
+        # I/O thread itself; the long settling sleeps predate that)
         if hasattr(self, 'arduino') and self.arduino:
             self.arduino.disconnect()
-            time.sleep(2)  # Allow time for port to release
+            time.sleep(0.5)  # Allow time for port to release
 
         # Reset GPIO pins to safe state
         self.setup_gpio()
-
-        time.sleep(5) 
 
         # Reinitialize Arduino connection
         connection_success = self.setup_arduino(auto_reset=False)
@@ -1917,19 +2057,20 @@ class KneeSpa(QMainWindow):
             self.increase_time.setEnabled(False)
             self.decrease_time.setEnabled(False)
 
-            self.mid_protocol_change_warning_shown = False
-            # Update previous values before starting
-            if self.max_pressure_edit: self.max_pressure_edit_previous_value = self.max_pressure_edit.value()
-            if self.max_left_edit: self.max_left_edit_previous_value = self.max_left_edit.value()
-            if self.max_right_edit: self.max_right_edit_previous_value = self.max_right_edit.value()
-            # self.current_use_pulse_setting is already up-to-date via its handler
+            self.mid_protocol_warning_shown = False
+            # Seed rollback values before starting: the mid-protocol
+            # change dialog's Cancel path restores _prev_* -- they were
+            # never initialized, so the first Cancel raised TypeError and
+            # silently left the unconfirmed value applied
+            self._prev_pressure = max_pressure
+            self._prev_left = max_left_from_slider
+            self._prev_right = max_right_from_slider
 
             # Update UI
             self.ui.start_button.setText("Stop")
             self.ui.start_button.setStyleSheet(BUTTON_STYLES["STOP"])
 
             self.set_to_c_distance(0)
-            time.sleep(0.5)
 
             # Create and start protocol
             self.worker = protocols.Protocols(
@@ -1977,10 +2118,13 @@ class KneeSpa(QMainWindow):
                     print("MAIN APP: Connected arduino.status_emit directly to pressure_dialog.update_pressure")
 
             self.protocol_running = True
-            self.mid_protocol_warning_shown = False    
+            self.mid_protocol_warning_shown = False
 
-            time.sleep(0.5)
             self.start_button.setEnabled(True)
+
+            # Always-visible treatment banner: live values arrive via
+            # status_emit; the countdown via update_protocol_time
+            self.treatment_panel.set_running(max_pressure, duration * 60)
 
             # Start protocol execution
             self.threadpool.start(self.worker)
@@ -2033,6 +2177,9 @@ class KneeSpa(QMainWindow):
         elapsed_time = int(time.time() - self.protocol_start_time)
         remaining_time = max(0, self.protocol_duration - elapsed_time)
 
+        # Always-visible banner countdown (not gated on any dialog)
+        self.treatment_panel.update_remaining(remaining_time)
+
         if self.timer_dialog.isVisible():
             self.timer_dialog.update_time(remaining_time)
 
@@ -2062,16 +2209,19 @@ class KneeSpa(QMainWindow):
         # (optional) be sure the dialogs disappear
         self.timer_dialog.hide()
         self.pressure_dialog.hide()
-        self.ui.start_button.setText("Start")
-        self.ui.start_button.setStyleSheet(BUTTON_STYLES["START"])
-        self.protocol_running = False
+        self.set_protocol_state("idle")
         self.mid_protocol_warning_shown = False
+        if not success:
+            self._show_safety_alert(
+                "Protocol did not complete normally. Traction has been "
+                "released; verify the patient before continuing."
+            )
 
     def stop_protocol(self):
         """Stop protocol sequence."""
         print("Stopping protocol")
+        self.set_protocol_state("stopping")
         self.stop_actuators()
-        self.protocol_running = False # Ensure flag is set here too
         self.mid_protocol_warning_shown = False
         # Use QTimer to avoid blocking UI
         QTimer.singleShot(500, self._stop_protocol_phase2)
@@ -2085,7 +2235,7 @@ class KneeSpa(QMainWindow):
 
     def _stop_protocol_phase3(self):
         """Phase 3 of stop protocol - final cleanup."""
-        self.start_button.setEnabled(True)
+        self.set_protocol_state("idle")
         self.reset_arduino()
 
     def show_pressure_dialog(self, state):
@@ -2122,46 +2272,49 @@ class KneeSpa(QMainWindow):
         """Handle status updates from Arduino with safety checks."""
 
         success = True  # Track if processing was successful
-        print(f"A {position_a} B {position_b} C {steps} Pressure {pressure}")
+
+        # Feed the always-visible banner with MEASURED pressure (the rest
+        # of the UI shows commanded values)
+        self.treatment_panel.update_pressure(pressure)
+
         if self.initial_setup_complete:
             try:
                 # Check various safety conditions
                 if position_a > AXIAL_MAX or (self.initial_setup_complete and pressure > PRESSURE_MAX):
-                    self._show_timed_error("Emergency stop triggered: Axial limit exceeded")
-                    if self.worker is not None:
-                        self.worker.stop()
+                    self._trigger_safety_stop("Axial/pressure limit exceeded")
                     success = False
-                    self.initial_setup_complete = False
-                    self.reset_arduino()
 
                 # Check horizontal position (B actuator)
                 if position_b < HORIZONTAL_MIN or position_b > HORIZONTAL_MAX:
-                    self._show_timed_error("Emergency stop triggered: Horizontal position limit exceeded")
-                    if self.worker is not None:
-                        self.worker.stop()
+                    self._trigger_safety_stop("Horizontal position limit exceeded")
                     success = False
-                    self.initial_setup_complete = False
-                    self.reset_arduino()
 
                 # Check lateral position (C actuator)
                 if steps < LATERAL_MIN or steps > LATERAL_MAX:
-                    self._show_timed_error("Emergency stop triggered: Lateral position limit exceeded")
-                    if self.worker is not None:
-                        self.worker.stop()
+                    self._trigger_safety_stop("Lateral position limit exceeded")
                     success = False
-                    self.initial_setup_complete = False
-                    self.reset_arduino()
 
             except Exception as e:
                 print(f"Error in status monitoring: {str(e)}")
                 self.stop_actuators()
-                time.sleep(1)
                 self.initial_setup_complete = False
                 self.reset_arduino()
-                self._show_timed_error(f"Emergency stop: Error monitoring system status\n{str(e)}")
+                self._show_safety_alert(
+                    f"Emergency stop: Error monitoring system status\n{str(e)}"
+                )
                 success = False
 
         return success
+
+    def _trigger_safety_stop(self, reason):
+        """Pi-side limit breach: stop, alert persistently, reset."""
+        self._show_safety_alert(f"Emergency stop triggered: {reason}")
+        self.treatment_panel.set_fault(reason)
+        self.set_protocol_state("fault")
+        if self.worker is not None:
+            self.worker.stop()
+        self.initial_setup_complete = False
+        self.reset_arduino()
 
     def _show_timed_error(self, message):
         """Show error message that automatically closes after a timeout."""
@@ -2203,7 +2356,9 @@ class KneeSpa(QMainWindow):
                 self.worker.is_running = False
             except Exception as e:
                 print(f"Error flagging worker stop: {e}")
-        self._show_timed_error(f"DEVICE SAFETY STOP: {message}")
+        self.treatment_panel.set_fault(message)
+        self.set_protocol_state("fault")
+        self._show_safety_alert(f"DEVICE SAFETY STOP: {message}")
 
     @QtCore.pyqtSlot()
     def handle_pressure_released(self):
@@ -2243,6 +2398,15 @@ class KneeSpa(QMainWindow):
                 self.worker.is_running = False
             except Exception as e:
                 print(f"Error flagging worker stop: {e}")
+        was_treating = self.protocol_running
+        self.treatment_panel.set_fault("CONNECTION LOST")
+        self.set_protocol_state("fault")
+        if was_treating:
+            self._show_safety_alert(
+                "CONNECTION LOST during treatment. The device stops and "
+                "releases traction on its own within 3 seconds. Verify the "
+                "patient, then reconnect."
+            )
         self.reset_arduino()
 
     def setup_arduino(self, auto_reset=True):
