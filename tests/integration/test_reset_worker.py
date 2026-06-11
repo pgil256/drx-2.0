@@ -57,7 +57,9 @@ def reset_env():
     config._set_default_c_marks()
     config._set_default_a_marks()
     config._set_default_b_marks()
-    config.calibration = 1.0
+    # Realistic device factor; an implausible one makes the reset skip L0
+    config.calibration = -28369.0
+    config.scale_calibrated = True
     # ResetWorker accesses marks with float-formatted keys "0.0"
     # Default marks use integer keys "0", so add float aliases
     config.AMarks["0.0"] = config.AMarks.get("0", 0)

@@ -184,10 +184,19 @@ class ResetWorker(QRunnable):
             # --- Step 6: Send Calibration ('L0') ---
             step_start = time.time()
             debug("[STEP 6/6] Sending Calibration ('L0')", component="ResetWorker", level="INFO")
-            calib_cmd = f"L0{self.config.calibration}"
-            debug(f"Calibration command: {calib_cmd}", component="ResetWorker")
-            if not self._try_command_with_retry(calib_cmd, "Calibration", 30.0):
-                raise TimeoutError("Failed to complete calibration even after retry")
+            if getattr(self.config, "scale_calibrated", True):
+                calib_cmd = f"L0{self.config.calibration}"
+                debug(f"Calibration command: {calib_cmd}", component="ResetWorker")
+                if not self._try_command_with_retry(calib_cmd, "Calibration", 30.0):
+                    raise TimeoutError("Failed to complete calibration even after retry")
+            else:
+                # Never push an implausible/default factor to the firmware;
+                # pressure features stay gated off by the app instead
+                debug(
+                    f"SKIPPING calibration: scale factor {self.config.calibration} "
+                    "is implausible (device uncalibrated)",
+                    component="ResetWorker", level="WARNING",
+                )
             debug_timing("[STEP 6/6] Calibration complete", start_time=step_start, component="ResetWorker")
             self.step_times.append(("Calibration", time.time() - step_start))
 

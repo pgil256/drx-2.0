@@ -50,9 +50,11 @@ GPIO_EXTRAENABLE = 17
 
 # Jog step sizes
 JOG_STEPS = {
-    "A": {"small": 0.25, "large": 1.0, "unit": "in"},
-    "B": {"small": 0.25, "large": 1.0, "unit": "in"},
-    "C": {"small": 25, "large": 100, "unit": "steps"},
+    # All jogging is in raw potentiometer counts: factors do not exist
+    # yet during calibration (~430 counts/inch on A per firmware AFULLINCH)
+    "A": {"small": 50, "large": 400, "unit": "counts"},
+    "B": {"small": 50, "large": 400, "unit": "counts"},
+    "C": {"small": 25, "large": 100, "unit": "counts"},
 }
 
 
@@ -380,46 +382,39 @@ def jog_loop(ard: ArduinoSerial, actuator: str, label: str) -> int:
             print(f"  Unknown command: {cmd}")
 
 
+def _jog_by_position(ard: ArduinoSerial, device: str, current: int, step, forward: bool):
+    """Jog an actuator by raw counts using an absolute I<device> target.
+
+    The position potentiometer is readable before any calibration exists,
+    so raw-count jogging needs no factors. The firmware treats moves
+    inside its 25-count deadband as already complete, so enforce a
+    useful minimum step.
+    """
+    step = max(int(step), 30)
+    target = current + step if forward else current - step
+    target = max(0, target)
+    ard.send(f"I{device}{target}")
+    time.sleep(1.0)  # give the move time to complete
+    refresh_status(ard)
+
+
 def _send_jog(ard: ArduinoSerial, actuator: str, step, forward: bool):
-    """Send a jog command appropriate for the actuator type."""
+    """Send a jog command appropriate for the actuator type.
+
+    NOTE: 'F' commands drive the FIT/leg-length motor, not actuators
+    12/13 -- the previous implementation jogged the wrong motor, so
+    recorded A/B positions never changed and any factor computed from
+    them was meaningless.
+    """
     if actuator == "A":
-        # Axial: send relative move via A12<inches>
-        # We track an internal offset and send absolute position
-        # For simplicity, send small incremental moves
-        val = step if forward else -step
-        # Read current position, compute target inches
         a, _, _, _ = ard.get_status()
-        # We don't know the factor yet during calibration, so send raw step command
-        # Actually, we should move in a way the Arduino understands.
-        # The Arduino expects A12<inches> where inches is an absolute position.
-        # Since we don't know the calibration factor yet, we'll move by sending
-        # incremental distance commands. Let's use a small absolute inch value.
-        if forward:
-            ard.send(f"F+")
-            time.sleep(0.5)
-            ard.send(f"F0")
-        else:
-            ard.send(f"F-")
-            time.sleep(0.5)
-            ard.send(f"F0")
+        _jog_by_position(ard, "12", a, step, forward)
         print(f"  Jogged A {'forward' if forward else 'back'}")
-        time.sleep(0.3)
-        refresh_status(ard)
 
     elif actuator == "B":
-        # Horizontal: same as A but with actuator 13
-        # Use raw step approach - we don't know the factor
-        if forward:
-            ard.send(f"F+")
-            time.sleep(0.5)
-            ard.send(f"F0")
-        else:
-            ard.send(f"F-")
-            time.sleep(0.5)
-            ard.send(f"F0")
+        _, b, _, _ = ard.get_status()
+        _jog_by_position(ard, "13", b, step, forward)
         print(f"  Jogged B {'forward' if forward else 'back'}")
-        time.sleep(0.3)
-        refresh_status(ard)
 
     elif actuator == "C":
         # Lateral: send K<raw_position> - jog by step counts
@@ -713,39 +708,94 @@ def calibrate_leg_length(ard: ArduinoSerial, cfg: configparser.ConfigParser):
     print("  (Leg length tracks position in software - no config values to save.)")
 
 
+MIN_PLAUSIBLE_SCALE_FACTOR = 1000.0
+
+
 def calibrate_load_cell(ard: ArduinoSerial, cfg: configparser.ConfigParser):
-    """Calibrate the pressure load cell."""
+    """Calibrate the load cell with a tare + known-weight procedure.
+
+    The previous flow conflated the tare OFFSET with the SCALE FACTOR:
+    the prompt asked for a zero offset but the value was sent as
+    L0<value> -> scale.set_scale(), inflating readings by orders of
+    magnitude (and a "0" answer meant set_scale(0): division by zero on
+    the firmware).
+    """
     print_header("Load Cell / Pressure Calibration")
     print("""
-  This calibrates the pressure sensor (load cell) zero offset.
+  Two-step calibration:
 
-  Step 1: Remove ALL load from the actuator (no weight/pressure).
-  Step 2: Record the raw pressure reading as the zero offset.
-  Step 3: Optionally place a known weight to verify the reading.
+  Step 1: TARE  - remove all load; the firmware zeroes its offset.
+  Step 2: SCALE - place a known weight; the factor is derived from the
+                  reading and verified before anything is saved.
     """)
 
-    # Step 1: No-load reading
-    print("--- Step 1: Zero offset ---")
-    prompt_enter("Remove all load from the axial actuator, then press Enter.")
+    current_cal = cfg.get("Options", "calibration", fallback="1.0")
+    try:
+        current_factor = float(current_cal)
+    except ValueError:
+        current_factor = 1.0
+    print(f"  Current scale factor in config: {current_factor}")
+
+    # --- Step 1: tare with no load ---
+    print("\n--- Step 1: Tare (zero offset) ---")
+    prompt_enter("Remove ALL load from the axial actuator, then press Enter.")
+    ard.send("L1")  # firmware: set_scale(current) + tare
+    time.sleep(2)
     refresh_status(ard)
-    _, _, _, zero_pressure = ard.get_status()
-    print(f"  Raw pressure reading with no load: {zero_pressure}")
+    _, _, _, zero_reading = ard.get_status()
+    print(f"  Reading after tare: {zero_reading:.2f} (should be ~0)")
 
-    # The calibration value in the config is sent as L0<value>
-    # Current config value for reference
-    current_cal = cfg.get("Options", "calibration", fallback="0")
-    print(f"  Current calibration offset in config: {current_cal}")
+    # --- Step 2: known weight ---
+    print("\n--- Step 2: Known weight ---")
+    weight_str = input("  Enter the known weight in lbs (e.g. 25), or blank to skip: ").strip()
+    if not weight_str:
+        print("  Skipped scale-factor derivation; tare only.")
+        return
+    try:
+        known_weight = float(weight_str)
+        if known_weight <= 0:
+            raise ValueError("weight must be positive")
+    except ValueError as e:
+        print(f"  Invalid weight ({e}). Aborting load-cell calibration.")
+        return
 
-    if prompt_yn("  Would you like to update the calibration offset?"):
-        new_cal = input(f"  Enter new calibration value (current={current_cal}): ").strip()
-        try:
-            float(new_cal)  # validate
-            cfg.set("Options", "calibration", new_cal)
-            print(f"  Saved calibration = {new_cal}")
-        except ValueError:
-            print("  Invalid number. Skipped.")
-    else:
-        print("  Skipped.")
+    prompt_enter(f"Apply the {known_weight} lbs load, then press Enter.")
+    time.sleep(2)
+    refresh_status(ard)
+    _, _, _, reading = ard.get_status()
+    print(f"  Reading under load: {reading:.2f} (with factor {current_factor})")
+
+    if abs(reading) < 0.01:
+        print("  Reading is zero - check load cell wiring. Aborting.")
+        return
+
+    # units = (raw - offset) / factor  =>  new_factor = factor * units / W
+    new_factor = current_factor * (reading / known_weight)
+    print(f"  Derived scale factor: {new_factor:.2f}")
+
+    if abs(new_factor) < MIN_PLAUSIBLE_SCALE_FACTOR:
+        print(
+            f"  Factor magnitude {abs(new_factor):.1f} is implausible for this "
+            f"hardware (expected tens of thousands). NOT saved."
+        )
+        return
+
+    # Apply and verify before saving
+    ard.send(f"L0{new_factor}")
+    time.sleep(2)
+    prompt_enter("Re-apply (or keep) the known weight, then press Enter to verify.")
+    refresh_status(ard)
+    _, _, _, verify_reading = ard.get_status()
+    error_pct = abs(verify_reading - known_weight) / known_weight * 100
+    print(f"  Verification: reads {verify_reading:.2f} lbs vs {known_weight} lbs "
+          f"({error_pct:.1f}% error)")
+
+    if error_pct > 5.0:
+        print("  Error exceeds 5% - NOT saved. Check setup and repeat.")
+        return
+
+    cfg.set("Options", "calibration", f"{new_factor:.2f}")
+    print(f"  Saved calibration = {new_factor:.2f}")
 
 
 # ---------------------------------------------------------------------------
@@ -858,12 +908,26 @@ def main():
             elif choice == "8":
                 a_zero = cfg.get("AMarks", "0.0", fallback="0")
                 b_zero = cfg.get("BMarks", "0.0", fallback="0")
-                cal = cfg.get("Options", "calibration", fallback="0")
-                print(f"  Sending zero mark: L5{a_zero} {b_zero}")
-                ard.send(f"L5{a_zero} {b_zero}")
+                cal = cfg.get("Options", "calibration", fallback="1.0")
+                # Delimited form: the fixed-width legacy format truncated
+                # 4-digit zero marks (1900 -> 190)
+                print(f"  Sending zero mark: L5|{a_zero}|{b_zero}")
+                ard.send(f"L5|{a_zero}|{b_zero}")
                 time.sleep(1)
-                print(f"  Sending calibration: L0{cal}")
-                ard.send(f"L0{cal}")
+                try:
+                    cal_value = float(cal)
+                except ValueError:
+                    cal_value = 0.0
+                if abs(cal_value) < MIN_PLAUSIBLE_SCALE_FACTOR:
+                    # set_scale(0) divides by zero on the firmware; tiny
+                    # factors mean the device was never weight-calibrated
+                    print(
+                        f"  NOT sending calibration: factor {cal} is "
+                        "implausible. Run load-cell calibration first."
+                    )
+                else:
+                    print(f"  Sending calibration: L0{cal}")
+                    ard.send(f"L0{cal}")
                 print("  Done.")
             elif choice == "9":
                 save_config(cfg, config_path)

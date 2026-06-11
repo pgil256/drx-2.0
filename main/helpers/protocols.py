@@ -3,6 +3,7 @@ import time
 import threading
 import logging
 from helpers.logging import setup_logger
+from helpers.conversions import lateral_degrees_to_position
 from typing import Optional
 
 from PyQt5 import QtCore, QtGui, QtWidgets, uic
@@ -354,29 +355,9 @@ class Protocols(QtCore.QRunnable):
         
         try:
             print(f"Setting C actuator to {degrees} degrees")
-            degrees = float(degrees)
-            degrees = round(degrees * 2) / 2
-            degrees = max(-20.0, min(20.0, degrees))
-            degree_key = "{:.1f}".format(degrees)
-
-            # Look up or interpolate position
-            if degree_key in self.config.CMarks:
-                position = int(self.config.CMarks[degree_key])
-            else:
-                marks = sorted((float(k), int(v)) for k, v in self.config.CMarks.items())
-                for i in range(len(marks) - 1):
-                    if marks[i][0] <= degrees <= marks[i + 1][0]:
-                        deg1, pos1 = marks[i]
-                        deg2, pos2 = marks[i + 1]
-                        # Linear interpolation with safety check for division by zero
-                        if deg2 - deg1 == 0:
-                            position = pos1
-                        else:
-                            ratio = (degrees - deg1) / (deg2 - deg1)
-                            position = pos1 + int((pos2 - pos1) * ratio)
-                        break
-                else:
-                    raise ValueError(f"Degree value {degrees} outside valid range")
+            position, degrees = lateral_degrees_to_position(
+                self.config.CMarks, degrees
+            )
 
             # Send command and ensure high-frequency status updates for position monitoring
             self.angle_set = False

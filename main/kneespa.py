@@ -84,6 +84,7 @@ from helpers.logging import setup_logger
 from ui.dialogs import TimerDialog, PressureDialog, VideoPlayer
 from ui.widgets.loading_spinner import LoadingSpinner
 from ui.widgets.treatment_status_panel import TreatmentStatusPanel
+from helpers.conversions import lateral_degrees_to_position
 
 # Suppress Qt warnings
 os.environ["QT_LOGGING_RULES"] = "*.debug=False;qt.qpa.xcb=False"
@@ -120,43 +121,9 @@ class KneeSpa(QMainWindow):
         self.loading_spinner.show()
         self.disable_actuator_controls()
         try:
-            # Ensure degrees is float
-            degrees = float(degrees)
-
-            # Round to nearest 2.5 degrees
-            degrees = round(degrees * 2) / 2
-
-            # Ensure degrees is within bounds
-            degrees = max(-20.0, min(20.0, degrees))
-
-            # Format for dictionary lookup
-            degree_key = "{:.1f}".format(degrees)
-
-            # If exact value exists, use it
-            if degree_key in self.config.CMarks:
-                position = int(self.config.CMarks[degree_key])
-            else:
-                # Convert dictionary items to float keys and integer values
-                marks = sorted(
-                    [(float(k), int(v)) for k, v in self.config.CMarks.items()]
-                )
-
-                # Find the two closest points for interpolation
-                for i in range(len(marks) - 1):
-                    if marks[i][0] <= degrees <= marks[i + 1][0]:
-                        deg1, pos1 = marks[i]
-                        deg2, pos2 = marks[i + 1]
-
-                        # Linear interpolation with safety check for division by zero
-                        if deg2 - deg1 == 0:
-                            # If degree values are the same, use the first position
-                            position = pos1
-                        else:
-                            ratio = (float(degrees) - deg1) / (deg2 - deg1)
-                            position = pos1 + int((pos2 - pos1) * ratio)
-                        break
-                else:
-                    raise ValueError(f"Degree value {degrees} outside valid range")
+            position, degrees = lateral_degrees_to_position(
+                self.config.CMarks, degrees
+            )
 
             print(f" positioned to {degrees} degrees pos {position}")
             command = f"K{position}"
@@ -211,6 +178,10 @@ class KneeSpa(QMainWindow):
         self.I2Cstatus_event = threading.Event()  # Thread-safe event for synchronization
         self.config = Configuration(config_path=config_path)
         self.config.get_config()
+        if not self.config.calibrated:
+            # Surface after the window is up; a corrupt config used to
+            # degrade silently to generated default geometry
+            QTimer.singleShot(1500, self._warn_uncalibrated)
         self.reset_done_event = threading.Event()
         self.initial_setup_complete = False
         self.reset_in_progress = False  # Flag to prevent overlapping resets
@@ -845,6 +816,16 @@ class KneeSpa(QMainWindow):
         # Continue to phase 3 after another second
         QTimer.singleShot(1000, self.reset_arduino)
 
+    def _warn_uncalibrated(self):
+        reasons = "\n".join(
+            self.config.calibration_errors[:4]
+        ) or "calibration data invalid"
+        self._show_safety_alert(
+            "DEVICE UNCALIBRATED - treatments are disabled.\n\n"
+            f"{reasons}\n\n"
+            "Recalibrate and restart before treating patients."
+        )
+
     def _confirm_protocol_start(self):
         """Summarize the treatment parameters and require confirmation.
 
@@ -1426,6 +1407,11 @@ class KneeSpa(QMainWindow):
         if self.actuator_command_in_progress:
             print("Actuator command already in progress - ignoring input")
             return
+        if not self.config.marks_valid:
+            # Generated default marks are fabricated geometry; jogging on
+            # them moves the mechanism to unintended positions
+            self._warn_uncalibrated()
+            return
         print(f"Speed factor: {speed_factor}")
         if actuator == self.actuator_b:  # Horizontal Flexion
             step = 10 if int(speed_factor) > 4 else 5
@@ -1521,17 +1507,20 @@ class KneeSpa(QMainWindow):
             self.loading_spinner.show()
             self.disable_actuator_controls()
 
-            # Ensure the position exists in CMarks
-            position_key = f"{new_position:.1f}"
-            if position_key not in self.config.CMarks:
-                print(f"Invalid position {position_key}, skipping movement")
+            # Interpolate between marks; an exact-key-only lookup used to
+            # silently no-op the button press when a 2.5-degree mark was
+            # missing from the table
+            try:
+                position, new_position = lateral_degrees_to_position(
+                    self.config.CMarks, new_position
+                )
+            except ValueError as e:
+                print(f"Invalid lateral position: {e}")
                 self.enable_actuator_controls()
                 self.loading_spinner.hide()
                 return
 
             self.lateral_flexion_position = new_position
-
-            position = self.config.CMarks[position_key]
 
             print(
                 f" positioned to {self.lateral_flexion_position} degrees pos {position}"
@@ -2003,6 +1992,12 @@ class KneeSpa(QMainWindow):
         if not self.current_user:
             print("Access denied: User not logged in")
             self._show_timed_error("Please login to proceed")
+            return False
+
+        if not self.config.calibrated:
+            # Treating a patient on generated default geometry or a
+            # default scale factor is never acceptable
+            self._warn_uncalibrated()
             return False
 
         try:
@@ -2576,6 +2571,18 @@ class KneeSpa(QMainWindow):
 
     def send_calibration(self):
         print("send_calibration")
+        if not self.config.scale_calibrated:
+            # Never push an implausible/default factor: the firmware
+            # would happily produce raw-count "pressure" readings
+            print(
+                f"Refusing to send implausible scale factor "
+                f"{self.config.calibration}"
+            )
+            self.logger.error(
+                "Refusing to send implausible load-cell scale factor %s",
+                self.config.calibration,
+            )
+            return
         self.arduino.send("L0{}".format(self.config.calibration))
 
     def setup_gpio(self):
