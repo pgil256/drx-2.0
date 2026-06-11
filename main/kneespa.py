@@ -803,6 +803,16 @@ class KneeSpa(QMainWindow):
         # Continue to phase 3 after another second
         QTimer.singleShot(1000, self.reset_arduino)
 
+    def _update_status_label(self, text):
+        """Mirror worker phase messages on the persistent status label
+        and the treatment banner."""
+        clean = str(text).lstrip(">")
+        try:
+            self.ui.status_label.setText(clean)
+        except Exception as e:
+            print(f"Error updating status label: {e}")
+        self.treatment_panel.set_phase(clean.upper())
+
     def _warn_uncalibrated(self):
         reasons = "\n".join(
             self.config.calibration_errors[:4]
@@ -1607,7 +1617,7 @@ class KneeSpa(QMainWindow):
             )
             self.ui.axial_flexion_position_slider.setValue(0)
             self.ui.axial_flexion_pressure_slider.setValue(0)
-            self.ui.axial_flexion_pressure_label.setText("0 lb")
+            self.ui.axial_flexion_pressure_label.setText("0 lbs")
             # Re-send the scale factor once the move has had time to
             # finish, without freezing the UI thread for 5 seconds.
             # NOTE: the firmware tares on L0, so this must only happen
@@ -1693,7 +1703,7 @@ class KneeSpa(QMainWindow):
 
     def update_pressure_display(self, value):
         """Update pressure display when slider moves."""
-        self.ui.axial_flexion_pressure_label.setText(f"{value} lb")
+        self.ui.axial_flexion_pressure_label.setText(f"{value} lbs")
 
     def stop_actuators(self):
         """Emergency stop for all actuators."""
@@ -2159,8 +2169,11 @@ class KneeSpa(QMainWindow):
             self.protocol_timer.start()
             QApplication.processEvents()
 
-            # Update status
+            # Live phase text: the label used to read "Protocol Started"
+            # for the whole session because worker progress was never
+            # connected to anything
             self.ui.status_label.setText("Protocol Started")
+            self.worker.signals.progress.connect(self._update_status_label)
             return True
 
         except ValueError as e:
@@ -2234,6 +2247,12 @@ class KneeSpa(QMainWindow):
         # (optional) be sure the dialogs disappear
         self.timer_dialog.hide()
         self.pressure_dialog.hide()
+        try:
+            self.ui.status_label.setText(
+                "Protocol complete" if success else "Protocol stopped"
+            )
+        except Exception as e:
+            print(f"Error updating status label: {e}")
         self.set_protocol_state("idle")
         self.mid_protocol_warning_shown = False
         if not success:
