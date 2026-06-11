@@ -2,6 +2,16 @@
 
 **Date:** 2026-06-11
 **Basis:** [Full application audit](../audits/2026-06-11-full-application-audit.md) (same date).
+
+> **Implementation status (2026-06-11, branch `improvement-plan`):**
+> - **Phase 0 — DONE.** Firmware tests buildable+green (57 tests), Linux CI workflow, FakeArduino firmware parity, both verified regressions fixed, docs reconciled.
+> - **Phase 1 — DONE (code + tests); awaiting the Batch-1 hardware checkout** ([checklist](2026-06-11-batch1-hardware-checklist.md)) before flashing. Firmware `2026-06-11-FAILSAFE-1`.
+> - **Phase 2 — DONE** except §2.1 protocol v2 framing (seq/ack/CRC), deliberately deferred to Flash Batch 2.
+> - **Phase 3 — DONE.** Treatment banner + STOP, state machine, persistent alarms, confirmation dialog, UI-thread unblocking.
+> - **Phase 4 — DONE** except items gated on hardware measurements (A-command zero-offset convention, AFULLINCH, B-axis direction — checklist items E1–E3).
+> - **Phase 5 — auth hardening DONE** (PBKDF2 + lockout); KneeSpa decomposition, parameterized protocol engine, and deployment hygiene remain.
+> - **Phase 6 — partial** (leg-motor GPIO auto-release, PIN double-masking); layout/nav/dead-code passes remain.
+> - CI activates on first push to GitHub (`.github/workflows/ci.yml`).
 **Constraints (per owner):**
 - Software/firmware changes only — no new hardware. (A hardware E-stop power interlock remains the single biggest residual risk and is documented in §8 as a recommended future hardware change.)
 - Device is used on real patients → every safety change carries a hazard reference, an acceptance criterion, and a verification method.
