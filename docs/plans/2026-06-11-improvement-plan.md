@@ -9,8 +9,8 @@
 > - **Phase 2 — DONE** except §2.1 protocol v2 framing (seq/ack/CRC), deliberately deferred to Flash Batch 2.
 > - **Phase 3 — DONE.** Treatment banner + STOP, state machine, persistent alarms, confirmation dialog, UI-thread unblocking.
 > - **Phase 4 — DONE** except items gated on hardware measurements (A-command zero-offset convention, AFULLINCH, B-axis direction — checklist items E1–E3).
-> - **Phase 5 — auth hardening DONE** (PBKDF2 + lockout); KneeSpa decomposition, parameterized protocol engine, and deployment hygiene remain.
-> - **Phase 6 — partial** (leg-motor GPIO auto-release, PIN double-masking); layout/nav/dead-code passes remain.
+> - **Phase 5 — DONE** except the KneeSpa class decomposition (§5.1), deferred to its own session by engineering judgment (high-regression-risk UI refactor; its testability goal is partially met via harness-bound tests). Auth (PBKDF2 + lockout), the parameterized protocol engine, and deployment hygiene are in.
+> - **Phase 6 — substantially done** (leg-motor GPIO auto-release, PIN double-masking, status-label lifecycle, unit consistency, dead-code removal); the layout/touch-target/nav-button pass remains and needs visual verification on the device.
 > - CI activates on first push to GitHub (`.github/workflows/ci.yml`).
 **Constraints (per owner):**
 - Software/firmware changes only — no new hardware. (A hardware E-stop power interlock remains the single biggest residual risk and is documented in §8 as a recommended future hardware change.)
