@@ -213,6 +213,8 @@ class KneeSpa(QMainWindow):
         self.reset_done_event = threading.Event()
         self.initial_setup_complete = False
         self.reset_in_progress = False  # Flag to prevent overlapping resets
+        self.actuator_command_in_progress = False  # Prevents simultaneous actuator commands
+        self.controls_enable_timer = None  # Single pending-enable timer for all controls
         self.mid_protocol_warning_shown = False 
         self._prev_pressure = None                   #  for rollback
         self._prev_left   = None
@@ -551,15 +553,35 @@ class KneeSpa(QMainWindow):
             raise
 
     def disable_actuator_controls(self):
+        # Cancel any pending enable so it cannot fire mid-command and
+        # re-enable controls while the MCU is still busy
+        if self.controls_enable_timer is not None:
+            self.controls_enable_timer.stop()
+            self.controls_enable_timer = None
+        self.actuator_command_in_progress = True
         for w in self.actuator_controls:
             w.setEnabled(False)
 
     def enable_actuator_controls(self):
+        self.actuator_command_in_progress = False
         if self.protocol_running == False:
             print("Scheduling controls to enable with delay...") # Add for debugging
-            for w in self.actuator_controls:
-                # Use a default argument to capture the current value of 'w'
-                QTimer.singleShot(200, lambda widget=w: widget.setEnabled(True))
+            # Single timer instance shared by all controls: a new enable
+            # request supersedes any pending one instead of stacking
+            # per-widget timers that can interleave with a later disable
+            if self.controls_enable_timer is not None:
+                self.controls_enable_timer.stop()
+            self.controls_enable_timer = QTimer()
+            self.controls_enable_timer.setSingleShot(True)
+            self.controls_enable_timer.timeout.connect(
+                self._apply_enable_actuator_controls
+            )
+            self.controls_enable_timer.start(200)
+
+    def _apply_enable_actuator_controls(self):
+        self.controls_enable_timer = None
+        for w in self.actuator_controls:
+            w.setEnabled(True)
 
     def connect_buttons_and_labels(self):
         """Connect signals and slots for all UI elements."""
@@ -1266,6 +1288,9 @@ class KneeSpa(QMainWindow):
         """
         Move an actuator in the specified direction
         """
+        if self.actuator_command_in_progress:
+            print("Actuator command already in progress - ignoring input")
+            return
         print(f"Speed factor: {speed_factor}")
         if actuator == self.actuator_b:  # Horizontal Flexion
             step = 10 if int(speed_factor) > 4 else 5
