@@ -83,6 +83,7 @@ from helpers.logging import setup_logger
 from ui.dialogs import TimerDialog, PressureDialog, VideoPlayer
 from ui.widgets.loading_spinner import LoadingSpinner
 from ui.widgets.treatment_status_panel import TreatmentStatusPanel
+from ui.widgets.press_feedback import install_press_feedback
 from helpers.conversions import lateral_degrees_to_position
 from controllers.safety_monitor import SafetyMonitor
 from controllers.auth_controller import AuthController
@@ -593,6 +594,18 @@ class KneeSpa(QMainWindow):
                     lambda event: self.handle_assistance_request()
                 )
 
+            # QLabel "buttons" give no visual response to a touch; dim
+            # them while pressed (keep the filter referenced or it is
+            # garbage-collected)
+            self._press_feedback = install_press_feedback(
+                self.ui.profile_button,
+                self.ui.video_player_button,
+                self.ui.brand_label,
+                self.ui.brand_logo,
+                self.ui.exit_app_button,
+                self.ui.request_assistance_button,
+            )
+
             # System control connections
             if self.ui.set_up_tolerance_button:
                 self.ui.set_up_tolerance_button.clicked.connect(
@@ -681,6 +694,9 @@ class KneeSpa(QMainWindow):
             if self.decrease_time and self.increase_time:
                 self.decrease_time.mousePressEvent = self.decrease_time_value
                 self.increase_time.mousePressEvent = self.increase_time_value
+                self._time_press_feedback = install_press_feedback(
+                    self.decrease_time, self.increase_time
+                )
 
             print("Protocol controls setup completed successfully")
 
@@ -1263,6 +1279,9 @@ class KneeSpa(QMainWindow):
 
         # Emergency stop
         self.ui.emergency_stop_setup_label.mousePressEvent = self.emergency_stop_clicked
+        self._estop_press_feedback = install_press_feedback(
+            self.ui.emergency_stop_setup_label
+        )
 
         print("Actuator controls setup complete")
 

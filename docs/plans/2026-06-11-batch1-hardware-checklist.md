@@ -45,4 +45,11 @@ States: (1) position move (`I14...`), (2) pressure ramp (`P30`), (3) pulsing (`J
 - [ ] **E3. Horizontal (B) convention.** Verify which direction increasing counts moves the horizontal actuator and what count `-25°`/`-5°` correspond to. The Pi-side formula and the constants file comments disagree.
 - [ ] **E4. Bootloader version** (from A2): WDT-safe? yes / no — if no, schedule a bootloader reflash.
 
+## F. Visual/touch verification (code cannot prove these; eyes on the device)
+
+- [ ] **F1. Treatment banner.** Start a protocol: the banner overlays the top of the screen on every page, values are readable at arm's length, and the STOP button is comfortably tappable. Fault state turns it red and persists.
+- [ ] **F2. PIN pad.** Keys are finger-sized after the layout pass; the in-field backspace icon is discoverable and tappable; digits mask correctly (single mask).
+- [ ] **F3. Press feedback.** Label-based controls (profile, logo/home, exit, assistance, time +/-, setup-page e-stop) visibly dim while pressed.
+- [ ] **F4. Fixed-geometry assessment.** At the device's native resolution, note any clipped/overlapping widgets. The .ui files still use absolute geometry; converting to responsive layouts was deliberately NOT done blind — record what needs moving here for a follow-up with the screen in front of you.
+
 Sign-off: __________ Date: __________

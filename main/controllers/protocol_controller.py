@@ -175,7 +175,7 @@ class ProtocolController:
 
             # Get duration in minutes from time_edit
             duration = 12  # Default to 12 minutes
-            if hasattr(self, "time_edit") and window.time_edit is not None:
+            if hasattr(window, "time_edit") and window.time_edit is not None:
                 try:
                     duration = int(window.time_edit.value())
                 except Exception as e:
@@ -189,7 +189,7 @@ class ProtocolController:
             window.protocol_start_time = time.time()
 
             # Update timer dialog if visible
-            if hasattr(self, "timer_dialog") and window.timer_dialog and window.timer_dialog.isVisible():
+            if hasattr(window, "timer_dialog") and window.timer_dialog and window.timer_dialog.isVisible():
                 window.timer_dialog.initialize_protocol_time(
                     window.protocol_start_time, window.protocol_duration
                 )
@@ -255,7 +255,7 @@ class ProtocolController:
 
             # Connect pressure dialog regardless of visibility
             # We'll connect it now so it's ready when the checkbox is checked
-            if hasattr(self, "pressure_dialog") and window.pressure_dialog:
+            if hasattr(window, "pressure_dialog") and window.pressure_dialog:
                 # Disconnect any existing connections to avoid duplicate signals
                 try:
                     window.worker.signals.pressure_emit.disconnect(window.pressure_dialog.update_pressure)
@@ -267,7 +267,7 @@ class ProtocolController:
                 print("MAIN APP: Connected worker.signals.pressure_emit to pressure_dialog.update_pressure")
 
                 # Also connect the Arduino's status directly as a backup connection
-                if hasattr(self, "arduino") and window.arduino and hasattr(window.arduino, "status_emit"):
+                if hasattr(window, "arduino") and window.arduino and hasattr(window.arduino, "status_emit"):
                     try:
                         window.arduino.status_emit.disconnect(window.pressure_dialog.update_pressure)
                     except Exception:
