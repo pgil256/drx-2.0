@@ -14,10 +14,14 @@
 */
 
 #define VERSION "2025-11-05-STOP-PIN-FIX"
+#ifndef UNIT_TEST
+// Hardware libraries; native unit tests supply mocks and arduino_shim.h
+// (see test/) before including this file
 #include "HX711.h"
 #include <elapsedMillis.h>
 #include <Wire.h>
 #include <avr/wdt.h>
+#endif
 
 // Pin definitions
 #define LOADCELL_DOUT_PIN  7

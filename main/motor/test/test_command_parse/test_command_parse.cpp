@@ -2,6 +2,7 @@
 #ifdef UNIT_TEST
 
 #include <unity.h>
+#include "../arduino_shim.h"
 #include "../mock_wire.h"
 #include "../mock_serial.h"
 #include "../mock_hx711.h"
@@ -14,7 +15,7 @@ MockSerial Serial1;
 // Provide stubs for Arduino functions used in motor.ino
 unsigned long _millis_value = 0;
 unsigned long millis() { return _millis_value; }
-void delay(unsigned long ms) {}
+void delay(unsigned long ms) { _millis_value += ms; }  // advance mock clock
 
 // Include the main firmware
 // (processCommand and related functions will be available)
@@ -64,8 +65,9 @@ void test_I_sets_position(void) {
 
 void test_I_ignored_when_running(void) {
     bRunning = true;
+    desiredPosition = 3;  // sentinel: must remain untouched
     processCommand("I121500");
-    TEST_ASSERT_EQUAL(3, desiredPosition);  // unchanged from default
+    TEST_ASSERT_EQUAL(3, desiredPosition);  // unchanged
 }
 
 // --- K command (lateral) ---
