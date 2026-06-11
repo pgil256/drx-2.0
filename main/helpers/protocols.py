@@ -446,222 +446,138 @@ class Protocols(QtCore.QRunnable):
             if self.arduino: self.arduino.send("JS")
             return False
 
-    def protocol_1(self):
-        """Axial protocol - pressure only."""
-        print("Running protocol 1...")
-        if not self.check_duration():
-            return
+    # ------------------------------------------------------------------
+    # Shared protocol phases
+    #
+    # protocol_1..4 used to be four ~90%-duplicated copies of the same
+    # sequence; fixes did not propagate between them (the reset_needed
+    # safety emit existed only in 2/3, the post-centering settle only in
+    # 3/4, and a too-short duration exited without emitting finished,
+    # leaving the UI stuck on "Stop").
+    # ------------------------------------------------------------------
 
-        self.signals.progress.emit(">>Starting axial protocol")
+    def _fail(self, reason: str, reset_needed: bool = False):
+        """Common failure exit: log, optionally request recovery, emit."""
+        print(f"Protocol {self.protocol} failed: {reason}")
+        if reset_needed:
+            self.signals.reset_needed.emit()
+        self.signals.finished.emit(False)
+        return False
 
-        # Determine initial pressure based on max pressure
+    def _initial_pressure(self) -> float:
         initial_pressure = MIN_PRESSURE
         if self.max_pressure > 20:
             initial_pressure = max(20.0, MIN_PRESSURE)
-            print(f"Setting higher initial pressure of {initial_pressure} lbs for max_pressure={self.max_pressure}")
+            print(
+                f"Setting higher initial pressure of {initial_pressure} lbs "
+                f"for max_pressure={self.max_pressure}"
+            )
+        return initial_pressure
 
-        # Initial pressure setting
+    def _preamble(self, banner: str) -> bool:
+        """Duration guard, banner, initial pressure, ramp to setpoint."""
+        if not self.check_duration():
+            return self._fail("duration already elapsed before start")
+        self.signals.progress.emit(banner)
+
+        initial_pressure = self._initial_pressure()
         if not self.set_to_pressure(initial_pressure):
-            self.signals.finished.emit(False)
-            return
-
-        # Run pressure sequence
+            return self._fail("initial pressure not reached")
         if not self.run_pressure_sequence(initial_pressure, self.max_pressure):
-            self.signals.finished.emit(False)
-            return
-            
-        # Final phase: pulse or hold, responsive to changes in self.use_pulse
-        if self.is_running:
-            main_phase_loop_active = True
-            print(f"Protocol {self.protocol} ({time.time()}): Entering final phase loop. Initial self.use_pulse={self.use_pulse}")
-            while main_phase_loop_active and self.is_running and self.check_duration():
-                if self.use_pulse:
-                    # If we enter here, we intend to pulse.
-                    # apply_continuous_pulse will run its own loop based on duration
-                    # and will also internally check self.use_pulse to stop early if it changes.
-                    print(f"Protocol {self.protocol} ({time.time()}): Loop decides to pulse. Calling apply_continuous_pulse.")
-                    if not self.apply_continuous_pulse():
-                        # Error during pulse - emit signal and return
-                        self.signals.finished.emit(False)
-                        return
-                    # apply_continuous_pulse completed (either by duration, stop, or self.use_pulse becoming False)
-                    # The function handles the timed part. We break the outer loop now.
-                    main_phase_loop_active = False
-                else:
-                    # Hold mode
-                    # print(f"Protocol {self.protocol} ({time.time()}): Loop decides to hold.") # Verbose
-                    time.sleep(0.5) # Check frequently if state changes back to pulse or duration ends
+            return self._fail("pressure ramp failed")
+        return True
 
-            # Ensure pulse is stopped if loop exited for any reason
-            if hasattr(self.arduino, 'send') and self.arduino:
-                 if not self.arduino.send("JS"):
-                     self.signals.finished.emit(False)
-                     return
-                 print(f"Protocol {self.protocol} ({time.time()}): Sent final 'JS' after main phase loop.")
-        
-        # Reset
+    def _pulse_or_hold_phase(self) -> bool:
+        """Run the treatment hold, pulsing while use_pulse is on.
+
+        Responsive to live use_pulse changes; ends when the duration
+        elapses or the protocol is stopped.
+        """
+        if not self.is_running:
+            return True
+
+        main_phase_loop_active = True
+        print(
+            f"Protocol {self.protocol}: entering pulse/hold phase "
+            f"(use_pulse={self.use_pulse})"
+        )
+        while main_phase_loop_active and self.is_running and self.check_duration():
+            if self.use_pulse:
+                if not self.apply_continuous_pulse():
+                    # Pulse failure leaves the machine in an unknown motion
+                    # state: request the recovery reset (previously only
+                    # protocols 2/3 did)
+                    return self._fail("pulse sequence failed", reset_needed=True)
+                main_phase_loop_active = False
+            else:
+                time.sleep(0.5)
+
+        # Ensure pulse is stopped however the loop exited
+        if self.arduino and hasattr(self.arduino, "send"):
+            if not self.arduino.send("JS"):
+                return self._fail("could not send final JS")
+        return True
+
+    def _release(self, center_first: bool) -> bool:
+        """Return to neutral: center laterally if needed, then release."""
+        if center_first:
+            if not self.set_to_c_distance(0):
+                return self._fail("could not return to center")
+            time.sleep(1)  # settle at center before releasing traction
         if not self.set_to_pressure(0):
-            self.signals.finished.emit(False)
-            return
-        print("Protocol 1 complete")
+            return self._fail("could not release pressure")
+        print(f"Protocol {self.protocol} complete")
         self.signals.progress.emit("Protocol complete")
         self.signals.finished.emit(True)
+        return True
+
+    def _run_standard_protocol(self, banner: str, target_angle) -> None:
+        """Protocols 1-3: ramp, optional lateral move, pulse/hold, release."""
+        if not self._preamble(banner):
+            return
+
+        moved_lateral = False
+        if self.is_running and target_angle is not None:
+            print(f"Moving to {target_angle}°")
+            if not self.set_to_c_distance(target_angle):
+                self._fail("lateral positioning failed")
+                return
+            moved_lateral = True
+
+        if not self._pulse_or_hold_phase():
+            return
+
+        self._release(center_first=moved_lateral)
+
+    def protocol_1(self):
+        """Axial protocol - pressure only."""
+        print("Running protocol 1...")
+        self._run_standard_protocol(">>Starting axial protocol", None)
 
     def protocol_2(self):
         """Axial with left lateral movement."""
         print("Running protocol 2...")
-        if not self.check_duration():
-            return
-
-        self.signals.progress.emit(">>Starting left lateral protocol")
-        
-        # Determine initial pressure based on max pressure
-        initial_pressure = MIN_PRESSURE
-        if self.max_pressure > 20:
-            initial_pressure = max(20.0, MIN_PRESSURE)
-            print(f"Setting higher initial pressure of {initial_pressure} lbs for max_pressure={self.max_pressure}")
-    
-        # Initial pressure setting
-        if not self.set_to_pressure(initial_pressure):
-            self.signals.finished.emit(False)
-            return
-
-        if not self.run_pressure_sequence(initial_pressure, self.max_pressure):
-            self.signals.finished.emit(False)
-            return
-
-        # Move to left position
-        if self.is_running:
-            print(f"Moving to left {self.max_left}°")
-            if not self.set_to_c_distance(self.max_left):
-                self.signals.finished.emit(False)
-                return
-
-            # Final phase: pulse or hold, responsive to changes in self.use_pulse
-            main_phase_loop_active = True
-            print(f"Protocol {self.protocol} ({time.time()}): Entering final phase loop (pulse/hold). Initial self.use_pulse={self.use_pulse}")
-            while main_phase_loop_active and self.is_running and self.check_duration():
-                if self.use_pulse:
-                    print(f"Protocol {self.protocol} ({time.time()}): self.use_pulse is True, attempting to run apply_continuous_pulse.")
-                    if not self.apply_continuous_pulse():
-                        self.signals.reset_needed.emit()
-                        self.signals.finished.emit(False)
-                        return
-                    main_phase_loop_active = False 
-                else:
-                    print(f"Protocol {self.protocol} ({time.time()}): self.use_pulse is False, in hold mode.")
-                    time.sleep(0.5)
-            
-            if hasattr(self.arduino, 'send') and self.arduino:
-                  if not self.arduino.send("JS"):
-                      self.signals.finished.emit(False)
-                      return
-                  print(f"Protocol {self.protocol} ({time.time()}): Sent final 'JS' after main phase loop.")
-
-        # Reset
-        if not self.set_to_c_distance(0):
-            self.signals.finished.emit(False)
-            return
-        if not self.set_to_pressure(0):
-            self.signals.finished.emit(False)
-            return
-        print("Protocol 2 complete")
-        self.signals.progress.emit("Protocol complete")
-        self.signals.finished.emit(True)
+        self._run_standard_protocol(
+            ">>Starting left lateral protocol", self.max_left
+        )
 
     def protocol_3(self):
         """Axial with right lateral movement."""
         print("Running protocol 3...")
-        if not self.check_duration():
-            return
-
-        self.signals.progress.emit(">>Starting right lateral protocol")
-        
-        # Determine initial pressure based on max pressure
-        initial_pressure = MIN_PRESSURE
-        if self.max_pressure > 20:
-            initial_pressure = max(20.0, MIN_PRESSURE)
-            print(f"Setting higher initial pressure of {initial_pressure} lbs for max_pressure={self.max_pressure}")
-    
-        # Initial pressure setting
-        if not self.set_to_pressure(initial_pressure):
-            self.signals.finished.emit(False)
-            return
-
-        if not self.run_pressure_sequence(initial_pressure, self.max_pressure):
-            self.signals.finished.emit(False)
-            return
-
-        # Move to right position
-        if self.is_running:
-            print(f"Moving to right {self.max_right}°")
-            if not self.set_to_c_distance(self.max_right):
-                self.signals.finished.emit(False)
-                return
-
-            # Final phase: pulse or hold, responsive to changes in self.use_pulse
-            main_phase_loop_active = True
-            print(f"Protocol {self.protocol} ({time.time()}): Entering final phase loop (pulse/hold). Initial self.use_pulse={self.use_pulse}")
-            while main_phase_loop_active and self.is_running and self.check_duration():
-                if self.use_pulse:
-                    print(f"Protocol {self.protocol} ({time.time()}): self.use_pulse is True, attempting to run apply_continuous_pulse.")
-                    if not self.apply_continuous_pulse():
-                        self.signals.reset_needed.emit()
-                        self.signals.finished.emit(False)
-                        return
-                    main_phase_loop_active = False 
-                else:
-                    print(f"Protocol {self.protocol} ({time.time()}): self.use_pulse is False, in hold mode.")
-                    time.sleep(0.5)
-            
-            if hasattr(self.arduino, 'send') and self.arduino:
-                  if not self.arduino.send("JS"):
-                      self.signals.finished.emit(False)
-                      return
-                  print(f"Protocol {self.protocol} ({time.time()}): Sent final 'JS' after main phase loop.")
-
-        # Reset
-        if not self.set_to_c_distance(0):
-            self.signals.finished.emit(False)
-            return
-        
-        # Simple wait for returning to center position
-        time.sleep(1)
-            
-        if not self.set_to_pressure(0):
-            self.signals.finished.emit(False)
-            return
-        print("Protocol 3 complete")
-        self.signals.progress.emit("Protocol complete")
-        self.signals.finished.emit(True)
+        self._run_standard_protocol(
+            ">>Starting right lateral protocol", self.max_right
+        )
 
     def protocol_4(self):
         """Axial with oscillating lateral movement between left and right."""
         print("Running protocol 4...")
-        if not self.check_duration():
-            return
-
-        self.signals.progress.emit(">>Starting oscillating lateral protocol")
-        
-        # Determine initial pressure based on max pressure
-        initial_pressure = MIN_PRESSURE
-        if self.max_pressure > 20:
-            initial_pressure = max(20.0, MIN_PRESSURE)
-            print(f"Setting higher initial pressure of {initial_pressure} lbs for max_pressure={self.max_pressure}")
-    
-        # Initial pressure setting
-        if not self.set_to_pressure(initial_pressure):
-            self.signals.finished.emit(False)
-            return
-
-        if not self.run_pressure_sequence(initial_pressure, self.max_pressure):
-            self.signals.finished.emit(False)
+        if not self._preamble(">>Starting oscillating lateral protocol"):
             return
 
         # Oscillation parameters
         oscillation_period = 30  # Total time for one complete cycle (left->right->left) in seconds
         hold_at_extreme = 2      # Time to hold at each extreme position
-        
+
         # Main oscillation loop
         if self.is_running:
             print(f"Starting oscillation between {self.max_left}° and {self.max_right}°")
@@ -669,24 +585,24 @@ class Protocols(QtCore.QRunnable):
             position_at_left = True  # Start at left position
             last_position_change = oscillation_start_time
             pulse_active = False
-            
+
             # Move to initial left position
             if not self.set_to_c_distance(self.max_left):
-                self.signals.finished.emit(False)
+                self._fail("initial lateral positioning failed")
                 return
-            
+
             # Start pulsing if enabled
             if self.use_pulse and self.arduino:
                 if not self.arduino.send("J"):
-                    self.signals.finished.emit(False)
+                    self._fail("could not start pulsing", reset_needed=True)
                     return
                 pulse_active = True
                 print(f"Protocol 4: Started continuous pulsing")
-            
+
             while self.is_running and self.check_duration():
                 current_time = time.time()
                 time_since_position_change = current_time - last_position_change
-                
+
                 # Check if it's time to switch positions
                 if time_since_position_change >= (oscillation_period / 2):
                     # Switch position
@@ -695,7 +611,7 @@ class Protocols(QtCore.QRunnable):
                         print(f"Oscillating to right {self.max_right}°")
                         self.signals.progress.emit(f">>Moving to right {self.max_right}°")
                         if not self.set_to_c_distance(self.max_right):
-                            self.signals.finished.emit(False)
+                            self._fail("oscillation move failed")
                             return
                         position_at_left = False
                     else:
@@ -703,61 +619,51 @@ class Protocols(QtCore.QRunnable):
                         print(f"Oscillating to left {self.max_left}°")
                         self.signals.progress.emit(f">>Moving to left {self.max_left}°")
                         if not self.set_to_c_distance(self.max_left):
-                            self.signals.finished.emit(False)
+                            self._fail("oscillation move failed")
                             return
                         position_at_left = True
-                    
+
                     last_position_change = current_time
-                    
+
                     # Hold briefly at extreme position
                     if hold_at_extreme > 0:
                         hold_start = time.time()
                         while time.time() - hold_start < hold_at_extreme and self.is_running and self.check_duration():
                             time.sleep(0.1)
-                
+
                 # Handle pulse state changes
                 if self.use_pulse and not pulse_active and self.arduino:
                     # Pulse was turned on
                     if not self.arduino.send("J"):
-                        self.signals.finished.emit(False)
+                        self._fail("could not restart pulsing", reset_needed=True)
                         return
                     pulse_active = True
                     print(f"Protocol 4: Restarted pulsing")
                 elif not self.use_pulse and pulse_active and self.arduino:
                     # Pulse was turned off
                     if not self.arduino.send("JS"):
-                        self.signals.finished.emit(False)
+                        self._fail("could not stop pulsing", reset_needed=True)
                         return
                     pulse_active = False
                     print(f"Protocol 4: Stopped pulsing")
-                
+
                 # Send periodic keepalive
                 if int(current_time) % 30 == 0:
                     if self.arduino:
                         if not self.arduino.send("T"):
-                            self.signals.finished.emit(False)
+                            self._fail("keepalive failed")
                             return
-                
+
                 time.sleep(0.1)  # Main loop sleep
-            
+
             # Stop pulsing if it was active
             if pulse_active and self.arduino:
                 if not self.arduino.send("JS"):
-                    self.signals.finished.emit(False)
+                    self._fail("could not stop final pulsing", reset_needed=True)
                     return
                 print(f"Protocol 4: Stopped final pulsing")
 
-        # Reset
-        if not self.set_to_c_distance(0):
-            self.signals.finished.emit(False)
-            return
-        time.sleep(1)  # Wait for return to center
-        if not self.set_to_pressure(0):
-            self.signals.finished.emit(False)
-            return
-        print("Protocol 4 complete")
-        self.signals.progress.emit("Protocol complete")
-        self.signals.finished.emit(True)
+        self._release(center_first=True)
 
     def run(self):
         """Execute the selected protocol."""
