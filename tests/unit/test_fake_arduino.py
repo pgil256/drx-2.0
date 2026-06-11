@@ -169,7 +169,9 @@ class TestFakeArduinoFirmwareParity:
         finally:
             fake.stop()
 
-    def test_status_suppressed_while_jerking(self):
+    def test_status_flows_while_jerking(self):
+        """Pulsing used to suppress all telemetry (noStatus), blinding the
+        pressure ceiling check; status must keep flowing during jerk now."""
         fake = FakeArduino()
         fake.hf_interval = 0.05
         fake.start()
@@ -178,14 +180,35 @@ class TestFakeArduinoFirmwareParity:
             assert wait_until(lambda: fake.high_frequency_status)
             send_cmd(fake, b"J\n")
             assert wait_until(lambda: fake.jerking)
-            read_output(fake, duration=0.3)  # drain anything in flight
-            output = read_output(fake, duration=0.4)
-            assert "STATUS_START" not in output
-            send_cmd(fake, b"JS\n")
-            assert wait_until(lambda: not fake.jerking)
-            send_cmd(fake, b"Q\n")  # ack any unacknowledged frame
+            read_output(fake, duration=0.2)  # drain anything in flight
+            send_cmd(fake, b"Q\n")  # ack so the next frame is allowed
             output = read_output(fake, duration=0.4)
             assert "STATUS_START" in output
+        finally:
+            fake.stop()
+
+    def test_busy_reply_while_running(self):
+        fake = FakeArduino()
+        fake.movement_speed = 50.0  # slow, so the first move stays active
+        fake.position_c = 1200
+        fake.start()
+        try:
+            send_cmd(fake, b"K1800\n")
+            assert wait_until(lambda: fake.b_running)
+            send_cmd(fake, b"P40\n")
+            output = read_output(fake, duration=0.6)
+            assert "BUSY" in output
+        finally:
+            fake.stop()
+
+    def test_l5_delimited_echoes_zeros(self):
+        fake = FakeArduino()
+        fake.start()
+        try:
+            send_cmd(fake, b"L5|160|1900\n")
+            output = read_output(fake, duration=0.4)
+            assert "ZEROS|160|1900" in output
+            assert "DONE" in output
         finally:
             fake.stop()
 

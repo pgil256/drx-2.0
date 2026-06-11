@@ -51,6 +51,10 @@ void delay(unsigned long ms);
 // abs overloads in the global namespace on glibc, so no shim is needed;
 // motor.ino's abs(float) calls resolve to std::abs(float).
 
+// Arduino defines min/max as macros; provide float overloads natively
+inline float min(float a, float b) { return a < b ? a : b; }
+inline float max(float a, float b) { return a > b ? a : b; }
+
 // --- elapsedMillis ---
 class elapsedMillis {
     unsigned long _start;

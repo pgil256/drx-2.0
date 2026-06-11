@@ -7,15 +7,16 @@ gradual position movement, and pressure changes.
 
 Behavior mirrors main/motor/motor.ino:
 - Completed position moves and pressure ramps emit "DONE".
-- Commands are processed at most once per MIN_COMMAND_INTERVAL (200 ms).
+- Commands are processed at most once per MIN_COMMAND_INTERVAL (200 ms);
+  'Q' acks and 'X' (emergency stop) bypass the limiter.
 - After each status frame, further frames are suppressed until the host
   acknowledges with 'Q' or STATUS_TIMEOUT (2 s) elapses.
 - High-frequency status runs at 1 Hz (HIGH_FREQ_INTERVAL), idle status
-  every 5 s (LOOP_STATUS_DELAY).
-- 'J' suppresses all status output until 'JS' or 'X' (noStatus).
+  every 5 s (LOOP_STATUS_DELAY); status keeps flowing during pulsing.
 - 'Y' replies "Reset|", reboots (state reset + boot delay), then announces
   "Ready to Go" -- it never replies DONE.
-- P/I/K/A are silently dropped while a move is running (bRunning).
+- P/I/K/A reply "BUSY" while a move is running (bRunning).
+- L5 zero marks accept the delimited form (L5|a|b) and echo "ZEROS|a|b".
 - Pressure above 80 lbs during a ramp emits
   "ERROR: Pressure limit exceeded" and stops everything.
 Timing constants are attributes so individual tests may tighten them.
@@ -50,7 +51,6 @@ class FakeArduino:
         self.b_running: bool = False
         self.measure_pressure: bool = False
         self.high_frequency_status: bool = False
-        self.no_status: bool = False
         self.status_acknowledged: bool = True
 
         # Configurable behavior (defaults mirror motor.ino timing)
@@ -149,12 +149,12 @@ class FakeArduino:
                         self._pending_commands.append(cmd)
 
                 # Process at most one command per MIN_COMMAND_INTERVAL,
-                # like the firmware's rate limiter ('Q' acks are exempt so
-                # the host's automatic acknowledgments cannot starve real
-                # commands in tests; the firmware bug where acks consume
-                # rate-limit slots is tracked for fix in the firmware)
+                # like the firmware's rate limiter. 'Q' acks and 'X'
+                # (emergency stop) bypass the limiter, as on the device.
                 now = time.time()
-                while self._pending_commands and self._pending_commands[0][0] == 'Q':
+                while self._pending_commands and (
+                    self._pending_commands[0][0] in ('Q', 'X')
+                ):
                     self._process_command(self._pending_commands.popleft())
                 if self._pending_commands and (
                     now - self._last_command_time >= self.min_command_interval
@@ -190,7 +190,6 @@ class FakeArduino:
         self.b_running = False
         self.measure_pressure = False
         self.jerking = False
-        self.no_status = False
         self.status_acknowledged = True
         self.high_frequency_status = False
         self._target_position_a = None
@@ -233,7 +232,8 @@ class FakeArduino:
 
         elif cmd_type == 'P':
             if self.b_running:
-                return  # firmware silently drops P while running
+                self._write("BUSY\n")
+                return
             target = float(cmd[1:]) if len(cmd) > 1 else 0
             self._target_pressure = target
             self.measure_pressure = True
@@ -241,7 +241,8 @@ class FakeArduino:
 
         elif cmd_type == 'I':
             if self.b_running:
-                return  # firmware silently drops I while running
+                self._write("BUSY\n")
+                return
             actuator_id = cmd[1:3]
             position = int(cmd[3:]) if len(cmd) > 3 else 0
             if actuator_id == "12":
@@ -254,14 +255,16 @@ class FakeArduino:
 
         elif cmd_type == 'K':
             if self.b_running:
-                return  # firmware silently drops K while running
+                self._write("BUSY\n")
+                return
             position = int(cmd[1:]) if len(cmd) > 1 else 0
             self._target_position_c = position
             self.b_running = True
 
         elif cmd_type == 'A':
             if self.b_running:
-                return  # firmware silently drops A while running
+                self._write("BUSY\n")
+                return
             actuator_id = cmd[1:3]
             inches = float(cmd[3:]) if len(cmd) > 3 else 0
             fullinch = {"12": 430, "13": 620, "14": 1880}.get(actuator_id, 430)
@@ -275,20 +278,19 @@ class FakeArduino:
             self.b_running = True
 
         elif cmd_type == 'J':
+            # Status keeps flowing during pulsing (the firmware's old
+            # noStatus suppression blinded the pressure ceiling check)
             if len(cmd) > 1 and cmd[1] == 'S':
                 self.jerking = False
-                self.no_status = False
                 self._write("DONE\n")
             else:
                 self.jerking = True
-                self.no_status = True  # firmware suppresses status while jerking
                 self._write("DONE\n")
 
         elif cmd_type == 'X':
             self.b_running = False
             self.measure_pressure = False
             self.jerking = False
-            self.no_status = False
             self._target_position_a = None
             self._target_position_b = None
             self._target_position_c = None
@@ -314,6 +316,15 @@ class FakeArduino:
             if stage == '4':
                 self._write(f"weight|{self.pressure}\n")
             elif stage == '5':
+                if len(cmd) > 2 and cmd[2] == '|':
+                    parts = cmd.split('|')
+                    a_zero = int(parts[1]) if len(parts) > 1 else 0
+                    b_zero = int(parts[2]) if len(parts) > 2 else 0
+                else:
+                    # Legacy fixed-width parse (truncates 4-digit values)
+                    a_zero = int(cmd[2:5]) if cmd[2:5].strip() else 0
+                    b_zero = int(cmd[5:9]) if cmd[5:9].strip() else 0
+                self._write(f"ZEROS|{a_zero}|{b_zero}\n")
                 self._write("DONE\n")
             elif stage == '6':
                 self._write(
@@ -393,13 +404,11 @@ class FakeArduino:
     def _send_status(self) -> bool:
         """Send status in the real Arduino format.
 
-        Returns False (suppressed) while jerking (noStatus) or while the
-        previous status is unacknowledged and STATUS_TIMEOUT has not passed,
+        Returns False (suppressed) while the previous status is
+        unacknowledged and STATUS_TIMEOUT has not passed,
         mirroring the firmware's sendStatus() gate.
         """
         now = time.time()
-        if self.no_status:
-            return False
         if not self.status_acknowledged and (
             now - self._last_status_time < self.status_timeout
         ):

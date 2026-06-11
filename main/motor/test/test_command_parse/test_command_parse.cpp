@@ -28,9 +28,13 @@ void setUp(void) {
     bRunning = false;
     measurePressure = false;
     jerking = false;
+    releasingPressure = false;
     desiredPressure = 0;
     desiredPosition = 0;
     highFrequencyStatus = false;
+    statusAcknowledged = true;
+    isProcessingStatus = false;
+    AZERO = 0;
     _millis_value = 0;
 }
 
@@ -53,6 +57,19 @@ void test_P_ignored_when_running(void) {
     bRunning = true;
     processCommand("P50");
     TEST_ASSERT_EQUAL_FLOAT(0.0, desiredPressure);
+}
+
+void test_P_busy_reply_when_running(void) {
+    // Dropped commands must be visible to the host, never silent
+    bRunning = true;
+    processCommand("P50");
+    TEST_ASSERT_TRUE(Serial1.outputContains("BUSY"));
+}
+
+void test_P_garbage_rejected(void) {
+    processCommand("Pabc");
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Invalid P value"));
+    TEST_ASSERT_FALSE(measurePressure);
 }
 
 // --- Position command ---
@@ -126,12 +143,74 @@ void test_long_command_rejected(void) {
     TEST_ASSERT_TRUE(Serial1.outputContains("ERROR"));
 }
 
+// --- Input rejection (corrupt commands must not move anything) ---
+
+void test_A_negative_inches_rejected(void) {
+    // A corrupted negative value used to wrap through uint16_t to a
+    // huge number and get clamped to FULL EXTENSION
+    Wire.position_12 = 1000;
+    processCommand("A12-1.0");
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: A value out of range"));
+    TEST_ASSERT_FALSE(bRunning);
+}
+
+void test_A_overrange_inches_rejected(void) {
+    processCommand("A1220.0");
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: A value out of range"));
+    TEST_ASSERT_FALSE(bRunning);
+}
+
+void test_A_garbage_rejected(void) {
+    processCommand("A12xyz");
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Invalid A value"));
+    TEST_ASSERT_FALSE(bRunning);
+}
+
+void test_I_invalid_device_rejected(void) {
+    processCommand("I991000");
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Invalid device"));
+    TEST_ASSERT_FALSE(bRunning);
+}
+
+void test_K_garbage_rejected(void) {
+    // toInt() garbage used to become 0 and drive the lateral actuator
+    // to its clamp floor (position 500)
+    Wire.position_14 = 1200;
+    processCommand("Kabc");
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Invalid K value"));
+    TEST_ASSERT_FALSE(bRunning);
+}
+
+void test_I_busy_replies_busy(void) {
+    bRunning = true;
+    processCommand("I121500");
+    TEST_ASSERT_TRUE(Serial1.outputContains("BUSY"));
+}
+
+// --- Symmetric deadband ---
+
+void test_I_within_deadband_completes_immediately(void) {
+    Wire.position_12 = 1500;
+    processCommand("I121510");  // 10 counts away: inside the band
+    TEST_ASSERT_FALSE(bRunning);
+    TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
+}
+
+void test_K_within_deadband_completes_immediately(void) {
+    Wire.position_14 = 1500;
+    processCommand("K1490");  // small backward move: also in the band now
+    TEST_ASSERT_FALSE(bRunning);
+    TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
 
     RUN_TEST(test_T_responds_OK);
     RUN_TEST(test_P_sets_desired_pressure);
     RUN_TEST(test_P_ignored_when_running);
+    RUN_TEST(test_P_busy_reply_when_running);
+    RUN_TEST(test_P_garbage_rejected);
     RUN_TEST(test_I_sets_position);
     RUN_TEST(test_I_ignored_when_running);
     RUN_TEST(test_K_sets_c_position);
@@ -141,6 +220,14 @@ int main(int argc, char **argv) {
     RUN_TEST(test_HF0_disables);
     RUN_TEST(test_X_stops_everything);
     RUN_TEST(test_long_command_rejected);
+    RUN_TEST(test_A_negative_inches_rejected);
+    RUN_TEST(test_A_overrange_inches_rejected);
+    RUN_TEST(test_A_garbage_rejected);
+    RUN_TEST(test_I_invalid_device_rejected);
+    RUN_TEST(test_K_garbage_rejected);
+    RUN_TEST(test_I_busy_replies_busy);
+    RUN_TEST(test_I_within_deadband_completes_immediately);
+    RUN_TEST(test_K_within_deadband_completes_immediately);
 
     return UNITY_END();
 }

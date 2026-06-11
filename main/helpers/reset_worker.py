@@ -168,7 +168,9 @@ class ResetWorker(QRunnable):
             debug("[STEP 2/6] Sending zero mark ('L5')", component="ResetWorker", level="INFO")
             a_zero = self.config.AMarks.get("0.0", self.config.AMarks.get("0", 0))
             b_zero = self.config.BMarks.get("0.0", self.config.BMarks.get("0", 0))
-            zero_cmd = "L5{:3} {:3}".format(a_zero, b_zero)
+            # Delimited form: the legacy fixed-width "L5{:3} {:3}" format
+            # silently truncated any 4-digit zero mark (1900 became 190)
+            zero_cmd = "L5|{}|{}".format(a_zero, b_zero)
             if not self._try_command_with_retry(zero_cmd, "Zero Mark", 30.0):
                 raise TimeoutError("Failed to complete Zero Mark setup even after retry")
             debug_timing("[STEP 2/6] Zero mark complete", start_time=step_start, component="ResetWorker")
