@@ -5,13 +5,13 @@
 
 > **Implementation status (2026-06-11, branch `improvement-plan`):**
 > - **Phase 0 — DONE.** Firmware tests buildable+green (57 tests), Linux CI workflow, FakeArduino firmware parity, both verified regressions fixed, docs reconciled.
-> - **Phase 1 — DONE (code + tests); awaiting the Batch-1 hardware checkout** ([checklist](2026-06-11-batch1-hardware-checklist.md)) before flashing. Firmware `2026-06-11-FAILSAFE-1`.
+> - **Phase 1 — DONE (code + tests); awaiting the Batch-1 hardware checkout** ([checklist](2026-06-11-batch1-hardware-checklist.md)) before flashing. Firmware `2026-06-11-FAILSAFE-2`. Session booked Fri 2026-06-12 09:00-12:00 ET.
 > - **Phase 2 — DONE**, including §2.1 protocol v2 framing (seq-echoed acks + XOR checksums both directions); the Pi side ships disabled behind `KNEESPA_PROTOCOL_V2=1` until checklist item D5a passes on hardware.
 > - **Phase 3 — DONE.** Treatment banner + STOP, state machine, persistent alarms, confirmation dialog, UI-thread unblocking.
 > - **Phase 4 — DONE** except items gated on hardware measurements (A-command zero-offset convention, AFULLINCH, B-axis direction — checklist items E1–E3).
-> - **Phase 5 — DONE** except the KneeSpa class decomposition (§5.1), deferred to its own session by engineering judgment (high-regression-risk UI refactor; its testability goal is partially met via harness-bound tests). Auth (PBKDF2 + lockout), the parameterized protocol engine, and deployment hygiene are in.
-> - **Phase 6 — substantially done** (leg-motor GPIO auto-release, PIN double-masking, status-label lifecycle, unit consistency, dead-code removal); the layout/touch-target/nav-button pass remains and needs visual verification on the device.
-> - CI activates on first push to GitHub (`.github/workflows/ci.yml`).
+> - **Phase 5 — DONE**, including the KneeSpa decomposition: SafetyMonitor, AuthController, ProtocolController, and ConnectionManager live in `main/controllers/` behind delegating slots, each unit-tested over stub windows (the extraction surfaced and fixed a missed legacy-L5 sender and a reset guard bug).
+> - **Phase 6 — DONE** to the limit of offscreen verification (leg-motor GPIO auto-release, PIN double-masking + backspace + key sizing, pressed-state feedback on label controls, status-label lifecycle, unit consistency, dead-code removal). Responsive-layout conversion of the fixed-geometry .ui files is deliberately deferred to an on-device session; checklist section F records the visual items.
+> - CI is live and green on github.com/pgil256/drx-2.0 (Python full suite, firmware native tests, AVR Mega build).
 **Constraints (per owner):**
 - Software/firmware changes only — no new hardware. (A hardware E-stop power interlock remains the single biggest residual risk and is documented in §8 as a recommended future hardware change.)
 - Device is used on real patients → every safety change carries a hazard reference, an acceptance criterion, and a verification method.
