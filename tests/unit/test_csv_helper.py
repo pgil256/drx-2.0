@@ -14,6 +14,7 @@ no pty / POSIX gating).
 """
 
 import hashlib
+import logging
 
 import pytest
 
@@ -66,6 +67,38 @@ def stub_message_box(monkeypatch):
 
     monkeypatch.setattr(csv_module, "QMessageBox", _StubMessageBox)
     return calls
+
+
+@pytest.fixture
+def no_qapplication(monkeypatch):
+    """Make load_csv observe that no QApplication event loop is running.
+
+    Forcing QApplication.instance() to return None makes the headless code
+    path deterministic regardless of whether an earlier Qt test left a
+    session-wide QApplication alive.
+    """
+
+    class _NoQApplication:
+        @staticmethod
+        def instance():
+            return None
+
+    monkeypatch.setattr(csv_module, "QApplication", _NoQApplication)
+    return _NoQApplication
+
+
+@pytest.fixture
+def with_qapplication(monkeypatch):
+    """Make load_csv observe a running QApplication event loop."""
+    sentinel = object()
+
+    class _RunningQApplication:
+        @staticmethod
+        def instance():
+            return sentinel
+
+    monkeypatch.setattr(csv_module, "QApplication", _RunningQApplication)
+    return _RunningQApplication
 
 
 def _sha256(value):
@@ -192,8 +225,10 @@ class TestLoadCsvMissingFile:
         # Should simply return without propagating an exception.
         helper.load_csv(str(missing))
 
-    def test_missing_file_shows_error_dialog(self, tmp_path, stub_message_box):
-        """A missing file triggers the error dialog side effect."""
+    def test_missing_file_shows_error_dialog_when_qapp_present(
+        self, tmp_path, stub_message_box, with_qapplication
+    ):
+        """With a running QApplication, a missing file shows the error dialog."""
         helper = CSVHelper()
         missing = tmp_path / "absent.csv"
 
@@ -208,7 +243,9 @@ class TestLoadCsvMissingFile:
 class TestLoadCsvMalformed:
     """Tests for load_csv() with malformed / incomplete data."""
 
-    def test_missing_pin_hash_column_does_not_crash(self, tmp_path, stub_message_box):
+    def test_missing_pin_hash_column_does_not_crash(
+        self, tmp_path, stub_message_box, with_qapplication
+    ):
         """A CSV lacking both pin_hash and pin is handled without crashing."""
         helper = CSVHelper()
         csv_path = _write_csv(
@@ -221,7 +258,7 @@ class TestLoadCsvMalformed:
 
         # The KeyError raised on the first row is caught; no valid rows loaded.
         assert data == {}
-        # The format error surfaces via the error dialog rather than an exception.
+        # With a QApplication running, the format error surfaces via the dialog.
         assert len(stub_message_box) == 1
 
     def test_partial_rows_loaded_before_bad_row(self, tmp_path):
@@ -349,3 +386,108 @@ class TestInitializeDataCsvFallback:
 
         # Bundled CSV uses 64-char sha256 hex digests as keys.
         assert all(len(key) == 64 for key in helper.users)
+
+
+@pytest.mark.unit
+class TestLoadCsvHeadlessRobustness:
+    """load_csv must not crash when no QApplication event loop is running.
+
+    QMessageBox.critical(None, ...) constructs a modal dialog. Without a
+    running QApplication -- a missing or malformed user_pins.csv at startup
+    before the Qt event loop is up, or any headless context -- constructing
+    that dialog aborts the interpreter (observed as STATUS_STACK_BUFFER_OVERRUN,
+    exit -1073740791). On a patient-facing device that turns a recoverable data
+    error into a hard crash. The fix guards the dialog behind
+    QApplication.instance() and logs the error instead, degrading to an empty
+    user set rather than crashing.
+    """
+
+    def test_missing_file_no_dialog_without_qapp(
+        self, tmp_path, stub_message_box, no_qapplication
+    ):
+        """Missing file + no QApplication: empty dict, dialog suppressed."""
+        helper = CSVHelper()
+        missing = tmp_path / "absent.csv"
+
+        data = helper.load_csv(str(missing))
+
+        assert data == {}
+        # The dialog (and thus the process-aborting code path) is never reached.
+        assert len(stub_message_box) == 0
+
+    def test_malformed_no_dialog_without_qapp(
+        self, tmp_path, stub_message_box, no_qapplication
+    ):
+        """Malformed CSV + no QApplication: empty dict, dialog suppressed."""
+        helper = CSVHelper()
+        csv_path = _write_csv(
+            tmp_path,
+            ["Administrator,admin@example.com,admin"],
+            header="username,email,status",
+        )
+
+        data = helper.load_csv(str(csv_path))
+
+        assert data == {}
+        assert len(stub_message_box) == 0
+
+    def test_real_message_box_never_constructed_without_qapp(
+        self, tmp_path, no_qapplication, monkeypatch
+    ):
+        """The guard must short-circuit before QMessageBox is ever touched.
+
+        Replaces QMessageBox with one that raises if .critical is called, so
+        the test fails loudly if the guard regresses (rather than relying only
+        on a recording stub returning zero calls).
+        """
+
+        class _ExplodingMessageBox:
+            @staticmethod
+            def critical(parent, title, message):
+                raise AssertionError(
+                    "QMessageBox.critical called without a QApplication"
+                )
+
+        monkeypatch.setattr(csv_module, "QMessageBox", _ExplodingMessageBox)
+
+        helper = CSVHelper()
+        missing = tmp_path / "absent.csv"
+
+        # Must not raise.
+        assert helper.load_csv(str(missing)) == {}
+
+    def test_error_is_logged_without_qapp(self, tmp_path, no_qapplication, caplog):
+        """The failure is logged even when no dialog can be shown."""
+        helper = CSVHelper()
+        missing = tmp_path / "absent.csv"
+
+        with caplog.at_level(logging.ERROR):
+            helper.load_csv(str(missing))
+
+        assert any(
+            "absent.csv" in record.getMessage() for record in caplog.records
+        )
+
+    def test_initialize_data_survives_missing_csv(
+        self, clean_auth_env, no_qapplication, monkeypatch, tmp_path
+    ):
+        """Startup with no env users and a missing CSV degrades to no users.
+
+        This mirrors the real device scenario: SecureAuthHelper finds nothing,
+        the bundled user_pins.csv is absent, and initialize_data falls back to
+        load_csv. It must not crash even though no Qt event loop exists yet.
+        """
+        missing = str(tmp_path / "user_pins.csv")  # tmp_path is empty
+        real_join = csv_module.os.path.join
+
+        def fake_join(*parts):
+            if parts and str(parts[-1]) == "user_pins.csv":
+                return missing
+            return real_join(*parts)
+
+        monkeypatch.setattr(csv_module.os.path, "join", fake_join)
+
+        helper = CSVHelper()
+        helper.initialize_data()
+
+        assert helper.users == {}

@@ -3,8 +3,10 @@ import os
 from helpers.logging import setup_logger
 from helpers.secure_auth import SecureAuthHelper
 try:
-    from PyQt5.QtWidgets import QMessageBox
+    from PyQt5.QtWidgets import QApplication, QMessageBox
 except ImportError:
+    QApplication = None
+
     class QMessageBox:
         @staticmethod
         def critical(parent, title, message):
@@ -37,6 +39,23 @@ class CSVHelper:
             self.users = self.load_csv(users_file)
             print(f"CSVHelper: Loaded {len(self.users)} user records from CSV")
         
+    def _report_load_error(self, message):
+        """Report a CSV load failure without crashing in headless contexts.
+
+        The error is always logged so the failure leaves an audit trail. A
+        modal QMessageBox is shown only when a QApplication event loop exists:
+        constructing a dialog without one (e.g. at startup before the event
+        loop is running, or in a headless/test context) aborts the process. On
+        a patient-facing device that would turn a recoverable data error -- a
+        missing or malformed user_pins.csv -- into a hard crash.
+
+        Args:
+            message (str): Human-readable description of the load failure.
+        """
+        self.logger.error(message)
+        if QApplication is not None and QApplication.instance() is not None:
+            QMessageBox.critical(None, "Error", message)
+
     def load_csv(self, filename):
         """
         Load CSV data into a dictionary.
@@ -69,18 +88,16 @@ class CSVHelper:
 
         except FileNotFoundError:
             print(f"CSVHelper: ERROR - CSV file not found: {filename}")
-            QMessageBox.critical(None, "Error", f"CSV file not found: {filename}")
+            self._report_load_error(f"CSV file not found: {filename}")
 
         except csv.Error as e:
             print(f"CSVHelper: ERROR - CSV file error in {filename}: {e}")
-            QMessageBox.critical(None, "Error", f"CSV file error in {filename}: {e}")
+            self._report_load_error(f"CSV file error in {filename}: {e}")
 
         except KeyError as e:
             print(f"CSVHelper: ERROR - Missing 'pin_hash' column in CSV file {filename}: {e}")
-            QMessageBox.critical(
-                None,
-                "Error",
-                f"CSV format error: Missing 'pin_hash' column in {filename}",
+            self._report_load_error(
+                f"CSV format error: Missing 'pin_hash' column in {filename}"
             )
 
         return data
