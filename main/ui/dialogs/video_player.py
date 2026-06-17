@@ -195,26 +195,33 @@ class VideoPlayer(QtWidgets.QDialog):
     def update_ui(self):
         """Update UI elements based on VLC player state."""
         # Simplified: Only update based on VLC player state
-        if self.resources.get("media_player"):
-            try:
-                is_playing_vlc = self.resources["media_player"].is_playing()
-                if self.video_state["is_playing"] != is_playing_vlc:
-                     self.video_state["is_playing"] = is_playing_vlc
-                     self.logger.debug(f"Player state updated: is_playing={self.is_playing}")
+        player = self.resources.get("media_player")
+        if not player:
+            # Ensure buttons are disabled if player isn't ready
+            if self.play_button: self.play_button.setEnabled(False)
+            if self.pause_button: self.pause_button.setEnabled(False)
+            return
 
-                # Update button states
-                if self.play_button:
-                    # Enable play only if stopped and videos exist in the list
-                    self.play_button.setEnabled(not self.video_state["is_playing"] and bool(self.config["video_list"]))
-                if self.pause_button:
-                    self.pause_button.setEnabled(self.video_state["is_playing"])
+        # Querying VLC is the only genuinely fallible call here, so guard just
+        # that. Keeping the state bookkeeping and widget updates outside the
+        # try means real errors (e.g. attribute typos) surface instead of being
+        # silently swallowed and only logged.
+        try:
+            is_playing_vlc = player.is_playing()
+        except Exception as e:
+            self.logger.error(f"Error querying VLC play state: {e}")
+            return
 
-            except Exception as e:
-                 self.logger.error(f"Error updating UI from VLC state: {e}")
-        else:
-             # Ensure buttons are disabled if player isn't ready
-             if self.play_button: self.play_button.setEnabled(False)
-             if self.pause_button: self.pause_button.setEnabled(False)
+        if self.video_state["is_playing"] != is_playing_vlc:
+            self.video_state["is_playing"] = is_playing_vlc
+            self.logger.debug(f"Player state updated: is_playing={self.video_state['is_playing']}")
+
+        # Update button states
+        if self.play_button:
+            # Enable play only if stopped and videos exist in the list
+            self.play_button.setEnabled(not self.video_state["is_playing"] and bool(self.config["video_list"]))
+        if self.pause_button:
+            self.pause_button.setEnabled(self.video_state["is_playing"])
 
 
     # Removed switch_to_camera method
