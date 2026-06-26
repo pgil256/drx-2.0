@@ -1,0 +1,124 @@
+/* KneeSpa DRx — global theme stylesheet (Phase 0 foundation).
+ *
+ * Values use design-system tokens as `var(--token)`; ui/theme/qss.py resolves
+ * them before this is handed to Qt (Qt QSS has no `var()`). Only QSS-supported
+ * properties appear here — effects QSS cannot express (box-shadow, transform,
+ * transition, text-transform, letter-spacing) are applied in Python
+ * (QGraphicsDropShadowEffect, manual uppercasing, property animations).
+ *
+ * Buttons read a dynamic `variant` (primary/success/danger/secondary/ghost) and
+ * `size` (sm/lg) property — set via widget.setProperty(...) then re-polished —
+ * mirroring the design-system Button component. Bare controls get sensible
+ * neutral styling so the legacy screens look coherent until each is rebuilt.
+ */
+
+/* ---- Tooltips ---- */
+QToolTip {
+  background-color: var(--ink-900);
+  color: var(--white);
+  border: var(--border-thin) solid var(--ink-700);
+  padding: var(--space-2) var(--space-3);
+  border-radius: var(--radius-sm);
+  font-size: var(--text-sm);
+}
+
+/* ---- Buttons ---- */
+QPushButton {
+  background-color: var(--surface-card);
+  color: var(--ink-800);
+  border: var(--border-thick) solid var(--gray-300);
+  border-radius: var(--radius-md);
+  padding: var(--space-3) var(--space-5);
+  font-size: var(--text-base);
+  font-weight: 600;
+}
+QPushButton:hover { background-color: var(--blue-050); border-color: var(--color-primary); }
+QPushButton:pressed { background-color: var(--gray-200); }
+QPushButton:disabled { background-color: var(--gray-300); color: var(--gray-600); border-color: var(--gray-300); }
+
+QPushButton[variant="primary"] { background-color: var(--color-primary); color: var(--text-on-accent); border-color: var(--color-primary); }
+QPushButton[variant="primary"]:hover { background-color: var(--color-primary-hover); border-color: var(--color-primary-hover); }
+QPushButton[variant="primary"]:pressed { background-color: var(--color-primary-active); border-color: var(--color-primary-active); }
+
+QPushButton[variant="success"] { background-color: var(--color-success); color: var(--white); border-color: var(--color-success); }
+QPushButton[variant="success"]:hover { background-color: var(--color-success-hover); border-color: var(--color-success-hover); }
+
+QPushButton[variant="danger"] { background-color: var(--color-danger); color: var(--white); border-color: var(--color-danger); }
+QPushButton[variant="danger"]:hover { background-color: var(--color-danger-hover); border-color: var(--color-danger-hover); }
+
+QPushButton[variant="secondary"] { background-color: var(--gray-200); color: var(--ink-800); border-color: var(--gray-200); }
+QPushButton[variant="secondary"]:hover { background-color: var(--gray-300); border-color: var(--gray-300); }
+
+QPushButton[variant="ghost"] { background-color: transparent; color: var(--color-primary); border-color: transparent; }
+QPushButton[variant="ghost"]:hover { background-color: var(--blue-050); }
+
+/* Disabled wins across variants (keep traffic-light buttons greyed when locked). */
+QPushButton[variant="primary"]:disabled,
+QPushButton[variant="success"]:disabled,
+QPushButton[variant="danger"]:disabled,
+QPushButton[variant="secondary"]:disabled,
+QPushButton[variant="ghost"]:disabled {
+  background-color: var(--gray-300); color: var(--gray-600); border-color: var(--gray-300);
+}
+
+/* Touch sizes (opt-in; bare buttons keep their existing geometry). */
+QPushButton[size="sm"] { padding: var(--space-2) var(--space-4); font-size: var(--text-sm); min-height: 36px; }
+QPushButton[size="lg"] { padding: var(--space-4) var(--space-8); font-size: var(--text-md); min-height: var(--touch-large); border-radius: var(--radius-lg); }
+
+/* ---- Sliders (two-tone filled track via sub-page/add-page) ---- */
+QSlider::groove:horizontal { height: 6px; background: var(--gray-300); border-radius: 3px; }
+QSlider::sub-page:horizontal { background: var(--color-primary); border-radius: 3px; }
+QSlider::add-page:horizontal { background: var(--gray-300); border-radius: 3px; }
+QSlider::handle:horizontal {
+  width: 22px; height: 22px; margin: -8px 0; border-radius: 11px;
+  background: var(--white); border: var(--border-heavy) solid var(--color-primary);
+}
+QSlider::handle:horizontal:hover { background: var(--blue-050); }
+QSlider::handle:horizontal:disabled { border-color: var(--gray-400); }
+
+/* ---- Text inputs ---- */
+QLineEdit {
+  background: var(--white); color: var(--ink-900);
+  border: var(--border-thick) solid var(--border-control);
+  border-radius: var(--radius-xs);
+  padding: var(--space-2) var(--space-3);
+  font-size: var(--text-base);
+  selection-background-color: var(--color-primary);
+  selection-color: var(--white);
+}
+QLineEdit:focus { border-color: var(--border-focus); }
+QLineEdit:disabled { background: var(--gray-100); color: var(--gray-600); }
+
+/* ---- Checkboxes ---- */
+QCheckBox { spacing: var(--space-3); font-size: var(--text-base); color: var(--ink-800); }
+QCheckBox::indicator {
+  width: 24px; height: 24px;
+  border: var(--border-heavy) solid var(--gray-400);
+  border-radius: var(--radius-xs); background: var(--white);
+}
+QCheckBox::indicator:hover { border-color: var(--color-primary); }
+QCheckBox::indicator:checked { background: var(--color-primary); border-color: var(--color-primary); }
+QCheckBox:disabled { color: var(--gray-600); }
+
+/* ---- Scrollbars (thin, unobtrusive) ---- */
+QScrollBar:vertical { width: 8px; background: transparent; margin: 0; }
+QScrollBar::handle:vertical { background: var(--gray-400); border-radius: 4px; min-height: 24px; }
+QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; background: none; }
+QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
+QScrollBar:horizontal { height: 8px; background: transparent; margin: 0; }
+QScrollBar::handle:horizontal { background: var(--gray-400); border-radius: 4px; min-width: 24px; }
+QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; background: none; }
+QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: none; }
+
+/* ---- Cards (dynamic props: dsCard on the frame, dsCardHeader on its title) ---- */
+QFrame[dsCard="true"] {
+  background: var(--surface-card);
+  border: var(--border-thin) solid var(--border-divider);
+  border-radius: var(--radius-lg);
+}
+QLabel[dsCardHeader="true"] {
+  background: var(--surface-dark); color: var(--text-on-dark);
+  font-size: var(--text-md); font-weight: 600;
+  padding: var(--space-3) var(--space-5);
+  border-top-left-radius: var(--radius-lg); border-top-right-radius: var(--radius-lg);
+}

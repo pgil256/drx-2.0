@@ -2392,7 +2392,16 @@ def main():
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
-    
+
+    # Phase 0: apply the modern theme foundation (bundled fonts + global QSS).
+    # Guarded so a theme/stylesheet problem can never stop the device launching.
+    try:
+        from ui.theme import apply_theme
+        theme_info = apply_theme(app)
+        print(f"Theme applied: {theme_info}")
+    except Exception as theme_err:
+        print(f"Theme not applied, continuing with default style: {theme_err}")
+
     window = KneeSpa(debug_mode=args.debug, config_path=args.config)
     window.show()
 
