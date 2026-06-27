@@ -7,7 +7,7 @@
  * (QGraphicsDropShadowEffect, manual uppercasing, property animations).
  *
  * Buttons read a dynamic `variant` (primary/success/danger/secondary/ghost) and
- * `size` (sm/lg) property — set via widget.setProperty(...) then re-polished —
+ * `size` (sm/md/lg) property — set via widget.setProperty(...) then re-polished —
  * mirroring the design-system Button component. Bare controls get sensible
  * neutral styling so the legacy screens look coherent until each is rebuilt.
  */
@@ -28,9 +28,9 @@ QPushButton {
   color: var(--ink-800);
   border: var(--border-thick) solid var(--gray-300);
   border-radius: var(--radius-md);
-  padding: var(--space-3) var(--space-5);
+  padding: 12px 24px;
   font-size: var(--text-base);
-  font-weight: 600;
+  font-weight: 700;
 }
 QPushButton:hover { background-color: var(--blue-050); border-color: var(--color-primary); }
 QPushButton:pressed { background-color: var(--gray-200); }
@@ -38,7 +38,6 @@ QPushButton:disabled { background-color: var(--gray-300); color: var(--gray-600)
 
 QPushButton[variant="primary"] { background-color: var(--color-primary); color: var(--text-on-accent); border-color: var(--color-primary); }
 QPushButton[variant="primary"]:hover { background-color: var(--color-primary-hover); border-color: var(--color-primary-hover); }
-QPushButton[variant="primary"]:pressed { background-color: var(--color-primary-active); border-color: var(--color-primary-active); }
 
 QPushButton[variant="success"] { background-color: var(--color-success); color: var(--white); border-color: var(--color-success); }
 QPushButton[variant="success"]:hover { background-color: var(--color-success-hover); border-color: var(--color-success-hover); }
@@ -46,11 +45,20 @@ QPushButton[variant="success"]:hover { background-color: var(--color-success-hov
 QPushButton[variant="danger"] { background-color: var(--color-danger); color: var(--white); border-color: var(--color-danger); }
 QPushButton[variant="danger"]:hover { background-color: var(--color-danger-hover); border-color: var(--color-danger-hover); }
 
-QPushButton[variant="secondary"] { background-color: var(--gray-200); color: var(--ink-800); border-color: var(--gray-200); }
-QPushButton[variant="secondary"]:hover { background-color: var(--gray-300); border-color: var(--gray-300); }
+QPushButton[variant="secondary"] { background-color: var(--gray-200); color: var(--ink-800); border-color: var(--gray-400); }
+QPushButton[variant="secondary"]:hover { background-color: #e0e6e8; }
 
 QPushButton[variant="ghost"] { background-color: transparent; color: var(--color-primary); border-color: transparent; }
-QPushButton[variant="ghost"]:hover { background-color: var(--blue-050); }
+QPushButton[variant="ghost"]:hover { background-color: var(--gray-100); }
+
+/* Pressed feedback — Qt QSS can't scale a sub-control, so the DS's press
+ * transform (scale 0.97) is substituted with a consistent per-variant darken
+ * (the device is touch-only: a visible press state matters more than parity). */
+QPushButton[variant="primary"]:pressed { background-color: var(--color-primary-active); border-color: var(--color-primary-active); }
+QPushButton[variant="success"]:pressed { background-color: var(--color-success-hover); border-color: var(--color-success-hover); }
+QPushButton[variant="danger"]:pressed { background-color: var(--color-danger-hover); border-color: var(--color-danger-hover); }
+QPushButton[variant="secondary"]:pressed { background-color: var(--gray-300); }
+QPushButton[variant="ghost"]:pressed { background-color: var(--gray-200); }
 
 /* Disabled wins across variants (keep traffic-light buttons greyed when locked). */
 QPushButton[variant="primary"]:disabled,
@@ -61,16 +69,21 @@ QPushButton[variant="ghost"]:disabled {
   background-color: var(--gray-300); color: var(--gray-600); border-color: var(--gray-300);
 }
 
-/* Touch sizes (opt-in; bare buttons keep their existing geometry). */
-QPushButton[size="sm"] { padding: var(--space-2) var(--space-4); font-size: var(--text-sm); min-height: 36px; }
-QPushButton[size="lg"] { padding: var(--space-4) var(--space-8); font-size: var(--text-md); min-height: var(--touch-large); border-radius: var(--radius-lg); }
+/* Touch sizes (from Button.jsx SIZES). Property is "dsSize" — "size" collides
+ * with QWidget's built-in size property and would never match. */
+QPushButton[dsSize="sm"] { padding: 8px 16px; font-size: var(--text-sm); min-height: 40px; border-radius: var(--radius-md); }
+QPushButton[dsSize="md"] { padding: 12px 24px; font-size: var(--text-base); min-height: var(--touch-min); border-radius: var(--radius-md); }
+QPushButton[dsSize="lg"] { padding: 18px 32px; font-size: var(--text-lg); min-height: var(--touch-large); border-radius: var(--radius-lg); }
 
-/* ---- Sliders (two-tone filled track via sub-page/add-page) ---- */
-QSlider::groove:horizontal { height: 6px; background: var(--gray-300); border-radius: 3px; }
-QSlider::sub-page:horizontal { background: var(--color-primary); border-radius: 3px; }
-QSlider::add-page:horizontal { background: var(--gray-300); border-radius: 3px; }
+/* ---- Sliders (two-tone filled track via sub-page/add-page; 8px groove, 24px handle) ----
+ * Handle is a WHITE disc with a primary ring. NB: this follows the rendered
+ * design screenshots (screenshots/06-setup-final.png), which disagree with the
+ * Slider.jsx source text (blue fill / white ring) — the approved render wins. */
+QSlider::groove:horizontal { height: 8px; background: var(--gray-300); border-radius: 4px; }
+QSlider::sub-page:horizontal { background: var(--color-primary); border-radius: 4px; }
+QSlider::add-page:horizontal { background: var(--gray-300); border-radius: 4px; }
 QSlider::handle:horizontal {
-  width: 22px; height: 22px; margin: -8px 0; border-radius: 11px;
+  width: 24px; height: 24px; margin: -8px 0; border-radius: 12px;
   background: var(--white); border: var(--border-heavy) solid var(--color-primary);
 }
 QSlider::handle:horizontal:hover { background: var(--blue-050); }
@@ -110,15 +123,6 @@ QScrollBar::handle:horizontal { background: var(--gray-400); border-radius: 4px;
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; background: none; }
 QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: none; }
 
-/* ---- Cards (dynamic props: dsCard on the frame, dsCardHeader on its title) ---- */
-QFrame[dsCard="true"] {
-  background: var(--surface-card);
-  border: var(--border-thin) solid var(--border-divider);
-  border-radius: var(--radius-lg);
-}
-QLabel[dsCardHeader="true"] {
-  background: var(--surface-dark); color: var(--text-on-dark);
-  font-size: var(--text-md); font-weight: 600;
-  padding: var(--space-3) var(--space-5);
-  border-top-left-radius: var(--radius-lg); border-top-right-radius: var(--radius-lg);
-}
+/* Composite DS components (Card, Badge, StatReadout, ProtocolButton,
+ * NavRailButton, Keypad) self-style from tokens in their own classes — see
+ * main/ui/widgets/ds/. */
