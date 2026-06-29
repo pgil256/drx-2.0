@@ -56,8 +56,11 @@ class DSCard(QFrame):
             outer.addWidget(self._header)
 
         self.body = QWidget(self)
+        self.body.setObjectName("DSCardBody")
         self.body.setAttribute(Qt.WA_StyledBackground, True)
-        self.body.setStyleSheet("background: transparent;")
+        # Scope to the body itself — a selector-less `background` would cascade
+        # onto descendants and wipe out child control fills (e.g. DSButton).
+        self.body.setStyleSheet("#DSCardBody { background: transparent; }")
         self.body_layout = QVBoxLayout(self.body)
         pad = px("--space-6") if padded else 0
         self.body_layout.setContentsMargins(pad, pad, pad, pad)

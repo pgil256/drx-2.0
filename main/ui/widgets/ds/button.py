@@ -8,17 +8,19 @@ Variants: primary · success · danger · secondary · ghost
 Sizes:    sm · md · lg   (md is the default; lg is START/keypad scale)
 """
 
-from PyQt5.QtCore import Qt
+from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtWidgets import QPushButton, QSizePolicy
 
 from ._common import repolish
 
 VARIANTS = ("primary", "success", "danger", "secondary", "ghost")
 SIZES = ("sm", "md", "lg")
+_ICON_PX = {"sm": 16, "md": 18, "lg": 22}
 
 
 class DSButton(QPushButton):
-    def __init__(self, text="", variant="primary", size="md", full_width=False, parent=None):
+    def __init__(self, text="", variant="primary", size="md", full_width=False,
+                 icon=None, parent=None):
         super().__init__(text, parent)
         self.setCursor(Qt.PointingHandCursor)
         self._variant = "primary"
@@ -26,6 +28,14 @@ class DSButton(QPushButton):
         self.set_variant(variant)
         self.set_size(size)
         self.set_full_width(full_width)
+        if icon is not None:
+            self.set_icon(icon)
+
+    def set_icon(self, icon):
+        # The DS pairs a leading glyph icon with the label (e.g. ▶ START). Qt
+        # lays the icon left of the text automatically; size it to the variant.
+        self.setIcon(icon)
+        self.setIconSize(QSize(_ICON_PX[self._size], _ICON_PX[self._size]))
 
     def set_variant(self, variant):
         self._variant = variant if variant in VARIANTS else "primary"

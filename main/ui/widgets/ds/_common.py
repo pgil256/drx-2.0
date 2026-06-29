@@ -14,6 +14,8 @@ All colors/sizes come from the design tokens via ``ui.theme.resolve`` — the
 single source of truth shared with ``app.qss``.
 """
 
+import os
+
 from PyQt5.QtGui import QColor, QFont
 from PyQt5.QtWidgets import QGraphicsDropShadowEffect
 
@@ -23,6 +25,18 @@ from ui.theme import resolve
 # --font-sans/--font-mono stacks if they are ever absent).
 SANS = "IBM Plex Sans"
 MONO = "IBM Plex Mono"
+
+# Bundled art lives at main/ui/media/images (this file is main/ui/widgets/ds/).
+_IMAGES_DIR = os.path.join(
+    os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+    "media",
+    "images",
+)
+
+
+def image_path(*parts):
+    """Absolute path to a bundled image, e.g. ``image_path('logos', 'knee.png')``."""
+    return os.path.join(_IMAGES_DIR, *parts)
 
 _WEIGHTS = {400: QFont.Normal, 500: QFont.Medium, 600: QFont.DemiBold, 700: QFont.Bold}
 

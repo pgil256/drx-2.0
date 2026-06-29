@@ -11,6 +11,7 @@ Typical use in ``main()`` (after ``app.setStyle("Fusion")``)::
 
 from .tokens import TOKENS
 from .qss import apply_theme, load_app_qss, load_fonts, qss, resolve
+from .icons import GLYPH, nav_icon, pause_icon, play_icon
 
 __all__ = [
     "TOKENS",
@@ -19,4 +20,8 @@ __all__ = [
     "load_fonts",
     "qss",
     "resolve",
+    "GLYPH",
+    "play_icon",
+    "pause_icon",
+    "nav_icon",
 ]
