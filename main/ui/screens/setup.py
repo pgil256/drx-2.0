@@ -44,8 +44,8 @@ ROWS = [
      "min": -20, "max": 20, "step": 2.5, "value": 0, "pos_tone": "cyan"},
     {"key": "horizontal", "name": "Horizontal", "sub": "−25° to +5°", "unit": "°",
      "min": -25, "max": 5, "step": 2.5, "value": -10, "pos_tone": "cyan"},
-    {"key": "leg_length", "name": "Leg Length", "sub": "adjust support", "unit": " in",
-     "min": 12, "max": 24, "step": 0.5, "value": 18, "pos_tone": "default"},
+    {"key": "leg_length", "name": "Leg Length", "sub": "0–6 in", "unit": " in",
+     "min": 0, "max": 6, "step": 0.5, "value": 0, "pos_tone": "default"},
     {"key": "pressure", "name": "Pressure", "sub": "0–80 lbs", "unit": " lbs",
      "min": 0, "max": 80, "step": 5, "value": 0, "pos_tone": "default"},
 ]
@@ -105,6 +105,7 @@ class _ActuatorRow(QWidget):
         lay.addWidget(name_host)
 
         # Jog cluster: «  ‹  ›  »  ↺
+        self.buttons = []  # all enable/disable-able controls in this row
         jog_row = QHBoxLayout()
         jog_row.setSpacing(6)
         specs = [
@@ -119,6 +120,7 @@ class _ActuatorRow(QWidget):
             b.setToolTip(action.replace("_", " ").title())
             b.clicked.connect(lambda _c, a=action, d=delta: self._on_jog(a, d))
             jog_row.addWidget(b)
+            self.buttons.append(b)
         lay.addLayout(jog_row)
 
         # Slider (label-less; the name block is the label).
@@ -133,6 +135,11 @@ class _ActuatorRow(QWidget):
         stop.clicked.connect(lambda: self.stop.emit(self._key))
         lay.addWidget(go)
         lay.addWidget(stop)
+        self.buttons.extend((go, stop))
+
+    def set_value(self, value):
+        """Set the slider without re-emitting (controller-driven reflect)."""
+        self.slider.set_value(value)
 
     def _on_jog(self, action, delta):
         if action == "reset":
@@ -236,6 +243,7 @@ class SetupScreen(QWidget):
         reset.clicked.connect(self.reset_arduino_requested)
         estop = DSButton(f"{GLYPH['estop']} Emergency Stop", variant="danger", full_width=True)
         estop.clicked.connect(self.emergency_stop_requested)
+        self._mark_btn, self._reset_btn, self._estop_btn = mark, reset, estop
         for b in (mark, reset, estop):
             actions.addWidget(b, 1)
         vlay.addLayout(actions)
@@ -325,3 +333,32 @@ class SetupScreen(QWidget):
     def set_arduino_connected(self, connected):
         self._arduino_badge.set_tone("success" if connected else "danger")
         self._arduino_badge.set_text("Arduino connected" if connected else "Arduino offline")
+
+    def row_value(self, key):
+        """Current slider value (natural units) for an actuator row."""
+        row = self._rows.get(key)
+        return row.value() if row is not None else 0.0
+
+    def set_position(self, key, value):
+        """Reflect a controller-commanded position back onto a row + Live Position.
+
+        Sets the slider without re-emitting ``value_changed`` (DSSlider blocks its
+        own signals in set_value), then refreshes the Live Position readout.
+        """
+        row = self._rows.get(key)
+        if row is None:
+            return
+        row.set_value(value)
+        self._refresh_live(key)
+
+    def control_buttons(self):
+        """Jog / Go / Stop buttons + Reset-Arduino — the set locked while the MCU
+        is busy. The Emergency Stop and Mark-As-Default buttons are intentionally
+        excluded so e-stop is always reachable."""
+        widgets = []
+        for cfg in ROWS:
+            row = self._rows.get(cfg["key"])
+            if row is not None:
+                widgets.extend(row.buttons)
+        widgets.append(self._reset_btn)
+        return widgets

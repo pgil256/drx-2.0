@@ -147,6 +147,7 @@ class TreatmentScreen(QWidget):
         self.setStyleSheet(f"#TreatmentScreen {{ background: {resolve('--surface-page')}; }}")
         self._running = False
         self._paused = False
+        self._busy = False  # locked while the device is mid-reset / reconnecting
         self._selected = 1
 
         grid = QHBoxLayout(self)
@@ -363,11 +364,16 @@ class TreatmentScreen(QWidget):
         self._running = running
         self._paused = paused
         self._start_btn.setText("RESUME" if paused else "START")
-        self._start_btn.setEnabled(not running or paused)
-        self._pause_btn.setEnabled(running and not paused)
+        self._start_btn.setEnabled((not running or paused) and not self._busy)
+        self._pause_btn.setEnabled((running and not paused) and not self._busy)
         for tile in self._proto_buttons.values():
             tile.setEnabled(not running)
         self._set_knee_glow(running and not paused)
+
+    def set_busy(self, busy):
+        """Lock START/PAUSE while the device is mid-reset / reconnecting."""
+        self._busy = busy
+        self.set_run_state(self._running, self._paused)
 
     def set_phase(self, phase):
         label, tone = PHASES.get(phase, PHASES["idle"])
@@ -400,6 +406,22 @@ class TreatmentScreen(QWidget):
             self._knee.setPixmap(
                 rot.scaled(210, 210, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             )
+
+    # ----- settings get/set (Phase 3 controller + Mark-As-Default) -----
+    def settings_values(self):
+        """Current Settings slider values: max_pressure/max_left/max_right/pulse_rate."""
+        return {key: sld.value() for key, sld in self._settings.items()}
+
+    def set_settings(self, values):
+        """Load Settings sliders from a dict (no signal re-emit; DSSlider blocks)."""
+        for key, value in (values or {}).items():
+            sld = self._settings.get(key)
+            if sld is not None:
+                sld.set_value(value)
+
+    def selected_protocol(self):
+        """The currently selected protocol number (1-4)."""
+        return self._selected
 
     def _set_knee_glow(self, on):
         if on:

@@ -13,7 +13,10 @@ from config.constants import (
     AXIAL_MAX,
     LATERAL_MIN,
     LATERAL_MAX,
-    PROTOCOL_DEFAULT_SETTINGS
+    PROTOCOL_DEFAULT_SETTINGS,
+    PULSE_RATE_FIRMWARE_SUPPORT,
+    MIN_JERK_INTERVAL_MS,
+    MAX_JERK_INTERVAL_MS,
 )
 
 # Constants
@@ -50,8 +53,15 @@ class Protocols(QtCore.QRunnable):
         use_pulse: bool,
         ser=None,
         config=None,
+        pulse_rate=None,
     ):
-        """Initialize protocol handler."""
+        """Initialize protocol handler.
+
+        ``pulse_rate`` (pulses/sec, optional) sets the firmware pulse cadence
+        when the device supports it (PULSE_RATE_FIRMWARE_SUPPORT); otherwise the
+        worker falls back to a bare ``J`` (on/off) and ``pulse_rate`` only acts
+        as an on/off hint. ``use_pulse`` remains the master on/off gate.
+        """
         super().__init__()
         print("Initializing Protocols class...")
 
@@ -69,9 +79,12 @@ class Protocols(QtCore.QRunnable):
         self.max_right = abs(max_right)    # Ensure positive for right
         self.duration = duration * 60      # Convert to seconds
         self.use_pulse = use_pulse
+        self.pulse_rate = pulse_rate       # pulses/sec, or None for bare-J
 
         # State tracking
         self.is_running = False
+        self.is_paused = False
+        self._pause_started = None
         self.start_time = None
         self.elapsed_time = 0
         self._state_lock = threading.Lock()
@@ -134,18 +147,72 @@ class Protocols(QtCore.QRunnable):
         self.signals.status_emit.emit(int(pos_a), int(pos_b), int(pos_c), float(pressure))
 
     def check_duration(self) -> bool:
-        """Check if protocol duration has expired."""
+        """Check if protocol duration has expired.
+
+        While paused, elapsed time is frozen at the moment pause began so the
+        protocol never expires mid-pause (resume() shifts ``start_time`` past the
+        paused span to keep the post-resume clock correct)."""
         if not self.start_time:
             print("Warning: No start time set for duration check")
             return False
-        
-        self.elapsed_time = time.time() - self.start_time
-        
+
+        now = time.time()
+        if self.is_paused and self._pause_started is not None:
+            now = self._pause_started  # freeze the clock during a pause
+
+        self.elapsed_time = now - self.start_time
+
         # Only print status every 15 seconds
         if int(self.elapsed_time) % 15 == 0:
             print(f"Duration check - Elapsed: {self.elapsed_time:.1f}s / Total: {self.duration}s")
-            
+
         return self.elapsed_time < self.duration
+
+    # ----- Pause / Resume (Phase 3.5 §15.1) -------------------------------
+    # Pause HOLDS: it stops issuing new pressure/position commands and freezes
+    # the phase clock, but never sends an emergency stop ('X') — the firmware
+    # keeps holding the last commanded pressure/position. Pulsing is stopped on
+    # pause and re-armed on resume so the limb is held static while paused.
+    def pause(self):
+        """Hold the running protocol (no-op if not running or already paused)."""
+        if not self.is_running or self.is_paused:
+            return
+        print("Protocol pause requested — holding")
+        self.is_paused = True
+        self._pause_started = time.time()
+        # Stop any active firmware pulse so the limb is held static (NOT 'X').
+        if self.arduino:
+            try:
+                self.arduino.send("JS")
+            except Exception as e:
+                print(f"Error stopping pulse on pause: {e}")
+
+    def resume(self):
+        """Resume a paused protocol, shifting the clock past the paused span."""
+        if not self.is_running or not self.is_paused:
+            return
+        print("Protocol resume requested")
+        if self._pause_started is not None and self.start_time is not None:
+            self.start_time += (time.time() - self._pause_started)
+        self._pause_started = None
+        self.is_paused = False
+
+    def _wait_while_paused(self):
+        """Block the worker thread while paused (cooperative; respects stop)."""
+        while self.is_running and self.is_paused:
+            time.sleep(0.1)
+
+    def _start_pulse(self) -> bool:
+        """Start firmware pulsing. Sends ``J<interval_ms>`` only on a flashed
+        device (PULSE_RATE_FIRMWARE_SUPPORT); otherwise a bare ``J`` so the old
+        firmware keeps working."""
+        cmd = "J"
+        if (PULSE_RATE_FIRMWARE_SUPPORT and self.pulse_rate
+                and self.pulse_rate > 0):
+            interval = int(round(1000.0 / self.pulse_rate))
+            interval = max(MIN_JERK_INTERVAL_MS, min(MAX_JERK_INTERVAL_MS, interval))
+            cmd = f"J{interval}"
+        return self.arduino.send(cmd)
 
     def run_pressure_sequence(self, starting_pressure: float, target_pressure: float) -> bool:
             """Run a sequence of pressure increases from start to target."""
@@ -160,18 +227,25 @@ class Protocols(QtCore.QRunnable):
             check_interval = 0.5  # Time between pressure checks in seconds
             last_check_time = 0  # Track when we last printed a status update
             
-            # Initial pressure command 
+            # Initial pressure command — hold before issuing it if paused.
+            self._wait_while_paused()
+            if not self.is_running:
+                return False
             print(f"Increasing pressure to: {current_command} lbs")
             if not self.arduino.send(f"P{current_command}"):
                 print(f"Failed to send pressure command P{current_command}")
                 return False
-            
+
             # Wait for initial pressure to build with less frequent status checks
             wait_start = time.time()
             while time.time() - wait_start < max_wait_time:
                 if not self.is_running:
                     print("Emergency stop during initial pressure build")
                     return False
+                if self.is_paused:
+                    self._wait_while_paused()
+                    wait_start = time.time()  # restart the window after a pause
+                    continue
                 if self.current_pressure >= current_command - pressure_tolerance:
                     break
                 # Avoid excessive status printing
@@ -192,6 +266,10 @@ class Protocols(QtCore.QRunnable):
                 if not self.is_running:
                     print("Emergency stop during pressure ramp")
                     return False
+                # Pause must HOLD: never escalate pressure while paused.
+                self._wait_while_paused()
+                if not self.is_running:
+                    return False
                 current_command += PRESSURE_INCREMENT
                 # Clamp to target to prevent floating-point overshoot
                 current_command = min(current_command, target_pressure)
@@ -208,6 +286,10 @@ class Protocols(QtCore.QRunnable):
                     if not self.is_running:
                         print("Emergency stop during pressure stabilization")
                         return False
+                    if self.is_paused:
+                        self._wait_while_paused()
+                        increment_start = time.time()  # restart the window after a pause
+                        continue
                     # Check if this increment is stable before moving to next
                     if abs(self.current_pressure - current_command) <= pressure_tolerance:
                         print(f"Pressure increment stabilized at {self.current_pressure} lbs")
@@ -222,7 +304,10 @@ class Protocols(QtCore.QRunnable):
                 # Small delay between increments
                 time.sleep(2.0)
 
-            # Send final pressure command
+            # Send final pressure command — hold before issuing it if paused.
+            self._wait_while_paused()
+            if not self.is_running:
+                return False
             print(f"Setting final pressure: {target_pressure} lbs")
             final_attempt_start = time.time()
             if not self.arduino.send(f"P{target_pressure}"):
@@ -246,6 +331,10 @@ class Protocols(QtCore.QRunnable):
                     if not self.is_running:
                         print("Emergency stop during final pressure wait")
                         return False
+                    if self.is_paused:
+                        self._wait_while_paused()
+                        wait_start = time.time()  # restart the window after a pause
+                        continue
                     final_diff = abs(target_pressure - self.current_pressure)
                     
                     # Only print status updates periodically
@@ -295,11 +384,15 @@ class Protocols(QtCore.QRunnable):
                 print(f"Error: Pressure {target_pressure} outside safe range (0-{MAX_SAFE_PRESSURE})")
                 return False
                 
+            # Hold before issuing the pressure command if paused.
+            self._wait_while_paused()
+            if not self.is_running:
+                return False
             print(f"Setting pressure to: {target_pressure} lbs")
             if not self.arduino.send(f"P{target_pressure}"):
                 print(f"Failed to send pressure command P{target_pressure}")
                 return False
-            
+
             # Wait for pressure to reach target with live monitoring
             if target_pressure > 0:  # Only wait if we're increasing pressure
                 wait_start = time.time()
@@ -307,6 +400,10 @@ class Protocols(QtCore.QRunnable):
                     if not self.is_running:
                         print("Emergency stop during pressure stabilization")
                         return False
+                    if self.is_paused:
+                        self._wait_while_paused()
+                        wait_start = time.time()  # restart the window after a pause
+                        continue
                     diff = abs(target_pressure - self.current_pressure)
                     if diff <= pressure_tolerance:
                         print(f"Pressure stabilized at {self.current_pressure} lbs")
@@ -354,13 +451,21 @@ class Protocols(QtCore.QRunnable):
             # Send command and ensure high-frequency status updates for position monitoring
             self.angle_set = False
             self.target_pos_c = position
+            # Hold before issuing the lateral move if paused.
+            self._wait_while_paused()
+            if not self.is_running:
+                return False
             if not self.arduino.send(f"K{position}"):
                 print(f"Failed to send C actuator command K{position}")
                 return False
-            
+
             # Wait for position to be reached with live monitoring
             wait_start = time.time()
             while time.time() - wait_start < max_wait_time:
+                if self.is_paused:
+                    self._wait_while_paused()
+                    wait_start = time.time()  # restart the window after a pause
+                    continue
                 current_diff = abs(self.current_pos_c - position)
                 print(f"Position check - Target: {position}, Current: {self.current_pos_c}, Difference: {current_diff}")
                 
@@ -399,7 +504,7 @@ class Protocols(QtCore.QRunnable):
             print(f"Protocol {self.protocol} ({time.time()}): Starting continuous pulse sequence (self.use_pulse={self.use_pulse})...")
             self.signals.progress.emit(">>Pulsing...")
 
-            if not self.arduino.send("J"): return False # Command to start pulsing
+            if not self._start_pulse(): return False # Command to start pulsing
             print(f"Protocol {self.protocol} ({time.time()}): Sent 'J' (start pulse) to Arduino.")
             pulse_command_active_j = True # Flag to track if "J" was sent
 
@@ -409,6 +514,17 @@ class Protocols(QtCore.QRunnable):
 
             while self.is_running and self.use_pulse: # *** KEY: Check self.use_pulse in loop condition ***
                 current_time = time.time()
+
+                # Pause holds static: pause() already sent 'JS'; wait here, then
+                # re-arm the pulse on resume so the hold continues cleanly.
+                if self.is_paused:
+                    self._wait_while_paused()
+                    if not (self.is_running and self.use_pulse):
+                        break
+                    if not self._start_pulse():
+                        return False
+                    last_keepalive_time = time.time()
+                    continue
 
                 # Check overall protocol duration
                 if not self.check_duration():
@@ -482,6 +598,7 @@ class Protocols(QtCore.QRunnable):
                 else:
                     # Hold mode
                     # print(f"Protocol {self.protocol} ({time.time()}): Loop decides to hold.") # Verbose
+                    self._wait_while_paused()
                     time.sleep(0.5) # Check frequently if state changes back to pulse or duration ends
 
             # Ensure pulse is stopped if loop exited for any reason
@@ -542,6 +659,7 @@ class Protocols(QtCore.QRunnable):
                     main_phase_loop_active = False 
                 else:
                     print(f"Protocol {self.protocol} ({time.time()}): self.use_pulse is False, in hold mode.")
+                    self._wait_while_paused()
                     time.sleep(0.5)
             
             if hasattr(self.arduino, 'send') and self.arduino:
@@ -604,6 +722,7 @@ class Protocols(QtCore.QRunnable):
                     main_phase_loop_active = False 
                 else:
                     print(f"Protocol {self.protocol} ({time.time()}): self.use_pulse is False, in hold mode.")
+                    self._wait_while_paused()
                     time.sleep(0.5)
             
             if hasattr(self.arduino, 'send') and self.arduino:
@@ -669,13 +788,25 @@ class Protocols(QtCore.QRunnable):
             
             # Start pulsing if enabled
             if self.use_pulse and self.arduino:
-                if not self.arduino.send("J"):
+                if not self._start_pulse():
                     self.signals.finished.emit(False)
                     return
                 pulse_active = True
                 print(f"Protocol 4: Started continuous pulsing")
-            
+
             while self.is_running and self.check_duration():
+                # Hold on pause: pause() sent 'JS'; on resume re-arm pulsing.
+                if self.is_paused:
+                    self._wait_while_paused()
+                    if not self.is_running:
+                        break
+                    if pulse_active and self.use_pulse and self.arduino:
+                        if not self._start_pulse():
+                            self.signals.finished.emit(False)
+                            return
+                    last_position_change = time.time()
+                    continue
+
                 current_time = time.time()
                 time_since_position_change = current_time - last_position_change
                 
@@ -710,7 +841,7 @@ class Protocols(QtCore.QRunnable):
                 # Handle pulse state changes
                 if self.use_pulse and not pulse_active and self.arduino:
                     # Pulse was turned on
-                    if not self.arduino.send("J"):
+                    if not self._start_pulse():
                         self.signals.finished.emit(False)
                         return
                     pulse_active = True

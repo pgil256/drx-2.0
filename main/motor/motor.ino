@@ -38,6 +38,8 @@
 #define BC_SPEED           800
 #define C_SPEED            800
 #define MAX_JERKS          10
+#define MIN_JERK_INTERVAL  100   // fastest host-settable pulse cadence (ms)
+#define MAX_JERK_INTERVAL  5000  // slowest host-settable pulse cadence (ms)
 #define FIT_SLOW_DELAY     (0.5 * 1000)
 #define FIT_FAST_DELAY     (6 * 1000)
 #define LOOP_STATUS_DELAY  5000
@@ -106,7 +108,7 @@ bool jerking = false;
 int jerkDirection = 1;
 int jerksCompleted = 0;
 unsigned long lastJerkTime = 0;
-const unsigned long jerkInterval = 200;  // Reduced from 400ms to 200ms for subtler jerking motion
+unsigned long jerkInterval = 200;  // Reduced from 400ms to 200ms; host-settable via J<ms> (Phase 3.5 §15.2)
 bool jerkDirectionChanged = false;
 
 // Makes Arduino restart
@@ -661,7 +663,24 @@ void processCommand(String cmd) {
       if (cmd.length() > 1)
           parameter = cmd.substring(1);
 
-      if (parameter == "") {
+      if (parameter == "S") {
+          Serial.println("stop jerking");
+          jerkDirection = 0;
+          jerking = false;
+          noStatus = false;
+          jerksCompleted = 0; // Reset counter
+          setMotorSpeed(0);
+          Serial1.println("DONE");
+      } else {
+          // Optional numeric parameter sets the pulse cadence in ms (J<ms>).
+          // A bare 'J' keeps the current jerkInterval. Out-of-range / malformed
+          // values are ignored so a bad rate can never drive an unsafe cadence.
+          if (parameter.length() > 0) {
+              long requested = parameter.toInt();
+              if (requested >= MIN_JERK_INTERVAL && requested <= MAX_JERK_INTERVAL) {
+                  jerkInterval = (unsigned long)requested;
+              }
+          }
           Serial.println("jerking");
           jerking = true;
           sendStatus();
@@ -670,16 +689,6 @@ void processCommand(String cmd) {
           jerkDirection = 1;
           lastJerkTime = millis(); // Initialize jerk timer
           smcDeviceNumber = 12;
-          Serial1.println("DONE");
-      }
-
-      if (parameter == "S") {
-          Serial.println("stop jerking");
-          jerkDirection = 0;
-          jerking = false;
-          noStatus = false;
-          jerksCompleted = 0; // Reset counter
-          setMotorSpeed(0);
           Serial1.println("DONE");
       }
       break;
