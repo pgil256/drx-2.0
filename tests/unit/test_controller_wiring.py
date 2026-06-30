@@ -239,3 +239,26 @@ class TestSupport:
         assert stub.username == "Dr"
         assert stub.user_email == "d@x"
         stub.email_admin.assert_called_once()
+
+
+# ----- live telemetry wiring (medical-device "telemetry updates live") -----
+class TestTelemetry:
+    def test_worker_status_drives_live_status(self):
+        stub = make_stub()
+        # CMarks: degrees -> position. pos_c=150 sits halfway between the
+        # 0deg(100) and 10deg(200) marks, so the angle approximates to 5.0.
+        stub.config.CMarks = {"0.0": 100, "10.0": 200, "20.0": 300}
+        KneeSpa._on_worker_status(stub, 500, 0, 150, 42)
+        stub.shell.treatment.set_pressure.assert_called_once_with(42)
+        stub.shell.treatment.set_angle.assert_called_once_with(pytest.approx(5.0))
+
+    @pytest.mark.parametrize("text,phase", [
+        ("Pulsing at target pressure", "pulsing"),
+        ("Oscillating limb", "oscillating"),
+        ("Moving to lateral angle", "positioning"),
+        ("Protocol complete", "complete"),
+    ])
+    def test_worker_progress_maps_to_phase(self, text, phase):
+        stub = make_stub()
+        KneeSpa._on_worker_progress(stub, text)
+        stub.shell.treatment.set_phase.assert_called_with(phase)

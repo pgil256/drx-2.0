@@ -1,16 +1,24 @@
-"""VideoModal — demo-video frame over a dim scrim.
+"""VideoModal — the demo-video player over a dim scrim.
 
 Mirrors `VideoModal` in `bundle.jsx`: a 720px card with a dark title bar, a 16:9
 stage (radial-gradient backdrop, faint knee watermark, big play button) and a
-transport bar (play/pause, elapsed/total time, progress track). Phase 4 drops
-the existing VLC ``VideoPlayer`` into the stage; here it is the static frame.
+transport bar (play/pause, elapsed/total time, progress track).
+
+The stage embeds a VLC media player (``_VlcEngine``) that renders into a native
+surface widget. VLC and the bundled clip are both optional — if either is
+missing the modal degrades to the static frame (the play button still toggles
+its icon and emits ``play_toggled`` so the UI stays consistent), so it can never
+block the app on a machine without VLC.
 
 Signals:
     play_toggled(bool)  — play button pressed (True = now playing)
     closed              — dismissed
 """
 
-from PyQt5.QtCore import Qt, QSize, pyqtSignal
+import os
+import sys
+
+from PyQt5.QtCore import Qt, QSize, QTimer, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
     QFrame,
@@ -19,20 +27,141 @@ from PyQt5.QtWidgets import (
     QHBoxLayout,
     QLabel,
     QPushButton,
+    QSizePolicy,
     QVBoxLayout,
     QWidget,
 )
 
+from config.constants import UI_PATHS
 from ui.theme import GLYPH, pause_icon, play_icon
 from ui.widgets.ds._common import drop_shadow, image_path, mono_font, resolve, sans_font
 
 from ._overlay import Overlay
 
-_DURATION = 150  # seconds (demo clock)
+try:  # VLC is optional — absent on dev boxes / headless CI (mocked in tests).
+    import vlc
+except Exception:  # pragma: no cover - exercised only where vlc is missing
+    vlc = None
+
+_FALLBACK_DURATION = 150  # seconds; used for the static clock when VLC is absent
 
 
 def _fmt(seconds):
-    return f"{int(seconds // 60)}:{int(seconds % 60):02d}"
+    seconds = max(0, int(seconds))
+    return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+class _VlcEngine:
+    """Thin VLC wrapper that renders into a host surface widget.
+
+    Every public method is a no-op when VLC or the clip is unavailable, so the
+    modal degrades gracefully instead of raising. All VLC calls are guarded —
+    in tests ``vlc`` is a MagicMock, so ``position()`` returns ``None`` (the
+    mock's getters are not real numbers) and play/pause are harmless.
+    """
+
+    def __init__(self, surface):
+        self._surface = surface
+        self._instance = None
+        self._player = None
+        self._video_path = self._first_video()
+        self.available = vlc is not None and self._video_path is not None
+
+    @staticmethod
+    def _first_video():
+        try:
+            video = UI_PATHS.get("VIDEOS")
+            if video and os.path.exists(video):
+                return video
+            folder = os.path.dirname(video) if video else None
+            if folder and os.path.isdir(folder):
+                clips = sorted(
+                    f for f in os.listdir(folder) if f.lower().endswith(".mp4")
+                )
+                if clips:
+                    return os.path.join(folder, clips[0])
+        except Exception:
+            pass
+        return None
+
+    def _ensure_player(self):
+        if self._player is not None or not self.available:
+            return self._player
+        try:
+            self._instance = vlc.Instance(["--no-xlib", "--quiet", "--no-audio"])
+            self._player = self._instance.media_player_new()
+            self._embed()
+            media = self._instance.media_new(self._video_path)
+            self._player.set_media(media)
+            media.release()
+        except Exception:
+            self._player = None
+            self.available = False
+        return self._player
+
+    def _embed(self):
+        handle = int(self._surface.winId())
+        if sys.platform.startswith("linux"):
+            self._player.set_xwindow(handle)
+        elif sys.platform == "win32":
+            self._player.set_hwnd(handle)
+        elif sys.platform == "darwin":
+            self._player.set_nsobject(handle)
+
+    def play(self):
+        player = self._ensure_player()
+        if player is None:
+            return False
+        try:
+            player.play()
+            return True
+        except Exception:
+            return False
+
+    def pause(self):
+        if self._player is not None:
+            try:
+                self._player.pause()  # VLC pause() toggles play/pause
+            except Exception:
+                pass
+
+    def stop(self):
+        # Unconditional — a paused player is not "playing" but still holds media.
+        if self._player is not None:
+            try:
+                self._player.stop()
+            except Exception:
+                pass
+
+    def position(self):
+        """Return ``(elapsed_s, total_s)`` floats, or ``None`` when unknown."""
+        if self._player is None:
+            return None
+        try:
+            length = self._player.get_length()
+            current = self._player.get_time()
+            if (isinstance(length, (int, float)) and isinstance(current, (int, float))
+                    and length > 0):
+                return current / 1000.0, length / 1000.0
+        except Exception:
+            pass
+        return None
+
+    def release(self):
+        try:
+            self.stop()
+            if self._player is not None:
+                media = self._player.get_media()
+                if media:
+                    media.release()
+                self._player.release()
+            if self._instance is not None:
+                self._instance.release()
+        except Exception:
+            pass
+        finally:
+            self._player = None
+            self._instance = None
 
 
 class VideoModal(Overlay):
@@ -60,6 +189,12 @@ class VideoModal(Overlay):
         lay.addWidget(self._transport())
 
         self.set_card(card)
+
+        self._engine = _VlcEngine(self._surface)
+        self._poll = QTimer(self)
+        self._poll.setInterval(250)
+        self._poll.timeout.connect(self._on_poll)
+        self.closed.connect(self._on_closed)
 
     def _title_bar(self):
         bar = QFrame()
@@ -102,18 +237,28 @@ class VideoModal(Overlay):
         grid = QGridLayout(stage)
         grid.setContentsMargins(0, 0, 0, 0)
 
-        watermark = QLabel()
-        watermark.setAlignment(Qt.AlignCenter)
-        watermark.setStyleSheet("background: transparent;")
+        # Native surface the VLC player renders into — fills the stage, hidden
+        # until playback starts so the gradient + watermark show underneath.
+        self._surface = QFrame()
+        self._surface.setObjectName("VideoSurface")
+        self._surface.setAttribute(Qt.WA_StyledBackground, True)
+        self._surface.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+        self._surface.setStyleSheet("#VideoSurface { background: #000000; }")
+        self._surface.setVisible(False)
+        grid.addWidget(self._surface, 0, 0)
+
+        self._watermark = QLabel()
+        self._watermark.setAlignment(Qt.AlignCenter)
+        self._watermark.setStyleSheet("background: transparent;")
         pix = QPixmap(image_path("logos", "knee.png"))
         if not pix.isNull():
-            watermark.setPixmap(
+            self._watermark.setPixmap(
                 pix.scaled(120, 120, Qt.KeepAspectRatio, Qt.SmoothTransformation)
             )
-        wm_opacity = QGraphicsOpacityEffect(watermark)
+        wm_opacity = QGraphicsOpacityEffect(self._watermark)
         wm_opacity.setOpacity(0.18)
-        watermark.setGraphicsEffect(wm_opacity)
-        grid.addWidget(watermark, 0, 0, Qt.AlignCenter)
+        self._watermark.setGraphicsEffect(wm_opacity)
+        grid.addWidget(self._watermark, 0, 0, Qt.AlignCenter)
 
         self._big_play = QPushButton()
         self._big_play.setCursor(Qt.PointingHandCursor)
@@ -127,6 +272,8 @@ class VideoModal(Overlay):
         )
         self._big_play.clicked.connect(self._toggle)
         grid.addWidget(self._big_play, 0, 0, Qt.AlignCenter)  # stacks above watermark
+        self._watermark.raise_()
+        self._big_play.raise_()
         return stage
 
     def _transport(self):
@@ -160,14 +307,14 @@ class VideoModal(Overlay):
         self._elapsed.setStyleSheet(f"color: {resolve('--ink-700')}; background: transparent;")
         h.addWidget(self._elapsed)
 
-        track = QFrame()
-        track.setObjectName("VTrack")
-        track.setAttribute(Qt.WA_StyledBackground, True)
-        track.setFixedHeight(8)
-        track.setStyleSheet(
+        self._track = QFrame()
+        self._track.setObjectName("VTrack")
+        self._track.setAttribute(Qt.WA_StyledBackground, True)
+        self._track.setFixedHeight(8)
+        self._track.setStyleSheet(
             f"#VTrack {{ background: {resolve('--gray-300')}; border-radius: 4px; }}"
         )
-        tlay = QHBoxLayout(track)
+        tlay = QHBoxLayout(self._track)
         tlay.setContentsMargins(0, 0, 0, 0)
         self._vfill = QFrame()
         self._vfill.setObjectName("VFill")
@@ -179,20 +326,66 @@ class VideoModal(Overlay):
         )
         tlay.addWidget(self._vfill)
         tlay.addStretch(1)
-        h.addWidget(track, 1)
+        h.addWidget(self._track, 1)
 
-        total = QLabel(_fmt(_DURATION))
-        total.setFont(mono_font(size="--text-xs"))
-        total.setStyleSheet(f"color: {resolve('--gray-600')}; background: transparent;")
-        h.addWidget(total)
+        self._total = QLabel(_fmt(_FALLBACK_DURATION))
+        self._total.setFont(mono_font(size="--text-xs"))
+        self._total.setStyleSheet(f"color: {resolve('--gray-600')}; background: transparent;")
+        h.addWidget(self._total)
         return bar
 
+    # ----- playback -----
     def _toggle(self):
         self._playing = not self._playing
-        icon_dark = play_icon(resolve("--ink-900"), 34) if not self._playing \
-            else pause_icon(resolve("--ink-900"), 34)
-        icon_white = play_icon("#ffffff", 15) if not self._playing \
-            else pause_icon("#ffffff", 15)
-        self._big_play.setIcon(icon_dark)
-        self._small_play.setIcon(icon_white)
+        if self._playing:
+            # Only reveal the video surface / start polling if VLC actually began
+            # playing; otherwise keep the static poster frame (graceful degrade).
+            if self._engine.play():
+                self._surface.setVisible(True)
+                self._watermark.setVisible(False)
+                self._big_play.setVisible(False)
+                self._poll.start()
+        else:
+            self._engine.pause()
+            self._big_play.setVisible(True)
+            self._poll.stop()
+        self._small_play.setIcon(
+            pause_icon("#ffffff", 15) if self._playing else play_icon("#ffffff", 15)
+        )
         self.play_toggled.emit(self._playing)
+
+    def _on_poll(self):
+        pos = self._engine.position()
+        if pos is None:
+            return
+        elapsed, total = pos
+        self._elapsed.setText(_fmt(elapsed))
+        if total > 0:
+            self._total.setText(_fmt(total))
+            frac = max(0.0, min(1.0, elapsed / total))
+            self._vfill.setFixedWidth(int(self._track.width() * frac))
+            if elapsed >= total - 0.3:  # clip ended → return to the paused frame
+                self._reset_playback()
+
+    def _reset_playback(self):
+        """Stop playback and restore the paused/static frame."""
+        self._poll.stop()
+        self._engine.stop()
+        self._playing = False
+        self._surface.setVisible(False)
+        self._watermark.setVisible(True)
+        self._big_play.setVisible(True)
+        self._small_play.setIcon(play_icon("#ffffff", 15))
+        self._elapsed.setText(_fmt(0))
+        self._vfill.setFixedWidth(0)
+
+    def _on_closed(self):
+        # Always stop playback + restore the static frame when dismissed —
+        # including the paused→close case (where _playing is already False and
+        # the poll is stopped, but VLC still holds media and the surface shows).
+        self._reset_playback()
+
+    def cleanup(self):
+        """Release VLC resources (call on app shutdown)."""
+        self._poll.stop()
+        self._engine.release()

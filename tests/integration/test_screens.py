@@ -268,3 +268,36 @@ def test_video_modal_play_toggle(shell):
     assert states == [True, False]
     shell.video_modal.close_overlay()
     assert shell.video_modal.isHidden()
+
+
+def test_video_modal_stops_playback_on_close(shell):
+    m = shell.video_modal
+    shell.show_video()
+    m._toggle()  # play
+    assert m._playing and m._poll.isActive()
+    m.close_overlay()  # dismiss → playback must be reset
+    assert not m._playing
+    assert not m._poll.isActive()
+
+
+def test_video_modal_degrades_without_vlc(app, monkeypatch):
+    """No VLC → engine unavailable, but the modal still toggles + never crashes."""
+    import ui.modals.video_modal as vm
+
+    monkeypatch.setattr(vm, "vlc", None)
+    modal = vm.VideoModal()
+    try:
+        assert modal._engine.available is False
+        states = []
+        modal.play_toggled.connect(states.append)
+        modal._toggle()  # "play" — engine is a no-op
+        # Degrades to the static frame: surface stays hidden, the poster
+        # (watermark) stays visible, and no idle poll is left running.
+        assert not modal._surface.isVisibleTo(modal)
+        assert modal._watermark.isVisibleTo(modal)
+        assert not modal._poll.isActive()
+        modal._toggle()  # "pause"
+        assert states == [True, False]
+    finally:
+        modal.cleanup()
+        modal.deleteLater()

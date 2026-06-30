@@ -30,7 +30,8 @@ KneeSpa is a PyQt5-based medical device control application for a knee treatment
 ### Core Components
 
 **`main/kneespa.py`** - Main application entry point and UI controller (`KneeSpa` class)
-- Manages PyQt5 UI loaded from `.ui` files in `main/ui/guis/`
+- Builds the PyQt5 UI in code via `ui.app_shell.AppShell` (the legacy Qt Designer
+  `.ui` files were retired in the Phase 2–4 view rebuild)
 - Handles GPIO for emergency stop and controls
 - Coordinates protocol execution via thread pool
 
@@ -67,10 +68,14 @@ Commands are single-letter prefixed strings sent via serial:
 
 Status responses: `STATUS_START|S|posA|posB|posC|pressure|STATUS_END`
 
-### UI Components
-- `main/ui/dialogs/` - Modal dialogs (timer, pressure, video player)
-- `main/ui/widgets/` - Reusable widgets (loading spinner)
-- Qt UI files in `main/ui/guis/` loaded via `uic.loadUi()`
+### UI Components (code-built, no `.ui` files)
+- `main/ui/app_shell.py` - Composition root: TopBar + NavRail + a `QStackedWidget`
+  of the five screens, plus the Login/Video modal overlays and login gating
+- `main/ui/screens/` - The five screens (home, setup, treatment, help, support)
+- `main/ui/modals/` - Overlay modals (`login_modal`, `video_modal` with embedded VLC)
+- `main/ui/chrome/` - `top_bar` and `nav_rail`
+- `main/ui/widgets/` - Reusable widgets, incl. the `ds/` design-system component library
+- `main/ui/theme/` - Design tokens + the `var()`-resolving QSS theme and bundled fonts
 
 ## Code Style Guidelines
 

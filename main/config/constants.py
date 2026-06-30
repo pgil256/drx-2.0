@@ -26,18 +26,13 @@ LOG_LEVEL = "DEBUG"
 WINDOW_TITLE = "KneeSpa Control Interface"
 DEGREES = "\u00b0"
 
-# Page Indices
-PAGES = {"HOME": 0, "SETUP": 1, "MAIN": 2, "HELP": 3, "PROFILE": 4}
+# Page order is owned by the code-built shell (ui.app_shell.PAGES) since the
+# Phase 2\u20134 rebuild; the legacy stackedWidget index dict was retired.
 
 # File Paths
+# The legacy Qt Designer .ui files were retired in the Phase 2–4 view rebuild
+# (screens are now built in code under ui/). Only media asset paths remain.
 UI_PATHS = {
-    "MAIN_UI": os.path.join(APP_BASE_DIR, "ui/guis/kneespa.ui"),
-    "LOGIN_UI": os.path.join(APP_BASE_DIR, "ui/guis/login.ui"),
-    "LOGIN_HELP_UI": os.path.join(APP_BASE_DIR, "ui/guis/login-help.ui"),
-    "ENTER_PATIENT_UI": os.path.join(APP_BASE_DIR, "ui/guis/enter-patient.ui"),
-    "ENTER_PATIENT_HELP_UI": os.path.join(
-        APP_BASE_DIR, "ui/guis/enter-patient-help.ui"
-    ),
     "PROTOCOL_IMAGES": os.path.join(APP_BASE_DIR, "ui/media/images/graphics"),
     "VIDEOS": os.path.join(APP_BASE_DIR, "ui/media/videos/1.mp4"),
 }
@@ -204,8 +199,6 @@ EMAIL_CONFIG = {
 
 # Error Messages
 ERROR_MESSAGES = {
-    "UI_NOT_FOUND": "UI file 'kneespa.ui' not found.",
-    "CENTRAL_WIDGET_NOT_FOUND": "Central widget 'main_content' not found in the UI file.",
     "LOGIN_REQUIRED": "Please log in to start a protocol.",
     "ADMIN_REQUIRED": "Only admins can edit patient data.",
     "INVALID_PIN": "Invalid PIN. Please try again.",

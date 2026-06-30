@@ -1,14 +1,14 @@
 # tests/integration/test_ui_widgets.py
 """Integration tests for misc UI widgets (offscreen, via qtbot).
 
-Covers:
-  * ``LoadingSpinner`` -- a transparent overlay wrapping a looping ``QMovie``.
-    Its public controls are ``show()`` (starts the animation) and ``hide()``
-    (stops it). These tests assert that construction and the show/hide
-    lifecycle work without crashing and drive the underlying movie state.
-  * ``VideoPlayer`` -- a VLC-backed dialog. ``vlc`` and the multimedia modules
-    are mocked by ``conftest.py``, so these tests stay light: construction plus
-    no-crash exercising of the public control slots and cleanup.
+Covers ``LoadingSpinner`` -- a transparent overlay wrapping a looping
+``QMovie``. Its public controls are ``show()`` (starts the animation) and
+``hide()`` (stops it). These tests assert that construction and the show/hide
+lifecycle work without crashing and drive the underlying movie state.
+
+(The legacy VLC ``VideoPlayer`` dialog was retired in Phase 4; the embedded
+player now lives in ``ui.modals.VideoModal`` and is covered by
+``test_screens.py``.)
 
 All tests run under ``QT_QPA_PLATFORM=offscreen`` (set in conftest).
 """
@@ -17,7 +17,6 @@ from PyQt5.QtGui import QMovie
 from PyQt5.QtCore import QSize
 
 from ui.widgets.loading_spinner import LoadingSpinner
-from ui.dialogs.video_player import VideoPlayer
 
 
 @pytest.mark.integration
@@ -101,66 +100,3 @@ class TestLoadingSpinnerLifecycle:
         qtbot.addWidget(spinner)
         spinner.hide()
         assert spinner._movie.state() == QMovie.NotRunning
-
-
-@pytest.mark.integration
-class TestVideoPlayerConstruction:
-    """VideoPlayer construction with mocked vlc (light coverage)."""
-
-    def test_construct_no_crash(self, qtbot):
-        """The dialog constructs without raising when vlc is mocked."""
-        player = VideoPlayer()
-        qtbot.addWidget(player)
-        assert isinstance(player, VideoPlayer)
-        player.safe_cleanup()
-
-    def test_media_player_initialized(self, qtbot):
-        """_init_vlc populates a (mocked) media player during construction."""
-        player = VideoPlayer()
-        qtbot.addWidget(player)
-        assert player.resources.get("media_player") is not None
-        player.safe_cleanup()
-
-    def test_initial_video_state(self, qtbot):
-        """The dialog starts at video index 0 and not playing."""
-        player = VideoPlayer()
-        qtbot.addWidget(player)
-        assert player.video_state["current_video_index"] == 0
-        assert player.video_state["is_playing"] is False
-        player.safe_cleanup()
-
-
-@pytest.mark.integration
-class TestVideoPlayerControls:
-    """Public control slots are callable without crashing (vlc mocked)."""
-
-    def test_play_video_no_crash(self, qtbot):
-        """play_video() does not raise with a mocked media player."""
-        player = VideoPlayer()
-        qtbot.addWidget(player)
-        player.play_video()
-        player.safe_cleanup()
-
-    def test_pause_video_no_crash(self, qtbot):
-        """pause_video() does not raise with a mocked media player."""
-        player = VideoPlayer()
-        qtbot.addWidget(player)
-        player.pause_video()
-        player.safe_cleanup()
-
-    def test_next_previous_no_crash(self, qtbot):
-        """show_next_video()/show_previous_video() do not raise."""
-        player = VideoPlayer()
-        qtbot.addWidget(player)
-        # These slots accept a (mouse) event argument; None is fine here.
-        player.show_next_video(None)
-        player.show_previous_video(None)
-        player.safe_cleanup()
-
-    def test_safe_cleanup_idempotent(self, qtbot):
-        """safe_cleanup() can be called repeatedly without crashing."""
-        player = VideoPlayer()
-        qtbot.addWidget(player)
-        player.safe_cleanup()
-        player.safe_cleanup()
-        assert player.resources.get("media_player") is None

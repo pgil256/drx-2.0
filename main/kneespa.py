@@ -587,7 +587,7 @@ class KneeSpa(QMainWindow):
         self.submit_ticket(self._selected_issue or "General support request")
 
     def _on_video_toggled(self, playing):
-        # Phase 4 will drop the VLC VideoPlayer into the modal stage.
+        # The VideoModal owns the embedded VLC player; this is just telemetry.
         print(f"Video play toggled: {playing}")
 
     # ----- emergency stop (frozen, unit-tested) -----
@@ -700,6 +700,10 @@ class KneeSpa(QMainWindow):
 
         if self.worker:
             self.worker.stop()
+
+        # Release the embedded VLC player, if any.
+        if hasattr(self, "shell"):
+            self.shell.video_modal.cleanup()
 
         # Force Arduino disconnect
         if hasattr(self, "arduino"):
