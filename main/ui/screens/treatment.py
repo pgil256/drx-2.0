@@ -27,6 +27,11 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from config.constants import (
+    DEFAULT_PROTOCOL_MINUTES,
+    PROTOCOL_MINUTES_MAX,
+    PROTOCOL_MINUTES_MIN,
+)
 from ui.theme import GLYPH, pause_icon, play_icon
 from ui.widgets.common import eyebrow
 from ui.widgets.ds import (
@@ -303,6 +308,8 @@ class TreatmentScreen(QWidget):
         sv.setSpacing(24)
         self._settings = {}
         slider_specs = [
+            ("duration", "Duration", DEFAULT_PROTOCOL_MINUTES,
+             PROTOCOL_MINUTES_MIN, PROTOCOL_MINUTES_MAX, 1, " min"),
             ("max_pressure", "Max Pressure", 50, 10, 80, 1, " lbs"),
             ("max_left", "Max Angle L", 10, 0, 20, 1, "°"),
             ("max_right", "Max Angle R", 10, 0, 20, 1, "°"),
@@ -368,6 +375,9 @@ class TreatmentScreen(QWidget):
         self._pause_btn.setEnabled((running and not paused) and not self._busy)
         for tile in self._proto_buttons.values():
             tile.setEnabled(not running)
+        # Duration is a pre-run parameter: lock it during an active run (incl.
+        # while paused) so a stray drag can't silently shorten/end the treatment.
+        self._settings["duration"].setEnabled(not running)
         self._set_knee_glow(running and not paused)
 
     def set_busy(self, busy):

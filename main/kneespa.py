@@ -67,6 +67,9 @@ from config.constants import (
     DEFAULT_PRESSURE,
     DEFAULT_LEG_LENGTH_POSITION,
     MIN_PRESSURE,
+    DEFAULT_PROTOCOL_MINUTES,
+    PROTOCOL_MINUTES_MIN,
+    PROTOCOL_MINUTES_MAX,
 )
 
 from config.config import Configuration
@@ -85,10 +88,6 @@ from ui.widgets.loading_spinner import LoadingSpinner
 
 # Suppress Qt warnings
 os.environ["QT_LOGGING_RULES"] = "*.debug=False;qt.qpa.xcb=False"
-
-# The modern Treatment screen has no duration picker; treatments run for this
-# many minutes by default (the legacy default). A future phase can surface it.
-DEFAULT_PROTOCOL_MINUTES = 12
 
 # Map a Setup jog action to the legacy (speed_factor, direction) pair used by
 # move_actuator ("20" = fast, "04" = slow; +1 forward, -1 reverse).
@@ -493,10 +492,12 @@ class KneeSpa(QMainWindow):
         ml = max(0, min(abs(LATERAL_MAX_DEGREES), abs(vals.get("max_left", 10))))
         mr = max(0, min(abs(LATERAL_MAX_DEGREES), abs(vals.get("max_right", 10))))
         pr = max(0, min(5, vals.get("pulse_rate", 2)))
+        dur = self._clamp_minutes(vals.get("duration", DEFAULT_PROTOCOL_MINUTES))
         try:
-            self.config.save_protocol_defaults(mp, ml, mr, pr)
+            self.config.save_protocol_defaults(mp, ml, mr, pr, dur)
             self.shell.treatment.set_settings(
-                {"max_pressure": mp, "max_left": ml, "max_right": mr, "pulse_rate": pr}
+                {"max_pressure": mp, "max_left": ml, "max_right": mr,
+                 "pulse_rate": pr, "duration": dur}
             )
             self._show_timed_error("Saved current settings as the default.")
         except Exception as e:
@@ -527,7 +528,29 @@ class KneeSpa(QMainWindow):
         elif key == "pulse_rate":
             self.worker.pulse_rate = value
             self.worker.use_pulse = value > 0
+        # "duration" is a pre-run parameter — the Treatment screen locks its
+        # slider during an active run, so it is deliberately NOT adjusted live
+        # here (a mid-run shorten could silently end the treatment).
         print(f"Mid-protocol: worker {key} updated to {value}")
+
+    @staticmethod
+    def _clamp_minutes(value):
+        try:
+            v = round(float(value))
+        except (TypeError, ValueError):
+            v = DEFAULT_PROTOCOL_MINUTES
+        return int(max(PROTOCOL_MINUTES_MIN, min(PROTOCOL_MINUTES_MAX, v)))
+
+    def _duration_minutes(self):
+        """Treatment duration (minutes) from the Settings slider, clamped to the
+        safe range; falls back to the default if the control is unavailable."""
+        try:
+            v = self.shell.treatment.settings_values().get(
+                "duration", DEFAULT_PROTOCOL_MINUTES
+            )
+        except Exception:
+            v = DEFAULT_PROTOCOL_MINUTES
+        return self._clamp_minutes(v)
 
     def _on_treatment_start(self):
         if not self.current_user:
@@ -1068,7 +1091,7 @@ class KneeSpa(QMainWindow):
             if protocol not in ["1", "2", "3", "4"]:
                 raise ValueError(f"Invalid protocol number: {protocol}")
 
-            duration = DEFAULT_PROTOCOL_MINUTES
+            duration = self._duration_minutes()
             print(f"Protocol duration: {duration} minutes")
             self.protocol_duration = duration * 60  # seconds (UI countdown)
             self.protocol_start_time = time.time()

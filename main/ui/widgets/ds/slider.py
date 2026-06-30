@@ -7,7 +7,13 @@ monospace value+unit. QSlider is integer-only, so this maps a float
 """
 
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import QHBoxLayout, QLabel, QSlider, QWidget
+from PyQt5.QtWidgets import (
+    QGraphicsOpacityEffect,
+    QHBoxLayout,
+    QLabel,
+    QSlider,
+    QWidget,
+)
 
 from ._common import mono_font, resolve, sans_font
 
@@ -70,6 +76,17 @@ class DSSlider(QWidget):
 
     def value(self):
         return self._value
+
+    def setEnabled(self, enabled):
+        """Dim the whole row when disabled — the custom QSS track has no
+        ``:disabled`` state, so without this a locked slider looks active."""
+        super().setEnabled(enabled)
+        if enabled:
+            self.setGraphicsEffect(None)
+        else:
+            effect = QGraphicsOpacityEffect(self)
+            effect.setOpacity(0.45)
+            self.setGraphicsEffect(effect)
 
     def _on_slider(self, pos):
         self._value = round(self._from_pos(pos), 6)

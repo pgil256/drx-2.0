@@ -152,6 +152,19 @@ def test_treatment_start_vs_resume_signal(shell):
     assert resumes == [1]
 
 
+def test_treatment_duration_slider_locks_during_run(shell):
+    t = shell.treatment
+    dur = t._settings["duration"]
+    t.set_run_state(running=False, paused=False)
+    assert dur.isEnabled()                      # editable before a run
+    t.set_run_state(running=True, paused=False)
+    assert not dur.isEnabled()                  # locked while running
+    t.set_run_state(running=True, paused=True)
+    assert not dur.isEnabled()                  # still locked while paused
+    t.set_run_state(running=False, paused=False)
+    assert dur.isEnabled()                      # editable again after stop
+
+
 def test_treatment_protocol_select_and_settings(shell):
     t = shell.treatment
     picked, settings = [], []

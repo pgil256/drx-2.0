@@ -24,12 +24,13 @@ def test_protocol_defaults_fallbacks(tmp_path):
         "max_left": 10.0,
         "max_right": 10.0,
         "pulse_rate": 2.0,
+        "duration": 12.0,
     }
 
 
 def test_save_and_reload_protocol_defaults(tmp_path):
     cfg = make_config(tmp_path)
-    cfg.save_protocol_defaults(60, 15, 18, 3)
+    cfg.save_protocol_defaults(60, 15, 18, 3, 20)
 
     reloaded = Configuration(config_path=str(tmp_path / "kneespa.cfg"))
     reloaded.get_config()
@@ -38,6 +39,29 @@ def test_save_and_reload_protocol_defaults(tmp_path):
     assert d["max_left"] == 15.0
     assert d["max_right"] == 18.0
     assert d["pulse_rate"] == 3.0
+    assert d["duration"] == 20.0
+
+
+def test_duration_optional_keeps_existing(tmp_path):
+    """save_protocol_defaults without a duration keeps the persisted one."""
+    cfg = make_config(tmp_path)
+    cfg.save_protocol_defaults(60, 15, 18, 3, 25)
+    cfg.save_protocol_defaults(55, 12, 12, 2)  # no duration arg
+    assert cfg.default_duration == 25.0
+
+
+def test_legacy_config_without_duration_falls_back(tmp_path):
+    """A pre-duration [ProtocolDefaults] section loads with the default duration."""
+    cfg = make_config(tmp_path)
+    cfg._set_section("ProtocolDefaults", {
+        "max_pressure": 60, "max_left": 15, "max_right": 18, "pulse_rate": 3,
+    })
+    with open(cfg.configFile, "w", encoding="utf-8") as fh:
+        cfg.config.write(fh)
+
+    reloaded = Configuration(config_path=str(tmp_path / "kneespa.cfg"))
+    reloaded.get_config()
+    assert reloaded.default_duration == 12.0  # DEFAULT_PROTOCOL_MINUTES fallback
 
 
 def test_device_id_generated_and_persisted(tmp_path):

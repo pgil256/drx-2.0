@@ -207,14 +207,48 @@ class TestSettings:
         assert stub.worker.pulse_rate == 0
         assert stub.worker.use_pulse is False
 
+    def test_duration_change_does_not_touch_running_worker(self):
+        """Duration is pre-run only — a stray live change must NOT mutate the
+        worker's duration (which could silently end the treatment)."""
+        stub = make_stub()
+        stub._confirm_mid_protocol_change.return_value = True
+        stub._prev_settings = {}
+        stub._clamp_minutes = KneeSpa._clamp_minutes
+        before = stub.worker.duration
+        KneeSpa._on_setting_changed(stub, "duration", 6)
+        assert stub.worker.duration is before  # untouched
+
     def test_mark_default_clamps_to_constants(self):
         stub = make_stub()
+        stub._clamp_minutes = KneeSpa._clamp_minutes  # real staticmethod
         stub.shell.treatment.settings_values.return_value = {
             "max_pressure": 95, "max_left": 25, "max_right": 18, "pulse_rate": 7,
+            "duration": 99,
         }
         KneeSpa._on_mark_default(stub)
-        # 95->80 (PRESSURE_MAX), 25->20 (lateral), 18 ok, 7->5 (pulse max)
-        stub.config.save_protocol_defaults.assert_called_once_with(80, 20, 18, 5)
+        # 95->80 (PRESSURE_MAX), 25->20 (lateral), 18 ok, 7->5 (pulse max),
+        # 99->30 (PROTOCOL_MINUTES_MAX)
+        stub.config.save_protocol_defaults.assert_called_once_with(80, 20, 18, 5, 30)
+
+
+class TestDuration:
+    def test_clamp_minutes_bounds_and_rounds(self):
+        assert KneeSpa._clamp_minutes(99) == 30      # PROTOCOL_MINUTES_MAX
+        assert KneeSpa._clamp_minutes(1) == 5        # PROTOCOL_MINUTES_MIN
+        assert KneeSpa._clamp_minutes(12.4) == 12    # rounds
+        assert KneeSpa._clamp_minutes("bad") == 12   # default on garbage
+
+    def test_duration_minutes_reads_slider(self):
+        stub = make_stub()
+        stub._clamp_minutes = KneeSpa._clamp_minutes
+        stub.shell.treatment.settings_values.return_value = {"duration": 18}
+        assert KneeSpa._duration_minutes(stub) == 18
+
+    def test_duration_minutes_defaults_when_unavailable(self):
+        stub = make_stub()
+        stub._clamp_minutes = KneeSpa._clamp_minutes
+        stub.shell.treatment.settings_values.side_effect = RuntimeError("no shell")
+        assert KneeSpa._duration_minutes(stub) == 12  # DEFAULT_PROTOCOL_MINUTES
 
 
 # ----- support ticket -----

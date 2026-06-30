@@ -3,7 +3,12 @@ import os
 import uuid
 from typing import Optional
 
-from config.constants import CONFIG_PATH, LATERAL_MIN, LATERAL_MAX
+from config.constants import (
+    CONFIG_PATH,
+    DEFAULT_PROTOCOL_MINUTES,
+    LATERAL_MIN,
+    LATERAL_MAX,
+)
 
 
 class Configuration:
@@ -29,6 +34,7 @@ class Configuration:
         self.default_max_left = 10.0
         self.default_max_right = 10.0
         self.default_pulse_rate = 2.0
+        self.default_duration = float(DEFAULT_PROTOCOL_MINUTES)
 
         # Per-device id for support tickets (Phase 3.5 §15.5); generated once.
         self.device_id = ""
@@ -146,6 +152,7 @@ class Configuration:
             "max_left": "default_max_left",
             "max_right": "default_max_right",
             "pulse_rate": "default_pulse_rate",
+            "duration": "default_duration",
         }
         for key, attr in specs.items():
             if self.config.has_option(section, key):
@@ -173,14 +180,22 @@ class Configuration:
             "max_left": self.default_max_left,
             "max_right": self.default_max_right,
             "pulse_rate": self.default_pulse_rate,
+            "duration": self.default_duration,
         }
 
-    def save_protocol_defaults(self, max_pressure, max_left, max_right, pulse_rate):
-        """Persist new Treatment Settings defaults (values should be pre-clamped)."""
+    def save_protocol_defaults(self, max_pressure, max_left, max_right, pulse_rate,
+                               duration=None):
+        """Persist new Treatment Settings defaults (values should be pre-clamped).
+
+        ``duration`` is optional for backward compatibility; when omitted the
+        existing persisted duration is kept.
+        """
         self.default_max_pressure = float(max_pressure)
         self.default_max_left = float(max_left)
         self.default_max_right = float(max_right)
         self.default_pulse_rate = float(pulse_rate)
+        if duration is not None:
+            self.default_duration = float(duration)
         self.update_config()
 
     def ensure_device_id(self):
@@ -247,6 +262,7 @@ class Configuration:
             "max_left": self.default_max_left,
             "max_right": self.default_max_right,
             "pulse_rate": self.default_pulse_rate,
+            "duration": self.default_duration,
         })
         self._set_section("Device", {"id": self.device_id})
 

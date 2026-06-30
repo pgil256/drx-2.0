@@ -102,6 +102,11 @@ LATERAL_MAX_DEGREES = ACTUATORS["LATERAL"]["LIMITS"][1]
 HORIZONTAL_MIN_DEGREES = ACTUATORS["HORIZONTAL"]["LIMITS"][0]
 HORIZONTAL_MAX_DEGREES = ACTUATORS["HORIZONTAL"]["LIMITS"][1]
 
+# Treatment duration (minutes) — surfaced as the Treatment "Duration" setting.
+DEFAULT_PROTOCOL_MINUTES = 12  # legacy default
+PROTOCOL_MINUTES_MIN = 5
+PROTOCOL_MINUTES_MAX = 30
+
 # Actuator Command Speed
 LEG_LENGTH_SPEED_NORMAL = 0.5  # inches per second
 LEG_LENGTH_SPEED_FAST = 1.0  # inches per second
