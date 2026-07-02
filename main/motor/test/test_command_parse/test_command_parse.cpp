@@ -39,6 +39,7 @@ void setUp(void) {
     currentCmdSeq = -1;
     activeCmdSeq = -1;
     _millis_value = 0;
+    jerkInterval = 200;  // mutable since Phase 3.5 (J<ms>); reset between tests
 }
 
 void tearDown(void) {}
@@ -109,6 +110,32 @@ void test_JS_stops_jerking(void) {
     jerking = true;
     processCommand("JS");
     TEST_ASSERT_FALSE(jerking);
+}
+
+// J<ms> sets the pulse cadence and starts jerking (Phase 3.5 §15.2).
+void test_J_with_interval_sets_interval(void) {
+    processCommand("J500");
+    TEST_ASSERT_TRUE(jerking);
+    TEST_ASSERT_EQUAL_UINT32(500, jerkInterval);
+}
+
+void test_J_bare_keeps_interval(void) {
+    jerkInterval = 350;
+    processCommand("J");
+    TEST_ASSERT_TRUE(jerking);
+    TEST_ASSERT_EQUAL_UINT32(350, jerkInterval);
+}
+
+void test_J_interval_below_min_ignored(void) {
+    processCommand("J50");
+    TEST_ASSERT_TRUE(jerking);
+    TEST_ASSERT_EQUAL_UINT32(200, jerkInterval);
+}
+
+void test_J_interval_above_max_ignored(void) {
+    processCommand("J99999");
+    TEST_ASSERT_TRUE(jerking);
+    TEST_ASSERT_EQUAL_UINT32(200, jerkInterval);
 }
 
 // --- High frequency status ---
@@ -281,6 +308,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_K_sets_c_position);
     RUN_TEST(test_J_starts_jerking);
     RUN_TEST(test_JS_stops_jerking);
+    RUN_TEST(test_J_with_interval_sets_interval);
+    RUN_TEST(test_J_bare_keeps_interval);
+    RUN_TEST(test_J_interval_below_min_ignored);
+    RUN_TEST(test_J_interval_above_max_ignored);
     RUN_TEST(test_HF1_enables);
     RUN_TEST(test_HF0_disables);
     RUN_TEST(test_X_stops_everything);

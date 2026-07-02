@@ -1,9 +1,15 @@
 import configparser
 import os
 import tempfile
+import uuid
 from typing import Optional
 
-from config.constants import CONFIG_PATH, LATERAL_MIN, LATERAL_MAX
+from config.constants import (
+    CONFIG_PATH,
+    DEFAULT_PROTOCOL_MINUTES,
+    LATERAL_MIN,
+    LATERAL_MAX,
+)
 
 # A real HX711 scale factor for this hardware is in the tens of
 # thousands (the shipped device uses -28369). Small magnitudes mean the
@@ -37,6 +43,17 @@ class Configuration:
         self.scale_calibrated = False
         self.calibration_errors = []
         self.calibration_warnings = []
+
+        # Treatment Settings defaults persisted by Setup's "Mark As Default"
+        # (Phase 3.5 §15.4). Fallbacks match the legacy 50/10/10 + a 2/sec pulse.
+        self.default_max_pressure = 50.0
+        self.default_max_left = 10.0
+        self.default_max_right = 10.0
+        self.default_pulse_rate = 2.0
+        self.default_duration = float(DEFAULT_PROTOCOL_MINUTES)
+
+        # Per-device id for support tickets (Phase 3.5 §15.5); generated once.
+        self.device_id = ""
 
     @property
     def calibrated(self) -> bool:
@@ -81,6 +98,8 @@ class Configuration:
 
             self._load_marks(allSections)
             self._load_options()
+            self._load_protocol_defaults()
+            self._load_device()
             self._ensure_config_sections()
             self._validate_calibration()
 
@@ -166,6 +185,70 @@ class Configuration:
                 value = option_settings["default"]
                 self.config.set(section, option_name, str(value))
             setattr(self, option_name, value)
+
+    def _load_protocol_defaults(self):
+        """Load persisted Treatment Settings defaults, keeping __init__ fallbacks
+        for any malformed/absent value."""
+        section = "ProtocolDefaults"
+        if not self.config.has_section(section):
+            return
+        specs = {
+            "max_pressure": "default_max_pressure",
+            "max_left": "default_max_left",
+            "max_right": "default_max_right",
+            "pulse_rate": "default_pulse_rate",
+            "duration": "default_duration",
+        }
+        for key, attr in specs.items():
+            if self.config.has_option(section, key):
+                try:
+                    setattr(self, attr, float(self.config[section][key]))
+                except (ValueError, TypeError) as e:
+                    print(f"Error parsing ProtocolDefaults.{key}: {e}, using default")
+
+    def _load_device(self):
+        """Load the persisted per-device id, if present."""
+        if self.config.has_section("Device") and self.config.has_option("Device", "id"):
+            self.device_id = self.config["Device"]["id"]
+
+    def _set_section(self, section, mapping):
+        """Write a flat string-valued section, creating it if missing."""
+        if not self.config.has_section(section):
+            self.config.add_section(section)
+        for key, value in mapping.items():
+            self.config.set(section, key, str(value))
+
+    def protocol_defaults(self):
+        """Return the persisted Treatment Settings defaults as a dict."""
+        return {
+            "max_pressure": self.default_max_pressure,
+            "max_left": self.default_max_left,
+            "max_right": self.default_max_right,
+            "pulse_rate": self.default_pulse_rate,
+            "duration": self.default_duration,
+        }
+
+    def save_protocol_defaults(self, max_pressure, max_left, max_right, pulse_rate,
+                               duration=None):
+        """Persist new Treatment Settings defaults (values should be pre-clamped).
+
+        ``duration`` is optional for backward compatibility; when omitted the
+        existing persisted duration is kept.
+        """
+        self.default_max_pressure = float(max_pressure)
+        self.default_max_left = float(max_left)
+        self.default_max_right = float(max_right)
+        self.default_pulse_rate = float(pulse_rate)
+        if duration is not None:
+            self.default_duration = float(duration)
+        self.update_config()
+
+    def ensure_device_id(self):
+        """Return the persisted per-device id, generating + saving one if absent."""
+        if not self.device_id:
+            self.device_id = uuid.uuid4().hex
+            self.update_config()
+        return self.device_id
 
     @staticmethod
     def validate_marks(marks) -> Optional[str]:
@@ -299,6 +382,16 @@ class Configuration:
         for option in config_options:
             if hasattr(self, option):
                 self.config.set(section, option, str(getattr(self, option)))
+
+        # Persist the Phase-3.5 sections alongside the legacy Options.
+        self._set_section("ProtocolDefaults", {
+            "max_pressure": self.default_max_pressure,
+            "max_left": self.default_max_left,
+            "max_right": self.default_max_right,
+            "pulse_rate": self.default_pulse_rate,
+            "duration": self.default_duration,
+        })
+        self._set_section("Device", {"id": self.device_id})
 
         print("Config updated")
         try:
