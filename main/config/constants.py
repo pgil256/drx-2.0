@@ -107,6 +107,11 @@ LATERAL_MAX_DEGREES = ACTUATORS["LATERAL"]["LIMITS"][1]
 HORIZONTAL_MIN_DEGREES = ACTUATORS["HORIZONTAL"]["LIMITS"][0]
 HORIZONTAL_MAX_DEGREES = ACTUATORS["HORIZONTAL"]["LIMITS"][1]
 
+# Treatment duration (minutes) — surfaced as the Treatment "Duration" setting.
+DEFAULT_PROTOCOL_MINUTES = 12  # legacy default
+PROTOCOL_MINUTES_MIN = 5
+PROTOCOL_MINUTES_MAX = 30
+
 # Actuator Command Speed
 LEG_LENGTH_SPEED_NORMAL = 0.5  # inches per second
 LEG_LENGTH_SPEED_FAST = 1.0  # inches per second
@@ -130,6 +135,18 @@ PROTOCOL_MAPPING = {
     3: "AC3",
     4: "AC4"
 }
+
+# Pulse-rate configuration (Phase 3.5 §15.2).
+# The firmware pulse cadence (motor.ino jerkInterval) only becomes host-settable
+# after the device is reflashed with the numeric-`J<ms>` build. Until then the
+# worker MUST keep sending a bare `J` (on/off) — a numeric `J<ms>` is a no-op on
+# the old firmware and would silently disable pulsing. Flip this to True only on
+# a flashed device.
+PULSE_RATE_FIRMWARE_SUPPORT = (
+    os.environ.get("KNEESPA_PULSE_RATE_FIRMWARE", "0") == "1"
+)
+MIN_JERK_INTERVAL_MS = 100   # fastest safe pulse (~10/sec)
+MAX_JERK_INTERVAL_MS = 5000  # slowest pulse the slider can request (0.2/sec)
 
 # Protocol Default Settings
 PROTOCOL_DEFAULT_SETTINGS = {
@@ -179,6 +196,12 @@ EMAIL_CONFIG = {
     "SENDER_EMAIL": os.environ.get("KNEESPA_SMTP_USERNAME", ""),
     "SENDER_PASSWORD": os.environ.get("KNEESPA_SMTP_PASSWORD", ""),
     "RECEIVER_EMAIL": os.environ.get("KNEESPA_ASSISTANCE_EMAIL", ""),
+    # Support-ticket recipient (Phase 3.5 §15.5) — the drxcode address. Falls
+    # back to the assistance address if unset so tickets still reach support.
+    "TICKET_EMAIL": os.environ.get(
+        "KNEESPA_TICKET_EMAIL",
+        os.environ.get("KNEESPA_ASSISTANCE_EMAIL", ""),
+    ),
     "SMTP_SERVER": os.environ.get("KNEESPA_SMTP_SERVER", "smtp.gmail.com"),
     "SMTP_PORT": int(os.environ.get("KNEESPA_SMTP_PORT", "465")),
 }
