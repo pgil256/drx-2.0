@@ -8,12 +8,13 @@ other controllers read them; this module owns the transitions.
 """
 import time
 
+import RPi.GPIO as GPIO
 from PyQt5 import QtWidgets
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QApplication, QMessageBox
 
 from helpers import protocols
-from config.constants import BUTTON_STYLES
+from config.constants import BUTTON_STYLES, EMERGENCYSTOP
 
 
 class ProtocolController:
@@ -204,6 +205,10 @@ class ProtocolController:
             max_right_for_worker = abs(max_right_from_slider)
 
             use_pulse = window.current_use_pulse_setting # Use the tracked state
+            # Pulse cadence from the modern Settings slider (None on the
+            # legacy UI). Only acts on flag-gated J<ms> firmware; otherwise
+            # the worker falls back to bare J (see helpers.protocols).
+            pulse_rate = getattr(window, "current_pulse_rate", None)
 
             if window.ui.forward_button_protocol_image:
                 window.ui.forward_button_protocol_image.setEnabled(False)
@@ -245,6 +250,7 @@ class ProtocolController:
                 use_pulse,  # Just the boolean flag
                 ser=window.arduino,
                 config=window.config,
+                pulse_rate=pulse_rate,
             )
 
             # Connect signals
@@ -401,6 +407,19 @@ class ProtocolController:
         """Handle emergency stop button press."""
         window = self.window
         print("Emergency stop triggered")
+        # Assert the hardware EMERGENCYSTOP line FIRST - it does not depend
+        # on the serial link being alive. setup_gpio() parks the pin HIGH
+        # (run-permitted) at boot, so LOW is the asserted/stop state; it was
+        # configured but never driven before. Released again when the
+        # recovery reset begins (phase 3), which needs a live machine to
+        # home. Polarity is inferred from the boot default - Phase E
+        # hardware measurement must confirm before this ships to a device.
+        try:
+            GPIO.output(EMERGENCYSTOP, GPIO.LOW)
+        except Exception as e:
+            print(f"Could not assert EMERGENCYSTOP GPIO: {e}")
+        # arduino.send never blocks or reconnects; 'X' jumps the tx queue
+        # and stop_actuators alarms the operator if the link is down.
         window.stop_actuators()
         # Use QTimer instead of sleep to avoid blocking UI
         QTimer.singleShot(1000, self._emergency_stop_phase2)
@@ -411,7 +430,18 @@ class ProtocolController:
         if window.worker:
             window.worker.stop()
         # Continue to phase 3 after another second
-        QTimer.singleShot(1000, window.reset_arduino)
+        QTimer.singleShot(1000, self._emergency_stop_phase3)
+
+    def _emergency_stop_phase3(self):
+        """Phase 3: release the hardware stop line, then run the recovery
+        reset (the reset sequence homes actuators, which needs the machine
+        powered)."""
+        window = self.window
+        try:
+            GPIO.output(EMERGENCYSTOP, GPIO.HIGH)
+        except Exception as e:
+            print(f"Could not release EMERGENCYSTOP GPIO: {e}")
+        window.reset_arduino()
 
 
     def update_status_label(self, text):

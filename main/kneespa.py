@@ -1,4 +1,21 @@
-# test
+# KneeSpa main window — modern AppShell view layer on the FAILSAFE controller base.
+#
+# Union of the two development lines (Phase B replay):
+#   * Backend/controllers (improvement-plan): the Arduino QThread, controllers/
+#     (auth, connection, protocol, safety), frozen calibration math
+#     (set_to_distance / set_to_c_distance / move_actuator / read_position),
+#     GPIO handling with auto-release timers, and the reset paths are preserved
+#     from the improvement-plan KneeSpa.
+#   * View (feat/gui-modernization): the monolithic kneespa.ui + findChild wiring
+#     is replaced by ui.app_shell.AppShell; the screens' pyqtSignals/setters are
+#     the seam between view and backend.
+#
+# The controllers still address the window through the legacy attribute contract
+# (window.ui.start_button, window.time_edit, window.timer_dialog, ...). That
+# contract is satisfied here by explicit adapters onto the modern widgets, and
+# by documented no-ops where the modern UI deliberately dropped a feature
+# (floating timer/pressure dialogs, protocol-image pager, show-timer/pressure
+# checkboxes). Controller logic itself is unchanged.
 import logging
 import traceback
 import sys
@@ -6,11 +23,11 @@ import os
 import RPi.GPIO as GPIO
 import time
 import smtplib
-import threading 
+import threading
 import shutil
 from email.mime.text import MIMEText
 from datetime import datetime
-from PyQt5 import QtWidgets, uic, QtCore
+from PyQt5 import QtWidgets, QtCore
 from PyQt5.QtCore import (
     Qt,
     QTimer,
@@ -18,56 +35,40 @@ from PyQt5.QtCore import (
     QObject,
     QTime
 )
-from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
     QApplication,
     QMainWindow,
     QMessageBox,
-    QDialog,
-    QVBoxLayout,
-    QLabel,
-    QCheckBox,
 )
 
 from config.constants import (
     APP_BASE_DIR,
-    PAGES,
-    UI_PATHS,
-    DATA_PATHS,
+    WINDOW_TITLE,
     DEGREES,
     ACTUATORS,
-    BUTTON_STYLES,
-    ERROR_MESSAGES,
     SUCCESS_MESSAGES,
-    ARDUINO_SETTINGS,
-    PROTOCOL_MAPPING,
     EMERGENCYSTOP,
     EXTRAFORWARD,
     EXTRABACKWARD,
     EXTRAENABLE,
     EMAIL_CONFIG,
     PRESSURE_MAX,
-    AXIAL_MAX,
     AXIAL_MAX_INCHES,
     AXIAL_MIN_INCHES,
-    LATERAL_MIN,
-    LATERAL_MAX,
     LATERAL_MIN_DEGREES,
     LATERAL_MAX_DEGREES,
-    HORIZONTAL_MIN,
-    HORIZONTAL_MAX,
     HORIZONTAL_MIN_DEGREES,
     HORIZONTAL_MAX_DEGREES,
     LEG_LENGTH_SPEED_NORMAL,
     LEG_LENGTH_SPEED_FAST,
     LEG_LENGTH_MIN,
     LEG_LENGTH_MAX,
-    DEFAULT_AXIAL_POSITION,
-    DEFAULT_LATERAL_POSITION,
-    DEFAULT_HORIZONTAL_POSITION,
     DEFAULT_PRESSURE,
     DEFAULT_LEG_LENGTH_POSITION,
-    MIN_PRESSURE  # Added for pressure safety validation
+    MIN_PRESSURE,
+    DEFAULT_PROTOCOL_MINUTES,
+    PROTOCOL_MINUTES_MIN,
+    PROTOCOL_MINUTES_MAX,
 )
 
 from config.config import Configuration
@@ -75,16 +76,17 @@ from helpers.arduino import Arduino
 from helpers.csv import CSVHelper
 from helpers.secure_auth import SecureAuthHelper
 from helpers import protocols
-from helpers.reset_worker import ResetWorker, ResetWorkerSignals 
+from helpers.reset_worker import ResetWorker, ResetWorkerSignals
+from helpers.conversions import lateral_degrees_to_position
+from helpers.angles import pos_c_to_angle
 
 from helpers.logging import setup_logger
 
-# Import UI components
-from ui.dialogs import TimerDialog, PressureDialog, VideoPlayer
+# Modern view layer — the composition root for chrome + screens + modals.
+from ui.app_shell import AppShell
 from ui.widgets.loading_spinner import LoadingSpinner
 from ui.widgets.treatment_status_panel import TreatmentStatusPanel
-from ui.widgets.press_feedback import install_press_feedback
-from helpers.conversions import lateral_degrees_to_position
+
 from controllers.safety_monitor import SafetyMonitor
 from controllers.auth_controller import AuthController
 from controllers.protocol_controller import ProtocolController
@@ -92,6 +94,147 @@ from controllers.connection_manager import ConnectionManager
 
 # Suppress Qt warnings
 os.environ["QT_LOGGING_RULES"] = "*.debug=False;qt.qpa.xcb=False"
+
+# Map a Setup jog action to the legacy (speed_factor, direction) pair used by
+# move_actuator ("20" = fast, "04" = slow; +1 forward, -1 reverse).
+_JOG_SPEED = {
+    "rev_fast": ("20", -1),
+    "rev": ("04", -1),
+    "fwd": ("04", 1),
+    "fwd_fast": ("20", 1),
+}
+
+
+# ---------------------------------------------------------------------------
+# Legacy-contract adapters
+#
+# The controllers (controllers/*) were extracted against the legacy .ui-file
+# window and drive it through attributes like window.ui.start_button and
+# window.time_edit. These adapters satisfy that contract against the modern
+# AppShell so the controllers stay byte-identical.
+# ---------------------------------------------------------------------------
+class _NullWidget:
+    """Stand-in for legacy widgets the modern UI deliberately dropped.
+
+    Accepts every call the controllers make and does nothing:
+    - timer_dialog / pressure_dialog (countdown + live pressure now render
+      inline on the Treatment screen and the status banner),
+    - forward/backward protocol-image pager, show-timer / show-pressure /
+      use-pulse checkboxes, increase/decrease time labels (replaced by the
+      Settings sliders), and the legacy login dialog/PIN field (the modern
+      modal manages its own display and submits the whole PIN at once).
+    """
+
+    def setEnabled(self, *_): pass
+    def setChecked(self, *_): pass
+    def setText(self, *_): pass
+    def setStyleSheet(self, *_): pass
+    def setValue(self, *_): pass
+    def setEchoMode(self, *_): pass
+    def blockSignals(self, *_): pass
+    def isVisible(self): return False
+    def hide(self): pass
+    def show(self): pass
+    def clear(self): pass
+    def text(self): return ""
+    def value(self): return 0
+    def accept(self): pass
+    def initialize_protocol_time(self, *_): pass
+    def update_time(self, *_): pass
+    def update_pressure(self, *_): pass
+
+
+class _ValueProxy:
+    """Adapts the controllers' legacy ``.value()`` / ``.text()`` reads onto a
+    live getter (the modern Settings sliders / protocol picker)."""
+
+    def __init__(self, getter):
+        self._getter = getter
+
+    def value(self):
+        return self._getter()
+
+    def text(self):
+        return str(self._getter())
+
+    def setEnabled(self, *_): pass
+    def setValue(self, *_): pass
+    def blockSignals(self, *_): pass
+
+
+class _StartButtonAdapter:
+    """Maps the controllers' legacy Start/Stop-button drive onto the Treatment
+    screen's run-state API: setText("Stop"/"Start") -> running/idle visuals,
+    setEnabled -> busy lock. Styling belongs to the DS theme, so setStyleSheet
+    is a no-op."""
+
+    def __init__(self, window):
+        self._window = window
+
+    def setText(self, text):
+        running = str(text).strip().lower() == "stop"
+        try:
+            self._window.shell.treatment.set_run_state(running=running, paused=False)
+        except Exception:
+            pass
+
+    def setStyleSheet(self, *_):
+        pass
+
+    def setEnabled(self, enabled):
+        try:
+            self._window.shell.treatment.set_busy(not enabled)
+        except Exception:
+            pass
+
+
+class _PhaseLabelAdapter:
+    """Maps the controllers' free-text status-label writes onto the Treatment
+    screen's phase badge/stepper (the status banner still gets the full text
+    via treatment_panel.set_phase inside the controller)."""
+
+    def __init__(self, window):
+        self._window = window
+
+    def setText(self, text):
+        t = str(text).lower()
+        if "pulsing" in t:
+            phase = "pulsing"
+        elif "oscillat" in t:
+            phase = "oscillating"
+        elif "moving to" in t:
+            phase = "positioning"
+        elif "complete" in t:
+            phase = "complete"
+        elif "stopped" in t:
+            phase = "stopped"
+        elif "started" in t or "pressure" in t:
+            phase = "ramping"
+        else:
+            return  # untranslatable free text — leave the phase unchanged
+        try:
+            self._window.shell.treatment.set_phase(phase)
+        except Exception:
+            pass
+
+
+class _LegacyUi:
+    """Namespace for the ``window.ui.<name>`` attributes the controllers use."""
+
+    def __init__(self, window):
+        self.start_button = _StartButtonAdapter(window)
+        self.status_label = _PhaseLabelAdapter(window)
+        null = _NullWidget()
+        # Dropped in the modern UI (see _NullWidget docstring). The reset-
+        # arduino button's protocol-run lockout is covered by the Treatment
+        # screen's set_busy + the actuator_controls group gating.
+        self.forward_button_protocol_image = null
+        self.backward_button_protocol_image = null
+        self.show_timer_button = null
+        self.show_pressure_button = null
+        self.use_pulse_button = null
+        self.reset_arduino_main_button = null
+
 
 # Main Python class
 class KneeSpa(QMainWindow):
@@ -158,18 +301,32 @@ class KneeSpa(QMainWindow):
             f"Initializing KneeSpa class in {'debug' if debug_mode else 'production'} mode"
         )
 
-        self.protocol_value = ""
+        # --- protocol / UI state (mirrors the legacy controller) ---
+        self.protocol_value = "1"          # selected protocol (Treatment picker)
         self.protocol_running = False
-        self.button_value = 0
-        self.protocol_start_time = None  # Initialize as None
+        self.protocol_start_time = None
+        self.protocol_duration = 0
+        self._paused_at = None             # wall-clock pause anchor for the UI timer
+        self._prev_settings = {}           # for mid-protocol slider rollback
+        self._selected_issue = None        # last-opened Support troubleshooting item
         self.current_use_pulse_setting = True
+        self.current_pulse_rate = None     # pulses/sec from the Settings slider
         self.axial_flexion_pressure = 0
-        self.left_lat_angle = 0
-        self.right_lat_angle = 0
         self.actuator_a = ACTUATORS["AXIAL"]["ID"]
         self.actuator_b = ACTUATORS["HORIZONTAL"]["ID"]
         self.actuator_c = ACTUATORS["LATERAL"]["ID"]
         self.protocol_timer = QTimer()
+
+        # Actuator position tracking (legacy setup_actuator_controls defaults).
+        self.axial_flexion_position = 0
+        self.horizontal_flexion_position = -10
+        self.lateral_flexion_position = 0
+        self.leg_length = DEFAULT_LEG_LENGTH_POSITION
+        self.current_pressure = DEFAULT_PRESSURE
+        self.LEG_LENGTH_MIN = LEG_LENGTH_MIN
+        self.LEG_LENGTH_MAX = LEG_LENGTH_MAX
+        self.LEG_LENGTH_SPEED_NORMAL = LEG_LENGTH_SPEED_NORMAL
+        self.LEG_LENGTH_SPEED_FAST = LEG_LENGTH_SPEED_FAST
 
         # Backend initialization
         self.I2Cstatus = 0  # Keep for compatibility
@@ -185,37 +342,26 @@ class KneeSpa(QMainWindow):
         self.reset_in_progress = False  # Flag to prevent overlapping resets
         self.actuator_command_in_progress = False  # Prevents simultaneous actuator commands
         self.controls_enable_timer = None  # Single pending-enable timer for all controls
-        self.mid_protocol_warning_shown = False 
+        self.mid_protocol_warning_shown = False
         self._prev_pressure = None                   #  for rollback
         self._prev_left   = None
         self._prev_right  = None
+        self.worker = None
 
-        try:
-            print("Loading main UI file")
-            self.ui = uic.loadUi(UI_PATHS["MAIN_UI"], self)
-        except FileNotFoundError:
-            print(ERROR_MESSAGES["UI_NOT_FOUND"])
-            self._show_timed_error("UI file not found.")
-            sys.exit(1)
+        # --- build the modern view ---
+        self.setWindowTitle(WINDOW_TITLE)
+        self.shell = AppShell()
+        self.setCentralWidget(self.shell)
+        self.centralWidget().setSizePolicy(
+            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
+        )
 
         if not debug_mode:
-            self.ui.showFullScreen()
+            self.showFullScreen()
             self.setWindowFlags(Qt.FramelessWindowHint)
             print("Production mode: Set to full screen without frame")
         else:
             print("Debug mode: Running in windowed mode")
-
-        # Finding and assigning central widget
-        print("Finding central widget 'central_widget'")
-        central_widget = self.ui.findChild(QtWidgets.QWidget, "central_widget")
-        if central_widget:
-            self.setCentralWidget(central_widget)
-        else:
-            raise ValueError("Central widget 'main_content' not found in the UI file.")
-
-        self.centralWidget().setSizePolicy(
-            QtWidgets.QSizePolicy.Expanding, QtWidgets.QSizePolicy.Expanding
-        )
 
         self.loading_spinner = LoadingSpinner(
             parent=self,
@@ -224,7 +370,9 @@ class KneeSpa(QMainWindow):
         )
 
         # Always-visible treatment banner: live pressure, time remaining,
-        # and a permanent STOP control on every page while a protocol runs
+        # and a permanent STOP control on every page while a protocol runs.
+        # Deliberately kept on top of the modern shell: the SafetyMonitor's
+        # fault banner must stay visible regardless of the active screen.
         self.treatment_panel = TreatmentStatusPanel(parent=self)
         self.treatment_panel.stop_requested.connect(self.panel_stop_requested)
         self.safety = SafetyMonitor(self)
@@ -243,289 +391,115 @@ class KneeSpa(QMainWindow):
             self.users = self.csv.users
             print(SUCCESS_MESSAGES["DATA_LOADED"])
         except Exception as e:
+            self.users = {}
             print(f"Error loading CSV data: {str(e)}")
             self._show_timed_error(f"Failed to load CSV data: {str(e)}")
 
         self.current_user = None
 
-        self.home_page = PAGES["HOME"]
-        self.setup_page = PAGES["SETUP"]
-        self.main_page = PAGES["MAIN"]
-        self.help_page = PAGES["HELP"]
-        self.profile_page = PAGES["PROFILE"]
+        # --- legacy attribute contract for the controllers ---
+        self.ui = _LegacyUi(self)
+        self.start_button = self.ui.start_button
+        # Dropped floating dialogs / legacy time controls (see _NullWidget).
+        self.timer_dialog = _NullWidget()
+        self.pressure_dialog = _NullWidget()
+        self.increase_time = _NullWidget()
+        self.decrease_time = _NullWidget()
+        self.login_line_edit = _NullWidget()
+        self.login_dialog = _NullWidget()
+        # Live reads the controllers make when starting/confirming a protocol.
+        self.protocol_number_field = _ValueProxy(lambda: self.protocol_value)
+        self.time_edit = _ValueProxy(self._duration_minutes)
+        self.max_pressure_edit = _ValueProxy(
+            lambda: self.shell.treatment.settings_values().get("max_pressure", 50)
+        )
+        self.max_left_edit = _ValueProxy(
+            lambda: self.shell.treatment.settings_values().get("max_left", 10)
+        )
+        self.max_right_edit = _ValueProxy(
+            lambda: self.shell.treatment.settings_values().get("max_right", 10)
+        )
 
-        self.setup_buttons_and_labels()
-        self.connect_buttons_and_labels()
-        self.setup_protocol_controls()
-        self.setup_dialogs()
-        self.show_home_page()
-        self.reset_setup_readings()
+        # Controls locked while the MCU is busy (jog/Go/Stop/Reset-Arduino) —
+        # the same gating group the legacy `actuator_controls` list provided.
+        self.actuator_controls = self.shell.setup.control_buttons()
+
+        # Treatment Settings sliders start from the persisted defaults (§15.4).
+        self.shell.treatment.set_settings(self.config.protocol_defaults())
 
         self.threadpool = QtCore.QThreadPool()
         print(f"Multithreading with maximum {self.threadpool.maxThreadCount()} threads")
-        self.worker = None
 
-        self.timer_dialog = TimerDialog(self)
-        self.pressure_dialog = PressureDialog(self)
-
+        # Wire the view's signals/setters to the backend, then start hardware.
+        self._connect_shell()
         self.setup_timers()
+
+        # Ensure a persisted per-device id exists for support tickets (§15.5).
+        try:
+            self.config.ensure_device_id()
+        except Exception as e:
+            print(f"Could not ensure device id: {e}")
+
+        self.shell.navigate("home")
+        self._set_badge(False)  # offline until the Arduino connects
+        # Navigation away from the Treatment screen is blocked while a
+        # protocol is active (see controllers.protocol_controller.block_nav).
+        self.shell.set_nav_guard(self._block_nav_during_treatment)
 
         # Initialize GPIO setup
         self.setup_gpio()
         # Initialize the Arduino instance afterward
         self.setup_arduino()
 
-        ### UI Methods ###
+    # ----- view ↔ backend wiring -----
+    def _connect_shell(self):
+        """Connect every screen/modal signal to its backend slot."""
+        s = self.shell
 
-    def setup_buttons_and_labels(self):
-        """Setup and store references to all UI buttons and labels."""
-        print("Setting up UI buttons and labels")
+        # Auth (the shell surfaces these; gating lives in the shell).
+        s.login_attempted.connect(self._on_login_attempt)
+        s.logout_requested.connect(self._on_logout)
 
+        # Setup screen.
+        s.setup.jog_requested.connect(self._on_setup_jog)
+        s.setup.go_requested.connect(self._on_setup_go)
+        s.setup.stop_requested.connect(self._on_setup_stop)
+        s.setup.mark_default_requested.connect(self._on_mark_default)
+        s.setup.reset_arduino_requested.connect(self.reset_arduino)
+        s.setup.emergency_stop_requested.connect(self._on_estop)
+
+        # Treatment screen.
+        s.treatment.protocol_selected.connect(self._on_protocol_selected)
+        s.treatment.start_requested.connect(self.start_or_stop_protocol)
+        s.treatment.resume_requested.connect(self._on_treatment_resume)
+        s.treatment.pause_requested.connect(self._on_treatment_pause)
+        s.treatment.estop_requested.connect(self._on_estop)
+        s.treatment.setting_changed.connect(self._on_setting_changed)
+
+        # Support screen.
+        s.support.request_assistance.connect(self.handle_assistance_request)
+        s.support.submit_ticket_requested.connect(self._on_submit_ticket)
+        s.support.issue_activated.connect(self._on_issue_activated)
+
+        # Video modal (owns the embedded VLC player).
+        s.video_modal.play_toggled.connect(self._on_video_toggled)
+
+    def _set_badge(self, connected):
+        """Reflect Arduino connectivity on the Setup header badge."""
         try:
-            # Navigation buttons
-            self.ui.setup_button = self.ui.findChild(
-                QtWidgets.QPushButton, "setup_button"
-            )
-            self.ui.protocols_button = self.ui.findChild(
-                QtWidgets.QPushButton, "protocols_button"
-            )
-            self.ui.help_button = self.ui.findChild(
-                QtWidgets.QPushButton, "help_button"
-            )
-            self.ui.login_button = self.ui.findChild(
-                QtWidgets.QPushButton, "login_button"
-            )
+            self.shell.setup.set_arduino_connected(connected)
+        except Exception:
+            pass
 
-            # Protocol controls
-            self.ui.start_button = self.ui.findChild(
-                QtWidgets.QPushButton, "push_button_start"
-            )
-            self.start_button = self.ui.start_button
-            self.ui.start_button.setStyleSheet(BUTTON_STYLES["START"])
+    def _reflect_setup(self, key, value):
+        """Push a controller-commanded position back onto the Setup row + Live
+        Position readout (tolerant of a mocked shell in unit tests)."""
+        try:
+            self.shell.setup.set_position(key, value)
+        except Exception:
+            pass
 
-            # Profile and navigation labels
-            self.ui.profile_button = self.ui.findChild(
-                QtWidgets.QLabel, "profile_button"
-            )
-            self.ui.video_player_button = self.ui.findChild(
-                QtWidgets.QLabel, "video_player_button"
-            )
-            self.ui.brand_label = self.ui.findChild(
-                QtWidgets.QLabel, "top_nav_brand_label"
-            )
-            self.ui.brand_logo = self.ui.findChild(QtWidgets.QLabel, "top_nav_logo")
-            self.ui.exit_app_button = self.ui.findChild(
-                QtWidgets.QPushButton, "exit_app_button"
-            )
-            self.ui.request_assistance_button = self.ui.findChild(
-                QtWidgets.QPushButton, "request_assistance_button"
-            )
-
-            # User information labels
-            self.ui.username_nav = self.ui.findChild(QtWidgets.QLabel, "username_nav")
-            self.ui.username_profile = self.ui.findChild(
-                QtWidgets.QLabel, "username_field"
-            )
-            self.ui.email_profile = self.ui.findChild(QtWidgets.QLabel, "email_field")
-            self.ui.status_profile = self.ui.findChild(QtWidgets.QLabel, "status_field")
-
-            # System control buttons
-            self.ui.set_up_tolerance_button = self.ui.findChild(
-                QtWidgets.QLabel, "set_up_tolerance_button"
-            )
-            self.ui.reset_arduino_main_button = self.ui.findChild(
-                QtWidgets.QPushButton, "reset_arduino_main_button"
-            )
-            self.ui.reset_arduino_setup_button = self.ui.findChild(
-                QtWidgets.QPushButton, "reset_arduino_setup_button"
-            )
-
-            # Checkbox controls
-            self.ui.show_timer_button = self.ui.findChild(
-                QtWidgets.QCheckBox, "checkbox_show_timer"
-            )
-            self.ui.show_pressure_button = self.ui.findChild(
-                QtWidgets.QCheckBox, "checkbox_show_pressure"
-            )
-            self.ui.use_pulse_button = self.ui.findChild(
-                QtWidgets.QCheckBox, "checkbox_use_pulse"
-            )
-
-            # Protocol image controls
-            self.ui.label_protocol_image = self.ui.findChild(
-                QtWidgets.QLabel, "label_protocol_image"
-            )
-            self.ui.protocol_image_number = self.ui.findChild(
-                QtWidgets.QLineEdit, "protocol_number_field"
-            )
-            self.ui.forward_button_protocol_image = self.ui.findChild(
-                QtWidgets.QLabel, "forward_button_protocol_image"
-            )
-            self.ui.backward_button_protocol_image = self.ui.findChild(
-                QtWidgets.QLabel, "backward_button_protocol_image"
-            )
-
-            # Emergency controls
-            self.ui.emergency_stop_setup_label = self.ui.findChild(
-                QtWidgets.QLabel, "emergency_stop_setup_label"
-            )
-
-            # Actuator position labels
-            self.ui.axial_flexion_position_label = self.ui.findChild(
-                QtWidgets.QLabel, "axial_flexion_position_label"
-            )
-            self.ui.axial_flexion_position_label_2 = self.ui.findChild(
-                QtWidgets.QLabel, "axial_flexion_position_label_2"
-            )
-            self.ui.lateral_flexion_position_label = self.ui.findChild(
-                QtWidgets.QLabel, "lateral_flexion_position_label"
-            )
-            self.ui.horizontal_flexion_position_label = self.ui.findChild(
-                QtWidgets.QLabel, "horizontal_flexion_position_label"
-            )
-
-            # Actuator pressure labels
-            self.ui.axial_flexion_pressure_label = self.ui.findChild(
-                QtWidgets.QLabel, "axial_flexion_pressure_label"
-            )
-
-            # Actuator control buttons
-            self.ui.forward_extra_button = self.ui.findChild(
-                QtWidgets.QPushButton, "forward_extra_button"
-            )
-            self.ui.reverse_extra_button = self.ui.findChild(
-                QtWidgets.QPushButton, "reverse_extra_button"
-            )
-            self.ui.forward_fast_extra_button = self.ui.findChild(
-                QtWidgets.QPushButton, "forward_fast_extra_button"
-            )
-            self.ui.reverse_fast_extra_button = self.ui.findChild(
-                QtWidgets.QPushButton, "reverse_fast_extra_button"
-            )
-            self.ui.reset_extra_button = self.ui.findChild(
-                QtWidgets.QPushButton, "reset_extra_button"
-            )
-            self.ui.forward_axial_flexion_button = self.ui.findChild(
-                QtWidgets.QPushButton, "forward_axial_flexion_button"
-            )
-            self.ui.reverse_axial_flexion_button = self.ui.findChild(
-                QtWidgets.QPushButton, "reverse_axial_flexion_button"
-            )
-            self.ui.forward_fast_axial_flexion_button = self.ui.findChild(
-                QtWidgets.QPushButton, "forward_fast_axial_flexion_button"
-            )
-            self.ui.reverse_fast_axial_flexion_button = self.ui.findChild(
-                QtWidgets.QPushButton, "reverse_fast_axial_flexion_button"
-            )
-            self.ui.reset_axial_flexion_button = self.ui.findChild(
-                QtWidgets.QPushButton, "reset_axial_flexion_button"
-            )
-
-            # Actuator stop and go controls
-            self.ui.axial_flexion_position_go_button = self.ui.findChild(
-                QtWidgets.QPushButton, "axial_flexion_position_go_button"
-            )
-            self.ui.axial_flexion_position_stop_button = self.ui.findChild(
-                QtWidgets.QPushButton, "axial_flexion_position_stop_button"
-            )
-            self.ui.axial_flexion_pressure_go_button = self.ui.findChild(
-                QtWidgets.QPushButton, "axial_flexion_pressure_go_button"
-            )
-            self.ui.axial_flexion_pressure_stop_button = self.ui.findChild(
-                QtWidgets.QPushButton, "axial_flexion_pressure_stop_button"
-            )
-            self.ui.lateral_flexion_position_go_button = self.ui.findChild(
-                QtWidgets.QPushButton, "lateral_flexion_position_go_button"
-            )
-            self.ui.lateral_flexion_position_stop_button = self.ui.findChild(
-                QtWidgets.QPushButton, "lateral_flexion_position_stop_button"
-            )
-            self.ui.horizontal_flexion_position_go_button = self.ui.findChild(
-                QtWidgets.QPushButton, "horizontal_flexion_position_go_button"
-            )
-            self.ui.horizontal_flexion_position_stop_button = self.ui.findChild(
-                QtWidgets.QPushButton, "horizontal_flexion_position_stop_button"
-            )
-
-            # Lateral and horizontal flexion control buttons
-            self.ui.forward_lateral_flexion_button = self.ui.findChild(
-                QtWidgets.QPushButton, "forward_lateral_flexion_button"
-            )
-            self.ui.reverse_lateral_flexion_button = self.ui.findChild(
-                QtWidgets.QPushButton, "reverse_lateral_flexion_button"
-            )
-            self.ui.forward_fast_lateral_flexion_button = self.ui.findChild(
-                QtWidgets.QPushButton, "forward_fast_lateral_flexion_button"
-            )
-            self.ui.reverse_fast_lateral_flexion_button = self.ui.findChild(
-                QtWidgets.QPushButton, "reverse_fast_lateral_flexion_button"
-            )
-            self.ui.reset_lateral_flexion_button = self.ui.findChild(
-                QtWidgets.QPushButton, "reset_lateral_flexion_button"
-            )
-
-            self.ui.forward_horizontal_flexion_button = self.ui.findChild(
-                QtWidgets.QPushButton, "forward_horizontal_flexion_button"
-            )
-            self.ui.reverse_horizontal_flexion_button = self.ui.findChild(
-                QtWidgets.QPushButton, "reverse_horizontal_flexion_button"
-            )
-            self.ui.forward_fast_horizontal_flexion_button = self.ui.findChild(
-                QtWidgets.QPushButton, "forward_fast_horizontal_flexion_button"
-            )
-            self.ui.reverse_fast_horizontal_flexion_button = self.ui.findChild(
-                QtWidgets.QPushButton, "reverse_fast_horizontal_flexion_button"
-            )
-            self.ui.reset_horizontal_flexion_button = self.ui.findChild(
-                QtWidgets.QPushButton, "reset_horizontal_flexion_button"
-            )
-
-            # Actuator position sliders
-            self.ui.axial_flexion_position_slider = self.ui.findChild(
-                QtWidgets.QSlider, "axial_flexion_position_slider"
-            )
-            self.ui.lateral_flexion_position_slider = self.ui.findChild(
-                QtWidgets.QSlider, "lateral_flexion_position_slider"
-            )
-            self.ui.horizontal_flexion_position_slider = self.ui.findChild(
-                QtWidgets.QSlider, "horizontal_flexion_position_slider"
-            )
-            self.ui.axial_flexion_pressure_slider = self.ui.findChild(
-                QtWidgets.QSlider, "axial_flexion_pressure_slider"
-            )
-
-            # Group all widgets that should be locked while the MCU is busy
-            self.actuator_controls = [
-                # leg-length
-                self.ui.forward_extra_button, self.ui.reverse_extra_button,
-                self.ui.forward_fast_extra_button, self.ui.reverse_fast_extra_button,
-                self.ui.reset_extra_button,
-                # axial
-                self.ui.forward_axial_flexion_button, self.ui.reverse_axial_flexion_button,
-                self.ui.forward_fast_axial_flexion_button, self.ui.reverse_fast_axial_flexion_button,
-                self.ui.reset_axial_flexion_button,
-                self.ui.axial_flexion_position_go_button,
-                self.ui.axial_flexion_pressure_go_button,
-                # lateral
-                self.ui.forward_lateral_flexion_button, self.ui.reverse_lateral_flexion_button,
-                self.ui.forward_fast_lateral_flexion_button, self.ui.reverse_fast_lateral_flexion_button,
-                self.ui.reset_lateral_flexion_button, self.ui.lateral_flexion_position_go_button,
-                
-                # horizontal
-                self.ui.forward_horizontal_flexion_button, self.ui.reverse_horizontal_flexion_button,
-                self.ui.forward_fast_horizontal_flexion_button, self.ui.reverse_fast_horizontal_flexion_button,
-                self.ui.reset_horizontal_flexion_button, self.ui.horizontal_flexion_position_go_button,
-                
-                self.ui.reset_arduino_main_button, self.ui.reset_arduino_setup_button,
-            ]
-
-            # Initialize actuator controls and connect signals
-            self.setup_actuator_controls()
-            print("UI elements setup completed successfully")
-
-        except Exception as e:
-            print(f"UI setup failed: {str(e)}")
-            raise
+    ### UI Methods ###
 
     def disable_actuator_controls(self):
         # Cancel any pending enable so it cannot fire mid-command and
@@ -558,260 +532,132 @@ class KneeSpa(QMainWindow):
         for w in self.actuator_controls:
             w.setEnabled(True)
 
-    def connect_buttons_and_labels(self):
-        """Connect signals and slots for all UI elements."""
-        print("Connecting UI element signals")
-        try:
-            # Navigation connections
-            if self.ui.setup_button:
-                self.ui.setup_button.clicked.connect(self.show_setup_page)
-            if self.ui.protocols_button:
-                self.ui.protocols_button.clicked.connect(self.show_main_page)
-            if self.ui.help_button:
-                self.ui.help_button.clicked.connect(self.show_help_page)
-            if self.ui.login_button:
-                self.ui.login_button.clicked.connect(self.show_login_dialog)
-
-            # Protocol control connections
-            if self.ui.start_button:
-                self.ui.start_button.clicked.connect(self.start_or_stop_protocol)
-
-            # Profile and navigation connections
-            if self.ui.profile_button:
-                self.ui.profile_button.mousePressEvent = self.show_profile_page
-            if self.ui.video_player_button:
-                self.ui.video_player_button.mousePressEvent = (
-                    self.show_video_player_dialog
-                )
-            if self.ui.brand_label:
-                self.ui.brand_label.mousePressEvent = self.return_to_home_page
-            if self.ui.brand_logo:
-                self.ui.brand_logo.mousePressEvent = self.return_to_home_page
-            if self.ui.exit_app_button:
-                self.ui.exit_app_button.mousePressEvent = lambda event: self.exit_app()
-            if self.ui.request_assistance_button:
-                self.ui.request_assistance_button.mousePressEvent = (
-                    lambda event: self.handle_assistance_request()
-                )
-
-            # QLabel "buttons" give no visual response to a touch; dim
-            # them while pressed (keep the filter referenced or it is
-            # garbage-collected)
-            self._press_feedback = install_press_feedback(
-                self.ui.profile_button,
-                self.ui.video_player_button,
-                self.ui.brand_label,
-                self.ui.brand_logo,
-                self.ui.exit_app_button,
-                self.ui.request_assistance_button,
-            )
-
-            # System control connections
-            if self.ui.set_up_tolerance_button:
-                self.ui.set_up_tolerance_button.clicked.connect(
-                    self.show_tolerance_dialog
-                )
-            if self.ui.show_timer_button:
-                self.ui.show_timer_button.stateChanged.connect(self.show_timer_dialog)
-            if self.ui.show_pressure_button:
-                print("Connecting show_pressure_button")
-                self.ui.show_pressure_button.stateChanged.connect(
-                    self.show_pressure_dialog
-                )
-            if self.ui.reset_arduino_main_button:
-                self.ui.reset_arduino_main_button.clicked.connect(self.reset_arduino)
-            if self.ui.reset_arduino_setup_button:
-                self.ui.reset_arduino_setup_button.clicked.connect(self.reset_arduino)
-
-            # Protocol image navigation
-            self.current_image_number = 1
-            self.update_protocol_image()
-            if self.forward_button_protocol_image:
-                self.forward_button_protocol_image.mousePressEvent = (
-                    self.show_next_protocol_image
-                )
-            if self.backward_button_protocol_image:
-                self.backward_button_protocol_image.mousePressEvent = (
-                    self.show_previous_protocol_image
-                )
-
-            print("Signal connections completed successfully")
-            print("UI element signals connected")
-
-        except Exception as e:
-            print(f"Error connecting signals: {str(e)}")
-            print(f"Signal connection failed: {str(e)}")
-            raise
-
     def reset_setup_readings(self):
-        """Reset setup readings to default values."""
-        self.ui.axial_flexion_position_label.setText("0 in")
-        self.ui.axial_flexion_position_label_2.setText("0 in")
-        self.ui.lateral_flexion_position_label.setText("0°")
-        self.ui.axial_flexion_pressure_label.setText("0 lbs")
-        self.ui.horizontal_flexion_position_label.setText("-10°")
+        """Reset setup readings to default values (modern Setup rows)."""
+        self._reflect_setup("axial", 0)
+        self._reflect_setup("leg_length", 0.0)
+        self._reflect_setup("lateral", 0)
+        self._reflect_setup("pressure", 0)
+        self._reflect_setup("horizontal", -10)
 
-    def setup_protocol_controls(self):
-        """Initialize protocol control GUI elements with preset values."""
+    # ----- Treatment: settings / duration -----
+    @staticmethod
+    def _clamp_minutes(value):
         try:
-            # Pulse control checkbox - single checkbox now
-            self.ui.use_pulse_button = self.findChild(QtWidgets.QCheckBox, "checkbox_use_pulse")
-            if self.ui.use_pulse_button:
-                self.ui.use_pulse_button.setChecked(True)  # Default to use pulse
-                self.ui.use_pulse_button.stateChanged.connect(self._on_pulse_toggled)
-            # Slider controls
-            self.max_pressure_edit = self.findChild(QtWidgets.QSlider, "max_pressure_edit")
-            self.max_left_edit = self.findChild(QtWidgets.QSlider, "max_left_edit")
-            self.max_right_edit = self.findChild(QtWidgets.QSlider, "max_right_edit")
+            v = round(float(value))
+        except (TypeError, ValueError):
+            v = DEFAULT_PROTOCOL_MINUTES
+        return int(max(PROTOCOL_MINUTES_MIN, min(PROTOCOL_MINUTES_MAX, v)))
 
-            # Initialize sliders with default values
-            if self.max_pressure_edit:
-                self.max_pressure_edit.setRange(0, 80)
-                self.max_pressure_edit.setSingleStep(5)
-                self.max_pressure_edit.setValue(40)  # Default 40 lbs
-                self.max_pressure_edit.valueChanged.connect(self.on_pressure_changed)
-
-            if self.max_left_edit:
-                self.max_left_edit.setRange(0, 20)
-                self.max_left_edit.setSingleStep(5)
-                self.max_left_edit.setValue(10)  # Default 10 degrees
-                self.max_left_edit.valueChanged.connect(self.on_left_angle_changed)
-
-            if self.max_right_edit:
-                self.max_right_edit.setRange(0, 20)
-                self.max_right_edit.setSingleStep(5)
-                self.max_right_edit.setValue(10)  # Default 10 degrees
-                self.max_right_edit.valueChanged.connect(self.on_right_angle_changed)
-
-            # Time display (LCD)
-            self.time_edit = self.findChild(QtWidgets.QLCDNumber, "time_edit")
-            if self.time_edit:
-                self.time_edit.display(12)  # Default 12 minutes
-
-            self.decrease_time = self.findChild(QtWidgets.QLabel, "decrease_time")
-            self.increase_time = self.findChild(QtWidgets.QLabel, "increase_time")
-
-            if self.decrease_time and self.increase_time:
-                self.decrease_time.mousePressEvent = self.decrease_time_value
-                self.increase_time.mousePressEvent = self.increase_time_value
-                self._time_press_feedback = install_press_feedback(
-                    self.decrease_time, self.increase_time
-                )
-
-            print("Protocol controls setup completed successfully")
-
-        except Exception as e:
-            print(f"Failed to setup protocol controls: {str(e)}")
-            self._show_timed_error(
-             f"Failed to initialize protocol controls: {str(e)}"
+    def _duration_minutes(self):
+        """Treatment duration (minutes) from the Settings slider, clamped to the
+        safe range; falls back to the default if the control is unavailable."""
+        try:
+            v = self.shell.treatment.settings_values().get(
+                "duration", DEFAULT_PROTOCOL_MINUTES
             )
+        except Exception:
+            v = DEFAULT_PROTOCOL_MINUTES
+        return self._clamp_minutes(v)
 
-    def on_pressure_changed(self, value):
-        """Handle pressure slider value changes."""
+    def _on_protocol_selected(self, n):
+        self.protocol_value = str(n)
+
+    def _on_setting_changed(self, key, value):
+        """A Treatment Settings slider moved. Mid-protocol changes are gated by a
+        one-time safety confirmation; on cancel the slider rolls back."""
         if not self._confirm_mid_protocol_change():
-            self.max_pressure_edit.blockSignals(True)
-            self.max_pressure_edit.setValue(self._prev_pressure)
-            self.max_pressure_edit.blockSignals(False)
+            self.shell.treatment.set_settings({key: self._prev_settings.get(key, value)})
             return
-        self._prev_pressure = value          
-        self.max_pressure = value
-        if self.worker:
+        self._prev_settings[key] = value
+        if key == "pulse_rate":
+            self.current_use_pulse_setting = value > 0
+            self.current_pulse_rate = value if value > 0 else None
+        if not self.worker:
+            return
+        if key == "max_pressure":
             self.worker.max_pressure = value
-            print(f"Mid-protocol: Worker max_pressure updated to {value}")
+        elif key == "max_left":
+            self.worker.max_left = -abs(value)
+        elif key == "max_right":
+            self.worker.max_right = abs(value)
+        elif key == "pulse_rate":
+            self.worker.pulse_rate = value
+            self.worker.use_pulse = value > 0
+        # "duration" is a pre-run parameter — the Treatment screen locks its
+        # slider during an active run, so it is deliberately NOT adjusted live
+        # here (a mid-run shorten could silently end the treatment).
+        print(f"Mid-protocol: worker {key} updated to {value}")
 
-    def on_left_angle_changed(self, value):
-        """Handle left angle slider value changes."""
-        if not self._confirm_mid_protocol_change():
-            self.max_left_edit.blockSignals(True)
-            self.max_left_edit.setValue(self._prev_left)
-            self.max_left_edit.blockSignals(False)
+    def _seed_modern_run_inputs(self):
+        """Snapshot the modern Settings sliders for the controllers and the
+        mid-protocol rollback seam before a start/stop toggle."""
+        try:
+            vals = self.shell.treatment.settings_values()
+        except Exception:
             return
-        self._prev_left = value         
-        self.max_left_angle = value
-        if self.worker:
-            actual_left = -abs(value) # Ensure negative
-            self.worker.max_left = actual_left
-            print(f"Mid-protocol: Worker max_left_angle updated to {value}")
+        self._prev_settings = dict(vals)
+        try:
+            self.protocol_value = str(self.shell.treatment.selected_protocol())
+        except Exception:
+            pass
+        rate = vals.get("pulse_rate", 0) or 0
+        self.current_pulse_rate = rate if rate > 0 else None
+        self.current_use_pulse_setting = rate > 0
 
-    def on_right_angle_changed(self, value):
-        """Handle right angle slider value changes."""
-        if not self._confirm_mid_protocol_change():
-            self.max_right_edit.blockSignals(True)
-            self.max_right_edit.setValue(self._prev_right)
-            self.max_right_edit.blockSignals(False)
-            return
-        self._prev_right = value         
-        self.max_right_angle = value
-        if self.worker:
-            actual_right = abs(value) # Ensure positive
-            self.worker.max_right = actual_right
-            print(f"Mid-protocol: Worker max_right_angle updated to {value}")
+    # ----- Treatment: run-state handlers -----
+    def start_or_stop_protocol(self):
+        """Start/Stop button (see controllers.protocol_controller)."""
+        self._seed_modern_run_inputs()
+        self.protocol.start_or_stop()
+        if self.protocol_state == "running":
+            try:
+                self.shell.treatment.set_phase("ramping")
+            except Exception:
+                pass
 
-    def _on_pulse_toggled(self, state):
-        if not self._confirm_mid_protocol_change():
-            self.ui.use_pulse_button.blockSignals(True)
-            self.ui.use_pulse_button.setChecked(not bool(state))
-            self.ui.use_pulse_button.blockSignals(False)
-            return
-        current_state = bool(state)
-        if self.current_use_pulse_setting:
-            self.current_use_pulse_setting = (
-                current_state  # Update KneeSpa's state tracker
-            )
-        if self.worker:
-            self.worker.use_pulse = current_state # Update worker with correct attribute name and value
-            print(f"Mid-protocol: Worker use_pulse updated to {current_state}")
-
-    def decrease_time_value(self, event):
-        """Decrease protocol time."""
-        current_value = int(self.time_edit.value())
-        if current_value > 1:
-            self.time_edit.display(current_value - 1)
-
-    def increase_time_value(self, event):
-        """Increase protocol time."""
-        current_value = int(self.time_edit.value())
-        if current_value < 60:
-            self.time_edit.display(current_value + 1)
-
-    def setup_dialogs(self):
-        """Initialize dialogs."""
-        print("Setting up dialogs")
-        self.ui.login_dialog = None
-        self.init_login_dialog()
-        self.ui.video_player_dialog = None
-
-    def setup_timers(self):
-        """Setup timers for protocol event"""
-        print("Setting up timers for protocol events")
-        self.protocol_timer = QTimer(self)
-        self.protocol_timer.timeout.connect(self.update_protocol_time)
-
-    def show_timer_dialog(self, state):
-        """Show/hide timer dialog during protocol execution."""
-        if state == Qt.Checked:
-            if not self.timer_dialog.isVisible():
-                # Position dialog in the top-right corner of the main window
-                dialog_x = self.x() + self.width() - self.timer_dialog.width() - 20
-                dialog_y = self.y() + 100
-                self.timer_dialog.move(dialog_x, dialog_y)
-
-                # Initialize timer if protocol is running
-                if self.protocol_start_time and self.protocol_duration:
-                    self.timer_dialog.initialize_protocol_time(
-                        self.protocol_start_time, self.protocol_duration
-                    )
-
-                self.timer_dialog.show()
-
-                # Start timer if protocol is running
-                if self.protocol_start_time:
-                    self.protocol_timer.start(1000)
-
-        else:
-            self.timer_dialog.hide()
+    def _on_treatment_pause(self):
+        if self.worker and self.protocol_running and not self._paused_at:
+            self.worker.pause()
+            self._paused_at = time.time()
             if self.protocol_timer.isActive():
                 self.protocol_timer.stop()
+            try:
+                self.shell.treatment.set_run_state(running=True, paused=True)
+                self.shell.treatment.set_phase("paused")
+            except Exception:
+                pass
+
+    def _on_treatment_resume(self):
+        if self.worker and self.protocol_running and self._paused_at:
+            self.worker.resume()
+            # Shift the UI clock past the paused span so the countdown is correct.
+            if self.protocol_start_time is not None:
+                self.protocol_start_time += (time.time() - self._paused_at)
+            self._paused_at = None
+            self.protocol_timer.start(1000)
+            try:
+                self.shell.treatment.set_run_state(running=True, paused=False)
+                self.shell.treatment.set_phase(
+                    "pulsing" if self.current_use_pulse_setting else "holding"
+                )
+            except Exception:
+                pass
+
+    def _on_estop(self):
+        """Emergency stop from the modern Setup/Treatment screens. Runs the
+        controllers' e-stop chain (X → worker stop → reset), then forces the
+        Treatment UI back to a stopped state; the protocol state machine
+        closes via the worker's finished(False) signal."""
+        self.emergency_stop_clicked(None)
+        self._paused_at = None
+        if self.protocol_timer.isActive():
+            self.protocol_timer.stop()
+        try:
+            self.shell.treatment.set_run_state(running=False, paused=False)
+            self.shell.treatment.set_phase("stopped")
+        except Exception:
+            pass
 
     def emergency_stop_clicked(self, event):
         self.protocol.emergency_stop_clicked(event)
@@ -832,104 +678,192 @@ class KneeSpa(QMainWindow):
     def _confirm_protocol_start(self):
         return self.protocol.confirm_start()
 
-    def start_or_stop_protocol(self):
-        """Start/Stop button (see controllers.protocol_controller)."""
-        self.protocol.start_or_stop()
+    # ----- Setup: jog / go / stop / reset -----
+    def _on_setup_jog(self, key, action):
+        """A Setup jog button was tapped. move_actuator stays the authoritative,
+        safety-clamped path; the row's local pre-move is corrected by reflecting
+        the true commanded position back onto the slider."""
+        if action == "reset":
+            self._setup_reset(key)
+            return
+        if key == "leg_length":
+            self._leg_jog(action)
+            return
+        if key == "pressure":
+            # Pressure has no jog-command in the legacy device; the row already
+            # nudged its slider — just refresh the Live Position readout.
+            self._reflect_setup("pressure", self.shell.setup.row_value("pressure"))
+            return
 
-    def show_login_dialog(self):
-        """Show the login dialog."""
-        print("Showing login dialog")
-        self.login_pin = ""
-        self.login_dialog.exec_()
+        speed, direction = _JOG_SPEED.get(action, ("04", 1))
+        actuator = {
+            "axial": self.actuator_a,
+            "lateral": self.actuator_c,
+            "horizontal": self.actuator_b,
+        }.get(key)
+        if actuator is not None:
+            self.move_actuator(actuator, None, speed, direction)
 
-    def init_login_dialog(self):
-        """Initialize the login dialog."""
-        print("Initializing login dialog")
-        self.login_dialog = QtWidgets.QDialog(self)
-        uic.loadUi(UI_PATHS["LOGIN_UI"], self.login_dialog)
-        self.login_dialog.adjustSize()
+    def _leg_jog(self, action):
+        handler = {
+            "rev_fast": self.reverse_fast_button_clicked,
+            "rev": self.reverse_button_clicked,
+            "fwd": self.forward_button_clicked,
+            "fwd_fast": self.forward_fast_button_clicked,
+        }.get(action)
+        if handler:
+            handler()
 
-        # Find key UI elements
-        self.login_line_edit = self.login_dialog.findChild(
-            QtWidgets.QLineEdit, "login_line_edit"
-        )
-        self.login_help_button = self.login_dialog.findChild(
-            QtWidgets.QPushButton, "login_help_button"
-        )
-        self.login_enter_button = self.login_dialog.findChild(
-            QtWidgets.QPushButton, "enter_password_button"
-        )
-        self.clear_login_pin_button = self.login_dialog.findChild(
-            QtWidgets.QPushButton, "clear_login_pin_button"
-        )
+    def _setup_reset(self, key):
+        if key == "axial":
+            self.reset_flexion_button_clicked(self.actuator_a)
+        elif key == "lateral":
+            self.reset_flexion_button_clicked(self.actuator_c)
+        elif key == "horizontal":
+            self.reset_flexion_button_clicked(self.actuator_b)
+        elif key == "leg_length":
+            self.reset_extra_button_clicked()
+        elif key == "pressure":
+            # No firmware pressure reset; just zero the display.
+            self._reflect_setup("pressure", 0)
 
-        # Connect action buttons
-        self.login_enter_button.clicked.connect(self.handle_login)
-        self.login_help_button.clicked.connect(self.show_login_help_dialog)
-        self.clear_login_pin_button.clicked.connect(self.clear_login_line_edit)
+    def _on_setup_go(self, key):
+        """Move an actuator to its row's current slider value (the legacy Go
+        path), preserving the per-actuator unit conversions and clamps."""
+        self.loading_spinner.show()
+        self.disable_actuator_controls()
+        try:
+            if key == "axial":
+                inches = self.shell.setup.row_value("axial")
+                inches = max(AXIAL_MIN_INCHES, min(AXIAL_MAX_INCHES, inches))
+                self.set_to_distance(inches, self.actuator_a, self.config.a_factor)
+                self.axial_flexion_position = inches
+                self._reflect_setup("axial", inches)
+            elif key == "horizontal":
+                degrees = self.shell.setup.row_value("horizontal")
+                degrees = max(HORIZONTAL_MIN_DEGREES, min(HORIZONTAL_MAX_DEGREES, degrees))
+                inches = abs((degrees + 25) / 5)
+                self.set_to_distance(inches, self.actuator_b, self.config.b_factor)
+                self.horizontal_flexion_position = degrees
+                self._reflect_setup("horizontal", degrees)
+            elif key == "lateral":
+                degrees = self.shell.setup.row_value("lateral")
+                degrees = max(LATERAL_MIN_DEGREES, min(LATERAL_MAX_DEGREES, degrees))
+                self.set_to_c_distance(degrees)
+                self.lateral_flexion_position = degrees
+                self._reflect_setup("lateral", degrees)
+            elif key == "pressure":
+                self._apply_setup_pressure()
+            elif key == "leg_length":
+                # Open-loop FIT actuator — no absolute position command.
+                pass
+        except Exception as e:
+            print(f"Error in Setup Go: {str(e)}")
+            self._show_timed_error(f"Error moving actuator: {str(e)}")
+        finally:
+            self.loading_spinner.hide()
 
-        # Connect numeric keypad buttons (0-9)
-        self.login_pin = ""  # Initialize PIN storage
-        keypad_buttons = []
-        for i in range(10):
-            button_name = f"pushButton_{i}"
-            button = self.login_dialog.findChild(QtWidgets.QPushButton, button_name)
-            if button:
-                keypad_buttons.append(button)
-                # Use lambda with default argument to capture current value of i
-                button.clicked.connect(
-                    lambda checked, num=str(i): self.append_login_star(num)
-                )
+    def _apply_setup_pressure(self):
+        """Setup pressure Go: clamp to [MIN_PRESSURE, PRESSURE_MAX] and send P."""
+        pressure = self.shell.setup.row_value("pressure")
+        if pressure > PRESSURE_MAX:
+            pressure = PRESSURE_MAX
+            self.logger.warning(f"Pressure request exceeds max {PRESSURE_MAX}, clamping")
+            self._show_timed_error(f"Pressure limited to maximum {PRESSURE_MAX} lbs for safety")
+        elif pressure < MIN_PRESSURE:
+            pressure = MIN_PRESSURE
+            self.logger.warning(f"Pressure request below minimum, setting to {MIN_PRESSURE}")
+        pressure = int(pressure)
+        self.arduino.send("P{}".format(pressure))
+        print("Pressure cmd sent P{}".format(pressure))
+        self.current_pressure = pressure
+        self._reflect_setup("pressure", pressure)
 
-        # Touch-target pass: enforce a finger-sized minimum on the keypad,
-        # but only where a layout can redistribute space (fixed-geometry
-        # widgets would overlap if resized blind)
-        for button in keypad_buttons + [
-            self.login_enter_button,
-            self.clear_login_pin_button,
-            self.login_help_button,
-        ]:
-            if button is None:
-                continue
-            parent = button.parentWidget()
-            if parent is not None and parent.layout() is not None:
-                button.setMinimumSize(80, 56)
+    def _on_setup_stop(self, key):
+        """Per-row Stop. The firmware's 'X' stops all actuators regardless of
+        suffix; route through the base stop paths so a link-down failure is
+        alarmed, not just logged."""
+        if key == "leg_length":
+            self.stop_leg_movement()
+            return
+        actuator = {
+            "axial": self.actuator_a,
+            "horizontal": self.actuator_b,
+            "lateral": self.actuator_c,
+            "pressure": self.actuator_a,  # pressure rides the axial channel
+        }.get(key)
+        if actuator is not None:
+            self.stop_position_flexion_button(actuator)
 
-        # Backspace for single mis-keyed digits (Clear used to force a
-        # full re-entry): a trailing action inside the PIN field, which
-        # is placement-safe regardless of the dialog's layout style
-        if self.login_line_edit:
-            backspace_icon = self.login_dialog.style().standardIcon(
-                QtWidgets.QStyle.SP_ArrowBack
+    def _on_mark_default(self):
+        """Mark As Default: persist the current Treatment Settings as protocol
+        defaults (§15.4), clamped to constants."""
+        vals = self.shell.treatment.settings_values()
+        mp = max(0, min(PRESSURE_MAX, vals.get("max_pressure", 50)))
+        ml = max(0, min(abs(LATERAL_MAX_DEGREES), abs(vals.get("max_left", 10))))
+        mr = max(0, min(abs(LATERAL_MAX_DEGREES), abs(vals.get("max_right", 10))))
+        pr = max(0, min(5, vals.get("pulse_rate", 2)))
+        dur = self._clamp_minutes(vals.get("duration", DEFAULT_PROTOCOL_MINUTES))
+        try:
+            self.config.save_protocol_defaults(mp, ml, mr, pr, dur)
+            self.shell.treatment.set_settings(
+                {"max_pressure": mp, "max_left": ml, "max_right": mr,
+                 "pulse_rate": pr, "duration": dur}
             )
-            backspace_action = self.login_line_edit.addAction(
-                backspace_icon, QtWidgets.QLineEdit.TrailingPosition
-            )
-            backspace_action.setToolTip("Delete last digit")
-            backspace_action.triggered.connect(self.auth.backspace_digit)
+            self._show_timed_error("Saved current settings as the default.")
+        except Exception as e:
+            print(f"Failed to save defaults: {e}")
+            self._show_timed_error("Could not save defaults.")
 
-    def append_login_star(self, value):
-        """PIN digit entry (see controllers.auth_controller)."""
-        self.auth.append_digit(value)
+    # ----- auth -----
+    def _on_login_attempt(self, pin):
+        """Modern login modal submits the whole PIN; the salted-hash verify and
+        lockout live in controllers.auth_controller."""
+        self.login_pin = pin
+        self.auth.handle_login()
+        if self.current_user is None:
+            # Specifics (lockout countdown, etc.) arrive via the timed error
+            # box; the modal shows the inline generic failure.
+            try:
+                self.shell.login_failed("Invalid PIN. Please try again.")
+            except Exception:
+                pass
 
-    def clear_login_line_edit(self):
-        self.auth.clear_pin()
+    def _on_logout(self):
+        if self._block_nav_during_treatment():
+            return
+        print("Handling logout")
+        self.current_user = None
+        self.shell.logout()
 
-    def show_login_help_dialog(self):
-        """Show login help dialog."""
-        print("Showing login help dialog")
-        help_dialog = QtWidgets.QDialog(self)
-        uic.loadUi(UI_PATHS["LOGIN_HELP_UI"], help_dialog)
-        help_dialog.exec_()
+    def update_ui_after_login(self):
+        """Update user interface with user details after login (modern shell:
+        close the modal, set the user chip, and go to the Treatment screen)."""
+        print("Updating UI after login")
+        self.shell.login_succeeded(self.current_user["username"], goto="protocols")
+
+    # ----- Support -----
+    def _on_issue_activated(self, question):
+        # Remember the last-opened troubleshooting item as ticket context.
+        self._selected_issue = question
+
+    def _on_submit_ticket(self):
+        self.submit_ticket(self._selected_issue or "General support request")
+
+    def _on_video_toggled(self, playing):
+        # The VideoModal owns the embedded VLC player; this is just telemetry.
+        print(f"Video play toggled: {playing}")
 
     def handle_assistance_request(self):
-        """Handle request assistance button click and email admin"""
+        """Request assistance — emails the admin using the logged-in user's
+        identity (read from current_user, not stale label text)."""
         print(f"Handle assistance method called")
-        self.username = self.ui.username_profile.text()
-        self.user_email = self.ui.email_profile.text()
-        self.user_status = self.ui.status_profile.text()
-
-        # Call the function from email.py
+        if self.current_user:
+            self.username = self.current_user.get("username", "")
+            self.user_email = self.current_user.get("email", "")
+            self.user_status = self.current_user.get("status", "")
+        else:
+            self.username = self.user_email = self.user_status = ""
         self.email_admin()
 
     def email_admin(self):
@@ -968,49 +902,51 @@ class KneeSpa(QMainWindow):
 
         threading.Thread(target=_send, daemon=True).start()
 
-    def handle_login(self):
-        """PIN validation with lockout (see controllers.auth_controller)."""
-        self.auth.handle_login()
+    def submit_ticket(self, issue_text):
+        """Submit a support ticket (§15.5) — SMTP to the TICKET_EMAIL, tagged
+        with the persisted per-device id. Sent from a worker thread like
+        email_admin (blocking SMTP froze the kiosk on a down network)."""
+        sender_email = EMAIL_CONFIG["SENDER_EMAIL"]
+        sender_password = EMAIL_CONFIG["SENDER_PASSWORD"]
+        receiver_email = EMAIL_CONFIG["TICKET_EMAIL"]
+        smtp_server = EMAIL_CONFIG["SMTP_SERVER"]
+        smtp_port = EMAIL_CONFIG["SMTP_PORT"]
 
-    def update_ui_after_login(self):
-        """Update user interface with user details after login"""
-        print("Updating UI after login")
-        # self.ui.username_nav.setText(self.current_user["username"])
-        self.ui.username_profile.setText(self.current_user["username"])
-        self.ui.email_profile.setText(self.current_user["email"])
-        self.ui.status_profile.setText(self.current_user["status"])
-        self.ui.login_button.setText("Logout")
-        self.ui.login_button.clicked.disconnect()
-        self.ui.login_button.clicked.connect(self.handle_logout)
+        try:
+            device_id = self.config.ensure_device_id()
+        except Exception:
+            device_id = "unknown"
 
-        if self.current_user["status"] == "admin":
-            print("Admin user logged in: Enabling admin features")
-            self.ui.protocols_button.setEnabled(True)
-        elif self.current_user["status"] == "user":
-            print("Standard user logged in: Disabling admin features")
-            self.ui.protocols_button.setEnabled(True)
-        else:
-            print("Unknown user status: Disabling protocol and edit features")
-            self.ui.protocols_button.setEnabled(False)
+        user = self.current_user.get("username", "unknown") if self.current_user else "unknown"
+        status = self.current_user.get("status", "") if self.current_user else ""
 
-    def handle_logout(self):
-        """Handle user logout"""
-        print("Handling logout")
-        self.current_user = None
-        self.ui.username_nav.setText("")
-        self.ui.username_profile.setText("")
-        self.ui.email_profile.setText("")
-        self.ui.status_profile.setText("")
-        self.ui.login_button.setText("Login")
-        self.ui.login_button.clicked.disconnect()
-        self.ui.login_button.clicked.connect(self.show_login_dialog)
-
-        self.ui.protocols_button.setEnabled(False)
-
-        self.ui.findChild(QtWidgets.QStackedWidget, "stackedWidget").setCurrentIndex(
-            self.home_page
+        subject = f"[KneeSpa {device_id}] Support ticket"
+        body = (
+            f"Device: {device_id}\n"
+            f"User: {user} ({status})\n\n"
+            f"Issue:\n{issue_text}"
         )
+        message = MIMEText(body)
+        message["Subject"] = subject
+        message["From"] = sender_email
+        message["To"] = receiver_email
 
+        def _send():
+            try:
+                if not sender_email or not sender_password or not receiver_email:
+                    raise RuntimeError("SMTP credentials are not configured")
+                with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15) as server:
+                    server.login(sender_email, sender_password)
+                    server.sendmail(sender_email, receiver_email, message.as_string())
+                print("Support ticket sent successfully.")
+            except Exception as e:
+                print(f"Failed to send ticket: {e}")
+                self.logger.error(f"Failed to send ticket: {e}")
+
+        threading.Thread(target=_send, daemon=True).start()
+        self._show_timed_error("Support ticket is being sent.")
+
+    # ----- protocol state / navigation gating -----
     def set_protocol_state(self, state):
         """Protocol lifecycle (see controllers.protocol_controller)."""
         self.protocol.set_state(state)
@@ -1039,261 +975,22 @@ class KneeSpa(QMainWindow):
         # Keep a reference so it is not garbage-collected
         self._active_safety_alert = msg_box
 
-    def show_home_page(self):
-        """Show the home page."""
-        if self._block_nav_during_treatment():
-            return
-        print("Showing home page")
-        self.ui.findChild(QtWidgets.QStackedWidget, "stackedWidget").setCurrentIndex(
-            self.home_page
-        )
-
-    def return_to_home_page(self, event):
-        """Return to the home page."""
-        if self._block_nav_during_treatment():
-            return
-        print("Returning to home page")
-        self.ui.findChild(QtWidgets.QStackedWidget, "stackedWidget").setCurrentIndex(
-            self.home_page
-        )
-
-    def show_setup_page(self):
-        """Show the setup page."""
-
-        if not self.current_user:
-            print("Access denied: User not logged in")
-            self._show_timed_error("Please log in to proceed.")
-            return
-        if self._block_nav_during_treatment():
-            return
-
-        print("Showing setup page")
-        self.ui.findChild(QtWidgets.QStackedWidget, "stackedWidget").setCurrentIndex(
-            self.setup_page
-        )
-        if self.ui.findChild(QtWidgets.QTabWidget, "setup_tabs"):
-            self.ui.findChild(QtWidgets.QTabWidget, "setup_tabs").setCurrentIndex(0)
-
-    def show_main_page(self):
-        """Show the main page."""
-
-        if not self.current_user:
-            print("Access denied: User not logged in")
-            self._show_timed_error(
-                "Please log in to start a protocol."
-            )
-            return
-
-        print("Showing main page")
-        self.ui.findChild(QtWidgets.QStackedWidget, "stackedWidget").setCurrentIndex(
-            self.main_page
-        )
-        if self.ui.findChild(QtWidgets.QTabWidget, "DRx_tabs"):
-            self.ui.findChild(QtWidgets.QTabWidget, "DRx_tabs").setCurrentIndex(0)
-
-    def show_help_page(self):
-        """Show the help page."""
-        if self._block_nav_during_treatment():
-            return
-        print("Showing help page")
-        self.ui.findChild(QtWidgets.QStackedWidget, "stackedWidget").setCurrentIndex(
-            self.help_page
-        )
-
-    def show_profile_page(self, event):
-        """Show the profile page."""
-        if self._block_nav_during_treatment():
-            return
-        print("Showing profile page")
-        self.ui.findChild(QtWidgets.QStackedWidget, "stackedWidget").setCurrentIndex(
-            self.profile_page
-        )
-
-    def show_video_player_dialog(self, event):
-        """Show the video player dialog."""
-        print("Showing video player dialog")
-        # Always create a new instance
-        if self.video_player_dialog:
-            self.video_player_dialog.deleteLater()
-        self.video_player_dialog = VideoPlayer(self)
-        self.video_player_dialog.show()
-
-    def update_protocol_image(self):
-        """Update the displayed protocol image."""
-        print(f"Updating protocol image to number {self.current_image_number}")
-        image_path = f"{UI_PATHS['PROTOCOL_IMAGES']}/{self.current_image_number}.png"
-        self.label_protocol_image.setPixmap(QPixmap(image_path))
-        self.protocol_image_number.setText(str(self.current_image_number))
-
-    def show_next_protocol_image(self, event):
-        """Show the next protocol image."""
-        print("Showing next protocol image")
-        if self.current_image_number < 4:
-            self.current_image_number += 1
-            self.update_protocol_image()
-
-    def show_previous_protocol_image(self, event):
-        """Show the previous protocol image."""
-        print("Showing previous protocol image")
-        if self.current_image_number > 1:
-            self.current_image_number -= 1
-            self.update_protocol_image()
-
     ### Backend Methods ###
 
-    def setup_actuator_controls(self):
-        """Initialize actuator control buttons and sliders."""
-
-        print("Setting up actuator controls...")
-        # Initialize actuator positions
-        self.axial_position = DEFAULT_AXIAL_POSITION  # inches
-        self.lateral_position = DEFAULT_LATERAL_POSITION  # degrees
-        self.horizontal_position = DEFAULT_HORIZONTAL_POSITION  # degrees
-        self.current_pressure = DEFAULT_PRESSURE  # pounds
-        self.leg_length = DEFAULT_LEG_LENGTH_POSITION
-        self.LEG_LENGTH_MIN = LEG_LENGTH_MIN
-        self.LEG_LENGTH_MAX = LEG_LENGTH_MAX
-        self.LEG_LENGTH_SPEED_NORMAL = LEG_LENGTH_SPEED_NORMAL
-        self.LEG_LENGTH_SPEED_FAST = LEG_LENGTH_SPEED_FAST
-
-        # Connect axial flexion controls
-        self.ui.forward_extra_button.clicked.connect(self.forward_button_clicked)
-        self.ui.reverse_extra_button.clicked.connect(self.reverse_button_clicked)
-        self.ui.forward_fast_extra_button.clicked.connect(
-            self.forward_fast_button_clicked
-        )
-        self.ui.reverse_fast_extra_button.clicked.connect(
-            self.reverse_fast_button_clicked
-        )
-        self.ui.reset_extra_button.clicked.connect(self.reset_extra_button_clicked)
-        self.axial_flexion_position = 0
-        self.horizontal_flexion_position = -10
-        self.lateral_flexion_position = 0
-        self.ui.axial_flexion_position_slider.setSingleStep(
-            5
-        )  # 5 represents 2.5 degrees
-        self.ui.axial_flexion_position_slider.setPageStep(10)
-        self.ui.lateral_flexion_position_slider.setSingleStep(
-            5
-        )  # 5 represents 2.5 degrees
-        self.ui.lateral_flexion_position_slider.setPageStep(10)
-        self.ui.horizontal_flexion_position_slider.setSingleStep(
-            5
-        )  # 5 represents 2.5 degrees
-        self.ui.horizontal_flexion_position_slider.setPageStep(10)
-
-        self.ui.forward_axial_flexion_button.clicked.connect(
-            lambda: self.move_actuator(self.actuator_a, 0.065, "04", 1)
-        )
-        self.ui.reverse_axial_flexion_button.clicked.connect(
-            lambda: self.move_actuator(self.actuator_a, 0.065, "04", -1)
-        )
-        self.ui.forward_fast_axial_flexion_button.clicked.connect(
-            lambda: self.move_actuator(self.actuator_a, 0.065, "20", 1)
-        )
-        self.ui.reverse_fast_axial_flexion_button.clicked.connect(
-            lambda: self.move_actuator(self.actuator_a, 0.065, "20", -1)
-        )
-        self.ui.reset_axial_flexion_button.clicked.connect(
-            lambda: self.reset_flexion_button_clicked(self.actuator_a)
-        )
-        self.ui.reset_lateral_flexion_button.clicked.connect(
-            lambda: self.reset_flexion_button_clicked(self.actuator_c)
-        )
-        self.ui.reset_horizontal_flexion_button.clicked.connect(
-            lambda: self.reset_flexion_button_clicked(self.actuator_b)
-        )
-
-        # Connection axial controls
-        self.ui.axial_flexion_position_go_button.clicked.connect(
-            lambda: self.move_position_flexion_button(self.actuator_a)
-        )
-        self.ui.axial_flexion_position_stop_button.clicked.connect(
-            lambda: self.stop_position_flexion_button(self.actuator_a)
-        )
-        self.ui.axial_flexion_pressure_go_button.clicked.connect(
-            self.axial_flexion_pressure_go_button_clicked
-        )
-        self.ui.axial_flexion_pressure_stop_button.clicked.connect(
-            lambda: self.stop_position_flexion_button(self.actuator_a)
-        )
-        self.ui.lateral_flexion_position_go_button.clicked.connect(
-            lambda: self.move_position_flexion_button(self.actuator_c)
-        )
-        self.ui.lateral_flexion_position_stop_button.clicked.connect(
-            lambda: self.stop_position_flexion_button(self.actuator_a)
-        )
-        self.ui.horizontal_flexion_position_go_button.clicked.connect(
-            lambda: self.move_position_flexion_button(self.actuator_b)
-        )
-        self.ui.horizontal_flexion_position_stop_button.clicked.connect(
-            lambda: self.stop_position_flexion_button(self.actuator_b)
-        )
-
-        # Connect lateral flexion controls
-        self.ui.forward_lateral_flexion_button.clicked.connect(
-            lambda: self.move_actuator(self.actuator_c, 5, "04", 1)  # slow speed
-        )
-        self.ui.reverse_lateral_flexion_button.clicked.connect(
-            lambda: self.move_actuator(self.actuator_c, 5, "04", -1)  # slow speed
-        )
-        self.ui.forward_fast_lateral_flexion_button.clicked.connect(
-            lambda: self.move_actuator(self.actuator_c, 10, "20", 1)  # fast speed
-        )
-        self.ui.reverse_fast_lateral_flexion_button.clicked.connect(
-            lambda: self.move_actuator(self.actuator_c, 10, "20", -1)  # fast speed
-        )
-
-        # Connect horizontal flexion controls
-        self.ui.forward_horizontal_flexion_button.clicked.connect(
-            lambda: self.move_actuator(self.actuator_b, 5, "04", 1)  # slow speed
-        )
-        self.ui.reverse_horizontal_flexion_button.clicked.connect(
-            lambda: self.move_actuator(self.actuator_b, 5, "04", -1)  # slow speed
-        )
-        self.ui.forward_fast_horizontal_flexion_button.clicked.connect(
-            lambda: self.move_actuator(self.actuator_b, 10, "20", 1)  # fast speed
-        )
-        self.ui.reverse_fast_horizontal_flexion_button.clicked.connect(
-            lambda: self.move_actuator(self.actuator_b, 10, "20", -1)  # fast speed
-        )
-
-        # Connect position sliders
-        self.ui.axial_flexion_position_slider.valueChanged.connect(
-            self.axial_flexion_position_changed
-        )
-        self.ui.lateral_flexion_position_slider.valueChanged.connect(
-            self.lateral_flexion_position_changed
-        )
-        self.ui.horizontal_flexion_position_slider.valueChanged.connect(
-            self.horizontal_flexion_position_changed
-        )
-        self.ui.axial_flexion_pressure_slider.valueChanged.connect(
-            self.axial_flexion_pressure_changed
-        )
-
-        # Update pressure display from slider
-        self.ui.axial_flexion_pressure_slider.valueChanged.connect(
-            self.update_pressure_display
-        )
-
-        # Emergency stop
-        self.ui.emergency_stop_setup_label.mousePressEvent = self.emergency_stop_clicked
-        self._estop_press_feedback = install_press_feedback(
-            self.ui.emergency_stop_setup_label
-        )
-
-        print("Actuator controls setup complete")
-
     def handle_connection_failed(self, message):
+        self._set_badge(False)
         self.connection.handle_connection_failed(message)
 
     def cleanup(self):
-        """Clean up resources, including VideoPlayer and GPIO."""
+        """Clean up resources, including the video player and GPIO."""
         print("Cleaning up resources.")
 
         if self.worker:
             self.worker.stop()
+
+        # Release the embedded VLC player, if any.
+        if hasattr(self, "shell"):
+            self.shell.video_modal.cleanup()
 
         # Force Arduino disconnect
         if hasattr(self, "arduino"):
@@ -1308,7 +1005,10 @@ class KneeSpa(QMainWindow):
 
     def move_actuator(self, actuator, step, speed_factor, direction):
         """
-        Move an actuator in the specified direction
+        Move an actuator in the specified direction.
+
+        The position math, clamps, and emitted serial commands are FROZEN (unit
+        tested). Only the UI feedback is rerouted to the modern Setup screen.
         """
         if self.actuator_command_in_progress:
             print("Actuator command already in progress - ignoring input")
@@ -1335,14 +1035,6 @@ class KneeSpa(QMainWindow):
             self.horizontal_flexion_position = new_position
             print(f"B position: {self.horizontal_flexion_position}")
 
-            # Update UI
-            self.ui.horizontal_flexion_position_slider.setValue(
-                self.horizontal_flexion_position
-            )
-            self.ui.horizontal_flexion_position_label.setText(
-                f"{self.horizontal_flexion_position}{DEGREES}"
-            )
-
             # Convert degrees to inches like the slider does
             inches = abs((self.horizontal_flexion_position + 25) / 5)
 
@@ -1350,6 +1042,7 @@ class KneeSpa(QMainWindow):
             command = f"A{actuator}{inches}"
             self.arduino.send(command)
 
+            self._reflect_setup("horizontal", self.horizontal_flexion_position)
             self.loading_spinner.hide()
 
         elif actuator == self.actuator_a:  # Axial Flexion
@@ -1370,14 +1063,6 @@ class KneeSpa(QMainWindow):
             self.axial_flexion_position = new_position
             print(f"A position: {self.axial_flexion_position}")
 
-            # Update UI
-            self.ui.axial_flexion_position_slider.setValue(
-                self.axial_flexion_position * 2
-            )
-            self.ui.axial_flexion_position_label.setText(
-                f"{self.axial_flexion_position} in"
-            )
-
             # Send command to Arduino
             # Arduino expects: A[2-digit device][float value starting at position 3]
             # Format position with at least 1 decimal place to ensure proper parsing
@@ -1389,6 +1074,7 @@ class KneeSpa(QMainWindow):
             # Removed problematic L5 command that was sent without proper parameters
             # This was causing malformed commands after forward axial movement
 
+            self._reflect_setup("axial", self.axial_flexion_position)
             self.loading_spinner.hide()
 
         elif actuator == self.actuator_c:  # Lateral Flexion
@@ -1432,23 +1118,11 @@ class KneeSpa(QMainWindow):
                 f" positioned to {self.lateral_flexion_position} degrees pos {position}"
             )
 
-            # Update UI
-            left_right = (
-                "R"
-                if self.lateral_flexion_position > 0
-                else "L" if self.lateral_flexion_position < 0 else ""
-            )
-            self.ui.lateral_flexion_position_slider.setValue(
-                self.lateral_flexion_position
-            )
-            self.ui.lateral_flexion_position_label.setText(
-                f"{abs(self.lateral_flexion_position)}{left_right}{DEGREES}"
-            )
-
             # Send command to Arduino
             command = f"K{position}"
             self.arduino.send(command)
 
+            self._reflect_setup("lateral", self.lateral_flexion_position)
             self.loading_spinner.hide()
 
     def reset_flexion_button_clicked(self, actuator):
@@ -1461,10 +1135,7 @@ class KneeSpa(QMainWindow):
             command = f"I14{position}"
             self.arduino.send(command)
             self.lateral_flexion_position = 0
-            self.ui.lateral_flexion_position_label.setText(
-                str(round(self.lateral_flexion_position, 2))
-            )
-            self.ui.lateral_flexion_position_slider.setValue(0)
+            self._reflect_setup("lateral", 0)
             self.loading_spinner.hide()
 
             return
@@ -1473,12 +1144,7 @@ class KneeSpa(QMainWindow):
             command = f"A{actuator}2"
             self.arduino.send(command)  # transmit data serially
             self.horizontal_flexion_position = -10
-            self.ui.horizontal_flexion_position_label.setText(
-                str(round(self.horizontal_flexion_position, 2))
-            )
-            self.ui.horizontal_flexion_position_slider.setValue(
-                self.horizontal_flexion_position
-            )
+            self._reflect_setup("horizontal", -10)
             self.loading_spinner.hide()
 
             return
@@ -1490,12 +1156,8 @@ class KneeSpa(QMainWindow):
             command = "I120"
             self.arduino.send(command)  # firmware floors this to AZERO
             self.axial_flexion_position = 0
-            self.ui.axial_flexion_position_label.setText(
-                str(round(self.axial_flexion_position, 2))
-            )
-            self.ui.axial_flexion_position_slider.setValue(0)
-            self.ui.axial_flexion_pressure_slider.setValue(0)
-            self.ui.axial_flexion_pressure_label.setText("0 lbs")
+            self._reflect_setup("axial", 0)
+            self._reflect_setup("pressure", 0)
             # Re-send the scale factor once the move has had time to
             # finish, without freezing the UI thread for 5 seconds.
             # NOTE: the firmware tares on L0, so this must only happen
@@ -1504,84 +1166,6 @@ class KneeSpa(QMainWindow):
             self.loading_spinner.hide()
 
             return
-
-    def move_position_flexion_button(self, actuator):
-        """Handle movement based on slider position for different actuators."""
-        self.loading_spinner.show()
-        self.disable_actuator_controls()
-        try:
-            if actuator == self.actuator_b:  # Horizontal
-                horizontal_degrees = self.ui.horizontal_flexion_position_slider.value()
-                horizontal_degrees = max(
-                    HORIZONTAL_MIN_DEGREES,
-                    min(HORIZONTAL_MAX_DEGREES, horizontal_degrees),
-                )
-                inches = abs((horizontal_degrees + 25) / 5)
-                self.set_to_distance(inches, actuator, self.config.b_factor)
-                self.horizontal_flexion_position = horizontal_degrees
-                self.loading_spinner.hide()
-
-            elif actuator == self.actuator_a:  # Axial
-                inches = self.ui.axial_flexion_position_slider.value() / 2.0
-                inches = max(AXIAL_MIN_INCHES, min(AXIAL_MAX_INCHES, inches))
-                self.set_to_distance(inches, actuator, self.config.a_factor)
-                self.axial_flexion_position = inches
-                self.loading_spinner.hide()
-
-            elif actuator == self.actuator_c:  # Lateral
-                degrees = self.ui.lateral_flexion_position_slider.value()
-                degrees = max(
-                    LATERAL_MIN_DEGREES,
-                    min(LATERAL_MAX_DEGREES, degrees),
-                )
-                if degrees != self.ui.lateral_flexion_position_slider.value():
-                    self.logger.warning(
-                        "Lateral position clamped to range "
-                        f"[{LATERAL_MIN_DEGREES}, {LATERAL_MAX_DEGREES}]"
-                    )
-                    self.ui.lateral_flexion_position_slider.setValue(degrees)
-                self.set_to_c_distance(degrees)
-                self.lateral_flexion_position = degrees
-                self.loading_spinner.hide()
-
-        except Exception as e:
-            print(f"Error in move_position_flexion_button: {str(e)}")
-            self._show_timed_error(
-                 f"Error moving actuator: {str(e)}"
-            )
-            self.loading_spinner.hide()
-
-    def adjust_pressure(self, target_pressure):
-        """Adjust axial pressure to target value with safety validation."""
-        print(f"Adjusting pressure to {target_pressure} lbs")
-
-        # SAFETY VALIDATION - Fix for missing bounds check
-        if target_pressure > PRESSURE_MAX:
-            self.logger.warning(f"Pressure {target_pressure} exceeds max, clamping to {PRESSURE_MAX}")
-            target_pressure = PRESSURE_MAX
-            self._show_timed_error(f"Pressure limited to maximum {PRESSURE_MAX} lbs for safety")
-        elif target_pressure < 0:
-            self.logger.warning(f"Negative pressure requested, setting to 0")
-            target_pressure = 0
-
-        self.loading_spinner.show()
-        self.disable_actuator_controls()
-        try:
-            self.ui.axial_flexion_pressure_label.setText(f"{target_pressure} lb")
-            self.arduino.send(f"P{target_pressure}")
-            self.current_pressure = target_pressure
-            print(f"Pressure adjusted to {target_pressure} lbs")
-            self.loading_spinner.hide()
-
-        except Exception as e:
-            print(f"Error adjusting pressure: {str(e)}")
-            print(f"Pressure adjustment failed: {str(e)}")
-            self.stop_pressure_adjustment()
-            self.loading_spinner.hide()
-
-    def update_pressure_display(self, value):
-        """Update pressure display when slider moves."""
-        self.ui.axial_flexion_pressure_label.setText(f"{value} lbs")
 
     def stop_actuators(self):
         """Emergency stop for all actuators."""
@@ -1600,21 +1184,6 @@ class KneeSpa(QMainWindow):
             print(f"Error in emergency stop: {str(e)}")
             self._show_timed_error(f"Emergency stop failed: {str(e)}")
 
-    def stop_pressure_adjustment(self):
-        """Stop pressure adjustment."""
-        print("Stopping pressure adjustment")
-        try:
-            if not self.arduino.send("X"):  # Stop pressure adjustment
-                self.logger.error("Pressure stop could not be sent - link down")
-                self._show_timed_error(
-                    "STOP NOT DELIVERED - connection down. "
-                    "Device stops itself within 3 seconds."
-                )
-            print("Pressure adjustment stopped")
-        except Exception as e:
-            print(f"Error stopping pressure adjustment: {str(e)}")
-            self._show_timed_error(f"Pressure stop failed: {str(e)}")
-
     def stop_position_flexion_button(self, actuator):
         # Firmware 'X' stops all actuators regardless of suffix
         if not self.arduino.send("X"):
@@ -1624,33 +1193,7 @@ class KneeSpa(QMainWindow):
                 "Device stops itself within 3 seconds."
             )
 
-    def update_leg_position(self, direction, fast=False):
-        """
-        Update leg length position tracking.
-
-        Args:
-            direction: 1 for forward, -1 for reverse
-            fast: True for fast movement speed
-        """
-        try:
-            speed = 1 if fast else 0.5  # inches per second
-            delta = direction * (speed * 0.1)  # 0.1 seconds per update
-            new_position = self.leg_length + delta
-
-            # Enforce limits (0 to 6 inches)
-            if 0 <= new_position <= 6:
-                self.leg_length = new_position
-                self.ui.axial_flexion_position_label_2.setText(
-                    f"{self.leg_length:.1f} in"
-                )
-            else:
-                # Stop movement if limit reached
-                self.stop_leg_movement()
-                print(f"Leg length limit reached: {new_position}")
-        except Exception as e:
-            print(f"Error updating leg position: {str(e)}")
-            self.stop_leg_movement()
-
+    # ----- leg-length (FIT) jog handlers (open-loop F-commands + GPIO) -----
     def forward_button_clicked(self):
         """Handle forward button press - normal speed."""
 
@@ -1669,7 +1212,7 @@ class KneeSpa(QMainWindow):
         # Update display (0.5s slow run ~= 0.25 in of travel)
         self.leg_length += 0.25
         self.leg_length = min(self.leg_length, self.LEG_LENGTH_MAX)  # Don't exceed max
-        self.ui.axial_flexion_position_label_2.setText(f"{self.leg_length:.1f} in")
+        self._reflect_setup("leg_length", self.leg_length)
         self.loading_spinner.hide()
 
     def reverse_button_clicked(self):
@@ -1687,7 +1230,7 @@ class KneeSpa(QMainWindow):
         # Update display (0.5s slow run ~= 0.25 in of travel)
         self.leg_length -= 0.25
         self.leg_length = max(0, self.leg_length)  # Don't go below 0
-        self.ui.axial_flexion_position_label_2.setText(f"{self.leg_length:.1f} in")
+        self._reflect_setup("leg_length", self.leg_length)
         self.loading_spinner.hide()
 
     def forward_fast_button_clicked(self):
@@ -1707,7 +1250,7 @@ class KneeSpa(QMainWindow):
         # Update display (6s fast run ~= 3.0 in of travel)
         self.leg_length += 3.0
         self.leg_length = min(self.leg_length, self.LEG_LENGTH_MAX)  # Don't exceed max
-        self.ui.axial_flexion_position_label_2.setText(f"{self.leg_length:.1f} in")
+        self._reflect_setup("leg_length", self.leg_length)
         self.loading_spinner.hide()
 
     def reverse_fast_button_clicked(self):
@@ -1722,10 +1265,11 @@ class KneeSpa(QMainWindow):
         if self.leg_length >= 3:
             # Update displays
             self.leg_length = 0
-            self.ui.axial_flexion_position_label_2.setText(f"{self.leg_length:.1f} in")
+            self._reflect_setup("leg_length", self.leg_length)
         else:
             self.leg_length -= 3.0  # 6s fast run ~= 3.0 in of travel
             self.leg_length = max(0, self.leg_length)  # Don't go below 0
+            self._reflect_setup("leg_length", self.leg_length)
 
         self.loading_spinner.hide()
 
@@ -1745,7 +1289,7 @@ class KneeSpa(QMainWindow):
         QTimer.singleShot(3000, self.reverse_fast_button_clicked)
 
         self.leg_length = 0.0
-        self.ui.axial_flexion_position_label_2.setText("0.0 in")
+        self._reflect_setup("leg_length", 0.0)
         self.loading_spinner.hide()
 
     def stop_leg_movement(self):
@@ -1757,54 +1301,6 @@ class KneeSpa(QMainWindow):
         GPIO.output(EXTRABACKWARD, GPIO.LOW)
         # GPIO.output(EXTRAENABLE, GPIO.LOW)
         self.loading_spinner.hide()
-
-    def axial_flexion_position_changed(self):
-        inches = self.ui.axial_flexion_position_slider.value() / 2.0
-        self.ui.axial_flexion_position_label.setText(str(inches) + " in")
-
-    def axial_flexion_pressure_changed(self):
-        pounds = self.ui.axial_flexion_pressure_slider.value()
-        self.ui.axial_flexion_pressure_label.setText(str(pounds) + " lb")
-
-    def axial_flexion_pressure_go_button_clicked(self):
-        print("axial_flexion_pressure_go_button_clicked")
-        self.loading_spinner.show()
-        self.disable_actuator_controls()
-        pressure = self.ui.axial_flexion_pressure_slider.value()
-        print(pressure)
-
-        # CRITICAL SAFETY CHECK - Fix for pressure safety bypass
-        if pressure > PRESSURE_MAX:
-            pressure = PRESSURE_MAX
-            self.logger.warning(f"Pressure request {pressure} exceeds max {PRESSURE_MAX}, clamping")
-            self._show_timed_error(f"Pressure limited to maximum {PRESSURE_MAX} lbs for safety")
-        elif pressure < MIN_PRESSURE:
-            pressure = MIN_PRESSURE
-            self.logger.warning(f"Pressure request below minimum, setting to {MIN_PRESSURE}")
-
-        command = "P{}".format(pressure)
-        self.arduino.send(command)
-        print("Pressure cmd sent {}".format(command.strip()))
-        self.ui.axial_flexion_pressure_slider.setValue(pressure)  # Update UI to show clamped value
-        self.loading_spinner.hide()
-
-    def horizontal_flexion_position_changed(self):
-        self.minus_horizontal_degrees = (
-            self.ui.horizontal_flexion_position_slider.value()
-        )
-        if (self.minus_horizontal_degrees % 5) != 0:
-            return
-        self.ui.horizontal_flexion_position_label.setText(
-            str(self.minus_horizontal_degrees) + "°"
-        )
-
-    def lateral_flexion_position_changed(self):
-        self.minus_horizontal_degrees = self.ui.lateral_flexion_position_slider.value()
-        if (self.minus_horizontal_degrees % 5) != 0:
-            return
-        self.ui.lateral_flexion_position_label.setText(
-            str(self.minus_horizontal_degrees) + "°"
-        )
 
     @QtCore.pyqtSlot()
     def set_done(self):
@@ -1858,6 +1354,14 @@ class KneeSpa(QMainWindow):
         return self.protocol.start_protocol()
 
     def update_protocol_time(self):
+        """Protocol countdown (see controllers.protocol_controller), plus the
+        Treatment screen's inline progress ring."""
+        if self.protocol_start_time:
+            elapsed = int(time.time() - self.protocol_start_time)
+            try:
+                self.shell.treatment.set_progress(elapsed, self.protocol_duration)
+            except Exception:
+                pass
         self.protocol.update_protocol_time()
 
     def protocol_completed(self, success=True):
@@ -1886,38 +1390,14 @@ class KneeSpa(QMainWindow):
             self.enable_actuator_controls()
         return True
 
-    def show_pressure_dialog(self, state):
-        """Show/hide pressure dialog during protocol execution."""
-        if state == Qt.Checked:
-            if not self.pressure_dialog.isVisible():
-                print("Showing PressureDialog")  # Debug print
-                # Position dialog below timer dialog if visible
-                dialog_x = self.x() + self.width() - self.pressure_dialog.width() - 20
-                dialog_y = self.y() + (300)
-                self.pressure_dialog.move(dialog_x, dialog_y)
-
-                # Initialize with current pressure if available
-                if hasattr(self, 'worker') and self.worker and hasattr(self.worker, 'current_pressure'):
-                    self.pressure_dialog.update_pressure(self.worker.current_pressure)
-
-                # Check if we're running a protocol and need to connect signals
-                if self.protocol_running and hasattr(self, 'worker') and self.worker:
-                    # Make sure signal is connected
-                    try:
-                        self.worker.signals.pressure_emit.disconnect(self.pressure_dialog.update_pressure)
-                    except Exception:
-                        pass  # Ignore if not previously connected
-
-                    self.worker.signals.pressure_emit.connect(self.pressure_dialog.update_pressure)
-                    print("Connected pressure signal to dialog on show")
-
-                # Show the dialog
-                self.pressure_dialog.show()
-        else:
-            self.pressure_dialog.hide()
-
     def status_emit(self, position_a, position_b, steps, pressure):
-        """Device status -> safety supervision (see controllers.safety_monitor)."""
+        """Device status -> safety supervision (see controllers.safety_monitor),
+        plus the Treatment screen's live pressure/angle readouts."""
+        try:
+            self.shell.treatment.set_pressure(pressure)
+            self.shell.treatment.set_angle(pos_c_to_angle(steps, self.config.CMarks))
+        except Exception as e:
+            print(f"Error updating live status: {e}")
         return self.safety.on_status(position_a, position_b, steps, pressure)
 
     def _trigger_safety_stop(self, reason):
@@ -1958,11 +1438,20 @@ class KneeSpa(QMainWindow):
 
     @QtCore.pyqtSlot()
     def handle_connection_lost(self):
+        self._set_badge(False)
         self.safety.on_connection_lost()
+
+    def setup_timers(self):
+        """Setup timers for protocol events."""
+        print("Setting up timers for protocol events")
+        self.protocol_timer = QTimer(self)
+        self.protocol_timer.timeout.connect(self.update_protocol_time)
 
     def setup_arduino(self, auto_reset=True):
         """Arduino lifecycle (see controllers.connection_manager)."""
-        return self.connection.setup_arduino(auto_reset=auto_reset)
+        connected = self.connection.setup_arduino(auto_reset=auto_reset)
+        self._set_badge(bool(connected))
+        return connected
 
     def reset_arduino(self, event=None):
         self.connection.reset_arduino(event)
@@ -2061,7 +1550,16 @@ def main():
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
-    
+
+    # Apply the modern theme foundation (bundled fonts + global QSS).
+    # Guarded so a theme/stylesheet problem can never stop the device launching.
+    try:
+        from ui.theme import apply_theme
+        theme_info = apply_theme(app)
+        print(f"Theme applied: {theme_info}")
+    except Exception as theme_err:
+        print(f"Theme not applied, continuing with default style: {theme_err}")
+
     window = KneeSpa(debug_mode=args.debug, config_path=args.config)
     window.show()
 

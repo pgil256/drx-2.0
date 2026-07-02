@@ -38,6 +38,7 @@ class AppShell(QWidget):
         super().__init__(parent)
         self.setObjectName("AppShell")
         self._username = None
+        self._nav_guard = None  # optional callable: True -> block user nav
 
         root = QVBoxLayout(self)
         root.setContentsMargins(0, 0, 0, 0)
@@ -73,7 +74,7 @@ class AppShell(QWidget):
 
     # ----- wiring -----
     def _wire(self):
-        self.top_bar.home_clicked.connect(lambda: self._go("home"))
+        self.top_bar.home_clicked.connect(lambda: self._on_nav("home"))
         self.top_bar.login_requested.connect(self.show_login)
         self.top_bar.logout_requested.connect(self.logout_requested)
 
@@ -85,6 +86,11 @@ class AppShell(QWidget):
         self.login_modal.submitted.connect(self.login_attempted)
 
     def _on_nav(self, key):
+        if self._nav_guard is not None and self._nav_guard():
+            # Blocked (e.g., a treatment is running); the guard owns the
+            # operator feedback. Keep the rail on the current page.
+            self.nav_rail.set_active(self._current)
+            return
         if key in GATED and not self._username:
             # Gated: bounce to login, keep the rail on the current page.
             self.nav_rail.set_active(self._current)
@@ -102,6 +108,12 @@ class AppShell(QWidget):
     # ----- public API (Phase 3 controller) -----
     def navigate(self, key):
         self._go(key)
+
+    def set_nav_guard(self, guard):
+        """Register a callable returning True to BLOCK user-driven navigation
+        (rail taps + top-bar home) — e.g., while a treatment protocol is
+        active. Programmatic navigate() is unaffected."""
+        self._nav_guard = guard
 
     def set_user(self, username):
         """Set the active clinician (or None when logged out) and refresh gating."""
