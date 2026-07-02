@@ -1,8 +1,12 @@
 name: CI
 
+# De-duplicated triggers: pushes to main, every PR, and manual runs.
+# (Previously fired on both `push` and `pull_request` for every commit.)
 on:
   push:
+    branches: [main]
   pull_request:
+  workflow_dispatch:
 
 jobs:
   python-tests:
@@ -25,6 +29,7 @@ jobs:
             libgl1 \
             libxkbcommon0 \
             libdbus-1-3 \
+            libfontconfig1 \
             xvfb
 
       - name: Install Python test dependencies
@@ -38,10 +43,21 @@ jobs:
         run: |
           xvfb-run -a python -m pytest -q
 
-  firmware-build:
-    name: Firmware build (PlatformIO)
+  # Hermetic: system g++ + the vendored Unity framework in test/unity/,
+  # no PlatformIO registry access needed. Gates the PR (no continue-on-error).
+  firmware-native-tests:
+    name: Firmware native tests (g++ + Unity)
     runs-on: ubuntu-latest
-    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build and run firmware test suites
+        run: bash main/motor/run_native_tests.sh
+
+  firmware-avr-build:
+    name: Firmware AVR build check (Mega 2560)
+    runs-on: ubuntu-latest
     steps:
       - name: Checkout
         uses: actions/checkout@v4
@@ -56,10 +72,12 @@ jobs:
           python -m pip install --upgrade pip
           pip install platformio
 
-      - name: Run native unit tests (pio test -e native)
-        working-directory: main/motor
-        run: pio test -e native
+      - name: Cache PlatformIO packages
+        uses: actions/cache@v4
+        with:
+          path: ~/.platformio
+          key: pio-${{ runner.os }}-${{ hashFiles('main/motor/platformio.ini') }}
 
-      - name: Build mega firmware (pio run -e mega)
+      - name: Compile firmware for target hardware
         working-directory: main/motor
         run: pio run -e mega

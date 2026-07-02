@@ -69,6 +69,20 @@ os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 
 from fixtures.fake_arduino import FakeArduino, PTY_AVAILABLE
 
+# Neutralize Arduino.release_busy_port for the whole test session.
+#
+# connect_to_arduino() (reached via reconnect()/send() on any dead link) calls
+# release_busy_port(), which runs `lsof <port>` and, if the port is busy,
+# `fuser -k <port>`. In tests the "port" is a pty held open by THIS pytest
+# process (FakeArduino), so the port is always "busy" and `fuser -k` SIGKILLs
+# the entire test run — the exit-137 seen on Ubuntu CI (the pty tests skip on
+# Windows dev machines, which is why it never reproduced locally). Any worker
+# or keepalive thread that outlives its test and trips a reconnect against a
+# closed port can fire this. Production code is left untouched.
+from helpers.arduino import Arduino as _Arduino
+
+_Arduino.release_busy_port = lambda self: None
+
 
 @pytest.fixture
 def fake_arduino_pair():
@@ -83,6 +97,8 @@ def fake_arduino_pair():
     if not PTY_AVAILABLE:
         pytest.skip("FakeArduino requires POSIX pty/termios support")
 
+    import time
+
     fake = FakeArduino()
     fake.start()
 
@@ -91,9 +107,22 @@ def fake_arduino_pair():
 
     yield arduino, fake
 
-    fake.stop()
-    if arduino.serial_com and arduino.serial_com.is_open:
-        arduino.serial_com.close()
+    # Exception-safe teardown, in dependency order: stop the reader loop
+    # BEFORE closing the port (the legacy reader reacts to a dying port with
+    # reconnect attempts — multi-second sleeps and new threads that outlive
+    # the test), then close the serial fd, then stop/join the FakeArduino
+    # thread and close the pty.
+    try:
+        arduino._running = False
+        arduino.connected = False
+        time.sleep(0.05)  # let read_from_com's ~10 ms poll observe the flag
+        if arduino.serial_com and getattr(arduino.serial_com, "is_open", False):
+            try:
+                arduino.serial_com.close()
+            except Exception:
+                pass
+    finally:
+        fake.stop()
 
 
 @pytest.fixture

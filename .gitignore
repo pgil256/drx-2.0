@@ -56,6 +56,9 @@ debug.txt
 htmlcov/
 .pytest_cache/
 .tox/
+# Firmware native-test build artifacts (created by main/motor/run_native_tests.sh)
+main/motor/.native-build/
+main/motor/.pio/
 
 # Distribution
 *.tar.gz

@@ -31,11 +31,19 @@ def connected_pair():
 
     yield arduino, fake
 
-    arduino._running = False
-    time.sleep(0.2)
-    fake.stop()
-    if arduino.serial_com and arduino.serial_com.is_open:
-        arduino.serial_com.close()
+    # Exception-safe teardown: stop + join the reader before touching the
+    # port so it cannot react to the closing fd with reconnect attempts.
+    try:
+        arduino._running = False
+        arduino.connected = False
+        reader.join(timeout=2)
+        if arduino.serial_com and getattr(arduino.serial_com, "is_open", False):
+            try:
+                arduino.serial_com.close()
+            except Exception:
+                pass
+    finally:
+        fake.stop()
 
 
 @pytest.mark.integration

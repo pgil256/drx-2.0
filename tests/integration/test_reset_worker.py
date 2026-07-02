@@ -9,10 +9,15 @@ from helpers.reset_worker import ResetWorker
 from config.config import Configuration
 from fixtures.fake_arduino import FakeArduino, PTY_AVAILABLE
 
-pytestmark = pytest.mark.skipif(
-    not PTY_AVAILABLE,
-    reason="FakeArduino requires POSIX pty/termios support",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        not PTY_AVAILABLE,
+        reason="FakeArduino requires POSIX pty/termios support",
+    ),
+    # Multi-step reset sequences wait on serial round-trips; keep an explicit
+    # generous cap independent of the global timeout.
+    pytest.mark.timeout(120),
+]
 from helpers.arduino import Arduino
 
 
@@ -44,14 +49,25 @@ def reset_env():
     # Mock main_window with I2Cstatus
     main_window = MagicMock()
     main_window.I2Cstatus = 0
+    # ResetWorker.run() aborts if main_window.worker.is_running is truthy,
+    # and bare MagicMock attributes are always truthy. No protocol runs here.
+    main_window.worker = None
 
     yield arduino, fake, config, main_window
 
-    arduino._running = False
-    time.sleep(0.2)
-    fake.stop()
-    if arduino.serial_com and arduino.serial_com.is_open:
-        arduino.serial_com.close()
+    # Exception-safe teardown: stop + join the reader before touching the
+    # port so it cannot react to the closing fd with reconnect attempts.
+    try:
+        arduino._running = False
+        arduino.connected = False
+        reader.join(timeout=2)
+        if arduino.serial_com and getattr(arduino.serial_com, "is_open", False):
+            try:
+                arduino.serial_com.close()
+            except Exception:
+                pass
+    finally:
+        fake.stop()
 
 
 def auto_ack_i2c(fake, main_window, delay=0.1):

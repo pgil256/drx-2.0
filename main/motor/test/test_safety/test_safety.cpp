@@ -2,6 +2,7 @@
 #ifdef UNIT_TEST
 
 #include <unity.h>
+#include "../arduino_shim.h"
 #include "../mock_wire.h"
 #include "../mock_serial.h"
 #include "../mock_hx711.h"
@@ -12,7 +13,7 @@ MockSerial Serial1;
 
 unsigned long _millis_value = 0;
 unsigned long millis() { return _millis_value; }
-void delay(unsigned long ms) {}
+void delay(unsigned long ms) { _millis_value += ms; }  // advance mock clock (firmware timeout loops spin on millis())
 
 #include "../../motor.ino"
 

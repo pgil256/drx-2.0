@@ -9,11 +9,9 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
-@pytest.fixture(scope="module")
-def app():
-    from PyQt5.QtWidgets import QApplication
-
-    return QApplication.instance() or QApplication([])
+@pytest.fixture
+def app(qt_app):
+    return qt_app
 
 
 def test_apply_theme_installs_resolved_stylesheet(app):

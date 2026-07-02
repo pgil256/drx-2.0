@@ -11,15 +11,9 @@ import pytest
 pytestmark = pytest.mark.integration
 
 
-@pytest.fixture(scope="module")
-def app():
-    from PyQt5.QtWidgets import QApplication
-
-    application = QApplication.instance() or QApplication([])
-    from ui.theme import apply_theme
-
-    apply_theme(application)
-    return application
+@pytest.fixture
+def app(themed_app):
+    return themed_app
 
 
 @pytest.fixture
