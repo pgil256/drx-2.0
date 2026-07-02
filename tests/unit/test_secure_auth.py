@@ -109,3 +109,231 @@ class TestLoginLockout:
         w.login_line_edit.text.return_value = ""
         auth.backspace_digit()
         assert w.login_pin == ""
+
+
+# ---------------------------------------------------------------------------
+# Environment-driven user loading + validate_pin (from the GUI line, adapted:
+# plaintext env PINs are now hashed with the salted hash_pin_secure, so the
+# user key is no longer predictable from the PIN — verify through verify_pin).
+# ---------------------------------------------------------------------------
+import hashlib
+
+# Environment variables that influence user loading. Cleared before each test
+# so the OS/CI environment cannot leak real values into assertions.
+_AUTH_ENV_VARS = [
+    "ADMIN_PIN_HASH",
+    "ADMIN_PIN",
+    "ADMIN_USERNAME",
+    "ADMIN_EMAIL",
+    "USER_PIN_HASH",
+    "USER_PIN",
+    "USER_USERNAME",
+    "USER_EMAIL",
+]
+
+
+@pytest.fixture
+def clean_auth_env(monkeypatch):
+    """Remove all auth-related env vars so each test starts from a clean slate."""
+    for var in _AUTH_ENV_VARS:
+        monkeypatch.delenv(var, raising=False)
+    return monkeypatch
+
+
+@pytest.mark.unit
+class TestHashPinLegacy:
+    """The legacy unsalted hash_pin (kept only so deployed hashes verify)."""
+
+    def test_matches_sha256_hexdigest(self):
+        expected = hashlib.sha256("1234".encode()).hexdigest()
+        assert SecureAuthHelper.hash_pin("1234") == expected
+
+    def test_is_deterministic(self):
+        assert SecureAuthHelper.hash_pin("9999") == SecureAuthHelper.hash_pin("9999")
+
+    def test_different_inputs_produce_different_hashes(self):
+        assert SecureAuthHelper.hash_pin("1234") != SecureAuthHelper.hash_pin("4321")
+
+    def test_returns_64_char_hex_string(self):
+        result = SecureAuthHelper.hash_pin("0000")
+        assert len(result) == 64
+        assert all(c in "0123456789abcdef" for c in result)
+
+    def test_numeric_and_string_pin_hash_equal(self):
+        """An int PIN and its string form hash identically (str() coercion)."""
+        assert SecureAuthHelper.hash_pin(1234) == SecureAuthHelper.hash_pin("1234")
+
+
+@pytest.mark.unit
+class TestLoadSecureUsers:
+    """Tests for environment-driven user loading via _load_secure_users."""
+
+    def test_no_env_users_returns_none(self, clean_auth_env):
+        """With no env vars set, user loading signals CSV fallback (None)."""
+        helper = SecureAuthHelper()
+        assert helper.users is None
+
+    def test_admin_pin_hash_env_loads_admin(self, clean_auth_env):
+        """ADMIN_PIN_HASH directly populates an admin user keyed by that hash."""
+        admin_hash = SecureAuthHelper.hash_pin("1111")
+        clean_auth_env.setenv("ADMIN_PIN_HASH", admin_hash)
+
+        helper = SecureAuthHelper()
+
+        assert admin_hash in helper.users
+        entry = helper.users[admin_hash]
+        assert entry["status"] == "admin"
+        assert entry["pin_hash"] == admin_hash
+
+    def test_admin_pin_plaintext_env_is_salted(self, clean_auth_env):
+        """ADMIN_PIN (plaintext) is hashed with the SALTED hash_pin_secure —
+        the legacy predictable-key behavior is deliberately gone."""
+        clean_auth_env.setenv("ADMIN_PIN", "2222")
+
+        helper = SecureAuthHelper()
+
+        assert len(helper.users) == 1
+        key = next(iter(helper.users))
+        assert key.startswith("pbkdf2_sha256$")
+        assert SecureAuthHelper.hash_pin("2222") not in helper.users
+        assert SecureAuthHelper.verify_pin("2222", key)
+        assert helper.users[key]["status"] == "admin"
+
+    def test_admin_pin_hash_takes_precedence_over_plaintext(self, clean_auth_env):
+        """When both ADMIN_PIN_HASH and ADMIN_PIN are set, the hash wins."""
+        admin_hash = SecureAuthHelper.hash_pin("hashed-value")
+        clean_auth_env.setenv("ADMIN_PIN_HASH", admin_hash)
+        clean_auth_env.setenv("ADMIN_PIN", "9999")
+
+        helper = SecureAuthHelper()
+
+        assert admin_hash in helper.users
+        # The plaintext PIN must not produce a second entry.
+        assert len(helper.users) == 1
+
+    def test_user_pin_hash_env_loads_user(self, clean_auth_env):
+        """USER_PIN_HASH populates a regular user keyed by that hash."""
+        user_hash = SecureAuthHelper.hash_pin("3333")
+        clean_auth_env.setenv("USER_PIN_HASH", user_hash)
+
+        helper = SecureAuthHelper()
+
+        assert user_hash in helper.users
+        assert helper.users[user_hash]["status"] == "user"
+
+    def test_user_pin_plaintext_env_is_salted(self, clean_auth_env):
+        """USER_PIN (plaintext) is hashed with the salted hash_pin_secure."""
+        clean_auth_env.setenv("USER_PIN", "4444")
+
+        helper = SecureAuthHelper()
+
+        assert len(helper.users) == 1
+        key = next(iter(helper.users))
+        assert key.startswith("pbkdf2_sha256$")
+        assert SecureAuthHelper.verify_pin("4444", key)
+        assert helper.users[key]["status"] == "user"
+
+    def test_both_admin_and_user_loaded(self, clean_auth_env):
+        """Admin and user entries coexist when both env hashes are set."""
+        admin_hash = SecureAuthHelper.hash_pin("1111")
+        user_hash = SecureAuthHelper.hash_pin("2222")
+        clean_auth_env.setenv("ADMIN_PIN_HASH", admin_hash)
+        clean_auth_env.setenv("USER_PIN_HASH", user_hash)
+
+        helper = SecureAuthHelper()
+
+        assert len(helper.users) == 2
+        assert helper.users[admin_hash]["status"] == "admin"
+        assert helper.users[user_hash]["status"] == "user"
+
+    def test_default_username_and_email_for_admin(self, clean_auth_env):
+        """Admin defaults to Administrator / admin@example.com when unset."""
+        admin_hash = SecureAuthHelper.hash_pin("1111")
+        clean_auth_env.setenv("ADMIN_PIN_HASH", admin_hash)
+
+        helper = SecureAuthHelper()
+
+        entry = helper.users[admin_hash]
+        assert entry["username"] == "Administrator"
+        assert entry["email"] == "admin@example.com"
+
+    def test_custom_admin_username_and_email(self, clean_auth_env):
+        """ADMIN_USERNAME / ADMIN_EMAIL override the admin defaults."""
+        admin_hash = SecureAuthHelper.hash_pin("1111")
+        clean_auth_env.setenv("ADMIN_PIN_HASH", admin_hash)
+        clean_auth_env.setenv("ADMIN_USERNAME", "Dr. Smith")
+        clean_auth_env.setenv("ADMIN_EMAIL", "smith@clinic.test")
+
+        helper = SecureAuthHelper()
+
+        entry = helper.users[admin_hash]
+        assert entry["username"] == "Dr. Smith"
+        assert entry["email"] == "smith@clinic.test"
+
+    def test_default_username_and_email_for_user(self, clean_auth_env):
+        """Regular user defaults to User / user@example.com when unset."""
+        user_hash = SecureAuthHelper.hash_pin("3333")
+        clean_auth_env.setenv("USER_PIN_HASH", user_hash)
+
+        helper = SecureAuthHelper()
+
+        entry = helper.users[user_hash]
+        assert entry["username"] == "User"
+        assert entry["email"] == "user@example.com"
+
+
+@pytest.mark.unit
+class TestValidatePin:
+    """Tests for PIN validation against loaded users (verify_pin loop)."""
+
+    def test_correct_admin_pin_returns_user(self, clean_auth_env):
+        """A matching admin PIN returns its user dict (salted verify)."""
+        clean_auth_env.setenv("ADMIN_PIN", "1234")
+
+        helper = SecureAuthHelper()
+        result = helper.validate_pin("1234")
+
+        assert result is not None
+        assert result["status"] == "admin"
+
+    def test_correct_user_pin_returns_user(self, clean_auth_env):
+        """A matching regular-user PIN returns its user dict."""
+        clean_auth_env.setenv("USER_PIN", "5678")
+
+        helper = SecureAuthHelper()
+        result = helper.validate_pin("5678")
+
+        assert result is not None
+        assert result["status"] == "user"
+
+    def test_wrong_pin_returns_none(self, clean_auth_env):
+        """A non-matching PIN returns None."""
+        clean_auth_env.setenv("ADMIN_PIN", "1234")
+
+        helper = SecureAuthHelper()
+        assert helper.validate_pin("0000") is None
+
+    def test_unknown_user_when_no_users_loaded(self, clean_auth_env):
+        """With CSV-fallback (users is None), validation returns None."""
+        helper = SecureAuthHelper()
+        assert helper.users is None
+        assert helper.validate_pin("1234") is None
+
+    def test_validate_pin_rehashes_input(self, clean_auth_env):
+        """Validation verifies the input PIN, never treats it as a hash."""
+        pin = "4321"
+        clean_auth_env.setenv("ADMIN_PIN_HASH", SecureAuthHelper.hash_pin(pin))
+
+        helper = SecureAuthHelper()
+
+        # Correct plaintext PIN validates (legacy hash still verifies)...
+        assert helper.validate_pin(pin) is not None
+        # ...but the raw hash string is NOT a valid PIN (it gets re-hashed).
+        assert helper.validate_pin(SecureAuthHelper.hash_pin(pin)) is None
+
+    def test_numeric_pin_validates(self, clean_auth_env):
+        """An int PIN validates against a hash created from its string form."""
+        clean_auth_env.setenv("ADMIN_PIN", "1234")
+
+        helper = SecureAuthHelper()
+        assert helper.validate_pin(1234) is not None
