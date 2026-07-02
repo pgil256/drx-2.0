@@ -26,18 +26,9 @@ LOG_LEVEL = "DEBUG"
 WINDOW_TITLE = "KneeSpa Control Interface"
 DEGREES = "\u00b0"
 
-# Page Indices
-PAGES = {"HOME": 0, "SETUP": 1, "MAIN": 2, "HELP": 3, "PROFILE": 4}
-
-# File Paths
+# File Paths (the legacy .ui-file entries were retired with the Qt Designer
+# view layer; the modern UI is code-built under ui/)
 UI_PATHS = {
-    "MAIN_UI": os.path.join(APP_BASE_DIR, "ui/guis/kneespa.ui"),
-    "LOGIN_UI": os.path.join(APP_BASE_DIR, "ui/guis/login.ui"),
-    "LOGIN_HELP_UI": os.path.join(APP_BASE_DIR, "ui/guis/login-help.ui"),
-    "ENTER_PATIENT_UI": os.path.join(APP_BASE_DIR, "ui/guis/enter-patient.ui"),
-    "ENTER_PATIENT_HELP_UI": os.path.join(
-        APP_BASE_DIR, "ui/guis/enter-patient-help.ui"
-    ),
     "PROTOCOL_IMAGES": os.path.join(APP_BASE_DIR, "ui/media/images/graphics"),
     "VIDEOS": os.path.join(APP_BASE_DIR, "ui/media/videos/1.mp4"),
 }
@@ -208,8 +199,6 @@ EMAIL_CONFIG = {
 
 # Error Messages
 ERROR_MESSAGES = {
-    "UI_NOT_FOUND": "UI file 'kneespa.ui' not found.",
-    "CENTRAL_WIDGET_NOT_FOUND": "Central widget 'main_content' not found in the UI file.",
     "LOGIN_REQUIRED": "Please log in to start a protocol.",
     "ADMIN_REQUIRED": "Only admins can edit patient data.",
     "INVALID_PIN": "Invalid PIN. Please try again.",
