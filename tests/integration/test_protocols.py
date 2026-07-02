@@ -10,10 +10,15 @@ from helpers.protocols import Protocols
 from config.config import Configuration
 from fixtures.fake_arduino import FakeArduino, PTY_AVAILABLE
 
-pytestmark = pytest.mark.skipif(
-    not PTY_AVAILABLE,
-    reason="FakeArduino requires POSIX pty/termios support",
-)
+pytestmark = [
+    pytest.mark.skipif(
+        not PTY_AVAILABLE,
+        reason="FakeArduino requires POSIX pty/termios support",
+    ),
+    # Real threads + serial waits: full protocol runs legitimately take tens
+    # of seconds. Explicit cap so the global timeout can change independently.
+    pytest.mark.timeout(120),
+]
 
 
 @pytest.fixture
@@ -39,11 +44,19 @@ def protocol_env():
 
     yield arduino, fake, config
 
-    arduino._running = False
-    time.sleep(0.2)
-    fake.stop()
-    if arduino.serial_com and arduino.serial_com.is_open:
-        arduino.serial_com.close()
+    # Exception-safe teardown: stop + join the reader before touching the
+    # port so it cannot react to the closing fd with reconnect attempts.
+    try:
+        arduino._running = False
+        arduino.connected = False
+        reader.join(timeout=2)
+        if arduino.serial_com and getattr(arduino.serial_com, "is_open", False):
+            try:
+                arduino.serial_com.close()
+            except Exception:
+                pass
+    finally:
+        fake.stop()
 
 
 def make_protocol(arduino, config, **kwargs):
