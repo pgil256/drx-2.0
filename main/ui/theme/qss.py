@@ -13,6 +13,7 @@ PyQt5 is imported lazily inside the Qt-only functions so this module (and the
 pure ``resolve``/``qss`` helpers) can be imported in unit tests without Qt.
 """
 
+import logging
 import os
 import re
 
@@ -24,6 +25,18 @@ _FONT_DIR = os.path.join(_THEME_DIR, "fonts")
 
 _VAR_RE = re.compile(r"var\(\s*(--[A-Za-z0-9_-]+)\s*\)")
 _COMMENT_RE = re.compile(r"/\*.*?\*/", re.S)
+
+_logger = logging.getLogger("kneespa.theme")
+
+# Substituted for an unknown --token. "transparent" is a valid QSS color
+# (the dominant token type); for non-color properties Qt discards the
+# unparseable value and keeps its own default -- either way the stylesheet
+# stays parseable. Emitting the literal "var(--x)" instead left invalid
+# text in the QSS that could poison the surrounding rule.
+_UNKNOWN_TOKEN_FALLBACK = "transparent"
+
+# Warn once per unknown token rather than once per occurrence.
+_warned_tokens = set()
 
 
 def strip_comments(text):
@@ -42,16 +55,24 @@ def _resolve_name(name, _seen):
         raise ValueError(f"Cyclic token reference involving {name}")
     raw = TOKENS.get(name)
     if raw is None:
-        # Unknown token: leave the original var(...) text so it's visible.
-        return None
+        # Unknown token: warn and fall back to a safe literal. Leaving the
+        # raw "var(--x)" in the output produced invalid QSS Qt could not
+        # parse; the fallback keeps the stylesheet valid and the warning
+        # makes the typo/missing token visible in the logs.
+        if name not in _warned_tokens:
+            _warned_tokens.add(name)
+            _logger.warning(
+                "Unknown theme token %s; falling back to %r",
+                name, _UNKNOWN_TOKEN_FALLBACK,
+            )
+        return _UNKNOWN_TOKEN_FALLBACK
     return _resolve_text(raw, _seen | {name})
 
 
 def _resolve_text(text, _seen):
     """Replace every ``var(--x)`` in *text* with its resolved literal."""
     def _sub(match):
-        resolved = _resolve_name(match.group(1), _seen)
-        return resolved if resolved is not None else match.group(0)
+        return _resolve_name(match.group(1), _seen)
 
     return _VAR_RE.sub(_sub, text)
 
