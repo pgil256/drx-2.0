@@ -211,7 +211,7 @@ Batch-1 checklist §D, plus the **500 ms cadence** verification (new default).
   firmware flag still OFF (bare `J`). Time the pulse period: it should be
   **~500 ms (2 pulses/sec)**, matching the UI's stated default — not the old
   200 ms. (This is the H7 drift fix: `DEFAULT_JERK_INTERVAL_MS = 500` in
-  `constants.py` paired with the `jerkInterval` initializer in `motor.ino`.)
+  `config/constants.py` paired with the `jerkInterval` initializer in `motor.ino`.)
 - [ ] **6.7 Enable host-settable cadence.** Set `KNEESPA_PULSE_RATE_FIRMWARE=1`
   in the app environment and restart. Change the Treatment pulse-rate slider
   and confirm the physical cadence tracks it (the app now sends `J<ms>`;
@@ -314,8 +314,8 @@ kneespa.service`) so it's running fullscreen on the touchscreen.
 
 **If you hit a wall:** stop, power down, and capture the serial log + what
 you saw. Most items map to a specific code location — the e-stop polarity to
-`protocol_controller.py:406/418/435/441`, the flags to `constants.py:147`
-and `arduino.py:76`, the cadence to `constants.py`/`motor.ino` — so a
+`protocol_controller.py:406/418/435/441`, the flags to `config/constants.py:147`
+and `helpers/arduino.py:76`, the cadence to `config/constants.py`/`motor.ino` — so a
 finding turns directly into a fix.
 
 Sign-off: __________________  Date: __________
