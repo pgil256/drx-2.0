@@ -273,25 +273,69 @@ class TestLoadCsvMalformed:
         # With a QApplication running, the format error surfaces via the dialog.
         assert len(stub_message_box) == 1
 
-    def test_partial_rows_loaded_before_bad_row(self, tmp_path):
-        """Rows preceding a row missing pin_hash are still returned.
+    def test_malformed_row_is_skipped_not_aborted(self, tmp_path):
+        """A row missing pin_hash is skipped; rows on BOTH sides still load.
 
-        load_csv catches the KeyError that aborts iteration, so any rows added
-        before the offending row remain in the returned dict.
+        Regression: a single malformed line used to raise KeyError and
+        abort the loop, discarding every user defined after it -- silently
+        locking out valid operators listed below the bad row.
         """
         helper = CSVHelper()
         csv_path = _write_csv(
             tmp_path,
             [
-                "hash_good,Good User,good@example.com,user",
-                ",Bad User,bad@example.com,user",  # empty pin_hash -> KeyError
+                "hash_before,Before User,before@example.com,user",
+                ",Bad User,bad@example.com,user",  # empty pin_hash -> skipped
+                "hash_after,After User,after@example.com,admin",
             ],
         )
 
         data = helper.load_csv(str(csv_path))
 
-        assert "hash_good" in data
-        assert data["hash_good"]["username"] == "Good User"
+        assert set(data) == {"hash_before", "hash_after"}
+        assert data["hash_after"]["username"] == "After User"
+
+    def test_bom_prefixed_file_still_keys_on_pin_hash(self, tmp_path):
+        """A UTF-8-with-BOM file must not corrupt the first header.
+
+        Regression: an editor saving user_pins.csv as UTF-8-with-BOM
+        prefixed the header with the BOM, so 'pin_hash' was read as
+        '\\ufeffpin_hash' and every row keyed on the wrong column -> total
+        lockout. utf-8-sig strips the BOM.
+        """
+        helper = CSVHelper()
+        csv_path = tmp_path / "user_pins.csv"
+        csv_path.write_text(
+            "pin_hash,username,email,status\n"
+            "hash_admin,Administrator,admin@example.com,admin\n",
+            encoding="utf-8-sig",  # writes the BOM
+        )
+
+        data = helper.load_csv(str(csv_path))
+
+        assert "hash_admin" in data
+        assert data["hash_admin"]["username"] == "Administrator"
+
+    def test_read_error_is_caught_and_reported(
+        self, tmp_path, monkeypatch, stub_message_box, with_qapplication
+    ):
+        """An OSError mid-read degrades gracefully instead of crashing."""
+        helper = CSVHelper()
+        csv_path = _write_csv(
+            tmp_path, ["hash_admin,Administrator,admin@example.com,admin"]
+        )
+
+        real_open = csv_module.open if hasattr(csv_module, "open") else open
+
+        def boom(*args, **kwargs):
+            raise OSError("disk gone")
+
+        monkeypatch.setattr("builtins.open", boom)
+
+        data = helper.load_csv(str(csv_path))
+
+        assert data == {}
+        assert len(stub_message_box) == 1
 
     def test_extra_columns_do_not_crash(self, tmp_path):
         """Rows with extra unmapped columns are tolerated (csv None key)."""
