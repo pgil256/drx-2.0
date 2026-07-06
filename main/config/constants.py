@@ -34,7 +34,12 @@ UI_PATHS = {
 }
 
 DATA_PATHS = {
-    "USER_PINS": os.path.join(APP_BASE_DIR, "data/user_pins.csv"),
+    # Overridable so real user records can live outside the repo checkout
+    # (the tracked tree ships only user_pins.csv.example).
+    "USER_PINS": os.environ.get(
+        "KNEESPA_USER_PINS_PATH",
+        os.path.join(APP_BASE_DIR, "data/user_pins.csv"),
+    ),
 }
 
 # GPIO Pin Configuration

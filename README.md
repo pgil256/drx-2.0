@@ -27,6 +27,33 @@ python main/kneespa.py                  # on the Pi (requires RPi.GPIO, PyQt5)
 python main/kneespa.py --debug --print-logs
 ```
 
+## User provisioning & runtime secrets
+
+`main/config/kneespa.cfg` (per-device calibration) and
+`main/data/user_pins.csv` (login credentials) are runtime state and are
+**not tracked in git** — the repo ships `*.example` templates. On first
+run the app generates a default (uncalibrated) config and seeds an empty
+users file; with zero users provisioned nobody can log in.
+
+Provision users one of two ways:
+
+- **Environment / `.env`** (preferred): set `ADMIN_PIN_HASH` /
+  `USER_PIN_HASH` (values from `SecureAuthHelper.hash_pin_secure`), plus
+  optional `ADMIN_USERNAME` / `ADMIN_EMAIL` etc. Plaintext `ADMIN_PIN` /
+  `USER_PIN` also work but keep the PIN readable in the environment.
+- **CSV**: add `pin_hash,username,email,status` rows to the runtime
+  `user_pins.csv`. Point `KNEESPA_USER_PINS_PATH` at a file outside the
+  checkout to keep credentials away from the repo entirely
+  (`KNEESPA_CONFIG_PATH` does the same for the config file).
+
+Generate a hash:
+
+```bash
+python -c "import sys; sys.path.insert(0, 'main'); \
+from helpers.secure_auth import SecureAuthHelper; \
+print(SecureAuthHelper.hash_pin_secure(input('PIN: ')))"
+```
+
 ## Testing
 
 ```bash

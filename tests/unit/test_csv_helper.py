@@ -490,21 +490,39 @@ class TestLoadCsvHeadlessRobustness:
     ):
         """Startup with no env users and a missing CSV degrades to no users.
 
-        This mirrors the real device scenario: SecureAuthHelper finds nothing,
-        the bundled user_pins.csv is absent, and initialize_data falls back to
-        load_csv. It must not crash even though no Qt event loop exists yet.
+        This mirrors a fresh checkout: SecureAuthHelper finds nothing and the
+        runtime user_pins.csv does not exist yet. initialize_data seeds an
+        empty users file from the tracked template and loads zero users. It
+        must not crash even though no Qt event loop exists yet.
         """
         missing = str(tmp_path / "user_pins.csv")  # tmp_path is empty
-        real_join = csv_module.os.path.join
-
-        def fake_join(*parts):
-            if parts and str(parts[-1]) == "user_pins.csv":
-                return missing
-            return real_join(*parts)
-
-        monkeypatch.setattr(csv_module.os.path, "join", fake_join)
+        monkeypatch.setitem(csv_module.DATA_PATHS, "USER_PINS", missing)
 
         helper = CSVHelper()
         helper.initialize_data()
 
         assert helper.users == {}
+        # First-run seeding created the header-only file from the template.
+        assert csv_module.os.path.exists(missing)
+
+    def test_initialize_data_missing_csv_and_template(
+        self, clean_auth_env, no_qapplication, monkeypatch, tmp_path
+    ):
+        """No env users, no CSV, and no template: still no crash, no users."""
+        missing = str(tmp_path / "user_pins.csv")
+        monkeypatch.setitem(csv_module.DATA_PATHS, "USER_PINS", missing)
+
+        real_exists = csv_module.os.path.exists
+
+        def exists_without_template(path):
+            if str(path).endswith("user_pins.csv.example"):
+                return False
+            return real_exists(path)
+
+        monkeypatch.setattr(csv_module.os.path, "exists", exists_without_template)
+
+        helper = CSVHelper()
+        helper.initialize_data()
+
+        assert helper.users == {}
+        assert not real_exists(missing)
