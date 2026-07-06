@@ -12,8 +12,11 @@ A web-based demo GUI that visualizes the KneeSpa device behavior without requiri
 
 ## File Structure
 
+> Relocated 2026-07-06 from the repo root to `docs/reference/demo/` (Phase F
+> hygiene): it is standalone reference material, not part of the app build.
+
 ```
-demo/
+docs/reference/demo/
 ├── index.html          # Layout and structure
 ├── styles.css          # All styling and animations
 ├── js/

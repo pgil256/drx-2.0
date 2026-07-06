@@ -82,6 +82,16 @@ main/config/kneespa.cfg
 main/data/user_pins.csv
 main/data/auth_state.json
 
+# Design-source scratch — reference material dropped in the working tree,
+# never part of the app build (the code-built UI lives under main/ui/)
+_ds/
+app/
+assets/
+screenshots/
+tweaks-panel.jsx
+.thumbnail
+/KneeSpa DRx - Modern GUI*.html
+
 # Project specific
 *.db
 *.sqlite3
