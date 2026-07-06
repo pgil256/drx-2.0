@@ -240,15 +240,6 @@ class _LegacyUi:
 class KneeSpa(QMainWindow):
     """Main application class for KneeSpa."""
 
-    ### Static methods ###
-    def exit_app(self):
-        GPIO.cleanup()  # clean up GPIO on normal exit
-        self.cleanup()
-        # Exit 0: a nonzero code here made systemd (Restart=always /
-        # on-failure) treat the operator's deliberate "Exit" as a crash
-        # and immediately relaunch the app
-        os._exit(0)
-
     def set_to_distance(self, inches, actuator, factor):
         position = int(inches * (factor / 8.0))
         print("Setting to {} in {} pos {} act".format(inches, position, actuator))

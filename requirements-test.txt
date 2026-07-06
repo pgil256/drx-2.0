@@ -4,6 +4,11 @@ pytest-mock
 pytest-qt
 pytest-cov
 pytest-timeout
-pyserial
-PyQt5
-python-dotenv
+pyserial>=3.5
+python-dotenv>=1.0
+# PyQt5 is provided by the system apt package on the Raspberry Pi
+# (python3-pyqt5, matched to the Pi's Qt); this pip entry is for the
+# CI/dev environment only, where no system Qt is present. Keep the two
+# in step when bumping — a pip PyQt5 newer than the Pi's Qt runtime can
+# fail to load on-device.
+PyQt5>=5.15
