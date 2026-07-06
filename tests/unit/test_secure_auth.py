@@ -60,20 +60,21 @@ class StubWindow:
 
 @pytest.mark.unit
 class TestLoginLockout:
-    def _make(self):
+    def _make(self, tmp_path, state_name="auth_state.json"):
         stored = SecureAuthHelper.hash_pin_secure("7531")
         users = {stored: {"pin_hash": stored, "username": "T", "email": "t@x", "status": "user"}}
         window = StubWindow(users)
-        return AuthController(window), window
+        state_path = str(tmp_path / state_name)
+        return AuthController(window, state_path=state_path), window
 
-    def test_successful_login(self):
-        auth, w = self._make()
+    def test_successful_login(self, tmp_path):
+        auth, w = self._make(tmp_path)
         w.login_pin = "7531"
         auth.handle_login()
         assert w.current_user is not None
 
-    def test_lockout_after_five_failures(self):
-        auth, w = self._make()
+    def test_lockout_after_five_failures(self, tmp_path):
+        auth, w = self._make(tmp_path)
         for _ in range(5):
             w.login_pin = "0000"
             auth.handle_login()
@@ -85,8 +86,8 @@ class TestLoginLockout:
         auth.handle_login()
         assert w.current_user is None
 
-    def test_success_resets_counter(self):
-        auth, w = self._make()
+    def test_success_resets_counter(self, tmp_path):
+        auth, w = self._make(tmp_path)
         for _ in range(3):
             w.login_pin = "0000"
             auth.handle_login()
@@ -95,20 +96,121 @@ class TestLoginLockout:
         assert w.current_user is not None
         assert auth.failed_logins == 0
 
-    def test_backspace_removes_last_digit(self):
-        auth, w = self._make()
+    def test_backspace_removes_last_digit(self, tmp_path):
+        auth, w = self._make(tmp_path)
         w.login_pin = "753"
         w.login_line_edit.text.return_value = "753"
         auth.backspace_digit()
         assert w.login_pin == "75"
         w.login_line_edit.setText.assert_called_with("75")
 
-    def test_backspace_on_empty_pin_is_safe(self):
-        auth, w = self._make()
+    def test_backspace_on_empty_pin_is_safe(self, tmp_path):
+        auth, w = self._make(tmp_path)
         w.login_pin = ""
         w.login_line_edit.text.return_value = ""
         auth.backspace_digit()
         assert w.login_pin == ""
+
+
+@pytest.mark.unit
+class TestLockoutPersistence:
+    """Lockout state survives a process restart and backs off exponentially.
+
+    A reboot used to reset the brute-force window: 5 attempts, power
+    cycle, 5 more attempts -- unlimited retries on a physical kiosk.
+    """
+
+    def _make(self, tmp_path):
+        stored = SecureAuthHelper.hash_pin_secure("7531")
+        users = {stored: {"pin_hash": stored, "username": "T", "email": "t@x", "status": "user"}}
+        window = StubWindow(users)
+        return AuthController(window, state_path=str(tmp_path / "auth_state.json")), window
+
+    def _trip_lockout(self, auth, window):
+        for _ in range(AuthController.LOCKOUT_THRESHOLD):
+            window.login_pin = "0000"
+            auth.handle_login()
+
+    def test_lockout_survives_restart(self, tmp_path):
+        auth, w = self._make(tmp_path)
+        self._trip_lockout(auth, w)
+        assert auth.lockout_until > 0
+
+        # New controller instance = process restart; same state file.
+        auth2, w2 = self._make(tmp_path)
+        assert auth2.lockout_until == pytest.approx(auth.lockout_until)
+        w2.login_pin = "7531"
+        auth2.handle_login()
+        assert w2.current_user is None  # still locked
+
+    def test_failed_count_survives_restart(self, tmp_path):
+        auth, w = self._make(tmp_path)
+        for _ in range(3):
+            w.login_pin = "0000"
+            auth.handle_login()
+
+        auth2, w2 = self._make(tmp_path)
+        assert auth2.failed_logins == 3
+        # Two more failures after "reboot" trip the threshold of five.
+        for _ in range(2):
+            w2.login_pin = "0000"
+            auth2.handle_login()
+        assert auth2.lockout_until > 0
+
+    def test_exponential_backoff_doubles_and_caps(self, tmp_path):
+        auth, w = self._make(tmp_path)
+        assert auth._lockout_duration() == 60
+        auth.lockout_count = 1
+        assert auth._lockout_duration() == 120
+        auth.lockout_count = 2
+        assert auth._lockout_duration() == 240
+        auth.lockout_count = 10
+        assert auth._lockout_duration() == AuthController.LOCKOUT_MAX_SECONDS
+
+    def test_second_lockout_is_longer(self, tmp_path, monkeypatch):
+        auth, w = self._make(tmp_path)
+        self._trip_lockout(auth, w)
+        first_until = auth.lockout_until
+
+        # Fast-forward past the first lockout, fail five more times.
+        monkeypatch.setattr(
+            "controllers.auth_controller.time.time",
+            lambda: first_until + 1,
+        )
+        self._trip_lockout(auth, w)
+        assert auth.lockout_until - (first_until + 1) == pytest.approx(120, abs=1)
+
+    def test_success_resets_backoff(self, tmp_path):
+        auth, w = self._make(tmp_path)
+        auth.lockout_count = 3
+        w.login_pin = "7531"
+        auth.handle_login()
+        assert auth.lockout_count == 0
+        # And the reset is persisted.
+        auth2, _ = self._make(tmp_path)
+        assert auth2.lockout_count == 0
+
+    def test_corrupt_state_file_starts_clean(self, tmp_path):
+        (tmp_path / "auth_state.json").write_text("{not json", encoding="utf-8")
+        auth, w = self._make(tmp_path)
+        assert auth.failed_logins == 0
+        assert auth.lockout_until == 0.0
+        w.login_pin = "7531"
+        auth.handle_login()
+        assert w.current_user is not None
+
+    def test_pin_never_logged(self, tmp_path, caplog):
+        """Audit logging must not leak the attempted PIN."""
+        import logging as _logging
+
+        auth, w = self._make(tmp_path)
+        with caplog.at_level(_logging.DEBUG):
+            w.login_pin = "13372"
+            auth.handle_login()
+            self._trip_lockout(auth, w)
+        for record in caplog.records:
+            assert "13372" not in record.getMessage()
+            assert "0000" not in record.getMessage()
 
 
 # ---------------------------------------------------------------------------

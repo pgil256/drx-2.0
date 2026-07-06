@@ -40,6 +40,12 @@ DATA_PATHS = {
         "KNEESPA_USER_PINS_PATH",
         os.path.join(APP_BASE_DIR, "data/user_pins.csv"),
     ),
+    # Login attempt/lockout state; persisted so a reboot does not reset
+    # the brute-force lockout window.
+    "AUTH_STATE": os.environ.get(
+        "KNEESPA_AUTH_STATE_PATH",
+        os.path.join(APP_BASE_DIR, "data/auth_state.json"),
+    ),
 }
 
 # GPIO Pin Configuration
@@ -222,8 +228,14 @@ SUCCESS_MESSAGES = {
 
 
 def validate_paths():
-    """Validate that all required paths exist."""
-    for category, paths in {**UI_PATHS, **DATA_PATHS}.items():
+    """Validate that all required shipped paths exist.
+
+    Only UI_PATHS are required at import: they ship with the tree. The
+    DATA_PATHS entries are untracked runtime state (user credentials,
+    lockout bookkeeping) created on demand -- a fresh checkout must boot
+    without them.
+    """
+    for category, paths in UI_PATHS.items():
         if isinstance(paths, dict):
             for name, path in paths.items():
                 if not os.path.exists(path):
