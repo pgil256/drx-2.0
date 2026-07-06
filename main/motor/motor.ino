@@ -156,7 +156,11 @@ bool jerking = false;
 int jerkDirection = 1;
 int jerksCompleted = 0;
 unsigned long lastJerkTime = 0;
-unsigned long jerkInterval = 200;  // Reduced from 400ms to 200ms; host-settable via J<ms> (Phase 3.5 §15.2)
+// Boot default = the host default of 2 pulses/sec (DEFAULT_JERK_INTERVAL_MS in
+// constants.py; paired values are checked by scripts/check_limits_sync.py).
+// It used to boot at 200 ms while the host UI claimed 2/sec. Host-settable via
+// J<ms> (Phase 3.5 §15.2).
+unsigned long jerkInterval = 500;
 bool jerkDirectionChanged = false;
 
 // Forward declarations (the native test build has no Arduino-IDE

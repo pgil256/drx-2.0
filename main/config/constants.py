@@ -149,6 +149,10 @@ PULSE_RATE_FIRMWARE_SUPPORT = (
 )
 MIN_JERK_INTERVAL_MS = 100   # fastest safe pulse (~10/sec)
 MAX_JERK_INTERVAL_MS = 5000  # slowest pulse the slider can request (0.2/sec)
+# The cadence the firmware boots with before any J<ms> arrives; must equal
+# 1000 / the default pulse rate (2/sec) so the UI's claim matches the device.
+# Paired with motor.ino's jerkInterval initializer (scripts/check_limits_sync.py).
+DEFAULT_JERK_INTERVAL_MS = 500
 
 # Protocol Default Settings
 PROTOCOL_DEFAULT_SETTINGS = {
