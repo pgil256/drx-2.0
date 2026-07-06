@@ -27,7 +27,8 @@ class Configuration:
         self.a_factor = 1900
         self.b_factor = 1900
         self.c_factor = 1900
-        self.unlock = "false"
+        # "unlock" was a legacy unused option that carried a real code in
+        # shipped configs; it is no longer read, written, or defaulted.
         self.calibration = 1.0
         self.configFile = config_path or CONFIG_PATH
         self.config = configparser.ConfigParser(allow_no_value=True)
@@ -164,7 +165,6 @@ class Configuration:
             "a_factor": {"default": self.a_factor, "type": int},
             "b_factor": {"default": self.b_factor, "type": int},
             "c_factor": {"default": self.c_factor, "type": int},
-            "unlock": {"default": self.unlock, "type": str},
             "calibration": {"default": self.calibration, "type": float},
         }
 
@@ -358,7 +358,6 @@ class Configuration:
             "a_factor": str(self.a_factor),
             "b_factor": str(self.b_factor),
             "c_factor": str(self.c_factor),
-            "unlock": str(self.unlock),
             "calibration": str(self.calibration),
         }
         self.config["AMarks"] = {k: str(v) for k, v in self.AMarks.items()}
@@ -375,7 +374,7 @@ class Configuration:
         # List of configuration options to update
         config_options = [
             "flexion_position", "a_factor", "b_factor", "c_factor",
-            "unlock", "calibration"
+            "calibration"
         ]
 
         # Set each option in the config
