@@ -1,6 +1,12 @@
 #!/usr/bin/env python3
 """
 Validate the high-priority audit fixes without importing GUI or hardware modules.
+
+A fast, import-free snapshot check: each entry greps for the code shape a
+past audit fix introduced, so an accidental revert fails CI immediately.
+Patterns were updated 2026-07-05 for the reconciled FAILSAFE tree (single
+I/O-thread Arduino, decomposed controllers, emergencyStopAndRelease).
+Runs in CI next to scripts/check_limits_sync.py.
 """
 
 import re
@@ -8,7 +14,7 @@ import sys
 from pathlib import Path
 
 
-ROOT = Path(__file__).resolve().parent
+ROOT = Path(__file__).resolve().parent.parent
 MAIN = ROOT / "main"
 
 
@@ -40,19 +46,33 @@ def validate_fixes():
             MAIN / "helpers" / "arduino.py",
             [
                 r"connection_ready_event = threading\.Event\(\)",
-                r"self\._lock = threading\.RLock\(\)",
-                r"def send\(self, command\):.*needs_reconnect.*self\.reconnect",
+                r"def send\(self, command\):.*Never blocks on the port",
+                r"self\._priority_queue\.append\(command\)",
             ],
-            "Arduino readiness event and non-deadlocking send",
+            "Arduino readiness event and non-blocking queued send",
         ),
         check(
             MAIN / "kneespa.py",
             [
-                r"if not self\.ensure_arduino_connection\(\):",
-                r"connection_ready_event\.is_set\(\)",
-                r"def start_protocol\(self\):.*return True",
+                r"def ensure_arduino_connection\(self\):\s*"
+                r"return self\.connection\.ensure_arduino_connection\(\)",
             ],
-            "Main controller honors Arduino readiness",
+            "Main window delegates connection readiness to ConnectionManager",
+        ),
+        check(
+            MAIN / "controllers" / "connection_manager.py",
+            [
+                r"def ensure_arduino_connection\(self\):",
+                r"connection_ready_event",
+            ],
+            "ConnectionManager owns the Arduino readiness gate",
+        ),
+        check(
+            MAIN / "controllers" / "protocol_controller.py",
+            [
+                r"if not window\.ensure_arduino_connection\(\):",
+            ],
+            "Protocol start is gated on Arduino readiness",
         ),
         check(
             MAIN / "helpers" / "protocols.py",
@@ -79,7 +99,7 @@ def validate_fixes():
                 r"#define MAX_PRESSURE_LBS\s+80",
                 r"clampPressureTarget",
                 r"clampPositionTarget",
-                r"Pressure safety limit exceeded",
+                r"emergencyStopAndRelease\(\"Pressure limit exceeded\"\)",
             ],
             "Primary firmware has hard clamps",
         ),

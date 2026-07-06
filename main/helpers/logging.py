@@ -50,8 +50,12 @@ class LoggerSetup:
         qt_logger = logging.getLogger('PyQt5')
         qt_logger.addFilter(self.QtWarningFilter())
 
-        # Set up handlers only if they have not been set up already
-        if not self.logger.hasHandlers():
+        # Set up handlers only if they have not been set up already.
+        # Checked via .handlers (this logger's own), NOT hasHandlers():
+        # hasHandlers() walks up to the root logger, so a stray
+        # logging.basicConfig() anywhere would return True and silently
+        # skip the rotating file handlers.
+        if not self.logger.handlers:
             self.setup_handlers()
 
         # Mark as initialized to prevent redundant initializations

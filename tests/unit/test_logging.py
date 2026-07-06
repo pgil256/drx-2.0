@@ -77,6 +77,42 @@ class TestSetupLogger:
 
 
 @pytest.mark.unit
+class TestHandlerGuard:
+    """LoggerSetup must attach its file handlers even when the ROOT logger
+    already has handlers (e.g. a stray logging.basicConfig() in a
+    dependency). The old hasHandlers() guard walked up to the root and
+    silently skipped the rotating file logs in that case."""
+
+    def test_root_handler_does_not_suppress_file_handlers(self):
+        app_logger = logging.getLogger(_LOGGER_NAME)
+        root = logging.getLogger()
+
+        saved_instance = LoggerSetup._instance
+        saved_handlers = list(app_logger.handlers)
+        stray = logging.StreamHandler()
+        try:
+            # Simulate a fresh process where basicConfig ran first.
+            LoggerSetup._instance = None
+            app_logger.handlers.clear()
+            root.addHandler(stray)
+
+            setup = LoggerSetup()
+
+            assert setup.logger.handlers, (
+                "own-logger handlers were skipped because the root logger "
+                "had a handler"
+            )
+        finally:
+            root.removeHandler(stray)
+            for handler in list(app_logger.handlers):
+                if handler not in saved_handlers:
+                    app_logger.removeHandler(handler)
+                    handler.close()
+            app_logger.handlers[:] = saved_handlers
+            LoggerSetup._instance = saved_instance
+
+
+@pytest.mark.unit
 class TestDebugHelpers:
     """Tests for the debug_* family of helper functions.
 

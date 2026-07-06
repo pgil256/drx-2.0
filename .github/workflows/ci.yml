@@ -45,6 +45,11 @@ jobs:
       - name: Check host/firmware safety-limit sync
         run: python scripts/check_limits_sync.py
 
+      # Fast import-free snapshot check that past audit fixes are still
+      # in place (an accidental revert fails here, not in review).
+      - name: Validate audit-fix snapshots
+        run: python scripts/validate_fixes.py
+
       # On Linux the pty-based integration tests run for real
       # (they skip on Windows dev machines).
       - name: Run pytest
