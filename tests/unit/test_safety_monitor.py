@@ -76,12 +76,25 @@ class TestStatusChecks:
         assert w.worker.stop.called
         assert w.resets == 1
         assert w.initial_setup_complete is False
-        assert any("limit exceeded" in a for a in w.alerts)
+        # The message names pressure specifically (not a combined trip) and
+        # reports the offending value, so the operator knows what happened.
+        assert any("Pressure limit exceeded" in a for a in w.alerts)
+        assert not any("Axial" in a for a in w.alerts)
 
     def test_axial_over_limit_triggers_stop(self, monitor):
         sm, w = monitor
         assert sm.on_status(AXIAL_MAX + 100, 2000, 1200, 10.0) is False
         assert w.resets == 1
+        assert any("Axial position limit exceeded" in a for a in w.alerts)
+        assert not any("Pressure" in a for a in w.alerts)
+
+    def test_axial_and_pressure_both_over_limit_report_both(self, monitor):
+        """When both trip at once the operator gets both messages, not one
+        ambiguous combined alert."""
+        sm, w = monitor
+        assert sm.on_status(AXIAL_MAX + 100, 2000, 1200, PRESSURE_MAX + 5) is False
+        assert any("Axial position limit exceeded" in a for a in w.alerts)
+        assert any("Pressure limit exceeded" in a for a in w.alerts)
 
     def test_lateral_under_limit_triggers_stop(self, monitor):
         sm, w = monitor

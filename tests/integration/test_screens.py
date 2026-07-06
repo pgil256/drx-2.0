@@ -308,3 +308,45 @@ def test_video_modal_degrades_without_vlc(app, monkeypatch):
     finally:
         modal.cleanup()
         modal.deleteLater()
+
+
+def test_video_modal_recovers_from_sustained_none_position(shell, monkeypatch):
+    """VLC dying mid-playback (position() stuck at None) must recover to the
+    poster instead of polling a dead player forever."""
+    m = shell.video_modal
+    shell.show_video()
+    m._toggle()  # play
+    assert m._playing and m._poll.isActive()
+
+    states = []
+    m.play_toggled.connect(states.append)
+    monkeypatch.setattr(m._engine, "position", lambda: None)
+
+    # First two None polls are tolerated (VLC opens media lazily)...
+    m._on_poll()
+    m._on_poll()
+    assert m._poll.isActive()
+    assert m._playing
+    # ...the third trips the recovery.
+    m._on_poll()
+    assert not m._poll.isActive()
+    assert not m._playing
+    assert m._watermark.isVisibleTo(m)
+    assert states == [False]
+
+
+def test_video_modal_none_run_reset_by_valid_poll(shell, monkeypatch):
+    """A transient None (e.g. one slow poll) must NOT trip recovery once a
+    valid position resumes; the counter resets."""
+    m = shell.video_modal
+    shell.show_video()
+    m._toggle()
+
+    seq = [None, None, (1.0, 30.0), None]
+    monkeypatch.setattr(m._engine, "position", lambda: seq.pop(0))
+    m._on_poll()  # None (1)
+    m._on_poll()  # None (2)
+    m._on_poll()  # valid -> resets counter
+    m._on_poll()  # None (1 again)
+    assert m._poll.isActive()  # never reached the threshold of 3
+    assert m._playing

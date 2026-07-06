@@ -357,8 +357,12 @@ class KneeSpa(QMainWindow):
         )
 
         if not debug_mode:
+            # Flags MUST be set before showing: changing window flags on an
+            # already-shown window recreates the native handle and dropped
+            # the window out of fullscreen (and could leave it hidden).
+            # Keep Qt.Window so it stays a top-level kiosk window.
+            self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
             self.showFullScreen()
-            self.setWindowFlags(Qt.FramelessWindowHint)
             print("Production mode: Set to full screen without frame")
         else:
             print("Debug mode: Running in windowed mode")

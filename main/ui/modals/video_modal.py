@@ -195,6 +195,11 @@ class VideoModal(Overlay):
         self._poll.setInterval(250)
         self._poll.timeout.connect(self._on_poll)
         self.closed.connect(self._on_closed)
+        # Consecutive polls where position() returned None. VLC returns None
+        # for a poll or two while opening media, so we tolerate a short run;
+        # a sustained run means the player died mid-playback.
+        self._none_polls = 0
+        self._MAX_NONE_POLLS = 3
 
     def _title_bar(self):
         bar = QFrame()
@@ -341,6 +346,7 @@ class VideoModal(Overlay):
             # Only reveal the video surface / start polling if VLC actually began
             # playing; otherwise keep the static poster frame (graceful degrade).
             if self._engine.play():
+                self._none_polls = 0
                 self._surface.setVisible(True)
                 self._watermark.setVisible(False)
                 self._big_play.setVisible(False)
@@ -357,7 +363,14 @@ class VideoModal(Overlay):
     def _on_poll(self):
         pos = self._engine.position()
         if pos is None:
+            # A sustained run of None while we believe we're playing means
+            # VLC crashed or the media handle went away; recover instead of
+            # polling a dead player forever.
+            self._none_polls += 1
+            if self._none_polls >= self._MAX_NONE_POLLS:
+                self._on_playback_failed()
             return
+        self._none_polls = 0
         elapsed, total = pos
         self._elapsed.setText(_fmt(elapsed))
         if total > 0:
@@ -367,8 +380,21 @@ class VideoModal(Overlay):
             if elapsed >= total - 0.3:  # clip ended → return to the paused frame
                 self._reset_playback()
 
+    def _on_playback_failed(self):
+        """VLC stopped producing a position mid-playback: recover to the
+        static poster frame so the modal never hangs on a dead player.
+
+        The instructional video is non-critical, so degrading to the poster
+        (with the play button back) is the right surface: the operator sees
+        it stopped and can retry. Logged for diagnostics.
+        """
+        print("VideoModal: playback position stalled; resetting to poster")
+        self._reset_playback()
+        self.play_toggled.emit(False)
+
     def _reset_playback(self):
         """Stop playback and restore the paused/static frame."""
+        self._none_polls = 0
         self._poll.stop()
         self._engine.stop()
         self._playing = False

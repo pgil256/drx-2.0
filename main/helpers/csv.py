@@ -107,10 +107,15 @@ class CSVHelper:
 
         data = {}
         row_count = 0
+        skipped = 0
         try:
-            with open(filename, "r", newline="", encoding="utf-8") as file:
+            # utf-8-sig strips a leading BOM: an editor that saved the file
+            # UTF-8-with-BOM turned the first header into "﻿pin_hash",
+            # so DictReader keyed nothing on "pin_hash" and locked everyone
+            # out. utf-8-sig reads BOM and BOM-less files identically.
+            with open(filename, "r", newline="", encoding="utf-8-sig") as file:
                 reader = csv.DictReader(file)
-                for row in reader:
+                for line_no, row in enumerate(reader, start=2):  # row 1 = header
                     pin_hash = row.get("pin_hash")
                     if not pin_hash and row.get("pin"):
                         # Legacy CSV support: convert plaintext pins in
@@ -119,11 +124,25 @@ class CSVHelper:
                         pin_hash = SecureAuthHelper.hash_pin_secure(row["pin"])
                         row.pop("pin", None)
                     if not pin_hash:
-                        raise KeyError("pin_hash")
+                        # Skip and log this one row rather than aborting the
+                        # whole load: one malformed line used to raise and
+                        # discard every user defined after it, silently
+                        # locking out valid operators.
+                        skipped += 1
+                        self.logger.warning(
+                            "Skipping malformed row %d in %s (no pin_hash/pin)",
+                            line_no, filename,
+                        )
+                        continue
                     row["pin_hash"] = pin_hash
                     data[pin_hash] = row
                     row_count += 1
             print(f"CSVHelper: Successfully loaded {row_count} rows from {filename}")
+            if skipped:
+                self._report_load_error(
+                    f"Skipped {skipped} malformed row(s) in {filename}; "
+                    f"loaded {row_count} valid user(s)"
+                )
 
         except FileNotFoundError:
             print(f"CSVHelper: ERROR - CSV file not found: {filename}")
@@ -133,10 +152,11 @@ class CSVHelper:
             print(f"CSVHelper: ERROR - CSV file error in {filename}: {e}")
             self._report_load_error(f"CSV file error in {filename}: {e}")
 
-        except KeyError as e:
-            print(f"CSVHelper: ERROR - Missing 'pin_hash' column in CSV file {filename}: {e}")
-            self._report_load_error(
-                f"CSV format error: Missing 'pin_hash' column in {filename}"
-            )
+        except (OSError, UnicodeDecodeError) as e:
+            # A permission error, a mid-read I/O failure, or a binary/
+            # corrupt file must not crash startup on a patient-facing
+            # kiosk -- degrade to whatever rows loaded and surface it.
+            print(f"CSVHelper: ERROR - Could not read {filename}: {e}")
+            self._report_load_error(f"Could not read {filename}: {e}")
 
         return data
