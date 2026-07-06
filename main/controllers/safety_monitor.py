@@ -30,11 +30,22 @@ class SafetyMonitor:
 
         if window.initial_setup_complete:
             try:
-                # Check various safety conditions
-                if position_a > AXIAL_MAX or (
-                    window.initial_setup_complete and pressure > PRESSURE_MAX
-                ):
-                    self.trigger_safety_stop("Axial/pressure limit exceeded")
+                # Axial over-travel and over-pressure are distinct hazards
+                # with distinct operator responses; they used to share one
+                # "Axial/pressure limit exceeded" message that told the
+                # operator neither which limit tripped nor by how much.
+                if position_a > AXIAL_MAX:
+                    self.trigger_safety_stop(
+                        f"Axial position limit exceeded "
+                        f"({position_a} > {AXIAL_MAX})"
+                    )
+                    success = False
+
+                if pressure > PRESSURE_MAX:
+                    self.trigger_safety_stop(
+                        f"Pressure limit exceeded "
+                        f"({pressure} > {PRESSURE_MAX} lbs)"
+                    )
                     success = False
 
                 # Check horizontal position (B actuator)
