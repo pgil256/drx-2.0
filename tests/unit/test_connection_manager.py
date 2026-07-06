@@ -104,3 +104,78 @@ class TestCalibrationPushes:
         w.config.calibration = 1.0
         cm.send_calibration()
         assert not w.arduino.send.called
+
+
+@pytest.mark.unit
+class TestEnsureConnection:
+    """The readiness gate every protocol start must pass (Phase D
+    safety-gate tests). The slow paths stub out setup_arduino and
+    time.sleep so no real port or 1.5 s of settling is involved."""
+
+    @pytest.fixture(autouse=True)
+    def _no_sleep(self, monkeypatch):
+        import controllers.connection_manager as cm_module
+
+        monkeypatch.setattr(cm_module.time, "sleep", lambda s: None)
+
+    def test_verified_connection_passes_without_reset(self, manager):
+        cm, w = manager
+        w.arduino.connected = True
+        w.arduino.verify_connection.return_value = True
+        assert cm.ensure_arduino_connection() is True
+        w.arduino.disconnect.assert_not_called()
+
+    def test_unresponsive_connection_reconnects(self, manager, monkeypatch):
+        """connected but not answering: disconnect, GPIO to safe state,
+        reconnect, then re-push zero marks + calibration."""
+        cm, w = manager
+        w.arduino.connected = True
+        w.arduino.verify_connection.return_value = False
+        w.setup_gpio = lambda: setattr(w, "gpio_reset", True)
+        monkeypatch.setattr(cm, "setup_arduino", lambda auto_reset: True)
+
+        assert cm.ensure_arduino_connection() is True
+
+        w.arduino.disconnect.assert_called_once()
+        assert w.gpio_reset
+        sent = [c.args[0] for c in w.arduino.send.call_args_list]
+        assert sent == ["L5|160|1900", "L0-28369.0"]
+
+    def test_no_arduino_object_reconnects(self, manager, monkeypatch):
+        cm, w = manager
+        w.arduino = None
+        w.setup_gpio = lambda: None
+
+        def fake_setup(auto_reset):
+            # the real setup_arduino installs a fresh Arduino on the window
+            w.arduino = MagicMock()
+            return True
+
+        monkeypatch.setattr(cm, "setup_arduino", fake_setup)
+        assert cm.ensure_arduino_connection() is True
+
+    def test_failed_reconnect_returns_false_and_alerts(self, manager, monkeypatch):
+        """A start must NOT proceed on a dead link; the operator is told."""
+        cm, w = manager
+        w.arduino.connected = False
+        w.setup_gpio = lambda: None
+        monkeypatch.setattr(cm, "setup_arduino", lambda auto_reset: False)
+
+        assert cm.ensure_arduino_connection() is False
+        assert w.errors, "operator was not shown a connection error"
+        # No calibration pushed onto a link that never came up.
+        assert not w.arduino.send.called
+
+    def test_reconnect_skips_auto_reset(self, manager, monkeypatch):
+        """The re-setup must use auto_reset=False: ensure_arduino_connection
+        runs inside the start path and an automatic reset would race it."""
+        cm, w = manager
+        w.arduino.connected = False
+        w.setup_gpio = lambda: None
+        seen = []
+        monkeypatch.setattr(
+            cm, "setup_arduino",
+            lambda auto_reset: seen.append(auto_reset) or True,
+        )
+        cm.ensure_arduino_connection()
+        assert seen == [False]

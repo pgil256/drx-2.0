@@ -16,6 +16,20 @@ def app(themed_app):
 
 
 def test_all_components_construct_and_polish(app):
+    """Every DS component constructs against the themed app AND honors its
+    style contract (previously this only counted the widgets it built).
+
+    Contract per styling mechanism:
+      * DSButton styles via app-QSS dynamic properties -- the widget must
+        carry variant/dsSize and the app stylesheet must have a matching
+        attribute selector for each accepted value.
+      * DSBadge / DSStatReadout self-style with resolved token stylesheets
+        -- the inline QSS must contain no unresolved var(--...) and must
+        actually differ between tones (a broken resolver used to emit the
+        literal var() text, styling every tone identically).
+    """
+    from PyQt5.QtWidgets import QLabel
+
     from ui.widgets.ds import (
         DSBadge,
         DSButton,
@@ -27,27 +41,78 @@ def test_all_components_construct_and_polish(app):
         DSStatReadout,
     )
 
-    widgets = []
+    app_qss = app.styleSheet()
+    assert app_qss, "themed app has no stylesheet applied"
+    assert "var(--" not in app_qss, "unresolved theme tokens in app QSS"
+
     for variant in ("primary", "success", "danger", "secondary", "ghost"):
         for size in ("sm", "md", "lg"):
-            widgets.append(DSButton(variant, variant=variant, size=size))
+            b = DSButton(variant, variant=variant, size=size)
+            b.ensurePolished()
+            assert b.property("variant") == variant
+            assert b.property("dsSize") == size
+            assert f'[variant="{variant}"]' in app_qss, (
+                f"app QSS has no rule for DSButton variant {variant!r}"
+            )
+            assert f'[dsSize="{size}"]' in app_qss, (
+                f"app QSS has no rule for DSButton size {size!r}"
+            )
+
+    badge_sheets = {}
     for tone in ("neutral", "info", "success", "danger", "warning", "cyan"):
-        widgets.append(DSBadge(tone, tone=tone, dot=True))
+        badge = DSBadge(tone, tone=tone, dot=True)
+        badge.ensurePolished()
+        sheet = badge.styleSheet()
+        assert "background" in sheet
+        assert "var(--" not in sheet, f"unresolved token in badge tone {tone!r}"
+        badge_sheets[tone] = sheet
+    assert len(set(badge_sheets.values())) == len(badge_sheets), (
+        "badge tones resolved to identical styles"
+    )
+
+    import re
+
+    from PyQt5.QtCore import Qt
+
+    readout_colors = {}
+    readout_sizes = {}
     for tone in ("default", "cyan", "success", "warning", "danger"):
         for size in ("sm", "md", "lg"):
-            widgets.append(DSStatReadout("42", unit="lbs", label=tone, tone=tone, size=size))
-    widgets.append(DSSlider("P", value=50, minimum=10, maximum=80, unit=" lbs"))
-    widgets.append(DSProtocolButton(1, "Axial"))
-    widgets.append(DSNavRailButton("Setup"))
-    widgets.append(DSKeypad(length=4))
+            r = DSStatReadout("42", unit="lbs", label=tone, tone=tone, size=size)
+            r.ensurePolished()
+            # Tone color + size font land in the value label's rich text.
+            value_html = next(
+                lbl.text() for lbl in r.findChildren(QLabel)
+                if lbl.textFormat() == Qt.RichText
+            )
+            assert "var(--" not in value_html, (
+                f"unresolved token in readout tone {tone!r}"
+            )
+            color = re.search(r"color:\s*([^;']+)", value_html)
+            font = re.search(r"font-size:\s*(\d+)px", value_html)
+            assert color and font, f"value styling missing for tone {tone!r}"
+            readout_colors[tone] = color.group(1)
+            readout_sizes[size] = int(font.group(1))
+    assert len(set(readout_colors.values())) == 5, (
+        "stat readout tones resolved to identical value colors"
+    )
+    assert readout_sizes["sm"] < readout_sizes["md"] < readout_sizes["lg"], (
+        "stat readout sizes do not scale the value font"
+    )
+
+    # The composite/interactive components still must construct and polish
+    # against the themed app without raising.
+    composites = [
+        DSSlider("P", value=50, minimum=10, maximum=80, unit=" lbs"),
+        DSProtocolButton(1, "Axial"),
+        DSNavRailButton("Setup"),
+        DSKeypad(length=4),
+    ]
     card = DSCard("Title", header_right=DSBadge("Ready", tone="warning", dot=True))
     card.add_widget(DSStatReadout("1", label="x"))
-    widgets.append(card)
-
-    for w in widgets:
+    composites.append(card)
+    for w in composites:
         w.ensurePolished()
-    # 15 buttons + 6 badges + 15 readouts + slider + protocol + nav + keypad + card
-    assert len(widgets) == 15 + 6 + 15 + 5
 
 
 def test_button_variant_and_size_switch(app):

@@ -279,6 +279,28 @@ class TestSettings:
         KneeSpa._on_setting_changed(stub, "duration", 6)
         assert stub.worker.duration is before  # untouched
 
+    def test_setting_change_without_worker_is_safe(self):
+        """Slider moves while no protocol worker exists (pre-run, or after a
+        stop tore the worker down): the change is recorded for the next run
+        and nothing dereferences the missing worker."""
+        stub = make_stub()
+        stub._confirm_mid_protocol_change.return_value = True
+        stub._prev_settings = {}
+        stub.worker = None
+        KneeSpa._on_setting_changed(stub, "max_pressure", 70)
+        assert stub._prev_settings["max_pressure"] == 70
+
+    def test_pulse_rate_change_without_worker_tracks_state(self):
+        """The pulse on/off + cadence snapshot feeds the NEXT start's
+        seeding, so it must update even with no live worker."""
+        stub = make_stub()
+        stub._confirm_mid_protocol_change.return_value = True
+        stub._prev_settings = {}
+        stub.worker = None
+        KneeSpa._on_setting_changed(stub, "pulse_rate", 3)
+        assert stub.current_use_pulse_setting is True
+        assert stub.current_pulse_rate == 3
+
     def test_cancelled_change_rolls_back_slider(self):
         stub = make_stub()
         stub._confirm_mid_protocol_change.return_value = False
