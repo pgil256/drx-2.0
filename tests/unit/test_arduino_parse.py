@@ -2,7 +2,7 @@
 import pytest
 from unittest.mock import MagicMock, patch
 
-from helpers.arduino import Arduino
+from helpers.arduino import Arduino, xor_checksum
 
 
 @pytest.fixture
@@ -24,10 +24,11 @@ class TestStatusParsing:
             arduino.handle_com("STATUS_START|S|1500|2000|1200|45.3|STATUS_END")
         assert blocker.args == [1500, 2000, 1200, 45.3]
 
-    def test_truncated_status_no_crash(self, arduino):
-        """Truncated status (missing STATUS_END) should not crash."""
-        arduino.handle_com("STATUS_START|S|1500|2000|1200|45.3")
-        # Should not raise
+    def test_truncated_status_rejected(self, arduino, qtbot):
+        """A frame without STATUS_END carries potentially corrupted values
+        and must never reach the safety-limit checks."""
+        with qtbot.assertNotEmitted(arduino.status_emit, wait=100):
+            arduino.handle_com("STATUS_START|S|1500|2000|1200|45.3")
 
     def test_status_with_zero_pressure(self, arduino, qtbot):
         with qtbot.waitSignal(arduino.status_emit, timeout=1000) as blocker:
@@ -58,10 +59,12 @@ class TestOKResponse:
         arduino.handle_com("OK")
         assert arduino.ok_event.is_set()
 
-    def test_ok_in_longer_string(self, arduino):
+    def test_ok_requires_exact_token(self, arduino):
+        """Substring matching used to let any message containing 'OK'
+        (e.g. a future error text) falsely satisfy verify_connection."""
         arduino.ok_event.clear()
-        arduino.handle_com("OK received")
-        assert arduino.ok_event.is_set()
+        arduino.handle_com("NOT OKAY")
+        assert not arduino.ok_event.is_set()
 
 
 @pytest.mark.unit
@@ -73,10 +76,131 @@ class TestPositionResponse:
             arduino.handle_com("P|1500")
         assert blocker.args[0] == 1500
 
-    def test_position_e_format(self, arduino, qtbot):
-        with qtbot.waitSignal(arduino.position_emit, timeout=1000) as blocker:
-            arduino.handle_com("E|100|200|forward|14")
-        assert blocker.args == [100, 200, "forward", 14]
+    def test_l6_report_feeds_status(self, arduino, qtbot):
+        """The L6 'A|a|b|c|p' report carries the same payload as a status
+        frame and now feeds the same signal."""
+        with qtbot.waitSignal(arduino.status_emit, timeout=1000) as blocker:
+            arduino.handle_com("A|100|200|300|12.5")
+        assert blocker.args == [100, 200, 300, 12.5]
+
+
+@pytest.mark.unit
+class TestFirmwareSafetyMessages:
+    """ERROR:/BUSY/RELEASED/ZEROS lines are safety telemetry that used to
+    be dropped as 'unrecognized data'."""
+
+    def test_error_line_emits_error_signal(self, arduino, qtbot):
+        with qtbot.waitSignal(arduino.error_emit, timeout=1000) as blocker:
+            arduino.handle_com("ERROR: Pressure limit exceeded")
+        assert blocker.args == ["Pressure limit exceeded"]
+
+    def test_busy_emits_error_signal(self, arduino, qtbot):
+        with qtbot.waitSignal(arduino.error_emit, timeout=1000) as blocker:
+            arduino.handle_com("BUSY")
+        assert blocker.args == ["BUSY"]
+
+    def test_released_emits_signal(self, arduino, qtbot):
+        with qtbot.waitSignal(arduino.released_emit, timeout=1000):
+            arduino.handle_com("RELEASED")
+
+    def test_zeros_echo_emits_signal(self, arduino, qtbot):
+        with qtbot.waitSignal(arduino.zeros_emit, timeout=1000) as blocker:
+            arduino.handle_com("ZEROS|160|1900")
+        assert blocker.args == [160, 1900]
+
+
+@pytest.mark.unit
+class TestSendQueueing:
+    """send() enqueues for the I/O thread instead of touching the port."""
+
+    def test_send_refused_without_link(self):
+        a = Arduino()
+        assert a.send("T") is False
+
+    def test_x_jumps_the_queue(self, arduino):
+        arduino._running = True
+        arduino.send("K1500")
+        arduino.send("P20")
+        arduino.send("X")
+        assert list(arduino._priority_queue) == ["X"]
+        assert list(arduino._tx_queue) == ["K1500", "P20"]
+
+    def test_empty_command_refused(self, arduino):
+        arduino._running = True
+        assert arduino.send("  ") is False
+
+
+def _frame(seq, cmd):
+    body = f"{seq}:{cmd}"
+    return f"#{body}*{xor_checksum(body):02X}"
+
+
+@pytest.mark.unit
+class TestProtocolV2Send:
+    """With protocol_v2 enabled, commands are framed with seq + checksum."""
+
+    def test_commands_are_framed(self, arduino):
+        arduino._running = True
+        arduino.protocol_v2 = True
+        arduino.send("P50")
+        assert list(arduino._tx_queue) == [_frame(1, "P50")]
+
+    def test_framed_x_still_jumps_the_queue(self, arduino):
+        arduino._running = True
+        arduino.protocol_v2 = True
+        arduino.send("K1500")
+        arduino.send("X")
+        assert list(arduino._priority_queue) == [_frame(2, "X")]
+        assert list(arduino._tx_queue) == [_frame(1, "K1500")]
+
+    def test_sequence_increments(self, arduino):
+        arduino._running = True
+        arduino.protocol_v2 = True
+        arduino.send("T")
+        arduino.send("T")
+        assert list(arduino._tx_queue) == [_frame(1, "T"), _frame(2, "T")]
+
+
+@pytest.mark.unit
+class TestProtocolV2Receive:
+    """Seq-bearing acks and checksummed status frames."""
+
+    def test_done_with_seq(self, arduino, qtbot):
+        with qtbot.waitSignal(arduino.done_emit, timeout=1000):
+            arduino.handle_com("DONE|17")
+        assert arduino.last_done_seq == 17
+
+    def test_busy_with_seq_emits_error(self, arduino, qtbot):
+        with qtbot.waitSignal(arduino.error_emit, timeout=1000) as blocker:
+            arduino.handle_com("BUSY|4")
+        assert blocker.args == ["BUSY"]
+
+    def test_err_with_seq_and_reason(self, arduino, qtbot):
+        with qtbot.waitSignal(arduino.error_emit, timeout=1000) as blocker:
+            arduino.handle_com("ERR|9|Invalid P value")
+        assert blocker.args == ["Invalid P value"]
+
+    def test_ok_with_seq_sets_event(self, arduino):
+        arduino.ok_event.clear()
+        arduino.handle_com("OK|3")
+        assert arduino.ok_event.is_set()
+
+    def test_status_with_valid_checksum_accepted(self, arduino, qtbot):
+        frame = "STATUS_START|S|1500|2000|1200|45.3|STATUS_END"
+        line = f"{frame}*{xor_checksum(frame):02X}"
+        with qtbot.waitSignal(arduino.status_emit, timeout=1000) as blocker:
+            arduino.handle_com(line)
+        assert blocker.args == [1500, 2000, 1200, 45.3]
+
+    def test_status_with_bad_checksum_rejected(self, arduino, qtbot):
+        """A corrupted in-flight value must never reach the safety checks."""
+        frame = "STATUS_START|S|1500|2000|1200|45.3|STATUS_END"
+        checksum = xor_checksum(frame)
+        corrupted = frame.replace("|45.3|", "|85.3|")  # flipped digit
+        line = f"{corrupted}*{checksum:02X}"
+        with qtbot.assertNotEmitted(arduino.status_emit, wait=100):
+            arduino.handle_com(line)
+        assert arduino.checksum_failures == 1
 
 
 @pytest.mark.unit
@@ -104,8 +228,10 @@ class TestReadyToGo:
     """Tests for ready-to-go response parsing."""
 
     def test_ready_to_go(self, arduino, qtbot):
+        arduino.ready_event.clear()
         with qtbot.waitSignal(arduino.ready_to_go_emit, timeout=1000):
             arduino.handle_com("Ready to Go")
+        assert arduino.ready_event.is_set()
 
 
 @pytest.mark.unit

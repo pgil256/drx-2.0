@@ -13,11 +13,21 @@
   - Fixed STOP pin logic (INPUT_PULLUP reads HIGH when not pressed)
 */
 
-#define VERSION "2025-11-05-STOP-PIN-FIX"
+#define VERSION "2026-06-11-FAILSAFE-2"
+#ifndef UNIT_TEST
+// Hardware libraries; native unit tests supply mocks and arduino_shim.h
+// (see test/) before including this file
 #include "HX711.h"
 #include <elapsedMillis.h>
 #include <Wire.h>
 #include <avr/wdt.h>
+#endif
+
+// Watchdog: reboots the MCU if loop() hangs (e.g. wedged I2C or load
+// cell). NOTE: verify on hardware that the installed Mega bootloader
+// recovers from WDT resets (old stk500v2 bootloaders boot-loop); set to
+// 0 only if the bootloader cannot be updated.
+#define ENABLE_WDT 1
 
 // Pin definitions
 #define LOADCELL_DOUT_PIN  7
@@ -38,6 +48,8 @@
 #define BC_SPEED           800
 #define C_SPEED            800
 #define MAX_JERKS          10
+#define MIN_JERK_INTERVAL  100   // fastest host-settable pulse cadence (ms)
+#define MAX_JERK_INTERVAL  5000  // slowest host-settable pulse cadence (ms)
 #define FIT_SLOW_DELAY     (0.5 * 1000)
 #define FIT_FAST_DELAY     (6 * 1000)
 #define LOOP_STATUS_DELAY  5000
@@ -53,6 +65,18 @@
 // Command buffer size (increased for safety)
 #define MAX_COMMAND_LENGTH 100
 
+// Fail-safe parameters
+#define HEARTBEAT_TIMEOUT     3000   // ms without host traffic while active -> stop
+#define SCALE_READ_TIMEOUT    500    // ms without HX711 ready while load matters -> fault
+#define PRESSURE_RELEASE_LBS  5.0    // autonomous release target after a fault
+#define RELEASE_TIMEOUT       15000  // ms bound on the autonomous release move
+#define PRESSURE_MOVE_TIMEOUT 30000  // ms bound on any single pressure move
+#define PRESSURE_STALL_MS     5000   // ms without pressure progress -> fault
+#define PRESSURE_STALL_DELTA  0.5    // lbs of progress expected within that window
+#define HX711_SATURATED       8388607L  // 24-bit ADC saturation magnitude
+#define POSITION_DEADBAND     25     // counts: symmetric close-enough band
+#define ACTIVE_STATUS_INTERVAL 1000  // ms: status cadence during motion (non-HF)
+
 // Status protection
 volatile bool isProcessingStatus = false;
 unsigned long lastCommandTime = 0;
@@ -66,7 +90,34 @@ const unsigned long STATUS_TIMEOUT = 2000; // Force-reset acknowledgment after 2
 // Load cell setup
 HX711 scale;
 float calibration_factor = -4360.14;
-float pressure = 0;
+float pressure = 0;          // filtered magnitude used by control/safety logic
+float signedPressure = 0;    // filtered signed value (negative = wiring/drift fault)
+
+// Non-blocking load-cell sampling state
+float pressureSamples[3] = {0, 0, 0};
+uint8_t pressureSampleIndex = 0;
+uint8_t pressureSampleCount = 0;
+unsigned long lastScaleReady = 0;    // last time the HX711 had data for us
+
+// Fail-safe state
+unsigned long lastHostTraffic = 0;   // last byte received from the Pi
+bool releasingPressure = false;      // autonomous post-fault release active
+unsigned long releaseStart = 0;
+unsigned long pressureMoveStart = 0; // start of current pressure move
+unsigned long pressureProgressTime = 0;
+float pressureProgressValue = 0;
+bool positionReadValid = false;      // last readPosition() I2C result ok
+
+// Protocol v2 framing. The host opts in per command by sending
+// "#<seq>:<CMD>*<XX>" where XX is the two-hex-digit XOR of "<seq>:<CMD>".
+// Acks then echo the sequence (DONE|<seq>, BUSY|<seq>, OK|<seq>,
+// ERR|<seq>|<reason>) and status frames carry a trailing "*<XX>"
+// checksum. A flipped digit in a command or status line was previously
+// undetectable ("P10" -> "P70" passed every check on both sides).
+// Unframed commands keep the exact legacy behavior.
+bool hostV2 = false;        // host has sent at least one framed command
+long currentCmdSeq = -1;    // seq of the command being processed (-1 = v1)
+long activeCmdSeq = -1;     // seq of the motion/pressure command in flight
 
 // Global variables
 uint8_t smcDeviceNumber = 13;
@@ -79,7 +130,6 @@ float CInches = 0;
 bool STOP = false;
 bool bRunning = false;
 bool measurePressure = false;
-bool noStatus = false;
 int forward = 1;
 float desiredPressure = 0;
 int pressureDirection = 0;
@@ -106,8 +156,20 @@ bool jerking = false;
 int jerkDirection = 1;
 int jerksCompleted = 0;
 unsigned long lastJerkTime = 0;
-const unsigned long jerkInterval = 200;  // Reduced from 400ms to 200ms for subtler jerking motion
+// Boot default = the host default of 2 pulses/sec (DEFAULT_JERK_INTERVAL_MS in
+// constants.py; paired values are checked by scripts/check_limits_sync.py).
+// It used to boot at 200 ms while the host UI claimed 2/sec. Host-settable via
+// J<ms> (Phase 3.5 §15.2).
+unsigned long jerkInterval = 500;
 bool jerkDirectionChanged = false;
+
+// Forward declarations (the native test build has no Arduino-IDE
+// prototype generation)
+uint8_t xorChecksum(const String &s, unsigned int from, unsigned int to);
+void emitAck(const char *token, long seq);
+void emitCmdError(const char *reason);
+bool parseV2Frame(const String &raw, String &inner);
+bool isEmergencyBuffer(const String &b);
 
 // Makes Arduino restart
 void(* resetFunc) (void) = 0;
@@ -121,12 +183,6 @@ void exitSafeStart() {
 
 // Set motor speed and direction
 void setMotorSpeed(int16_t speed) {
-  // Skip if actuator is disabled
-  if ((smcDeviceNumber == 12 && false) ||
-      (smcDeviceNumber == 13 && false) ||
-      (smcDeviceNumber == 14 && false))
-    return;
-
   // Clamp speed to valid range
   if (speed > 3200) speed = 3200;
   if (speed < -3200) speed = -3200;
@@ -153,16 +209,8 @@ void setMotorSpeed(int16_t speed) {
   Wire.endTransmission();
 }
 
-// Read actuator position - IMPROVED
-uint16_t readPosition() {
-  uint16_t position = 0;
-
-  // Skip if actuator is disabled
-  if ((smcDeviceNumber == 12 && false) ||
-      (smcDeviceNumber == 13 && false) ||
-      (smcDeviceNumber == 14 && false))
-    return position;
-
+// Read actuator position once over I2C; returns true on success
+static bool readPositionOnce(uint16_t &out) {
   // Request position from controller
   Wire.beginTransmission(smcDeviceNumber);
   Wire.write(0xA1);  // Command: Get variable
@@ -181,18 +229,40 @@ uint16_t readPosition() {
     Serial.print(smcDeviceNumber);
     Serial.print(", returned: ");
     Serial.println(returned);
-    return 0; // Return 0 on error
+    return false;
   }
 
   // Process position data
-  position = Wire.read();
-  position = (position + (Wire.read() << 8)); // Fixed bit shift
+  uint16_t value = Wire.read();
+  value = (value + (Wire.read() << 8)); // Fixed bit shift
 
   // Sanity check on position value
-  if (position > 65000) // Invalid value
-    position = 0;
+  if (value > 65000) // Invalid value
+    return false;
 
-  return position;
+  out = value;
+  return true;
+}
+
+// Read actuator position - retries once; on persistent failure returns
+// the last good value for this device and clears positionReadValid so
+// callers do not make safety decisions on garbage (0 used to be both
+// the error value and a legal position)
+uint16_t lastGoodPosition[3] = {0, 0, 0};  // indexed by device - 12
+
+uint16_t readPosition() {
+  uint16_t value = 0;
+  positionReadValid = readPositionOnce(value) || readPositionOnce(value);
+
+  uint8_t idx = 0;
+  if (smcDeviceNumber >= 12 && smcDeviceNumber <= 14)
+    idx = smcDeviceNumber - 12;
+
+  if (positionReadValid) {
+    lastGoodPosition[idx] = value;
+    return value;
+  }
+  return lastGoodPosition[idx];
 }
 
 // Parse string with separator
@@ -214,7 +284,7 @@ String getValue(String data, char separator, int index) {
 // Send status information to Serial and Serial1
 bool sendStatus() {
   // Skip if status already in progress or not acknowledged (within timeout)
-  if (noStatus || isProcessingStatus || (!statusAcknowledged && millis() - lastStatusTime < STATUS_TIMEOUT))
+  if (isProcessingStatus || (!statusAcknowledged && millis() - lastStatusTime < STATUS_TIMEOUT))
     return false;
 
   isProcessingStatus = true;
@@ -233,8 +303,8 @@ bool sendStatus() {
   smcDeviceNumber = 14;
   positionC = readPosition();
 
-  // Read pressure
-  pressure = abs(scale.get_units(5));
+  // Pressure comes from the continuously-maintained filtered value;
+  // never block on the HX711 inside status (it stalls the safety loop)
 
   // Log to Serial for debugging
   Serial.print(F("status: "));
@@ -247,16 +317,25 @@ bool sendStatus() {
   Serial.print(F(" pressure: "));
   Serial.println(pressure);
 
-  // Send to Serial1 (Pi communication)
-  Serial1.print("STATUS_START|S|");
-  Serial1.print(positionA);
-  Serial1.print("|");
-  Serial1.print(positionB);
-  Serial1.print("|");
-  Serial1.print(positionC);
-  Serial1.print("|");
-  Serial1.print(pressure);
-  Serial1.println("|STATUS_END");
+  // Send to Serial1 (Pi communication). Built as one string so a
+  // checksum can cover the whole frame for v2 hosts.
+  String frame = "STATUS_START|S|";
+  frame += String((int)positionA);
+  frame += "|";
+  frame += String((int)positionB);
+  frame += "|";
+  frame += String((int)positionC);
+  frame += "|";
+  frame += String(pressure);
+  frame += "|STATUS_END";
+  Serial1.print(frame);
+  if (hostV2) {
+    char suffix[5];
+    snprintf(suffix, sizeof(suffix), "*%02X",
+             xorChecksum(frame, 0, frame.length()));
+    Serial1.print(suffix);
+  }
+  Serial1.println("");
 
   // Restore device number
   smcDeviceNumber = lastSmcDeviceNumber;
@@ -269,6 +348,10 @@ bool sendStatus() {
 // Emergency stop all actuators
 void emergencyStop() {
   Serial.println("Emergency Stop");
+
+  // Aborted motion/pressure commands never get a DONE (v1 behavior);
+  // drop the in-flight sequence so a later completion cannot echo it
+  activeCmdSeq = -1;
 
   smcDeviceNumber = 12;
   setMotorSpeed(0);
@@ -286,6 +369,162 @@ void emergencyStop() {
   bRunning = false;
   jerking = false;
   jerksCompleted = 0; // Reset jerk counter
+}
+
+// Emergency stop, then autonomously back the axial actuator off until
+// the load is released. Screw actuators hold force after a plain stop,
+// so every fault path must actively release the patient. Bounded by
+// load (< PRESSURE_RELEASE_LBS), travel (AZERO), and time.
+void emergencyStopAndRelease(const char *reason) {
+  if (releasingPressure)
+    return;  // a release is already the active fault response
+
+  Serial.print("Emergency stop + release: ");
+  Serial.println(reason);
+  Serial1.print("ERROR: ");
+  Serial1.println(reason);
+
+  emergencyStop();
+
+  releasingPressure = true;
+  releaseStart = millis();
+  smcDeviceNumber = 12;
+  setMotorSpeed(-PRESSURE_SPEED);  // negative = back off / reduce pressure
+}
+
+// XOR checksum over s[from..to)
+uint8_t xorChecksum(const String &s, unsigned int from, unsigned int to) {
+  uint8_t x = 0;
+  for (unsigned int i = from; i < to && i < s.length(); i++)
+    x ^= (uint8_t)s.charAt(i);
+  return x;
+}
+
+// Emit an ack token, with "|<seq>" appended for v2-framed commands
+void emitAck(const char *token, long seq) {
+  Serial1.print(token);
+  if (seq >= 0) {
+    Serial1.print("|");
+    Serial1.print((int)seq);
+  }
+  Serial1.println("");
+}
+
+// Emit an error for the command being processed: "ERR|<seq>|<reason>"
+// for v2, the legacy "ERROR: <reason>" otherwise
+void emitCmdError(const char *reason) {
+  if (currentCmdSeq >= 0) {
+    Serial1.print("ERR|");
+    Serial1.print((int)currentCmdSeq);
+    Serial1.print("|");
+    Serial1.println(reason);
+  } else {
+    Serial1.print("ERROR: ");
+    Serial1.println(reason);
+  }
+}
+
+// Parse "#<seq>:<CMD>*<XX>" into inner CMD; verifies the checksum.
+// Returns false (after emitting an error) on a malformed/corrupt frame.
+bool parseV2Frame(const String &raw, String &inner) {
+  int colon = raw.indexOf(':');
+  int star = raw.indexOf('*');
+  if (colon < 2 || star < colon + 2 || star + 1 >= (int)raw.length()) {
+    currentCmdSeq = -1;
+    emitCmdError("Malformed frame");
+    return false;
+  }
+  hostV2 = true;
+  long seq = raw.substring(1, colon).toInt();
+  uint8_t expected =
+      (uint8_t)strtol(raw.substring(star + 1).c_str(), NULL, 16);
+  uint8_t actual = xorChecksum(raw, 1, (unsigned int)star);
+  if (actual != expected) {
+    currentCmdSeq = seq;
+    emitCmdError("Checksum mismatch");
+    currentCmdSeq = -1;
+    return false;
+  }
+  currentCmdSeq = seq;
+  inner = raw.substring(colon + 1, star);
+  return true;
+}
+
+// Emergency stop must bypass the rate limiter whether framed or not
+bool isEmergencyBuffer(const String &b) {
+  if (b.length() == 0)
+    return false;
+  if (b.charAt(0) == 'X')
+    return true;
+  if (b.charAt(0) == '#') {
+    int colon = b.indexOf(':');
+    if (colon > 0 && colon + 1 < (int)b.length() && b.charAt(colon + 1) == 'X')
+      return true;
+  }
+  return false;
+}
+
+// True if s is a plain decimal number (optional leading -, one optional .)
+bool isNumeric(const String &s) {
+  if (s.length() == 0)
+    return false;
+  bool seenDot = false;
+  bool seenDigit = false;
+  for (unsigned int i = 0; i < s.length(); i++) {
+    char c = s.charAt(i);
+    if (c == '-' && i == 0)
+      continue;
+    if (c == '.' && !seenDot) {
+      seenDot = true;
+      continue;
+    }
+    if (c < '0' || c > '9')
+      return false;
+    seenDigit = true;
+  }
+  return seenDigit;
+}
+
+// Non-blocking load-cell sampling: one HX711 read when data is ready
+// (~10 Hz), saturation-rejected, median-of-3 filtered. Maintains the
+// global `pressure` (magnitude) and `signedPressure` without ever
+// stalling loop() the way blocking get_units() calls did.
+void updatePressure() {
+  if (!scale.is_ready())
+    return;
+
+  long raw = scale.read();
+  lastScaleReady = millis();
+
+  // A saturated ADC reading is a wiring/overload fault, not data.
+  // (8388607/calibration ~= the documented '1923.3 lbs' spike symptom.)
+  if (raw >= HX711_SATURATED || raw <= -HX711_SATURATED)
+    return;
+
+  float factor = scale.get_scale();
+  if (factor == 0)
+    return;  // set_scale(0) would otherwise poison readings with inf
+
+  float units = ((float)raw - scale.get_offset()) / factor;
+
+  pressureSamples[pressureSampleIndex] = units;
+  pressureSampleIndex = (pressureSampleIndex + 1) % 3;
+  if (pressureSampleCount < 3)
+    pressureSampleCount++;
+
+  if (pressureSampleCount < 3) {
+    signedPressure = units;
+  } else {
+    // Median of three: single-sample spikes cannot move the output
+    float a = pressureSamples[0], b = pressureSamples[1], c = pressureSamples[2];
+    float lo = min(a, min(b, c));
+    float hi = max(a, max(b, c));
+    signedPressure = a + b + c - lo - hi;
+  }
+
+  pressure = signedPressure < 0 ? -signedPressure : signedPressure;
+  if (pressure < 0.5)
+    pressure = 0;
 }
 
 float clampPressureTarget(float target) {
@@ -321,7 +560,7 @@ void processCommand(String cmd) {
   // Validate command length
   if (cmd.length() > MAX_COMMAND_LENGTH) {
     Serial.println("Command too long, ignoring");
-    Serial1.println("ERROR: Command too long");
+    emitCmdError("Command too long");
     return;
   }
 
@@ -354,7 +593,7 @@ void processCommand(String cmd) {
     // Test command
     case 'T':
         Serial.println("Test command received");
-        Serial1.println("OK");
+        emitAck("OK", currentCmdSeq);
         break;
 
     // Status acknowledgment
@@ -369,11 +608,11 @@ void processCommand(String cmd) {
         timeSinceLastStatus = 0; // Reset timer immediately
         statusAcknowledged = true; // Reset flag to allow immediate status
         sendStatus(); // Send status once when activated
-        Serial1.println("DONE"); // Acknowledge command
+        emitAck("DONE", currentCmdSeq); // Acknowledge command
       } else if (cmd.length() > 2 && cmd.substring(1,3) == "F0") {
         highFrequencyStatus = false;
         Serial.println("High frequency status OFF");
-        Serial1.println("DONE"); // Acknowledge command
+        emitAck("DONE", currentCmdSeq); // Acknowledge command
       }
       break;
 
@@ -384,12 +623,16 @@ void processCommand(String cmd) {
 
     // Pressure control
     case 'P':
-      if (bRunning) {
-        // Skip if already running - main loop will handle status updates
+      if (bRunning || releasingPressure) {
+        emitAck("BUSY", currentCmdSeq);  // never silently drop a motion command
         return;
       }
 
       parameter = cmd.substring(1);
+      if (!isNumeric(parameter)) {
+        emitCmdError("Invalid P value");
+        return;
+      }
       desiredPressure = clampPressureTarget(parameter.toFloat());
       Serial.print("desiredPressure ");
       Serial.println(desiredPressure);
@@ -397,10 +640,10 @@ void processCommand(String cmd) {
       sendStatus();
       smcDeviceNumber = 12;
 
+      // Filtered pressure is maintained by updatePressure(); never
+      // block on the load cell here
       Serial.print("pressure desired: ");
       Serial.print(desiredPressure);
-
-      pressure = abs(scale.get_units(5));
       Serial.print(" pressure now: ");
       Serial.println(pressure);
 
@@ -411,25 +654,33 @@ void processCommand(String cmd) {
       Serial.print(" pressureDirection: ");
       Serial.println(pressureDirection);
 
+      pressureMoveStart = millis();
+      pressureProgressTime = millis();
+      pressureProgressValue = pressure;
       setMotorSpeed(PRESSURE_SPEED * pressureDirection);
       measurePressure = true;
+      activeCmdSeq = currentCmdSeq;
       break;
 
     // Reset/restart
     case 'Y':
       parameter = cmd.substring(1, 3);
       smcDeviceNumber = parameter.toInt();
+      // Stop all motion before the MCU resets: the SMCs would otherwise
+      // keep the last commanded speed until setup() zeroes them
+      releasingPressure = false;
+      emergencyStop();
       Serial1.println("Reset|");
       resetFunc();
-      Serial1.println("DONE");
       break;
 
     // Emergency stop
     case 'X':
+      releasingPressure = false;  // host is alive and taking control
       emergencyStop();
       Serial.print(F("Stopped at Position: "));
       Serial.println(readPosition());
-      Serial1.println("DONE");
+      emitAck("DONE", currentCmdSeq);
       break;
 
     // Get position
@@ -441,35 +692,58 @@ void processCommand(String cmd) {
       Serial.print(localPosition);
       Serial1.print("P|");
       Serial1.println(localPosition);
-      Serial1.println("DONE");
+      emitAck("DONE", currentCmdSeq);
       break;
 
     // Position control
     case 'I':
-      if (bRunning) return;
+      if (bRunning || releasingPressure) {
+        emitAck("BUSY", currentCmdSeq);  // never silently drop a motion command
+        return;
+      }
 
       parameter = cmd.substring(1, 3);
+      if (parameter.toInt() < 12 || parameter.toInt() > 14) {
+        emitCmdError("Invalid device");
+        return;
+      }
       smcDeviceNumber = parameter.toInt();
       Serial.println(smcDeviceNumber);
 
       parameter = cmd.substring(3);
+      if (!isNumeric(parameter) || parameter.toInt() < 0) {
+        // Reject corrupt input: toInt() garbage would become position 0
+        emitCmdError("Invalid I value");
+        return;
+      }
       localDesiredPosition = parameter.toInt();
       localDesiredPosition = clampPositionTarget(smcDeviceNumber, localDesiredPosition);
+
+      if (smcDeviceNumber == 12)
+        if (localDesiredPosition <= AZERO)
+          localDesiredPosition = AZERO;
+
       localPosition = readPosition();
+      if (!positionReadValid) {
+        emitCmdError("Position read failed");
+        return;
+      }
 
       Serial.print(localDesiredPosition);
       Serial.print(" ");
       Serial.println(localPosition);
 
-      if (localDesiredPosition >= (localPosition + 25)) {
-        forward = 1;
-      } else {
-        forward = -1;
+      // Symmetric close-enough band: small moves in either direction
+      // complete immediately instead of one-sided 25-count behavior
+      if (localDesiredPosition + POSITION_DEADBAND >= localPosition &&
+          localPosition + POSITION_DEADBAND >= localDesiredPosition) {
+        position = localPosition;
+        desiredPosition = localDesiredPosition;
+        sendStatus();
+        emitAck("DONE", currentCmdSeq);
+        break;
       }
-
-      if (smcDeviceNumber == 12)
-        if (localDesiredPosition <= AZERO)
-          localDesiredPosition = AZERO;
+      forward = (localDesiredPosition > localPosition) ? 1 : -1;
 
       // Copy local variables to globals for use in loop()
       position = localPosition;
@@ -485,13 +759,14 @@ void processCommand(String cmd) {
       Serial.print(" ");
       Serial.println(position);
 
+      activeCmdSeq = currentCmdSeq;
       bRunning = true;
       break;
 
     // C Position (lateral flexion) control
     case 'K':
-      if (bRunning) {
-        // Skip if already running - main loop will handle status updates
+      if (bRunning || releasingPressure) {
+        emitAck("BUSY", currentCmdSeq);  // never silently drop a motion command
         return;
       }
 
@@ -500,20 +775,35 @@ void processCommand(String cmd) {
       parameter = cmd.substring(1);
       Serial.println(parameter);
 
+      if (!isNumeric(parameter) || parameter.toInt() < 0) {
+        // Reject corrupt input: toInt() garbage would drive the lateral
+        // actuator to its clamp floor (500)
+        emitCmdError("Invalid K value");
+        return;
+      }
       localDesiredPosition = parameter.toInt();
       localDesiredPosition = clampPositionTarget(smcDeviceNumber, localDesiredPosition);
       Serial.println(localDesiredPosition);
 
       localPosition = readPosition();
+      if (!positionReadValid) {
+        emitCmdError("Position read failed");
+        return;
+      }
       Serial.print(localDesiredPosition);
       Serial.print(" ");
       Serial.println(localPosition);
 
-      if (localDesiredPosition >= (localPosition + 25)) {
-        forward = 1;
-      } else {
-        forward = -1;
+      // Symmetric close-enough band (see 'I')
+      if (localDesiredPosition + POSITION_DEADBAND >= localPosition &&
+          localPosition + POSITION_DEADBAND >= localDesiredPosition) {
+        desiredPosition = localDesiredPosition;
+        position = localPosition;
+        sendStatus();
+        emitAck("DONE", currentCmdSeq);
+        break;
       }
+      forward = (localDesiredPosition > localPosition) ? 1 : -1;
 
       // Copy to globals
       desiredPosition = localDesiredPosition;
@@ -527,32 +817,54 @@ void processCommand(String cmd) {
       Serial.print(" ");
       Serial.println(position);
 
+      activeCmdSeq = currentCmdSeq;
       bRunning = true;
       break;
 
     // Position in inches
     case 'A':
-      if (bRunning) return;
+      if (bRunning || releasingPressure) {
+        emitAck("BUSY", currentCmdSeq);  // never silently drop a motion command
+        return;
+      }
 
       parameter = cmd.substring(1, 3);
+      if (parameter.toInt() < 12 || parameter.toInt() > 14) {
+        emitCmdError("Invalid device");
+        return;
+      }
       smcDeviceNumber = parameter.toInt();
       Serial.println(smcDeviceNumber);
 
       parameter = cmd.substring(3);
+      if (!isNumeric(parameter)) {
+        emitCmdError("Invalid A value");
+        return;
+      }
       inches = parameter.toFloat();
+      if (inches < 0.0 || inches > 12.0) {
+        // Reject instead of letting the float->uint16_t conversion wrap
+        // a corrupted negative value to full extension
+        emitCmdError("A value out of range");
+        return;
+      }
 
+      // NOTE: target math intentionally preserves the historical
+      // convention (no ZERO offset for nonzero inches). The offset
+      // question changes physical targets and is gated on the Batch-1
+      // hardware measurement session -- see the flash checklist.
       if (smcDeviceNumber == 12) {
-        localDesiredPosition = AFULLINCH * inches;
+        localDesiredPosition = (uint16_t)(AFULLINCH * inches);
         AInches = inches;
         if (inches == 0)
           localDesiredPosition = AZERO;
       } else if (smcDeviceNumber == 13) {
-        localDesiredPosition = BFULLINCH * inches;
+        localDesiredPosition = (uint16_t)(BFULLINCH * inches);
         BInches = inches;
         if (inches == 0)
           localDesiredPosition = BZERO;
       } else if (smcDeviceNumber == 14) {
-        localDesiredPosition = CFULLINCH * inches;
+        localDesiredPosition = (uint16_t)(CFULLINCH * inches);
         CInches = inches;
         if (inches == 0)
           localDesiredPosition = CZERO;
@@ -560,6 +872,10 @@ void processCommand(String cmd) {
       localDesiredPosition = clampPositionTarget(smcDeviceNumber, localDesiredPosition);
 
       localPosition = readPosition();
+      if (!positionReadValid) {
+        emitCmdError("Position read failed");
+        return;
+      }
       Serial.print(inches);
       Serial.print(" ");
       Serial.print(localDesiredPosition);
@@ -570,13 +886,17 @@ void processCommand(String cmd) {
       desiredPosition = localDesiredPosition;
       position = localPosition;
 
-      if (desiredPosition >= (position + 25)) {
-        forward = 1;
-      } else {
-        forward = -1;
+      // Symmetric close-enough band (see 'I')
+      if (desiredPosition + POSITION_DEADBAND >= position &&
+          position + POSITION_DEADBAND >= desiredPosition) {
+        sendStatus();
+        emitAck("DONE", currentCmdSeq);
+        break;
       }
+      forward = (desiredPosition > position) ? 1 : -1;
 
       setMotorSpeed(forward * BC_SPEED); // Start motor immediately
+      activeCmdSeq = currentCmdSeq;
       bRunning = true;
       break;
 
@@ -593,7 +913,7 @@ void processCommand(String cmd) {
           Serial.println(calibration_factor);
           scale.set_scale(calibration_factor);
           scale.tare();
-          Serial1.println("DONE");
+          emitAck("DONE", currentCmdSeq);
           break;
 
         case 1: // Tare scale
@@ -603,7 +923,7 @@ void processCommand(String cmd) {
           scale.tare();
           Serial.print("UNITS: ");
           Serial.println(scale.get_units(10));
-          Serial1.println("DONE");
+          emitAck("DONE", currentCmdSeq);
           break;
 
         case 4: // Get weight
@@ -614,13 +934,27 @@ void processCommand(String cmd) {
           break;
 
         case 5: // Set zero marks
-          AZERO = cmd.substring(2, 5).toInt();
-          BZERO = cmd.substring(5, 9).toInt();
+          if (cmd.length() > 2 && cmd.charAt(2) == '|') {
+            // Delimited form: L5|<azero>|<bzero> -- unambiguous for any
+            // digit count
+            AZERO = getValue(cmd, '|', 1).toInt();
+            BZERO = getValue(cmd, '|', 2).toInt();
+          } else {
+            // Legacy fixed-width form ("L5{:3} {:3}"): corrupts 4-digit
+            // values (1900 parses as 190); kept for old hosts only
+            AZERO = cmd.substring(2, 5).toInt();
+            BZERO = cmd.substring(5, 9).toInt();
+          }
           Serial.print("AZERO: ");
           Serial.print(AZERO);
           Serial.print("BZERO: ");
           Serial.println(BZERO);
-          Serial1.println("DONE");
+          // Echo parsed values so the host can verify what was applied
+          Serial1.print("ZEROS|");
+          Serial1.print(AZERO);
+          Serial1.print("|");
+          Serial1.println(BZERO);
+          emitAck("DONE", currentCmdSeq);
           break;
 
         case 6: // Report all positions and pressure
@@ -661,26 +995,35 @@ void processCommand(String cmd) {
       if (cmd.length() > 1)
           parameter = cmd.substring(1);
 
-      if (parameter == "") {
-          Serial.println("jerking");
-          jerking = true;
-          sendStatus();
-          noStatus = true;
-          jerksCompleted = 0;
-          jerkDirection = 1;
-          lastJerkTime = millis(); // Initialize jerk timer
-          smcDeviceNumber = 12;
-          Serial1.println("DONE");
-      }
-
       if (parameter == "S") {
           Serial.println("stop jerking");
           jerkDirection = 0;
           jerking = false;
-          noStatus = false;
           jerksCompleted = 0; // Reset counter
           setMotorSpeed(0);
-          Serial1.println("DONE");
+          emitAck("DONE", currentCmdSeq);
+      } else {
+          // Optional numeric parameter sets the pulse cadence in ms (J<ms>,
+          // Phase 3.5 §15.2). A bare 'J' keeps the current jerkInterval.
+          // Out-of-range / malformed values are ignored so a bad rate can
+          // never drive an unsafe cadence — pulsing still starts at the
+          // last good interval and DONE is still acked.
+          if (parameter.length() > 0) {
+              long requested = parameter.toInt();
+              if (requested >= MIN_JERK_INTERVAL && requested <= MAX_JERK_INTERVAL) {
+                  jerkInterval = (unsigned long)requested;
+              }
+          }
+          Serial.println("jerking");
+          jerking = true;
+          // Status stays ON during pulsing: the pressure ceiling check
+          // and the Pi both need telemetry exactly when force pulses
+          sendStatus();
+          jerksCompleted = 0;
+          jerkDirection = 1;
+          lastJerkTime = millis(); // Initialize jerk timer
+          smcDeviceNumber = 12;
+          emitAck("DONE", currentCmdSeq);
       }
       break;
 
@@ -722,7 +1065,7 @@ void processCommand(String cmd) {
         }
 
         timeInFIT = 0;
-        Serial1.println(F("DONE"));
+        emitAck("DONE", currentCmdSeq);
       }
       break; // FIXED: Added missing break statement
 
@@ -735,6 +1078,10 @@ void processCommand(String cmd) {
 
 // Setup function
 void setup() {
+#if ENABLE_WDT
+  wdt_disable();  // a pending watchdog must not fire again mid-setup
+#endif
+
   // Join I2C bus as slave
   Wire.begin(0x8);
 
@@ -743,7 +1090,18 @@ void setup() {
   Serial.setTimeout(5000);
   Serial1.begin(115200);
 
-  exitSafeStart();
+  // SAFETY: stop all motors before anything else. After an unexpected
+  // MCU reset the SMCs may still be running the last commanded speed;
+  // historically they kept moving for the >1s the load-cell init took.
+  AInches = 0;
+  smcDeviceNumber = 12;
+  setMotorSpeed(0);
+  BInches = 2;
+  smcDeviceNumber = 13;
+  setMotorSpeed(0);
+  smcDeviceNumber = 14;
+  setMotorSpeed(0);
+  Serial.println("All actuators stopped");
 
   Serial.println("\n\n\nStarting");
   Serial.print("VERSION: ");
@@ -762,21 +1120,6 @@ void setup() {
   pinMode(DIR_A_FORWARD, OUTPUT);
   pinMode(DIR_A_REVERSE, OUTPUT);
 
-  // Initialize actuators
-  int movement = -3000;
-  AInches = 0;
-  smcDeviceNumber = 12; // position actuator
-  setMotorSpeed(0);  // stop
-  Serial.println("A actuator positioned");
-
-  BInches = 2;
-  smcDeviceNumber = 13; // position actuator
-  setMotorSpeed(0);  // stop
-  Serial.println("B actuator positioned");
-
-  smcDeviceNumber = 14; // position actuator
-  setMotorSpeed(0);  // stop
-  Serial.println("C actuator ready");
   Serial.print("readPosition ");
   Serial.println(readPosition());
 
@@ -786,14 +1129,88 @@ void setup() {
   Serial1.println("Ready to Go");
 
   loopPosition = millis();
+  lastHostTraffic = millis();
+  lastScaleReady = millis();
+
+#if ENABLE_WDT
+  // Reboot into the safe state above if loop() ever hangs (wedged I2C,
+  // dead load cell, etc.)
+  wdt_enable(WDTO_2S);
+#endif
 }
+
+// Loop state (file scope rather than function statics so the native
+// tests can reset them between cases)
+int loopLastPosition = -1;
+int loopStallCount = 0;
+unsigned long lastActiveStatus = 0;
 
 // Main loop function - FIXED jerking logic
 void loop() {
-  static int lastPosition = -1;
+#if ENABLE_WDT
+  wdt_reset();
+#endif
 
   // Read stop pin
   STOP = digitalRead(STOP_PIN);
+
+  // Maintain the filtered pressure value without blocking
+  updatePressure();
+
+  bool activeMotion = bRunning || measurePressure || jerking;
+
+  // SAFETY: the physical stop button is honored in EVERY state --
+  // including pressure application and pulsing, which previously
+  // ignored it entirely
+  if (!STOP && activeMotion) {
+    emergencyStopAndRelease("Stop button pressed");
+    activeMotion = false;
+  }
+
+  // SAFETY: pressure ceiling enforced in EVERY state, not only inside
+  // an active pressure move (pulsing and position moves can also wind
+  // traction past the limit)
+  if (pressure > MAX_PRESSURE_LBS && !releasingPressure) {
+    emergencyStopAndRelease("Pressure limit exceeded");
+    activeMotion = false;
+  }
+
+  // SAFETY: heartbeat -- if the host goes silent while we are moving or
+  // holding load, stop and release rather than continuing forever
+  if (activeMotion && millis() - lastHostTraffic > HEARTBEAT_TIMEOUT) {
+    emergencyStopAndRelease("Host heartbeat lost");
+    activeMotion = false;
+  }
+
+  // SAFETY: a load cell that stops producing data while load matters is
+  // a sensor fault; without this, pressure is whatever stale value the
+  // last good read left behind
+  if ((measurePressure || jerking) &&
+      millis() - lastScaleReady > SCALE_READ_TIMEOUT) {
+    emergencyStopAndRelease("Load cell not responding");
+    activeMotion = false;
+  }
+
+  // Autonomous post-fault release: back the axial actuator off until
+  // the load clears, bounded by travel and time
+  if (releasingPressure) {
+    smcDeviceNumber = 12;
+    uint16_t releasePos = readPosition();
+    bool scaleAlive = (millis() - lastScaleReady) < SCALE_READ_TIMEOUT;
+    bool released = scaleAlive && pressure < PRESSURE_RELEASE_LBS;
+    bool atTravelLimit =
+        positionReadValid && releasePos <= (uint16_t)(AZERO + POSITION_DEADBAND);
+    bool timedOut = millis() - releaseStart > RELEASE_TIMEOUT;
+    if (released || atTravelLimit || timedOut) {
+      setMotorSpeed(0);
+      releasingPressure = false;
+      if (released)
+        Serial1.println("RELEASED");
+      else
+        Serial1.println("ERROR: Release incomplete");
+      sendStatus();
+    }
+  }
 
   // Reset if processing status took too long
   if (isProcessingStatus && (millis() - statusStartTime > 500)) {
@@ -813,6 +1230,15 @@ void loop() {
     timeSinceLastStatus = 0; // Reset timer
     if (sendStatus()) {
       lastStatusTime = millis(); // Record when we sent status
+    }
+  }
+  // Status during motion even without HF mode: the host needs telemetry
+  // (and its Q acks feed the heartbeat) exactly while things move
+  else if (!highFrequencyStatus && activeMotion &&
+           millis() - lastActiveStatus > ACTIVE_STATUS_INTERVAL) {
+    lastActiveStatus = millis();
+    if (sendStatus()) {
+      lastStatusTime = millis();
     }
   }
   // Regular status update only when idle
@@ -862,19 +1288,17 @@ void loop() {
   }
 
   // Running motor handler (position control)
+  // (STOP pin already handled unconditionally at the top of loop())
   if (bRunning) {
-    // STOP pin is pulled HIGH normally, goes LOW when pressed
-    if (!STOP) {  // Emergency stop when pin is LOW (button pressed)
-      emergencyStop();
-    } else {
-      // No need to set motor speed here - already set in processCommand
-      uint16_t currentPos = readPosition();
+    // No need to set motor speed here - already set in processCommand
+    uint16_t currentPos = readPosition();
 
+    if (positionReadValid) {
       // Debug output
       Serial.print(forward); Serial.print(" ");
       Serial.print(CInches); Serial.print(" ");
       Serial.print(currentPos); Serial.print(" ");
-      Serial.print(lastPosition); Serial.print(" ");
+      Serial.print(loopLastPosition); Serial.print(" ");
       Serial.println(desiredPosition);
 
       // Check if position reached with hysteresis
@@ -895,79 +1319,124 @@ void loop() {
       }
 
       // Handle stalling detection
-      if (lastPosition == currentPos) {
-        static int stallCount = 0;
-        stallCount++;
-        if (stallCount > 5) { // Stop if stalled for too long
+      if (loopLastPosition == (int)currentPos) {
+        loopStallCount++;
+        if (loopStallCount > 5) { // Stop if stalled for too long
           Serial.println("Motor stalled - stopping");
+          Serial1.println("ERROR: Motor stalled");
           setMotorSpeed(0);
           bRunning = false;
-          stallCount = 0;
+          loopStallCount = 0;
         }
       } else {
-        lastPosition = currentPos;
+        // Movement resumed: a counter that never reset here used to
+        // accumulate across the whole session and stop healthy moves
+        loopStallCount = 0;
+        loopLastPosition = currentPos;
       }
     }
+    // On an invalid position read, skip arrival/stall decisions this
+    // iteration rather than acting on garbage (0 was both the error
+    // value and a legal position)
 
     // Cleanup after run complete
     if (!bRunning) {
       position = readPosition();
       Serial.println(position);
       sendStatus();
-      Serial1.println("DONE");
+      emitAck("DONE", activeCmdSeq);
+      activeCmdSeq = -1;
     }
   }
 
   // Pressure monitoring and control
+  // (>MAX check and load-cell-fault check already ran unconditionally
+  // at the top of loop(); pressure itself is maintained by
+  // updatePressure() without blocking)
   if (measurePressure) {
     smcDeviceNumber = 12;
     uint16_t currentPos = readPosition();
-    pressure = abs(scale.get_units(5));
-    if (pressure > MAX_PRESSURE_LBS) {
-      Serial.println("Pressure safety limit exceeded - emergency stop");
-      Serial1.println("ERROR: Pressure limit exceeded");
-      emergencyStop();
+
+    // Travel envelope: a pressure move may not push past the axial
+    // travel limits chasing an unreachable target
+    if (positionReadValid && pressureDirection > 0 &&
+        currentPos >= AXIAL_MAX_POS) {
+      emergencyStopAndRelease("Axial travel limit during pressure move");
       return;
     }
-
-    Serial.print("desiredPressure: ");
-    Serial.print(desiredPressure);
-    Serial.print(" pressureDirection: ");
-    Serial.print(pressureDirection);
-    Serial.print(" pressure: ");
-    Serial.println(pressure);
-
-    if (pressure < 0.5)
-      pressure = 0;
-
-    // Check if target pressure reached with hysteresis
-    bool pressureReached = false;
-    if (pressureDirection > 0) {
-      if (pressure >= desiredPressure) {
-        pressureReached = true;
-      }
-    } else if (pressure <= desiredPressure) {
-      pressureReached = true;
-    }
-
-    if (pressureReached) {
+    if (positionReadValid && pressureDirection < 0 &&
+        currentPos <= (uint16_t)(AZERO + POSITION_DEADBAND)) {
+      // Fully backed off; lower pressure is not achievable
+      Serial1.println("ERROR: Axial at zero, pressure target not reached");
       setMotorSpeed(0);
       measurePressure = false;
       pressureDirection = 0;
     }
 
+    // Time bound on the whole move
+    if (measurePressure &&
+        millis() - pressureMoveStart > PRESSURE_MOVE_TIMEOUT) {
+      emergencyStopAndRelease("Pressure move timeout");
+      return;
+    }
+
+    // Progress check: motor commanded but pressure not changing means a
+    // frozen sensor or mechanical stall -- both are faults
+    if (measurePressure) {
+      float progress = pressure - pressureProgressValue;
+      if ((pressureDirection > 0 && progress >= PRESSURE_STALL_DELTA) ||
+          (pressureDirection < 0 && progress <= -PRESSURE_STALL_DELTA)) {
+        pressureProgressValue = pressure;
+        pressureProgressTime = millis();
+      } else if (millis() - pressureProgressTime > PRESSURE_STALL_MS) {
+        emergencyStopAndRelease("No pressure progress");
+        return;
+      }
+    }
+
+    if (measurePressure) {
+      Serial.print("desiredPressure: ");
+      Serial.print(desiredPressure);
+      Serial.print(" pressureDirection: ");
+      Serial.print(pressureDirection);
+      Serial.print(" pressure: ");
+      Serial.println(pressure);
+
+      // Check if target pressure reached with hysteresis
+      bool pressureReached = false;
+      if (pressureDirection > 0) {
+        if (pressure >= desiredPressure) {
+          pressureReached = true;
+        }
+      } else if (pressure <= desiredPressure) {
+        pressureReached = true;
+      }
+
+      if (pressureReached) {
+        setMotorSpeed(0);
+        measurePressure = false;
+        pressureDirection = 0;
+      }
+    }
+
     // Cleanup after pressure adjustment complete
     if (!measurePressure) {
-      pressure = abs(scale.get_units(5));
       sendStatus();
-      Serial1.println("DONE");
-      noStatus = false;
+      emitAck("DONE", activeCmdSeq);
+      activeCmdSeq = -1;
     }
   }
 
   // Command reading and processing - IMPROVED buffer handling
   while (Serial1.available() > 0) {
+    // Never append bytes to an already-complete command: under the rate
+    // limiter this used to merge two commands into one corrupt string
+    // (e.g. "Q"+"X" -> "QX", silently discarding an emergency stop)
+    if (isCommandComplete)
+      break;
+
     char incomingByte = Serial1.read();
+    lastHostTraffic = millis();  // any host byte feeds the heartbeat
 
     if (incomingByte == '\n' || incomingByte == '\r') {  // Command complete
       if (commandBuffer.length() > 0) { // Only process non-empty commands
@@ -987,11 +1456,24 @@ void loop() {
     }
   }
 
-  // Process complete commands with rate limiting
-  if (isCommandComplete && millis() - lastCommandTime > MIN_COMMAND_INTERVAL && !isProcessingStatus) {
-    lastCommandTime = millis();
-    processCommand(commandBuffer);
-    commandBuffer = "";
-    isCommandComplete = false;
+  // Process complete commands with rate limiting. 'X' (emergency stop)
+  // is exempt from both the rate limiter and the status-in-progress
+  // gate: a stop must never wait in line behind an ack
+  if (isCommandComplete) {
+    bool isEmergency = isEmergencyBuffer(commandBuffer);
+    if (isEmergency ||
+        (millis() - lastCommandTime > MIN_COMMAND_INTERVAL && !isProcessingStatus)) {
+      lastCommandTime = millis();
+      String execBuffer = commandBuffer;
+      currentCmdSeq = -1;
+      bool frameOk = true;
+      if (commandBuffer.charAt(0) == '#')
+        frameOk = parseV2Frame(commandBuffer, execBuffer);
+      if (frameOk)
+        processCommand(execBuffer);
+      currentCmdSeq = -1;
+      commandBuffer = "";
+      isCommandComplete = false;
+    }
   }
 }

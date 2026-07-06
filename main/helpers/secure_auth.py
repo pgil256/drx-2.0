@@ -1,11 +1,13 @@
 """
 Secure Authentication Helper
 This module provides secure authentication using environment variables.
-For production, this should be replaced with a proper database and password hashing.
 """
 
 import os
 import hashlib
+import hmac
+import secrets
+
 try:
     from dotenv import load_dotenv
 except ImportError:
@@ -14,6 +16,10 @@ except ImportError:
 
 # Load environment variables
 load_dotenv()
+
+PBKDF2_ITERATIONS = 200_000
+PBKDF2_PREFIX = "pbkdf2_sha256"
+
 
 class SecureAuthHelper:
     def __init__(self):
@@ -31,7 +37,7 @@ class SecureAuthHelper:
         admin_pin_hash = os.getenv("ADMIN_PIN_HASH")
         admin_pin = os.getenv("ADMIN_PIN")
         if not admin_pin_hash and admin_pin:
-            admin_pin_hash = self.hash_pin(admin_pin)
+            admin_pin_hash = self.hash_pin_secure(admin_pin)
         if admin_pin_hash:
             users[admin_pin_hash] = {
                 "pin_hash": admin_pin_hash,
@@ -44,7 +50,7 @@ class SecureAuthHelper:
         user_pin_hash = os.getenv("USER_PIN_HASH")
         user_pin = os.getenv("USER_PIN")
         if not user_pin_hash and user_pin:
-            user_pin_hash = self.hash_pin(user_pin)
+            user_pin_hash = self.hash_pin_secure(user_pin)
         if user_pin_hash:
             users[user_pin_hash] = {
                 "pin_hash": user_pin_hash,
@@ -74,16 +80,58 @@ class SecureAuthHelper:
         """
         if not self.users:
             return None
-        pin_hash = self.hash_pin(pin)
-        if pin_hash in self.users:
-            return self.users[pin_hash]
+        for stored_hash, user in self.users.items():
+            if self.verify_pin(pin, stored_hash):
+                return user
         return None
+
+    @staticmethod
+    def hash_pin_secure(pin):
+        """Hash a PIN with PBKDF2-HMAC-SHA256 and a random per-user salt.
+
+        Format: pbkdf2_sha256$<iterations>$<salt_hex>$<hash_hex>
+        """
+        salt = secrets.token_bytes(16)
+        derived = hashlib.pbkdf2_hmac(
+            "sha256", str(pin).encode(), salt, PBKDF2_ITERATIONS
+        )
+        return (
+            f"{PBKDF2_PREFIX}${PBKDF2_ITERATIONS}"
+            f"${salt.hex()}${derived.hex()}"
+        )
+
+    @staticmethod
+    def verify_pin(pin, stored_hash):
+        """Verify a PIN against either hash format.
+
+        Supports the salted PBKDF2 format for all new hashes and the
+        legacy unsalted SHA-256 hex digests already present in deployed
+        user files (those keep working but should be re-provisioned).
+        """
+        if not stored_hash:
+            return False
+        if stored_hash.startswith(PBKDF2_PREFIX + "$"):
+            try:
+                _, iterations, salt_hex, hash_hex = stored_hash.split("$")
+                derived = hashlib.pbkdf2_hmac(
+                    "sha256",
+                    str(pin).encode(),
+                    bytes.fromhex(salt_hex),
+                    int(iterations),
+                )
+                return hmac.compare_digest(derived.hex(), hash_hex)
+            except (ValueError, TypeError):
+                return False
+        # Legacy unsalted SHA-256
+        legacy = hashlib.sha256(str(pin).encode()).hexdigest()
+        return hmac.compare_digest(legacy, stored_hash)
 
     @staticmethod
     def hash_pin(pin):
         """
-        Hash a PIN for secure storage.
-        Note: In production, use bcrypt or similar with salt.
+        Legacy unsalted SHA-256 hash (kept only so existing stored hashes
+        remain verifiable). Use hash_pin_secure for anything new: a bare
+        digest of a short numeric PIN is reversible instantly.
 
         Args:
             pin (str): The PIN to hash

@@ -14,6 +14,7 @@ no pty / POSIX gating).
 """
 
 import hashlib
+import logging
 
 import pytest
 
@@ -66,6 +67,38 @@ def stub_message_box(monkeypatch):
 
     monkeypatch.setattr(csv_module, "QMessageBox", _StubMessageBox)
     return calls
+
+
+@pytest.fixture
+def no_qapplication(monkeypatch):
+    """Make load_csv observe that no QApplication event loop is running.
+
+    Forcing QApplication.instance() to return None makes the headless code
+    path deterministic regardless of whether an earlier Qt test left a
+    session-wide QApplication alive.
+    """
+
+    class _NoQApplication:
+        @staticmethod
+        def instance():
+            return None
+
+    monkeypatch.setattr(csv_module, "QApplication", _NoQApplication)
+    return _NoQApplication
+
+
+@pytest.fixture
+def with_qapplication(monkeypatch):
+    """Make load_csv observe a running QApplication event loop."""
+    sentinel = object()
+
+    class _RunningQApplication:
+        @staticmethod
+        def instance():
+            return sentinel
+
+    monkeypatch.setattr(csv_module, "QApplication", _RunningQApplication)
+    return _RunningQApplication
 
 
 def _sha256(value):
@@ -125,7 +158,13 @@ class TestLoadCsvValidFile:
 
 @pytest.mark.unit
 class TestLoadCsvLegacyPin:
-    """Tests for the legacy plaintext-pin -> hashed-pin conversion."""
+    """Tests for the legacy plaintext-pin -> hashed-pin conversion.
+
+    Since the FAILSAFE branch the in-memory migration is SALTED
+    (hash_pin_secure), so the resulting key is non-deterministic: assert
+    on the format and on verify_pin round-trips, never on a precomputed
+    digest.
+    """
 
     def test_plaintext_pin_is_hashed(self, tmp_path):
         """A 'pin' column (no pin_hash) is hashed in memory and used as key."""
@@ -138,9 +177,10 @@ class TestLoadCsvLegacyPin:
 
         data = helper.load_csv(str(csv_path))
 
-        expected_hash = _sha256("1234")
-        assert expected_hash in data
-        assert data[expected_hash]["username"] == "Administrator"
+        assert len(data) == 1
+        stored_hash, row = next(iter(data.items()))
+        assert "1234" not in stored_hash
+        assert row["username"] == "Administrator"
 
     def test_plaintext_pin_removed_from_row(self, tmp_path):
         """The plaintext 'pin' value must not survive in the loaded row."""
@@ -153,12 +193,13 @@ class TestLoadCsvLegacyPin:
 
         data = helper.load_csv(str(csv_path))
 
-        row = data[_sha256("1234")]
+        stored_hash, row = next(iter(data.items()))
         assert "pin" not in row
-        assert row["pin_hash"] == _sha256("1234")
+        assert row["pin_hash"] == stored_hash
 
-    def test_hash_matches_secure_auth_helper(self, tmp_path):
-        """Legacy hashing uses the same algorithm as SecureAuthHelper.hash_pin."""
+    def test_migrated_hash_is_salted_and_verifiable(self, tmp_path):
+        """The migration uses the salted PBKDF2 format (no reversible
+        digest is ever held) and the PIN still verifies against it."""
         helper = CSVHelper()
         csv_path = _write_csv(
             tmp_path,
@@ -168,7 +209,11 @@ class TestLoadCsvLegacyPin:
 
         data = helper.load_csv(str(csv_path))
 
-        assert SecureAuthHelper.hash_pin("9999") in data
+        assert len(data) == 1
+        stored_hash = next(iter(data))
+        assert stored_hash.startswith("pbkdf2_sha256$")
+        assert SecureAuthHelper.verify_pin("9999", stored_hash)
+        assert not SecureAuthHelper.verify_pin("0000", stored_hash)
 
 
 @pytest.mark.unit
@@ -192,8 +237,10 @@ class TestLoadCsvMissingFile:
         # Should simply return without propagating an exception.
         helper.load_csv(str(missing))
 
-    def test_missing_file_shows_error_dialog(self, tmp_path, stub_message_box):
-        """A missing file triggers the error dialog side effect."""
+    def test_missing_file_shows_error_dialog_when_qapp_present(
+        self, tmp_path, stub_message_box, with_qapplication
+    ):
+        """With a running QApplication, a missing file shows the error dialog."""
         helper = CSVHelper()
         missing = tmp_path / "absent.csv"
 
@@ -208,7 +255,9 @@ class TestLoadCsvMissingFile:
 class TestLoadCsvMalformed:
     """Tests for load_csv() with malformed / incomplete data."""
 
-    def test_missing_pin_hash_column_does_not_crash(self, tmp_path, stub_message_box):
+    def test_missing_pin_hash_column_does_not_crash(
+        self, tmp_path, stub_message_box, with_qapplication
+    ):
         """A CSV lacking both pin_hash and pin is handled without crashing."""
         helper = CSVHelper()
         csv_path = _write_csv(
@@ -221,7 +270,7 @@ class TestLoadCsvMalformed:
 
         # The KeyError raised on the first row is caught; no valid rows loaded.
         assert data == {}
-        # The format error surfaces via the error dialog rather than an exception.
+        # With a QApplication running, the format error surfaces via the dialog.
         assert len(stub_message_box) == 1
 
     def test_partial_rows_loaded_before_bad_row(self, tmp_path):
@@ -263,27 +312,30 @@ class TestInitializeDataEnvOverride:
     """Tests for initialize_data() using environment-variable users."""
 
     def test_admin_plaintext_pin_hashed(self, clean_auth_env):
-        """ADMIN_PIN is hashed and used as the user key."""
+        """ADMIN_PIN is salted-hashed (hash_pin_secure) and used as the key."""
         clean_auth_env.setenv("ADMIN_PIN", "1234")
 
         helper = CSVHelper()
         helper.initialize_data()
 
-        expected_hash = _sha256("1234")
-        assert expected_hash in helper.users
-        assert helper.users[expected_hash]["status"] == "admin"
-        assert helper.users[expected_hash]["pin_hash"] == expected_hash
+        assert len(helper.users) == 1
+        stored_hash, record = next(iter(helper.users.items()))
+        assert stored_hash.startswith("pbkdf2_sha256$")
+        assert SecureAuthHelper.verify_pin("1234", stored_hash)
+        assert record["status"] == "admin"
+        assert record["pin_hash"] == stored_hash
 
     def test_user_plaintext_pin_hashed(self, clean_auth_env):
-        """USER_PIN is hashed and used as the user key."""
+        """USER_PIN is salted-hashed and used as the user key."""
         clean_auth_env.setenv("USER_PIN", "5678")
 
         helper = CSVHelper()
         helper.initialize_data()
 
-        expected_hash = _sha256("5678")
-        assert expected_hash in helper.users
-        assert helper.users[expected_hash]["status"] == "user"
+        assert len(helper.users) == 1
+        stored_hash, record = next(iter(helper.users.items()))
+        assert SecureAuthHelper.verify_pin("5678", stored_hash)
+        assert record["status"] == "user"
 
     def test_admin_and_user_both_loaded(self, clean_auth_env):
         """Both ADMIN_PIN and USER_PIN produce two distinct user records."""
@@ -293,9 +345,10 @@ class TestInitializeDataEnvOverride:
         helper = CSVHelper()
         helper.initialize_data()
 
-        assert _sha256("1111") in helper.users
-        assert _sha256("2222") in helper.users
         assert len(helper.users) == 2
+        by_status = {rec["status"]: h for h, rec in helper.users.items()}
+        assert SecureAuthHelper.verify_pin("1111", by_status["admin"])
+        assert SecureAuthHelper.verify_pin("2222", by_status["user"])
 
     def test_prehashed_pin_used_as_is(self, clean_auth_env):
         """ADMIN_PIN_HASH is used directly without re-hashing."""
@@ -318,34 +371,181 @@ class TestInitializeDataEnvOverride:
         helper = CSVHelper()
         helper.initialize_data()
 
-        record = helper.users[_sha256("1234")]
+        assert len(helper.users) == 1
+        record = next(iter(helper.users.values()))
         assert record["username"] == "Dr. Alice"
         assert record["email"] == "alice@clinic.example"
 
 
 @pytest.mark.unit
 class TestInitializeDataCsvFallback:
-    """Tests for initialize_data() falling back to a CSV file."""
+    """Tests for initialize_data() falling back to a CSV file.
 
-    def test_falls_back_to_bundled_csv(self, clean_auth_env):
-        """With no env users, initialize_data loads the bundled hashed CSV.
+    The runtime user_pins.csv is untracked (it holds real credentials), so
+    these tests provision a controlled CSV and point DATA_PATHS at it --
+    the repo no longer ships user records to assert against.
+    """
 
-        The repository ships main/data/user_pins.csv with two hashed records.
-        With the auth environment cleared, initialize_data must read that file.
-        """
+    @pytest.fixture
+    def runtime_csv(self, monkeypatch, tmp_path):
+        path = tmp_path / "user_pins.csv"
+        rows = [
+            SecureAuthHelper.hash_pin_secure("7042"),
+            SecureAuthHelper.hash_pin_secure("9518"),
+        ]
+        path.write_text(
+            "pin_hash,username,email,status\n"
+            f"{rows[0]},Admin,a@x,admin\n"
+            f"{rows[1]},User,u@x,user\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setitem(csv_module.DATA_PATHS, "USER_PINS", str(path))
+        return rows
+
+    def test_falls_back_to_runtime_csv(self, clean_auth_env, runtime_csv):
+        """With no env users, initialize_data loads the hashed CSV."""
         helper = CSVHelper()
         helper.initialize_data()
 
-        # The bundled CSV contains exactly two user records, keyed by hash.
         assert len(helper.users) == 2
         for key, row in helper.users.items():
             assert row["pin_hash"] == key
             assert "status" in row
 
-    def test_fallback_keys_are_hashes_not_plaintext(self, clean_auth_env):
-        """Fallback records are keyed by pin_hash, never by a plaintext pin."""
+    def test_fallback_keys_are_hashes_not_plaintext(self, clean_auth_env, runtime_csv):
+        """Fallback records are keyed by pin_hash, never by a plaintext pin.
+
+        Accepted forms are the salted PBKDF2 format (all re-provisioned
+        records) or a legacy 64-char sha256 digest (deployed files that
+        have not been rotated yet); a short numeric PIN is neither.
+        """
         helper = CSVHelper()
         helper.initialize_data()
 
-        # Bundled CSV uses 64-char sha256 hex digests as keys.
-        assert all(len(key) == 64 for key in helper.users)
+        assert helper.users
+        for key in helper.users:
+            assert key.startswith("pbkdf2_sha256$") or len(key) == 64
+            assert not key.isdigit()
+
+
+@pytest.mark.unit
+class TestLoadCsvHeadlessRobustness:
+    """load_csv must not crash when no QApplication event loop is running.
+
+    QMessageBox.critical(None, ...) constructs a modal dialog. Without a
+    running QApplication -- a missing or malformed user_pins.csv at startup
+    before the Qt event loop is up, or any headless context -- constructing
+    that dialog aborts the interpreter (observed as STATUS_STACK_BUFFER_OVERRUN,
+    exit -1073740791). On a patient-facing device that turns a recoverable data
+    error into a hard crash. The fix guards the dialog behind
+    QApplication.instance() and logs the error instead, degrading to an empty
+    user set rather than crashing.
+    """
+
+    def test_missing_file_no_dialog_without_qapp(
+        self, tmp_path, stub_message_box, no_qapplication
+    ):
+        """Missing file + no QApplication: empty dict, dialog suppressed."""
+        helper = CSVHelper()
+        missing = tmp_path / "absent.csv"
+
+        data = helper.load_csv(str(missing))
+
+        assert data == {}
+        # The dialog (and thus the process-aborting code path) is never reached.
+        assert len(stub_message_box) == 0
+
+    def test_malformed_no_dialog_without_qapp(
+        self, tmp_path, stub_message_box, no_qapplication
+    ):
+        """Malformed CSV + no QApplication: empty dict, dialog suppressed."""
+        helper = CSVHelper()
+        csv_path = _write_csv(
+            tmp_path,
+            ["Administrator,admin@example.com,admin"],
+            header="username,email,status",
+        )
+
+        data = helper.load_csv(str(csv_path))
+
+        assert data == {}
+        assert len(stub_message_box) == 0
+
+    def test_real_message_box_never_constructed_without_qapp(
+        self, tmp_path, no_qapplication, monkeypatch
+    ):
+        """The guard must short-circuit before QMessageBox is ever touched.
+
+        Replaces QMessageBox with one that raises if .critical is called, so
+        the test fails loudly if the guard regresses (rather than relying only
+        on a recording stub returning zero calls).
+        """
+
+        class _ExplodingMessageBox:
+            @staticmethod
+            def critical(parent, title, message):
+                raise AssertionError(
+                    "QMessageBox.critical called without a QApplication"
+                )
+
+        monkeypatch.setattr(csv_module, "QMessageBox", _ExplodingMessageBox)
+
+        helper = CSVHelper()
+        missing = tmp_path / "absent.csv"
+
+        # Must not raise.
+        assert helper.load_csv(str(missing)) == {}
+
+    def test_error_is_logged_without_qapp(self, tmp_path, no_qapplication, caplog):
+        """The failure is logged even when no dialog can be shown."""
+        helper = CSVHelper()
+        missing = tmp_path / "absent.csv"
+
+        with caplog.at_level(logging.ERROR):
+            helper.load_csv(str(missing))
+
+        assert any(
+            "absent.csv" in record.getMessage() for record in caplog.records
+        )
+
+    def test_initialize_data_survives_missing_csv(
+        self, clean_auth_env, no_qapplication, monkeypatch, tmp_path
+    ):
+        """Startup with no env users and a missing CSV degrades to no users.
+
+        This mirrors a fresh checkout: SecureAuthHelper finds nothing and the
+        runtime user_pins.csv does not exist yet. initialize_data seeds an
+        empty users file from the tracked template and loads zero users. It
+        must not crash even though no Qt event loop exists yet.
+        """
+        missing = str(tmp_path / "user_pins.csv")  # tmp_path is empty
+        monkeypatch.setitem(csv_module.DATA_PATHS, "USER_PINS", missing)
+
+        helper = CSVHelper()
+        helper.initialize_data()
+
+        assert helper.users == {}
+        # First-run seeding created the header-only file from the template.
+        assert csv_module.os.path.exists(missing)
+
+    def test_initialize_data_missing_csv_and_template(
+        self, clean_auth_env, no_qapplication, monkeypatch, tmp_path
+    ):
+        """No env users, no CSV, and no template: still no crash, no users."""
+        missing = str(tmp_path / "user_pins.csv")
+        monkeypatch.setitem(csv_module.DATA_PATHS, "USER_PINS", missing)
+
+        real_exists = csv_module.os.path.exists
+
+        def exists_without_template(path):
+            if str(path).endswith("user_pins.csv.example"):
+                return False
+            return real_exists(path)
+
+        monkeypatch.setattr(csv_module.os.path, "exists", exists_without_template)
+
+        helper = CSVHelper()
+        helper.initialize_data()
+
+        assert helper.users == {}
+        assert not real_exists(missing)

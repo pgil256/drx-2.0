@@ -69,6 +69,12 @@ os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 
 from fixtures.fake_arduino import FakeArduino, PTY_AVAILABLE
 
+# NOTE: the pre-FAILSAFE Arduino had a release_busy_port() that ran
+# `fuser -k <port>` on reconnect — in tests the port is a pty held by the
+# pytest process itself, so a stray reconnect SIGKILLed the whole run
+# (the historical exit-137 on Ubuntu CI). This branch's Arduino removed
+# that path entirely; no session-wide neutralization is needed anymore.
+
 
 @pytest.fixture
 def fake_arduino_pair():
@@ -83,6 +89,8 @@ def fake_arduino_pair():
     if not PTY_AVAILABLE:
         pytest.skip("FakeArduino requires POSIX pty/termios support")
 
+    import time
+
     fake = FakeArduino()
     fake.start()
 
@@ -91,9 +99,22 @@ def fake_arduino_pair():
 
     yield arduino, fake
 
-    fake.stop()
-    if arduino.serial_com and arduino.serial_com.is_open:
-        arduino.serial_com.close()
+    # Exception-safe teardown, in dependency order: stop the reader loop
+    # BEFORE closing the port (the legacy reader reacts to a dying port with
+    # reconnect attempts — multi-second sleeps and new threads that outlive
+    # the test), then close the serial fd, then stop/join the FakeArduino
+    # thread and close the pty.
+    try:
+        arduino._running = False
+        arduino.connected = False
+        time.sleep(0.05)  # let read_from_com's ~10 ms poll observe the flag
+        if arduino.serial_com and getattr(arduino.serial_com, "is_open", False):
+            try:
+                arduino.serial_com.close()
+            except Exception:
+                pass
+    finally:
+        fake.stop()
 
 
 @pytest.fixture

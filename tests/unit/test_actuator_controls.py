@@ -1,32 +1,26 @@
 # tests/unit/test_actuator_controls.py
+"""Unit tests for KneeSpa actuator-movement and safety controls.
+
+Union of the two development lines:
+- the FAILSAFE base's control-gating regression tests (single supersedable
+  enable timer; the lateral double-click lockup),
+- the GUI line's move_actuator boundary/command tests, adapted to the base's
+  guards (in-progress command debounce + marks_valid calibration gate), plus
+  the emergency-stop scheduling and mid-protocol confirmation contracts.
+
+Each target method is called UNBOUND against a lightweight stub ``self`` (a
+``MagicMock``) that carries only the attributes the method actually reads, so
+no Qt window / Arduino is constructed and the tests run on Windows.
 """
-Unit tests for KneeSpa actuator-movement and safety controls.
-
-These tests exercise three methods of the (very large) ``KneeSpa``
-``QMainWindow`` *without* constructing the window. Each target method is called
-UNBOUND against a lightweight stub ``self`` (a ``MagicMock``) that carries only
-the attributes the method actually reads. This keeps the tests fast,
-deterministic and Windows-runnable.
-
-Methods under test:
-  * ``move_actuator(actuator, step, speed_factor, direction)`` -- position
-    clamping to configured limits and the exact serial command emitted at the
-    boundaries (below-min, above-max, in-range) for each actuator.
-  * ``emergency_stop_clicked(event)`` -- emits the ``X`` (stop-all) command and
-    schedules the staged shutdown.
-  * ``_confirm_mid_protocol_change()`` -- the non-interactive return contract of
-    the mid-protocol safety confirmation dialog.
-
-Per the medical-device test policy, these tests assert the CURRENT behavior of
-``kneespa.py`` only; they never modify production code.
-"""
-
 from unittest.mock import MagicMock, patch
 
 import pytest
+from PyQt5.QtWidgets import QPushButton
 
 import kneespa
 from kneespa import KneeSpa
+import controllers.protocol_controller as pc_mod
+from controllers.protocol_controller import ProtocolController
 from config.config import Configuration
 from config.constants import (
     ACTUATORS,
@@ -44,25 +38,118 @@ ACTUATOR_B = ACTUATORS["HORIZONTAL"]["ID"]   # "13" -- horizontal flexion (deg)
 ACTUATOR_C = ACTUATORS["LATERAL"]["ID"]      # "14" -- lateral flexion (deg)
 
 
-def make_kneespa_stub(**positions):
-    """
-    Build a minimal stub ``self`` for ``move_actuator``.
+# ---------------------------------------------------------------------------
+# Control gating (base regression: the lateral double-click control lockup)
+# ---------------------------------------------------------------------------
+class ControlsHarness:
+    """Bare object exposing only the state the control-gating methods use.
 
-    Only the attributes read by ``move_actuator`` are populated:
-      * actuator id strings, a mocked ``arduino`` (records ``.send`` calls),
-      * the three current-position attributes,
-      * a default-populated ``config`` (for the lateral ``CMarks`` lookup),
-      * stubbed UI widgets / loading spinner / control toggles.
+    Binds the real KneeSpa methods without constructing the full UI.
     """
+
+    disable_actuator_controls = KneeSpa.disable_actuator_controls
+    enable_actuator_controls = KneeSpa.enable_actuator_controls
+    _apply_enable_actuator_controls = KneeSpa._apply_enable_actuator_controls
+    move_actuator = KneeSpa.move_actuator
+
+    def __init__(self, qtbot, n_buttons=3):
+        self.protocol_running = False
+        self.actuator_command_in_progress = False
+        self.controls_enable_timer = None
+        self.actuator_controls = []
+        for _ in range(n_buttons):
+            button = QPushButton()
+            qtbot.addWidget(button)
+            self.actuator_controls.append(button)
+
+    def all_enabled(self):
+        return all(w.isEnabled() for w in self.actuator_controls)
+
+    def all_disabled(self):
+        return all(not w.isEnabled() for w in self.actuator_controls)
+
+
+@pytest.mark.unit
+class TestActuatorControlGating:
+    def test_disable_sets_flag_and_disables(self, qtbot):
+        h = ControlsHarness(qtbot)
+        h.disable_actuator_controls()
+        assert h.actuator_command_in_progress is True
+        assert h.all_disabled()
+
+    def test_enable_reenables_after_delay_and_clears_state(self, qtbot):
+        h = ControlsHarness(qtbot)
+        h.disable_actuator_controls()
+        h.enable_actuator_controls()
+        assert h.actuator_command_in_progress is False
+        qtbot.wait(300)
+        assert h.all_enabled()
+        assert h.controls_enable_timer is None
+
+    def test_disable_cancels_pending_enable(self, qtbot):
+        """The lockup scenario: a second command arrives while the first
+        command's deferred enable is still pending. The disable must win."""
+        h = ControlsHarness(qtbot)
+        h.disable_actuator_controls()
+        h.enable_actuator_controls()  # first command completed
+        h.disable_actuator_controls()  # second command starts before timer fires
+        qtbot.wait(300)
+        assert h.all_disabled()
+        assert h.actuator_command_in_progress is True
+        assert h.controls_enable_timer is None
+
+    def test_rapid_double_enable_uses_single_timer(self, qtbot):
+        h = ControlsHarness(qtbot)
+        h.disable_actuator_controls()
+        h.enable_actuator_controls()
+        first_timer = h.controls_enable_timer
+        h.enable_actuator_controls()
+        assert h.controls_enable_timer is not first_timer
+        assert not first_timer.isActive()
+        qtbot.wait(300)
+        assert h.all_enabled()
+        assert h.controls_enable_timer is None
+
+    def test_enable_during_protocol_clears_flag_keeps_disabled(self, qtbot):
+        h = ControlsHarness(qtbot)
+        h.disable_actuator_controls()
+        h.protocol_running = True
+        h.enable_actuator_controls()
+        assert h.actuator_command_in_progress is False
+        qtbot.wait(300)
+        assert h.all_disabled()
+
+    def test_move_actuator_ignored_while_command_in_progress(self, qtbot):
+        """move_actuator must return before touching any actuator state.
+
+        The harness has none of the attributes the body uses, so reaching
+        past the guard would raise AttributeError."""
+        h = ControlsHarness(qtbot)
+        h.actuator_command_in_progress = True
+        h.move_actuator("12", 0.5, 1, 1)
+
+
+# ---------------------------------------------------------------------------
+# move_actuator boundary/command behavior (GUI line, adapted to base guards)
+# ---------------------------------------------------------------------------
+def make_kneespa_stub(**positions):
+    """Build a minimal stub ``self`` for ``move_actuator``.
+
+    Only the attributes read by ``move_actuator`` are populated: actuator id
+    strings, a mocked ``arduino``, the current-position attributes, and a
+    default-populated ``config`` with the base guards satisfied
+    (actuator_command_in_progress False, marks_valid True)."""
     config = Configuration()
     config._set_default_c_marks()
     config._set_default_a_marks()
     config._set_default_b_marks()
+    config.marks_valid = True  # the calibration gate is tested separately
 
     stub = MagicMock()
     stub.actuator_a = ACTUATOR_A
     stub.actuator_b = ACTUATOR_B
     stub.actuator_c = ACTUATOR_C
+    stub.actuator_command_in_progress = False
 
     stub.arduino = MagicMock()
     stub.config = config
@@ -70,10 +157,21 @@ def make_kneespa_stub(**positions):
     stub.horizontal_flexion_position = positions.get("horizontal", 0)
     stub.axial_flexion_position = positions.get("axial", 0)
     stub.lateral_flexion_position = positions.get("lateral", 0)
-
-    # UI widgets / helpers the method touches are MagicMocks by default
-    # because ``stub`` is itself a MagicMock; ``stub.ui`` autocreates children.
     return stub
+
+
+@pytest.mark.unit
+class TestMoveActuatorGuards:
+    """The base guards run before any motion state is touched."""
+
+    def test_uncalibrated_marks_refuse_to_jog(self):
+        """Generated default marks are fabricated geometry - jogging on them
+        must warn and send nothing."""
+        stub = make_kneespa_stub(horizontal=0)
+        stub.config.marks_valid = False
+        KneeSpa.move_actuator(stub, ACTUATOR_B, None, "1", 1)
+        stub.arduino.send.assert_not_called()
+        stub._warn_uncalibrated.assert_called_once()
 
 
 @pytest.mark.unit
@@ -180,9 +278,8 @@ class TestMoveActuatorLateral:
     def test_in_range_sends_mapped_position_command(self):
         """In-range move maps degrees through CMarks and sends ``K<position>``."""
         # Start at 0; slow step is 2.5, direction +1 -> 2.5 deg.
-        # CMarks["2.5"] == 1569 in the default configuration.
         stub = make_kneespa_stub(lateral=0)
-        expected_pos = stub.config.CMarks["2.5"]
+        expected_pos = int(stub.config.CMarks["2.5"])
         KneeSpa.move_actuator(stub, ACTUATOR_C, None, "1", 1)
         stub.arduino.send.assert_called_once_with(f"K{expected_pos}")
         assert stub.lateral_flexion_position == 2.5
@@ -191,7 +288,7 @@ class TestMoveActuatorLateral:
         """The new position is snapped to the nearest 2.5-degree increment."""
         # Start at 1.0; slow step 2.5 -> 3.5 -> rounds to 2.5 (nearest 2.5).
         stub = make_kneespa_stub(lateral=1.0)
-        expected_pos = stub.config.CMarks["2.5"]
+        expected_pos = int(stub.config.CMarks["2.5"])
         KneeSpa.move_actuator(stub, ACTUATOR_C, None, "1", 1)
         stub.arduino.send.assert_called_once_with(f"K{expected_pos}")
         assert stub.lateral_flexion_position == 2.5
@@ -199,18 +296,26 @@ class TestMoveActuatorLateral:
 
 @pytest.mark.unit
 class TestEmergencyStop:
-    """emergency_stop_clicked safety behavior."""
+    """Emergency-stop delegation + the controller's staged shutdown.
+
+    The GPIO-line ordering is pinned separately in test_estop_gpio.py."""
+
+    def test_window_delegates_to_controller(self):
+        stub = MagicMock()
+        KneeSpa.emergency_stop_clicked(stub, event=None)
+        stub.protocol.emergency_stop_clicked.assert_called_once_with(None)
 
     def test_sends_stop_command(self):
-        """Emergency stop must emit the ``X`` (stop-all) serial command."""
+        """The controller chain must emit the ``X`` (stop-all) serial command
+        through the real stop_actuators implementation."""
         stub = MagicMock()
-        stub.arduino = MagicMock()
-        # stop_actuators is the real implementation; call it unbound so the
-        # ``X`` command actually reaches the mocked arduino.
+        stub.arduino.send.return_value = True
         stub.stop_actuators = lambda: KneeSpa.stop_actuators(stub)
+        controller = ProtocolController(stub)
 
-        with patch.object(kneespa, "QTimer") as mock_qtimer:
-            KneeSpa.emergency_stop_clicked(stub, event=None)
+        with patch.object(pc_mod, "QTimer") as mock_qtimer, \
+                patch.object(pc_mod, "GPIO"):
+            controller.emergency_stop_clicked(None)
 
         stub.arduino.send.assert_called_once_with("X")
         # The staged shutdown is scheduled (non-blocking) via QTimer.singleShot.
@@ -219,16 +324,16 @@ class TestEmergencyStop:
     def test_schedules_phase_two(self):
         """After the stop command, phase 2 is scheduled with a 1s delay."""
         stub = MagicMock()
-        stub.arduino = MagicMock()
-        stub.stop_actuators = MagicMock()
+        controller = ProtocolController(stub)
 
-        with patch.object(kneespa, "QTimer") as mock_qtimer:
-            KneeSpa.emergency_stop_clicked(stub, event=None)
+        with patch.object(pc_mod, "QTimer") as mock_qtimer, \
+                patch.object(pc_mod, "GPIO"):
+            controller.emergency_stop_clicked(None)
 
         stub.stop_actuators.assert_called_once()
         args, _ = mock_qtimer.singleShot.call_args
         assert args[0] == 1000
-        assert args[1] == stub._emergency_stop_phase2
+        assert args[1] == controller._emergency_stop_phase2
 
 
 @pytest.mark.unit

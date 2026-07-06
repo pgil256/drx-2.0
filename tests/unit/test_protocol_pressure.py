@@ -155,14 +155,15 @@ class TestStop:
         sent = [c[0][0] for c in p.arduino.send.call_args_list]
         assert "X" in sent
 
-    def test_disables_high_frequency_before_emergency_stop(self):
-        """'HF0' is sent before 'X' so updates are quiet during the stop."""
+    def test_stop_order_x_then_release_then_hf0(self):
+        """stop() sends X first (jumps the rate-limit queue), then P0 to
+        release pressure, then HF0 last so telemetry stays live during the
+        release."""
         p = make_protocol()
         p.is_running = True
         p.stop()
         sent = [c[0][0] for c in p.arduino.send.call_args_list]
-        assert "HF0" in sent and "X" in sent
-        assert sent.index("HF0") < sent.index("X")
+        assert sent == ["X", "P0", "HF0"]
 
     def test_emits_stopped_signal(self):
         """stop() emits the stopped(True) signal on success."""

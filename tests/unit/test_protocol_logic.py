@@ -128,6 +128,20 @@ class TestSetToCDistance:
         assert result is True
         p.arduino.send.assert_called_with("K2400")
 
+    def test_duplicate_degree_marks_no_division_error(self):
+        """Regression: duplicate-degree CMarks keys (e.g. "-20" and "-20.00"
+        from a hand-edited config) both float to the same degree value but
+        miss the exact "{:.1f}" lookup, producing a zero-width interpolation
+        bracket. Must use the first mark, not raise ZeroDivisionError."""
+        p = make_protocol()
+        p.config.CMarks = {"-20": "500", "-20.00": "505", "20.0": "2400"}
+        p.is_running = True
+        p.current_pos_c = 500  # Already at target to avoid timeout
+
+        result = p.set_to_c_distance(-20.0)
+        assert result is True
+        p.arduino.send.assert_called_with("K500")
+
 
 @pytest.mark.unit
 class TestProtocolInit:

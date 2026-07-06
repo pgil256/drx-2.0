@@ -26,24 +26,26 @@ LOG_LEVEL = "DEBUG"
 WINDOW_TITLE = "KneeSpa Control Interface"
 DEGREES = "\u00b0"
 
-# Page Indices
-PAGES = {"HOME": 0, "SETUP": 1, "MAIN": 2, "HELP": 3, "PROFILE": 4}
-
-# File Paths
+# File Paths (the legacy .ui-file entries were retired with the Qt Designer
+# view layer; the modern UI is code-built under ui/)
 UI_PATHS = {
-    "MAIN_UI": os.path.join(APP_BASE_DIR, "ui/guis/kneespa.ui"),
-    "LOGIN_UI": os.path.join(APP_BASE_DIR, "ui/guis/login.ui"),
-    "LOGIN_HELP_UI": os.path.join(APP_BASE_DIR, "ui/guis/login-help.ui"),
-    "ENTER_PATIENT_UI": os.path.join(APP_BASE_DIR, "ui/guis/enter-patient.ui"),
-    "ENTER_PATIENT_HELP_UI": os.path.join(
-        APP_BASE_DIR, "ui/guis/enter-patient-help.ui"
-    ),
     "PROTOCOL_IMAGES": os.path.join(APP_BASE_DIR, "ui/media/images/graphics"),
     "VIDEOS": os.path.join(APP_BASE_DIR, "ui/media/videos/1.mp4"),
 }
 
 DATA_PATHS = {
-    "USER_PINS": os.path.join(APP_BASE_DIR, "data/user_pins.csv"),
+    # Overridable so real user records can live outside the repo checkout
+    # (the tracked tree ships only user_pins.csv.example).
+    "USER_PINS": os.environ.get(
+        "KNEESPA_USER_PINS_PATH",
+        os.path.join(APP_BASE_DIR, "data/user_pins.csv"),
+    ),
+    # Login attempt/lockout state; persisted so a reboot does not reset
+    # the brute-force lockout window.
+    "AUTH_STATE": os.environ.get(
+        "KNEESPA_AUTH_STATE_PATH",
+        os.path.join(APP_BASE_DIR, "data/auth_state.json"),
+    ),
 }
 
 # GPIO Pin Configuration
@@ -107,6 +109,11 @@ LATERAL_MAX_DEGREES = ACTUATORS["LATERAL"]["LIMITS"][1]
 HORIZONTAL_MIN_DEGREES = ACTUATORS["HORIZONTAL"]["LIMITS"][0]
 HORIZONTAL_MAX_DEGREES = ACTUATORS["HORIZONTAL"]["LIMITS"][1]
 
+# Treatment duration (minutes) — surfaced as the Treatment "Duration" setting.
+DEFAULT_PROTOCOL_MINUTES = 12  # legacy default
+PROTOCOL_MINUTES_MIN = 5
+PROTOCOL_MINUTES_MAX = 30
+
 # Actuator Command Speed
 LEG_LENGTH_SPEED_NORMAL = 0.5  # inches per second
 LEG_LENGTH_SPEED_FAST = 1.0  # inches per second
@@ -130,6 +137,22 @@ PROTOCOL_MAPPING = {
     3: "AC3",
     4: "AC4"
 }
+
+# Pulse-rate configuration (Phase 3.5 §15.2).
+# The firmware pulse cadence (motor.ino jerkInterval) only becomes host-settable
+# after the device is reflashed with the numeric-`J<ms>` build. Until then the
+# worker MUST keep sending a bare `J` (on/off) — a numeric `J<ms>` is a no-op on
+# the old firmware and would silently disable pulsing. Flip this to True only on
+# a flashed device.
+PULSE_RATE_FIRMWARE_SUPPORT = (
+    os.environ.get("KNEESPA_PULSE_RATE_FIRMWARE", "0") == "1"
+)
+MIN_JERK_INTERVAL_MS = 100   # fastest safe pulse (~10/sec)
+MAX_JERK_INTERVAL_MS = 5000  # slowest pulse the slider can request (0.2/sec)
+# The cadence the firmware boots with before any J<ms> arrives; must equal
+# 1000 / the default pulse rate (2/sec) so the UI's claim matches the device.
+# Paired with motor.ino's jerkInterval initializer (scripts/check_limits_sync.py).
+DEFAULT_JERK_INTERVAL_MS = 500
 
 # Protocol Default Settings
 PROTOCOL_DEFAULT_SETTINGS = {
@@ -168,7 +191,6 @@ BUTTON_STYLES = {
 ARDUINO_SETTINGS = {
     "CALIBRATION_DELAY": 2000,  # ms
     "ZERO_MARK_DELAY": 5000,  # ms
-    "COMMAND_DELAY": 1500,  # ms
     "BUFFER_WARNING_THRESHOLD": 0.8,  # 80% full
     "ARDUINO_BUFFER_SIZE": 64,  # Standard Arduino buffer size
     "ARDUINO_PORT": os.environ.get("KNEESPA_ARDUINO_PORT", "/dev/serial0"),
@@ -180,14 +202,18 @@ EMAIL_CONFIG = {
     "SENDER_EMAIL": os.environ.get("KNEESPA_SMTP_USERNAME", ""),
     "SENDER_PASSWORD": os.environ.get("KNEESPA_SMTP_PASSWORD", ""),
     "RECEIVER_EMAIL": os.environ.get("KNEESPA_ASSISTANCE_EMAIL", ""),
+    # Support-ticket recipient (Phase 3.5 §15.5) — the drxcode address. Falls
+    # back to the assistance address if unset so tickets still reach support.
+    "TICKET_EMAIL": os.environ.get(
+        "KNEESPA_TICKET_EMAIL",
+        os.environ.get("KNEESPA_ASSISTANCE_EMAIL", ""),
+    ),
     "SMTP_SERVER": os.environ.get("KNEESPA_SMTP_SERVER", "smtp.gmail.com"),
     "SMTP_PORT": int(os.environ.get("KNEESPA_SMTP_PORT", "465")),
 }
 
 # Error Messages
 ERROR_MESSAGES = {
-    "UI_NOT_FOUND": "UI file 'kneespa.ui' not found.",
-    "CENTRAL_WIDGET_NOT_FOUND": "Central widget 'main_content' not found in the UI file.",
     "LOGIN_REQUIRED": "Please log in to start a protocol.",
     "ADMIN_REQUIRED": "Only admins can edit patient data.",
     "INVALID_PIN": "Invalid PIN. Please try again.",
@@ -206,8 +232,14 @@ SUCCESS_MESSAGES = {
 
 
 def validate_paths():
-    """Validate that all required paths exist."""
-    for category, paths in {**UI_PATHS, **DATA_PATHS}.items():
+    """Validate that all required shipped paths exist.
+
+    Only UI_PATHS are required at import: they ship with the tree. The
+    DATA_PATHS entries are untracked runtime state (user credentials,
+    lockout bookkeeping) created on demand -- a fresh checkout must boot
+    without them.
+    """
+    for category, paths in UI_PATHS.items():
         if isinstance(paths, dict):
             for name, path in paths.items():
                 if not os.path.exists(path):

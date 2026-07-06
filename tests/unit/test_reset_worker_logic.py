@@ -5,11 +5,15 @@ These tests drive ResetWorker with fully mocked Arduino / config / main_window
 objects and call its methods directly (no QThreadPool, no pty). They complement
 the POSIX/pty-gated integration tests in tests/integration/test_reset_worker.py.
 
-Conventions:
-- Import via `from helpers.reset_worker import ...` (conftest puts main/ on path).
-- time.sleep is patched out so timeout/retry paths run fast.
-- Per the tests-only fix policy, these assert CURRENT behavior of the device
-  logic. Suspected bugs are marked xfail rather than changing safety logic.
+Adapted from the GUI line to the FAILSAFE ResetWorker contract:
+- the DTR-reset recovery is gone (a no-op on /dev/serial0 — the Pi UART has no
+  modem lines wired to the Arduino RESET pin); a completion timeout now retries
+  the send once, and a failed send returns False immediately;
+- 'Y' waits for the firmware boot banner (arduino.ready_event) instead of a
+  blind 5 s sleep;
+- the zero mark uses the delimited "L5|a|b" form (the fixed-width format
+  silently truncated 4-digit marks);
+- calibration ('L0') is skipped when the scale factor is implausible.
 """
 import threading
 from unittest.mock import MagicMock, patch
@@ -37,7 +41,7 @@ def make_main_window(use_event=True):
     return mw
 
 
-def make_config():
+def make_config(scale_calibrated=True):
     """Build a mocked config with the marks/calibration ResetWorker reads."""
     config = MagicMock()
     config.AMarks = {"0.0": 0, "0": 0}
@@ -45,6 +49,7 @@ def make_config():
     # run() reads CMarks["{:.1f}".format(0)] == CMarks["0.0"]
     config.CMarks = {"0.0": 1450}
     config.calibration = 1.0
+    config.scale_calibrated = scale_calibrated
     return config
 
 
@@ -89,7 +94,6 @@ class TestWaitForDone:
     def test_returns_false_on_timeout_event_path(self):
         """Event never set within timeout -> returns False (event path)."""
         worker = make_worker(use_event=True)
-        # Event is never set, so a short timeout should elapse and return False.
         result = worker._wait_for_done(timeout=0.05, operation_name="op")
         assert result is False
 
@@ -129,7 +133,8 @@ class TestWaitForDone:
 
 @pytest.mark.unit
 class TestTryCommandWithRetry:
-    """Tests for _try_command_with_retry: send, success, and DTR retry."""
+    """Tests for _try_command_with_retry: send, ack, and the resend-once-on-
+    timeout contract (the old DTR-reset recovery was retired)."""
 
     def test_sends_command_via_arduino(self):
         """The command is sent through the mocked arduino."""
@@ -151,16 +156,12 @@ class TestTryCommandWithRetry:
     def test_clears_stale_event_before_send(self):
         """A stale (pre-set) ack event must be cleared before sending.
 
-        Discriminating test for the clear-before-send guard (reset_worker.py:83):
-        the event is pre-set (a stale ack from a prior command), but ``send``
-        succeeds WITHOUT acking the current command, and ``reset_dtr`` is
-        unavailable so there is no retry. With the guard, the stale event is
-        cleared, the non-acking command times out, and the result is False. If
-        the guard were removed, the stale event would make ``_wait_for_done``
-        return True immediately and this would (wrongly) return True -- so this
-        test fails if the guard regresses, unlike a side_effect that re-sets it.
-        """
-        arduino = MagicMock(spec=["send"])  # no reset_dtr -> clean timeout, no retry
+        Discriminating test for the clear-before-send guard: the event is
+        pre-set (a stale ack from a prior command) but ``send`` succeeds
+        WITHOUT acking the current command. With the guard, both attempts
+        time out and the result is False; if the guard were removed, the
+        stale event would make _wait_for_done return True immediately."""
+        arduino = MagicMock()
         arduino.send.return_value = True     # send "succeeds" but never acks
         mw = make_main_window(use_event=True)
         mw.I2Cstatus_event.set()             # stale ack from a prior command
@@ -170,37 +171,12 @@ class TestTryCommandWithRetry:
             result = worker._try_command_with_retry("X", "op", timeout=0.05)
 
         assert result is False               # would be True if clear() were removed
-        arduino.send.assert_called_once_with("X")
+        assert arduino.send.call_count == 2  # timeout retries the send once
 
-    def test_dtr_reset_retry_on_send_failure(self):
-        """First send fails -> reset_dtr is called and command is re-sent."""
+    def test_send_failure_returns_false_without_retry(self):
+        """A failed send aborts immediately: no DTR recovery exists and
+        resending on a dead link would just fail again."""
         arduino = MagicMock()
-        arduino.reset_dtr = MagicMock()
-        mw = make_main_window(use_event=True)
-
-        calls = {"n": 0}
-
-        def send_side_effect(cmd):
-            calls["n"] += 1
-            if calls["n"] == 1:
-                return False  # first attempt fails -> triggers DTR retry
-            # Second attempt (after DTR reset) succeeds and acks completion.
-            mw.I2Cstatus_event.set()
-            return True
-
-        arduino.send.side_effect = send_side_effect
-        worker = ResetWorker(arduino, make_config(), mw)
-
-        with patch("helpers.reset_worker.time.sleep"):
-            result = worker._try_command_with_retry("Z", "op", timeout=1.0)
-
-        assert result is True
-        arduino.reset_dtr.assert_called_once()
-        assert arduino.send.call_count == 2
-
-    def test_returns_false_when_send_fails_and_no_dtr(self):
-        """Send fails and reset_dtr unavailable -> returns False, no retry."""
-        arduino = MagicMock(spec=["send"])  # no reset_dtr attribute
         arduino.send.return_value = False
         worker = make_worker(arduino=arduino, use_event=True)
         with patch("helpers.reset_worker.time.sleep"):
@@ -208,34 +184,37 @@ class TestTryCommandWithRetry:
         assert result is False
         arduino.send.assert_called_once()
 
-    def test_dtr_retry_on_timeout(self):
-        """Send succeeds but completion times out -> DTR reset and retry."""
+    def test_timeout_resends_once_then_fails(self):
+        """Completion timeout -> the send is retried exactly once."""
         arduino = MagicMock()
         arduino.send.return_value = True
-        arduino.reset_dtr = MagicMock()
+        worker = make_worker(arduino=arduino, use_event=True)
+        # Event never set -> both attempts time out.
+        with patch("helpers.reset_worker.time.sleep"):
+            result = worker._try_command_with_retry("Z", "op", timeout=0.05)
+        assert result is False
+        assert arduino.send.call_count == 2
+
+    def test_timeout_then_ack_on_retry_succeeds(self):
+        """First attempt times out; the resend acks -> True."""
+        arduino = MagicMock()
         mw = make_main_window(use_event=True)
-        # Event never gets set -> _wait_for_done times out both times.
+        calls = {"n": 0}
+
+        def send_side_effect(cmd):
+            calls["n"] += 1
+            if calls["n"] == 2:  # only the retry acks
+                mw.I2Cstatus_event.set()
+            return True
+
+        arduino.send.side_effect = send_side_effect
         worker = ResetWorker(arduino, make_config(), mw)
 
         with patch("helpers.reset_worker.time.sleep"):
             result = worker._try_command_with_retry("Z", "op", timeout=0.05)
 
-        # Final wait also times out so overall result is False, but the timeout
-        # DTR-retry path was exercised: reset_dtr called, command sent twice.
-        assert result is False
-        arduino.reset_dtr.assert_called_once()
+        assert result is True
         assert arduino.send.call_count == 2
-
-    def test_returns_false_on_timeout_without_dtr(self):
-        """Completion times out and reset_dtr unavailable -> returns False."""
-        arduino = MagicMock(spec=["send"])  # no reset_dtr
-        arduino.send.return_value = True
-        worker = make_worker(arduino=arduino, use_event=True)
-        # Event never set -> first wait times out, no DTR available -> False.
-        with patch("helpers.reset_worker.time.sleep"):
-            result = worker._try_command_with_retry("Z", "op", timeout=0.05)
-        assert result is False
-        arduino.send.assert_called_once()
 
 
 @pytest.mark.unit
@@ -269,12 +248,9 @@ class TestRunProtocolGuard:
     def test_proceeds_when_no_protocol_running(self):
         """run() proceeds (sends Y) when worker is present but not running."""
         arduino = MagicMock()
-        arduino.send.return_value = True
         mw = make_main_window(use_event=True)
         mw.worker = MagicMock()
         mw.worker.is_running = False
-        # Auto-ack: set the event on each send so waits pass quickly.
-        mw.I2Cstatus_event = threading.Event()
 
         def send_and_ack(cmd):
             mw.I2Cstatus_event.set()
@@ -294,7 +270,7 @@ class TestRunProtocolGuard:
 class TestRunSequenceOrdering:
     """Tests for the ordered reset steps issued on the success path."""
 
-    def _run_success(self):
+    def _run_success(self, config=None):
         """Run a full successful reset and return the list of sent commands."""
         arduino = MagicMock()
         mw = make_main_window(use_event=True)
@@ -307,7 +283,7 @@ class TestRunSequenceOrdering:
             return True
 
         arduino.send.side_effect = send_and_ack
-        worker = ResetWorker(arduino, make_config(), mw)
+        worker = ResetWorker(arduino, config or make_config(), mw)
 
         finished = []
         worker.signals.finished.connect(finished.append)
@@ -326,10 +302,16 @@ class TestRunSequenceOrdering:
     def test_zero_mark_before_actuators(self):
         """Step 2 issues the 'L5' zero mark before any actuator step."""
         sent, _ = self._run_success()
-        # 'Y' first, then an 'L5...' command before the I14/A13/I12 actuators.
         l5_index = next(i for i, c in enumerate(sent) if c.startswith("L5"))
         i14_index = next(i for i, c in enumerate(sent) if c.startswith("I14"))
         assert l5_index < i14_index
+
+    def test_zero_mark_uses_delimited_form(self):
+        """The zero mark is delimited ('L5|a|b'): the fixed-width format
+        silently truncated 4-digit marks (1900 became 190)."""
+        sent, _ = self._run_success()
+        l5_cmd = next(c for c in sent if c.startswith("L5"))
+        assert l5_cmd == "L5|0|1900"
 
     def test_actuator_step_ordering(self):
         """Actuators C ('I14'), B ('A13'), A ('I12') are issued in order."""
@@ -367,6 +349,13 @@ class TestRunSequenceOrdering:
         sent, _ = self._run_success()
         l0_cmd = next(c for c in sent if c.startswith("L0"))
         assert l0_cmd == "L01.0"
+
+    def test_calibration_skipped_when_scale_uncalibrated(self):
+        """An implausible scale factor must never reach the firmware; the
+        sequence still finishes successfully without 'L0'."""
+        sent, finished = self._run_success(config=make_config(scale_calibrated=False))
+        assert not any(c.startswith("L0") for c in sent)
+        assert finished == [True]
 
     def test_success_emits_finished_true(self):
         """A fully successful run emits finished(True)."""

@@ -1,27 +1,72 @@
 # tests/unit/test_conversions.py
-"""Unit tests for KneeSpa distance/degree conversion helpers.
+"""Conversion tests: the extracted lateral_degrees_to_position helper (base)
+plus the GUI line's window-method tests for KneeSpa.set_to_distance /
+set_to_c_distance, called UNBOUND against lightweight stubs.
 
-Covers ``KneeSpa.set_to_distance(inches, actuator, factor)`` and
-``KneeSpa.set_to_c_distance(degrees)``. Both methods live on the 2400-line
-``KneeSpa`` QMainWindow, so they are called UNBOUND against a lightweight stub
-``self`` that only carries the attributes each method actually reads. This
-avoids constructing the real Qt window.
-
-FROZEN-CONVENTION POLICY: these tests assert CURRENT behavior only. The A-command
-formula and the degree-interpolation arithmetic are pinned exactly as kneespa.py
-implements them today; the tests are guards against accidental regression, not a
-statement that the current numbers are "correct".
-"""
-
+FROZEN-CONVENTION POLICY: these pin CURRENT behavior (A-command format,
+half-degree snapping, integer-truncating interpolation) as regression guards,
+not as a statement that the numbers are "correct"."""
 import types
 from unittest.mock import MagicMock
 
 import pytest
 
+from helpers.conversions import lateral_degrees_to_position
 from kneespa import KneeSpa
 from config.config import Configuration
 
+CMARKS = {
+    "-20.0": 500,
+    "-17.5": 619,
+    "0.0": 1450,
+    "17.5": 2281,
+    "20.0": 2400,
+}
 
+
+@pytest.mark.unit
+class TestLateralDegreesToPosition:
+    def test_exact_key(self):
+        position, degrees = lateral_degrees_to_position(CMARKS, 0.0)
+        assert position == 1450
+        assert degrees == 0.0
+
+    def test_interpolates_between_marks(self):
+        # -19.0 lies between -20.0 (500) and -17.5 (619)
+        position, degrees = lateral_degrees_to_position(CMARKS, -19.0)
+        assert degrees == -19.0
+        assert 540 <= position <= 555
+
+    def test_snaps_to_half_degree(self):
+        position, degrees = lateral_degrees_to_position(CMARKS, -18.75)
+        assert degrees == -19.0
+
+    def test_clamps_out_of_range_input(self):
+        position, degrees = lateral_degrees_to_position(CMARKS, 35.0)
+        assert degrees == 20.0
+        assert position == 2400
+
+    def test_duplicate_degree_marks_no_crash(self):
+        marks = {"-20": "500", "-20.00": "505", "20.0": "2400"}
+        position, degrees = lateral_degrees_to_position(marks, -20.0)
+        assert position == 500
+
+    def test_outside_table_raises(self):
+        sparse = {"-5.0": 1200, "5.0": 1700}
+        with pytest.raises(ValueError):
+            lateral_degrees_to_position(sparse, -10.0)
+
+    def test_string_values_accepted(self):
+        # configparser yields strings
+        marks = {k: str(v) for k, v in CMARKS.items()}
+        position, _ = lateral_degrees_to_position(marks, 17.5)
+        assert position == 2281
+
+
+# ---------------------------------------------------------------------------
+# Window-method tests (GUI line, adapted to the FAILSAFE base: the methods no
+# longer touch I2CStatus, and the lateral path routes through the helper).
+# ---------------------------------------------------------------------------
 def make_config_with_defaults():
     """Build a Configuration populated with the default mark tables."""
     config = Configuration()
@@ -32,12 +77,7 @@ def make_config_with_defaults():
 
 
 def make_c_stub(config=None):
-    """Lightweight stub carrying only what KneeSpa.set_to_c_distance reads.
-
-    set_to_c_distance touches: loading_spinner (show/hide),
-    disable/enable_actuator_controls, config.CMarks, arduino.send,
-    I2CStatus, and I2Cstatus_event.clear().
-    """
+    """Lightweight stub carrying only what KneeSpa.set_to_c_distance reads."""
     if config is None:
         config = make_config_with_defaults()
     return types.SimpleNamespace(
@@ -46,20 +86,14 @@ def make_c_stub(config=None):
         enable_actuator_controls=MagicMock(),
         config=config,
         arduino=MagicMock(),
-        I2CStatus=1,
         I2Cstatus_event=MagicMock(),
     )
 
 
 def make_distance_stub():
-    """Lightweight stub carrying only what KneeSpa.set_to_distance reads.
-
-    set_to_distance touches: arduino.send, I2CStatus, I2Cstatus_event.clear(),
-    and enable_actuator_controls().
-    """
+    """Lightweight stub carrying only what KneeSpa.set_to_distance reads."""
     return types.SimpleNamespace(
         arduino=MagicMock(),
-        I2CStatus=1,
         I2Cstatus_event=MagicMock(),
         enable_actuator_controls=MagicMock(),
     )
@@ -118,11 +152,11 @@ class TestSetToDistance:
         KneeSpa.set_to_distance(stub_b, 2.0, "A", 8)
         assert sent_command(stub_a) == sent_command(stub_b) == "AA2.0"
 
-    def test_clears_i2c_status_and_event(self):
-        """Side effects: I2CStatus reset to 0 and the status event cleared."""
+    def test_clears_status_event(self):
+        """Side effect: the thread-safe DONE event is cleared for the next
+        command (the legacy I2CStatus flag write was retired on the base)."""
         stub = make_distance_stub()
         KneeSpa.set_to_distance(stub, 1.0, "A", 1900)
-        assert stub.I2CStatus == 0
         stub.I2Cstatus_event.clear.assert_called_once()
 
     def test_re_enables_actuator_controls(self):
@@ -244,12 +278,11 @@ class TestSetToCDistanceClamping:
 
 @pytest.mark.unit
 class TestSetToCDistanceSideEffects:
-    """Spinner / control / I2C side effects of set_to_c_distance."""
+    """Spinner / control / event side effects of set_to_c_distance."""
 
-    def test_clears_i2c_status_and_event_on_success(self):
+    def test_clears_status_event_on_success(self):
         stub = make_c_stub()
         KneeSpa.set_to_c_distance(stub, 0.0)
-        assert stub.I2CStatus == 0
         stub.I2Cstatus_event.clear.assert_called_once()
 
     def test_toggles_loading_spinner(self):

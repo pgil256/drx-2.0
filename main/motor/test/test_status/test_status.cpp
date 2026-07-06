@@ -2,6 +2,7 @@
 #ifdef UNIT_TEST
 
 #include <unity.h>
+#include "../arduino_shim.h"
 #include "../mock_wire.h"
 #include "../mock_serial.h"
 #include "../mock_hx711.h"
@@ -13,7 +14,7 @@ MockSerial Serial1;
 
 unsigned long _millis_value = 0;
 unsigned long millis() { return _millis_value; }
-void delay(unsigned long ms) {}
+void delay(unsigned long ms) { _millis_value += ms; }  // advance mock clock
 
 #include "../../motor.ino"
 
@@ -25,10 +26,10 @@ void setUp(void) {
     Wire.position_13 = 2000;
     Wire.position_14 = 1200;
     scale.setUnits(45.3);
-    noStatus = false;
     isProcessingStatus = false;
     statusAcknowledged = true;
     highFrequencyStatus = false;
+    jerking = false;
     _millis_value = 0;
 }
 
@@ -44,10 +45,14 @@ void test_status_format(void) {
     TEST_ASSERT_TRUE(out.find("|1200|") != std::string::npos);
 }
 
-void test_status_skipped_when_nostatus(void) {
-    noStatus = true;
+void test_status_sent_while_jerking(void) {
+    // Pulsing used to set noStatus and blind both the Pi and the
+    // pressure ceiling check for the whole pulse phase; status must
+    // keep flowing now
+    jerking = true;
     bool sent = sendStatus();
-    TEST_ASSERT_FALSE(sent);
+    TEST_ASSERT_TRUE(sent);
+    TEST_ASSERT_TRUE(Serial1.outputContains("STATUS_START"));
 }
 
 void test_status_skipped_when_processing(void) {
@@ -90,11 +95,74 @@ void test_calibration_l5_zero_marks(void) {
     TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
 }
 
+void test_l5_legacy_four_digit_corruption_documented(void) {
+    // The legacy fixed-width format cannot carry a 4-digit AZERO; the
+    // delimited form below is the fix. This documents the constraint.
+    processCommand("L5160 1900");
+    TEST_ASSERT_EQUAL(160, AZERO);
+    TEST_ASSERT_EQUAL(190, BZERO);  // truncated! use delimited form
+}
+
+void test_l5_delimited_zero_marks(void) {
+    processCommand("L5|160|1900");
+    TEST_ASSERT_EQUAL(160, AZERO);
+    TEST_ASSERT_EQUAL(1900, BZERO);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ZEROS|160|1900"));
+    TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
+}
+
+void test_update_pressure_median_filters_spike(void) {
+    scale._ready = true;
+    scale._scale = 1.0;
+    scale._offset = 0.0;
+    scale._raw = 20;
+    updatePressure();
+    updatePressure();
+    updatePressure();
+    TEST_ASSERT_FLOAT_WITHIN(0.01, 20.0, pressure);
+
+    // One spike sample cannot move the median
+    scale._raw = 5000;
+    updatePressure();
+    TEST_ASSERT_FLOAT_WITHIN(0.01, 20.0, pressure);
+}
+
+void test_update_pressure_rejects_saturated_sample(void) {
+    scale._ready = true;
+    scale._scale = 1.0;
+    scale._offset = 0.0;
+    scale._raw = 20;
+    updatePressure();
+    updatePressure();
+    updatePressure();
+
+    // A saturated ADC reading (the documented 1923-lbs spike symptom)
+    // must be discarded entirely
+    scale._raw = 8388607L;
+    updatePressure();
+    updatePressure();
+    TEST_ASSERT_FLOAT_WITHIN(0.01, 20.0, pressure);
+}
+
+void test_update_pressure_skips_when_not_ready(void) {
+    scale._ready = true;
+    scale._scale = 1.0;
+    scale._offset = 0.0;
+    scale._raw = 20;
+    updatePressure();
+    unsigned long readyBefore = lastScaleReady;
+
+    scale._ready = false;
+    _millis_value += 1000;
+    updatePressure();
+    TEST_ASSERT_EQUAL(readyBefore, lastScaleReady);
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
 
     RUN_TEST(test_status_format);
-    RUN_TEST(test_status_skipped_when_nostatus);
+    RUN_TEST(test_status_sent_while_jerking);
     RUN_TEST(test_status_skipped_when_processing);
     RUN_TEST(test_q_acknowledges_status);
     RUN_TEST(test_s_command_triggers_status);
@@ -102,6 +170,11 @@ int main(int argc, char **argv) {
     RUN_TEST(test_calibration_l1_tare);
     RUN_TEST(test_calibration_l4_weight);
     RUN_TEST(test_calibration_l5_zero_marks);
+    RUN_TEST(test_l5_legacy_four_digit_corruption_documented);
+    RUN_TEST(test_l5_delimited_zero_marks);
+    RUN_TEST(test_update_pressure_median_filters_spike);
+    RUN_TEST(test_update_pressure_rejects_saturated_sample);
+    RUN_TEST(test_update_pressure_skips_when_not_ready);
 
     return UNITY_END();
 }

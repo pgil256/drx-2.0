@@ -56,6 +56,9 @@ debug.txt
 htmlcov/
 .pytest_cache/
 .tox/
+# Firmware native-test build artifacts (created by main/motor/run_native_tests.sh)
+main/motor/.native-build/
+main/motor/.pio/
 
 # Distribution
 *.tar.gz
@@ -72,6 +75,12 @@ htmlcov/
 # Node
 node_modules/
 package-lock.json
+
+# Runtime secrets / per-device state — never commit (templates are tracked
+# as *.example; see README "User provisioning")
+main/config/kneespa.cfg
+main/data/user_pins.csv
+main/data/auth_state.json
 
 # Project specific
 *.db
@@ -108,3 +117,4 @@ claude_old/
 
 
 
+main/motor/.native-build/

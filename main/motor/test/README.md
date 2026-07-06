@@ -13,9 +13,13 @@ reporting, safety logic, and value clamping in CI and on a developer laptop.
 ```
 test/
 ├── README.md                 <- this file
+├── arduino_shim.h            <- minimal Arduino core (pins, String, elapsedMillis, wdt) for native builds
 ├── mock_serial.h             <- mock for Arduino Serial / Serial1 (captures output, injects input)
 ├── mock_wire.h               <- mock for the I2C Wire library (records commands, returns positions)
 ├── mock_hx711.h              <- mock for the HX711 load-cell amplifier (configurable pressure)
+├── unity/                    <- vendored Unity framework (hermetic runs, no registry needed)
+├── test_clamp/
+│   └── test_clamp.cpp          <- clampPressureTarget()/clampPositionTarget()/getValue() tests
 ├── test_command_parse/
 │   └── test_command_parse.cpp  <- processCommand() command-handling tests
 ├── test_safety/
@@ -32,8 +36,11 @@ test suite with its own `main()` / `UNITY_BEGIN()` / `UNITY_END()`.
 Each test file:
 
 1. Guards everything behind `#ifdef UNIT_TEST` (the `native` build defines
-   `-DUNIT_TEST`; see `platformio.ini`).
-2. Includes `<unity.h>` and the three mock headers (`../mock_*.h`).
+   `-DUNIT_TEST`; see `platformio.ini`). `motor.ino` only includes the real
+   hardware libraries (`HX711.h`, `elapsedMillis.h`, `Wire.h`, `avr/wdt.h`)
+   when `UNIT_TEST` is *not* defined.
+2. Includes `<unity.h>`, `../arduino_shim.h` (Arduino core substitutes), and
+   the three mock headers (`../mock_*.h`) — the shim must come first.
 3. Instantiates the mock globals (`MockWire Wire;`, `MockSerial Serial;`,
    `MockSerial Serial1;`) and stubs `millis()` / `delay()`.
 4. Includes the firmware directly with `#include "../../motor.ino"`, which makes
@@ -50,10 +57,11 @@ headers unless the firmware genuinely needs a new mocked API.
 From `main/motor/`:
 
 ```bash
-# Convenience wrapper (checks for pio, then runs the native env):
+# Hermetic runner: system gcc/g++ + the vendored Unity in test/unity/
+# (no PlatformIO or registry access needed) — this is what CI gates on:
 bash run_native_tests.sh
 
-# Or invoke PlatformIO directly:
+# Or invoke PlatformIO (downloads the native platform + Unity on first run):
 pio test -e native
 ```
 
@@ -73,9 +81,8 @@ the firmware would expect the real Arduino libraries.
 
 ## Offline / registry caveat
 
-The first `pio test -e native` run downloads the `native` platform and the Unity
-test framework from the PlatformIO package registry. **If the machine cannot
-reach that registry (offline, restricted network), the download fails and the
-tests cannot be built or run.** CI runs these tests in an environment with
-registry access. Locally, you need connectivity (at least for the first run, to
-populate the PlatformIO package cache).
+`run_native_tests.sh` is fully offline: it uses the system C/C++ compiler and
+the vendored Unity sources in `test/unity/`. Only the `pio test -e native`
+route downloads packages (the `native` platform and Unity) from the PlatformIO
+registry on first run, so it needs connectivity once to populate the package
+cache.
