@@ -379,30 +379,53 @@ class TestInitializeDataEnvOverride:
 
 @pytest.mark.unit
 class TestInitializeDataCsvFallback:
-    """Tests for initialize_data() falling back to a CSV file."""
+    """Tests for initialize_data() falling back to a CSV file.
 
-    def test_falls_back_to_bundled_csv(self, clean_auth_env):
-        """With no env users, initialize_data loads the bundled hashed CSV.
+    The runtime user_pins.csv is untracked (it holds real credentials), so
+    these tests provision a controlled CSV and point DATA_PATHS at it --
+    the repo no longer ships user records to assert against.
+    """
 
-        The repository ships main/data/user_pins.csv with two hashed records.
-        With the auth environment cleared, initialize_data must read that file.
-        """
+    @pytest.fixture
+    def runtime_csv(self, monkeypatch, tmp_path):
+        path = tmp_path / "user_pins.csv"
+        rows = [
+            SecureAuthHelper.hash_pin_secure("7042"),
+            SecureAuthHelper.hash_pin_secure("9518"),
+        ]
+        path.write_text(
+            "pin_hash,username,email,status\n"
+            f"{rows[0]},Admin,a@x,admin\n"
+            f"{rows[1]},User,u@x,user\n",
+            encoding="utf-8",
+        )
+        monkeypatch.setitem(csv_module.DATA_PATHS, "USER_PINS", str(path))
+        return rows
+
+    def test_falls_back_to_runtime_csv(self, clean_auth_env, runtime_csv):
+        """With no env users, initialize_data loads the hashed CSV."""
         helper = CSVHelper()
         helper.initialize_data()
 
-        # The bundled CSV contains exactly two user records, keyed by hash.
         assert len(helper.users) == 2
         for key, row in helper.users.items():
             assert row["pin_hash"] == key
             assert "status" in row
 
-    def test_fallback_keys_are_hashes_not_plaintext(self, clean_auth_env):
-        """Fallback records are keyed by pin_hash, never by a plaintext pin."""
+    def test_fallback_keys_are_hashes_not_plaintext(self, clean_auth_env, runtime_csv):
+        """Fallback records are keyed by pin_hash, never by a plaintext pin.
+
+        Accepted forms are the salted PBKDF2 format (all re-provisioned
+        records) or a legacy 64-char sha256 digest (deployed files that
+        have not been rotated yet); a short numeric PIN is neither.
+        """
         helper = CSVHelper()
         helper.initialize_data()
 
-        # Bundled CSV uses 64-char sha256 hex digests as keys.
-        assert all(len(key) == 64 for key in helper.users)
+        assert helper.users
+        for key in helper.users:
+            assert key.startswith("pbkdf2_sha256$") or len(key) == 64
+            assert not key.isdigit()
 
 
 @pytest.mark.unit
