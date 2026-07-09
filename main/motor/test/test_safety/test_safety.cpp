@@ -62,6 +62,12 @@ void setUp(void) {
     hostV2 = false;
     currentCmdSeq = -1;
     activeCmdSeq = -1;
+    activeFitCmdSeq = -1;
+    moveFITForward = false;
+    FITDelay = 0;
+    timeInFIT = 0;
+    _pin_levels[DIR_FIT_FORWARD] = LOW;
+    _pin_levels[DIR_FIT_REVERSE] = LOW;
 }
 
 void tearDown(void) {}
@@ -128,6 +134,48 @@ void test_emergency_stop_during_jerking(void) {
     TEST_ASSERT_EQUAL(0, jerksCompleted);
 }
 
+void test_emergency_stop_stops_fit_motion(void) {
+    moveFITForward = true;
+    FITDelay = FIT_FAST_DELAY;
+    activeFitCmdSeq = 41;
+    _pin_levels[DIR_FIT_FORWARD] = HIGH;
+    _pin_levels[DIR_FIT_REVERSE] = LOW;
+
+    emergencyStop();
+
+    TEST_ASSERT_FALSE(moveFITForward);
+    TEST_ASSERT_EQUAL(-1, activeFitCmdSeq);
+    TEST_ASSERT_EQUAL(LOW, _pin_levels[DIR_FIT_FORWARD]);
+    TEST_ASSERT_EQUAL(LOW, _pin_levels[DIR_FIT_REVERSE]);
+}
+
+void test_fit_done_is_emitted_only_after_physical_completion(void) {
+    processCommand("F+");
+
+    TEST_ASSERT_TRUE(moveFITForward);
+    TEST_ASSERT_FALSE(Serial1.outputContains("DONE"));
+
+    _millis_value = (unsigned long)FIT_SLOW_DELAY + 1;
+    keepAlive();
+    loop();
+
+    TEST_ASSERT_FALSE(moveFITForward);
+    TEST_ASSERT_EQUAL(LOW, _pin_levels[DIR_FIT_FORWARD]);
+    TEST_ASSERT_EQUAL(LOW, _pin_levels[DIR_FIT_REVERSE]);
+    TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
+}
+
+void test_fit_rejects_conflicting_motion_command(void) {
+    processCommand("FF");
+    TEST_ASSERT_TRUE(moveFITForward);
+    Serial1.reset();
+
+    processCommand("FR");
+
+    TEST_ASSERT_TRUE(moveFITForward);
+    TEST_ASSERT_TRUE(Serial1.outputContains("BUSY"));
+}
+
 // --- Fail-safe core (Phase 1) ---
 
 void test_stop_pin_honored_during_pressure(void) {
@@ -152,6 +200,23 @@ void test_stop_pin_honored_during_jerking(void) {
     loop();
 
     TEST_ASSERT_FALSE(jerking);
+    TEST_ASSERT_TRUE(releasingPressure);
+}
+
+void test_stop_pin_honored_during_fit_motion(void) {
+    moveFITForward = true;
+    FITDelay = FIT_FAST_DELAY;
+    _pin_levels[DIR_FIT_FORWARD] = HIGH;
+    scale._raw = 30;
+    pressure = 30;
+    keepAlive();
+    _pin_levels[STOP_PIN] = LOW;
+
+    loop();
+
+    TEST_ASSERT_FALSE(moveFITForward);
+    TEST_ASSERT_EQUAL(LOW, _pin_levels[DIR_FIT_FORWARD]);
+    TEST_ASSERT_EQUAL(LOW, _pin_levels[DIR_FIT_REVERSE]);
     TEST_ASSERT_TRUE(releasingPressure);
 }
 
@@ -190,6 +255,24 @@ void test_heartbeat_loss_stops_and_releases(void) {
     loop();
 
     TEST_ASSERT_FALSE(bRunning);
+    TEST_ASSERT_TRUE(releasingPressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Host heartbeat lost"));
+}
+
+void test_heartbeat_loss_stops_fit_motion(void) {
+    moveFITForward = true;
+    FITDelay = FIT_FAST_DELAY;
+    _pin_levels[DIR_FIT_FORWARD] = HIGH;
+    scale._raw = 30;
+    pressure = 30;
+    lastHostTraffic = 0;
+    _millis_value = HEARTBEAT_TIMEOUT + 1000;
+    lastScaleReady = _millis_value;
+
+    loop();
+
+    TEST_ASSERT_FALSE(moveFITForward);
+    TEST_ASSERT_EQUAL(LOW, _pin_levels[DIR_FIT_FORWARD]);
     TEST_ASSERT_TRUE(releasingPressure);
     TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Host heartbeat lost"));
 }
@@ -604,12 +687,17 @@ int main(int argc, char **argv) {
     RUN_TEST(test_x_command_triggers_emergency_stop);
     RUN_TEST(test_commands_accepted_after_emergency_stop);
     RUN_TEST(test_emergency_stop_during_jerking);
+    RUN_TEST(test_emergency_stop_stops_fit_motion);
+    RUN_TEST(test_fit_done_is_emitted_only_after_physical_completion);
+    RUN_TEST(test_fit_rejects_conflicting_motion_command);
 
     RUN_TEST(test_stop_pin_honored_during_pressure);
     RUN_TEST(test_stop_pin_honored_during_jerking);
+    RUN_TEST(test_stop_pin_honored_during_fit_motion);
     RUN_TEST(test_pressure_ceiling_enforced_during_jerking);
     RUN_TEST(test_pressure_ceiling_enforced_during_position_move);
     RUN_TEST(test_heartbeat_loss_stops_and_releases);
+    RUN_TEST(test_heartbeat_loss_stops_fit_motion);
     RUN_TEST(test_heartbeat_not_tripped_when_idle);
     RUN_TEST(test_load_cell_fault_during_pressure);
     RUN_TEST(test_release_drives_axial_backward);

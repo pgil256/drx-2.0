@@ -54,8 +54,9 @@ class ProtocolController:
         elif state == "fault":
             start_button.setText("Start")
             start_button.setStyleSheet(BUTTON_STYLES["START"])
-            start_button.setEnabled(True)
-            # Banner stays up (red) until the next start/reset
+            # A fault is not treatment-ready. Recovery reset is the only path
+            # back to idle, and the red banner remains visible until then.
+            start_button.setEnabled(False)
 
     def block_nav(self):
         """Navigation away from the treatment screen is blocked while a
@@ -78,7 +79,8 @@ class ProtocolController:
         else:
             # Fault/idle state: make sure the machine is stopped anyway
             window.stop_actuators()
-            window.treatment_panel.set_idle()
+            if window.protocol_state == "idle":
+                window.treatment_panel.set_idle()
 
 
     def confirm_start(self):
@@ -127,7 +129,13 @@ class ProtocolController:
         start_button.setEnabled(False)
 
         try:
-            if window.protocol_state == "idle" or window.protocol_state == "fault":
+            if window.protocol_state == "fault":
+                window._show_timed_error(
+                    "Recover/reset the device before starting another treatment."
+                )
+                self.set_state("fault")
+                return
+            if window.protocol_state == "idle":
                 if not self.confirm_start():
                     start_button.setEnabled(True)
                     return
@@ -148,10 +156,13 @@ class ProtocolController:
                 self.stop_protocol()
         except Exception as e:
             print(f"Error during protocol operation: {e}")
-            # Reset the button state in case of error
-            start_button.setText("Start")
-            start_button.setStyleSheet(BUTTON_STYLES["START"])
-            start_button.setEnabled(True)
+            window.logger.exception("Protocol start/stop transition failed")
+            window.worker = None
+            window.protocol_timer.stop()
+            window.protocol_start_time = None
+            window.protocol_stop_requested = False
+            self.set_state("idle")
+            window._show_timed_error(f"Could not start treatment: {e}")
 
 
     def start_protocol(self):
@@ -225,6 +236,7 @@ class ProtocolController:
             window.decrease_time.setEnabled(False)
 
             window.mid_protocol_warning_shown = False
+            window.protocol_stop_requested = False
             # Seed rollback values before starting: the mid-protocol
             # change dialog's Cancel path restores _prev_* -- they were
             # never initialized, so the first Cancel raised TypeError and
@@ -324,6 +336,7 @@ class ProtocolController:
         """Stop protocol sequence."""
         window = self.window
         print("Stopping protocol")
+        window.protocol_stop_requested = True
         self.set_state("stopping")
         window.stop_actuators()
         window.mid_protocol_warning_shown = False
@@ -341,7 +354,8 @@ class ProtocolController:
     def _stop_phase3(self):
         """Phase 3 of stop protocol - final cleanup."""
         window = self.window
-        self.set_state("idle")
+        # Keep the explicit stopping state until either the worker reports a
+        # user-requested completion or reset recovery finishes.
         window.reset_arduino()
 
 
@@ -374,13 +388,22 @@ class ProtocolController:
             )
         except Exception as e:
             print(f"Error updating status label: {e}")
-        self.set_state("idle")
+        user_stopped = bool(getattr(window, "protocol_stop_requested", False))
         window.mid_protocol_warning_shown = False
-        if not success:
+        if success:
+            self.set_state("idle")
+        elif user_stopped:
+            # The staged stop still owes the patient a recovery reset. Keep
+            # Start/navigation gated until _on_reset_finished confirms it.
+            self.set_state("stopping")
+        else:
+            self.set_state("fault")
             window._show_safety_alert(
                 "Protocol did not complete normally. Traction has been "
                 "released; verify the patient before continuing."
             )
+        if not user_stopped:
+            window.protocol_stop_requested = False
 
 
     def update_protocol_time(self):

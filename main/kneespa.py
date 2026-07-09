@@ -253,11 +253,12 @@ class KneeSpa(QMainWindow):
         print("Setting to {} in {} pos {} act".format(inches, position, actuator))
         # Format inches with at least 1 decimal place for proper Arduino parsing
         command = "A{}{:.1f}".format(actuator, inches)
-        self.arduino.send(command)
+        self.I2Cstatus_event.clear()
+        if not KneeSpa._send_motion_command(self, command, "axial movement"):
+            return False
         print("Sent cmd {}".format(command.strip()))
-        self.I2Cstatus_event.clear()  # Clear the thread-safe event
         print("End set to distance")
-        self.enable_actuator_controls()
+        return True
 
     def set_to_c_distance(self, degrees):
         """
@@ -275,12 +276,12 @@ class KneeSpa(QMainWindow):
 
             print(f" positioned to {degrees} degrees pos {position}")
             command = f"K{position}"
-            self.arduino.send(command)
+            self.I2Cstatus_event.clear()
+            if not KneeSpa._send_motion_command(self, command, "lateral movement"):
+                return False
             print(f"cmd {command}")
 
-            self.I2Cstatus_event.clear()  # Clear the thread-safe event
             print("End set to c.")
-            self.enable_actuator_controls()
             self.loading_spinner.hide()
             return True
 
@@ -342,6 +343,7 @@ class KneeSpa(QMainWindow):
         self.actuator_command_in_progress = False  # Prevents simultaneous actuator commands
         self.controls_enable_timer = None  # Single pending-enable timer for all controls
         self.mid_protocol_warning_shown = False
+        self.protocol_stop_requested = False
         self._prev_pressure = None                   #  for rollback
         self._prev_left   = None
         self._prev_right  = None
@@ -510,6 +512,25 @@ class KneeSpa(QMainWindow):
             self.shell.setup.set_position(key, value)
         except Exception:
             pass
+
+    def _send_motion_command(self, command, context):
+        """Queue a Setup motion without fabricating success in the UI."""
+        try:
+            queued = bool(self.arduino and self.arduino.send(command))
+        except Exception as exc:
+            queued = False
+            self.logger.error("Could not queue %s command %s: %s", context, command, exc)
+        if queued:
+            return True
+
+        self.logger.error("Could not queue %s command %s", context, command)
+        self._set_badge(False)
+        self._show_timed_error(
+            f"{context.capitalize()} was not sent. Check the Arduino connection."
+        )
+        self.enable_actuator_controls()
+        self.loading_spinner.hide()
+        return False
 
     ### UI Methods ###
 
@@ -736,39 +757,50 @@ class KneeSpa(QMainWindow):
         elif key == "leg_length":
             self.reset_extra_button_clicked()
         elif key == "pressure":
-            # No firmware pressure reset; just zero the display.
-            self._reflect_setup("pressure", 0)
+            self.loading_spinner.show()
+            self.disable_actuator_controls()
+            if KneeSpa._send_motion_command(self, "P0", "pressure release"):
+                self.treatment_panel.set_stopping()
 
     def _on_setup_go(self, key):
         """Move an actuator to its row's current slider value (the legacy Go
         path), preserving the per-actuator unit conversions and clamps."""
+        if key == "leg_length":
+            # FIT is open-loop: there is no absolute position sensor with
+            # which a slider's Go target could be reached safely.
+            self._show_timed_error("Leg Length has no absolute Go position; use Jog or Reset.")
+            return False
+
         self.loading_spinner.show()
         self.disable_actuator_controls()
         try:
             if key == "axial":
                 inches = self.shell.setup.row_value("axial")
                 inches = max(AXIAL_MIN_INCHES, min(AXIAL_MAX_INCHES, inches))
-                self.set_to_distance(inches, self.actuator_a, self.config.a_factor)
+                if not self.set_to_distance(inches, self.actuator_a, self.config.a_factor):
+                    return False
                 self.axial_flexion_position = inches
                 self._reflect_setup("axial", inches)
             elif key == "horizontal":
                 degrees = self.shell.setup.row_value("horizontal")
                 degrees = max(HORIZONTAL_MIN_DEGREES, min(HORIZONTAL_MAX_DEGREES, degrees))
-                inches = abs((degrees + 25) / 5)
-                self.set_to_distance(inches, self.actuator_b, self.config.b_factor)
+                position = horizontal_degrees_to_position(self.config.BMarks, degrees)
+                if not KneeSpa._send_motion_command(
+                    self, f"I13{position}", "horizontal movement"
+                ):
+                    return False
                 self.horizontal_flexion_position = degrees
                 self._reflect_setup("horizontal", degrees)
             elif key == "lateral":
                 degrees = self.shell.setup.row_value("lateral")
                 degrees = max(LATERAL_MIN_DEGREES, min(LATERAL_MAX_DEGREES, degrees))
-                self.set_to_c_distance(degrees)
+                if not self.set_to_c_distance(degrees):
+                    return False
                 self.lateral_flexion_position = degrees
                 self._reflect_setup("lateral", degrees)
             elif key == "pressure":
-                self._apply_setup_pressure()
-            elif key == "leg_length":
-                # Open-loop FIT actuator — no absolute position command.
-                pass
+                return self._apply_setup_pressure()
+            return True
         except Exception as e:
             print(f"Error in Setup Go: {str(e)}")
             self._show_timed_error(f"Error moving actuator: {str(e)}")
@@ -786,10 +818,15 @@ class KneeSpa(QMainWindow):
             pressure = MIN_PRESSURE
             self.logger.warning(f"Pressure request below minimum, setting to {MIN_PRESSURE}")
         pressure = int(pressure)
-        self.arduino.send("P{}".format(pressure))
+        if not KneeSpa._send_motion_command(
+            self, "P{}".format(pressure), "pressure movement"
+        ):
+            return False
         print("Pressure cmd sent P{}".format(pressure))
+        # This is a target, not measured pressure. The live readout is updated
+        # only by status_emit feedback.
         self.current_pressure = pressure
-        self._reflect_setup("pressure", pressure)
+        return True
 
     def _on_setup_stop(self, key):
         """Per-row Stop. The firmware's 'X' stops all actuators regardless of
@@ -1044,9 +1081,14 @@ class KneeSpa(QMainWindow):
         if hasattr(self, "shell"):
             self.shell.video_modal.cleanup()
 
-        # Force Arduino disconnect
-        if hasattr(self, "arduino"):
-            self.arduino.disconnect()
+        # Give queued X/P0/HF0 traffic a bounded opportunity to reach the
+        # serial driver before closing it. The old immediate disconnect
+        # cleared these safety commands from the queues during application
+        # shutdown.
+        if hasattr(self, "connection"):
+            drained = self.connection.teardown_arduino(drain_timeout=1.5)
+            if not drained:
+                self.logger.error("Serial safety queue did not drain before shutdown")
 
         GPIO.cleanup()
 
@@ -1084,15 +1126,17 @@ class KneeSpa(QMainWindow):
             self.loading_spinner.show()
             self.disable_actuator_controls()
 
+            position = horizontal_degrees_to_position(
+                self.config.BMarks, new_position
+            )
+            command = f"I13{position}"
+            if not KneeSpa._send_motion_command(
+                self, command, "horizontal movement"
+            ):
+                return False
+
             self.horizontal_flexion_position = new_position
             print(f"B position: {self.horizontal_flexion_position}")
-
-            # Convert degrees to inches like the slider does
-            inches = abs((self.horizontal_flexion_position + 25) / 5)
-
-            # Use the same command format as the slider/go button
-            command = f"A{actuator}{inches}"
-            self.arduino.send(command)
 
             self._reflect_setup("horizontal", self.horizontal_flexion_position)
             self.loading_spinner.hide()
@@ -1112,15 +1156,15 @@ class KneeSpa(QMainWindow):
             self.loading_spinner.show()
             self.disable_actuator_controls()
 
-            self.axial_flexion_position = new_position
-            print(f"A position: {self.axial_flexion_position}")
-
             # Send command to Arduino
             # Arduino expects: A[2-digit device][float value starting at position 3]
             # Format position with at least 1 decimal place to ensure proper parsing
-            command = f"A12{self.axial_flexion_position:.1f}"
+            command = f"A12{new_position:.1f}"
             print(f"Sending axial command: {command}")
-            self.arduino.send(command)
+            if not KneeSpa._send_motion_command(self, command, "axial movement"):
+                return False
+            self.axial_flexion_position = new_position
+            print(f"A position: {self.axial_flexion_position}")
             print(f"Axial flexion position: {self.axial_flexion_position} in")
 
             # Removed problematic L5 command that was sent without proper parameters
@@ -1164,18 +1208,21 @@ class KneeSpa(QMainWindow):
                 self.loading_spinner.hide()
                 return
 
-            self.lateral_flexion_position = new_position
-
             print(
-                f" positioned to {self.lateral_flexion_position} degrees pos {position}"
+                f" positioned to {new_position} degrees pos {position}"
             )
 
             # Send command to Arduino
             command = f"K{position}"
-            self.arduino.send(command)
+            if not KneeSpa._send_motion_command(self, command, "lateral movement"):
+                return False
+
+            self.lateral_flexion_position = new_position
 
             self._reflect_setup("lateral", self.lateral_flexion_position)
             self.loading_spinner.hide()
+
+        return True
 
     def reset_flexion_button_clicked(self, actuator):
         self.loading_spinner.show()
@@ -1185,7 +1232,8 @@ class KneeSpa(QMainWindow):
             position = self.config.CMarks["{:.1f}".format(0)]
             print(f" positioned to 0 degrees pos {position}")
             command = f"I14{position}"
-            self.arduino.send(command)
+            if not KneeSpa._send_motion_command(self, command, "lateral reset"):
+                return False
             self.lateral_flexion_position = 0
             self._reflect_setup("lateral", 0)
             self.loading_spinner.hide()
@@ -1207,7 +1255,8 @@ class KneeSpa(QMainWindow):
                 self.loading_spinner.hide()
                 return
             command = f"I13{position}"
-            self.arduino.send(command)  # transmit data serially
+            if not KneeSpa._send_motion_command(self, command, "horizontal reset"):
+                return False
             self.horizontal_flexion_position = DEFAULT_HORIZONTAL_POSITION
             self._reflect_setup("horizontal", DEFAULT_HORIZONTAL_POSITION)
             self.loading_spinner.hide()
@@ -1219,7 +1268,8 @@ class KneeSpa(QMainWindow):
             # UI then showed 0 in / 0 lb while nothing moved. Home the
             # axial actuator for real, the way the reset sequence does.
             command = "I120"
-            self.arduino.send(command)  # firmware floors this to AZERO
+            if not KneeSpa._send_motion_command(self, command, "axial reset"):
+                return False
             self.axial_flexion_position = 0
             self._reflect_setup("axial", 0)
             self._reflect_setup("pressure", 0)
@@ -1259,84 +1309,46 @@ class KneeSpa(QMainWindow):
             )
 
     # ----- leg-length (FIT) jog handlers (open-loop F-commands + GPIO) -----
-    def forward_button_clicked(self):
-        """Handle forward button press - normal speed."""
+    def _move_leg(self, command, delta, duration_ms, forward):
+        """Start one bounded open-loop FIT movement."""
+        target = self.leg_length + delta
+        if target < self.LEG_LENGTH_MIN or target > self.LEG_LENGTH_MAX:
+            self._show_timed_error(
+                f"Leg Length is limited to {self.LEG_LENGTH_MIN:.0f}-"
+                f"{self.LEG_LENGTH_MAX:.0f} inches."
+            )
+            return False
 
         self.loading_spinner.show()
         self.disable_actuator_controls()
-        self.arduino.send("F+")
-        GPIO.output(EXTRAFORWARD, GPIO.HIGH)
-        GPIO.output(EXTRABACKWARD, GPIO.LOW)
-        # Firmware auto-stops its FIT pins after FIT_SLOW_DELAY (0.5s);
-        # mirror that on the Pi pins, which used to latch HIGH until the
-        # next button press
-        QTimer.singleShot(600, self._release_leg_gpio)
+        if not KneeSpa._send_motion_command(self, command, "leg-length movement"):
+            return False
 
-        if self.leg_length >= self.LEG_LENGTH_MAX:
-            return  # Already at max
-        # Update display (0.5s slow run ~= 0.25 in of travel)
-        self.leg_length += 0.25
-        self.leg_length = min(self.leg_length, self.LEG_LENGTH_MAX)  # Don't exceed max
+        GPIO.output(EXTRAFORWARD, GPIO.HIGH if forward else GPIO.LOW)
+        GPIO.output(EXTRABACKWARD, GPIO.LOW if forward else GPIO.HIGH)
+        QTimer.singleShot(duration_ms, self._release_leg_gpio)
+        self.leg_length = max(
+            self.LEG_LENGTH_MIN, min(self.LEG_LENGTH_MAX, target)
+        )
         self._reflect_setup("leg_length", self.leg_length)
         self.loading_spinner.hide()
+        return True
+
+    def forward_button_clicked(self):
+        """Handle forward button press - normal speed."""
+        return KneeSpa._move_leg(self, "F+", 0.25, 600, True)
 
     def reverse_button_clicked(self):
         """Handle reverse button press - normal speed."""
-        self.loading_spinner.show()
-        self.disable_actuator_controls()
-        self.arduino.send("F-")
-        GPIO.output(EXTRAFORWARD, GPIO.LOW)
-        GPIO.output(EXTRABACKWARD, GPIO.HIGH)
-        QTimer.singleShot(600, self._release_leg_gpio)
-
-        if self.leg_length <= 0:
-            return  # Already at min
-
-        # Update display (0.5s slow run ~= 0.25 in of travel)
-        self.leg_length -= 0.25
-        self.leg_length = max(0, self.leg_length)  # Don't go below 0
-        self._reflect_setup("leg_length", self.leg_length)
-        self.loading_spinner.hide()
+        return KneeSpa._move_leg(self, "F-", -0.25, 600, False)
 
     def forward_fast_button_clicked(self):
         """Handle forward button press - fast speed."""
-        self.loading_spinner.show()
-        print("forward_fast_button_clicked")
-        self.disable_actuator_controls()
-        if self.leg_length >= self.LEG_LENGTH_MAX:
-            return  # Already at max
-
-        self.arduino.send("FF")
-        GPIO.output(EXTRAFORWARD, GPIO.HIGH)
-        GPIO.output(EXTRABACKWARD, GPIO.LOW)
-        # Firmware fast run is FIT_FAST_DELAY (6s)
-        QTimer.singleShot(6100, self._release_leg_gpio)
-
-        # Update display (6s fast run ~= 3.0 in of travel)
-        self.leg_length += 3.0
-        self.leg_length = min(self.leg_length, self.LEG_LENGTH_MAX)  # Don't exceed max
-        self._reflect_setup("leg_length", self.leg_length)
-        self.loading_spinner.hide()
+        return KneeSpa._move_leg(self, "FF", 3.0, 6100, True)
 
     def reverse_fast_button_clicked(self):
         """Handle reverse button press - fast speed."""
-        self.loading_spinner.show()
-        self.disable_actuator_controls()
-        self.arduino.send("FR")
-        GPIO.output(EXTRAFORWARD, GPIO.LOW)
-        GPIO.output(EXTRABACKWARD, GPIO.HIGH)
-        QTimer.singleShot(6100, self._release_leg_gpio)
-
-        if self.leg_length >= 3:
-            # Update displays
-            self.leg_length = 0
-            self._reflect_setup("leg_length", self.leg_length)
-        else:
-            self.leg_length -= 3.0  # 6s fast run ~= 3.0 in of travel
-            self.leg_length = max(0, self.leg_length)  # Don't go below 0
-            self._reflect_setup("leg_length", self.leg_length)
-
-        self.loading_spinner.hide()
+        return KneeSpa._move_leg(self, "FR", -3.0, 6100, False)
 
     def _release_leg_gpio(self):
         """Drop the Pi-side leg-motor direction pins to a safe state."""
@@ -1344,15 +1356,18 @@ class KneeSpa(QMainWindow):
         GPIO.output(EXTRABACKWARD, GPIO.LOW)
 
     def reset_extra_button_clicked(self):
-        """Reset leg length position."""
+        """Home the open-loop FIT axis, updating zero only after completion."""
         self.loading_spinner.show()
         self.disable_actuator_controls()
-        self.arduino.send("F0")
+        if not KneeSpa._send_motion_command(self, "FR", "leg-length reset"):
+            return False
         GPIO.output(EXTRAFORWARD, GPIO.LOW)
-        GPIO.output(EXTRABACKWARD, GPIO.LOW)
+        GPIO.output(EXTRABACKWARD, GPIO.HIGH)
+        QTimer.singleShot(6100, self._finish_leg_reset)
+        return True
 
-        QTimer.singleShot(3000, self.reverse_fast_button_clicked)
-
+    def _finish_leg_reset(self):
+        self._release_leg_gpio()
         self.leg_length = 0.0
         self._reflect_setup("leg_length", 0.0)
         self.loading_spinner.hide()
@@ -1360,12 +1375,15 @@ class KneeSpa(QMainWindow):
     def stop_leg_movement(self):
         """Stop leg length actuator movement."""
         self.loading_spinner.show()
-        self.disable_actuator_controls()
-        self.arduino.send("F0")
+        if not KneeSpa._send_motion_command(self, "F0", "leg-length stop"):
+            # Local GPIO stop remains mandatory even when serial is down.
+            self._release_leg_gpio()
+            return False
         GPIO.output(EXTRAFORWARD, GPIO.LOW)
         GPIO.output(EXTRABACKWARD, GPIO.LOW)
         # GPIO.output(EXTRAENABLE, GPIO.LOW)
         self.loading_spinner.hide()
+        return True
 
     @QtCore.pyqtSlot()
     def set_done(self):
@@ -1460,7 +1478,12 @@ class KneeSpa(QMainWindow):
         plus the Treatment screen's live pressure/angle readouts."""
         try:
             self.shell.treatment.set_pressure(pressure)
-            self.shell.treatment.set_angle(pos_c_to_angle(steps, self.config.CMarks))
+            lateral_angle = pos_c_to_angle(steps, self.config.CMarks)
+            self.shell.treatment.set_angle(lateral_angle)
+            # Setup's pressure/lateral readouts are measured values. Command
+            # handlers no longer overwrite them merely because a send queued.
+            self._reflect_setup("pressure", pressure)
+            self._reflect_setup("lateral", lateral_angle)
         except Exception as e:
             print(f"Error updating live status: {e}")
         return self.safety.on_status(position_a, position_b, steps, pressure)
@@ -1495,6 +1518,10 @@ class KneeSpa(QMainWindow):
 
     @QtCore.pyqtSlot()
     def handle_pressure_released(self):
+        self.current_pressure = 0
+        self._reflect_setup("pressure", 0)
+        self.enable_actuator_controls()
+        self.loading_spinner.hide()
         self.safety.on_pressure_released()
 
     @QtCore.pyqtSlot(int, int)

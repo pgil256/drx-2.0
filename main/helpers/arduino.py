@@ -2,6 +2,8 @@ import os
 import time
 import threading
 from collections import deque
+from dataclasses import dataclass, field
+from typing import Optional
 
 import serial
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot
@@ -16,6 +18,23 @@ def xor_checksum(payload: str) -> int:
     for byte in payload.encode():
         value ^= byte
     return value
+
+
+@dataclass
+class CommandHandle:
+    """Observable lifecycle for a queued command.
+
+    Protocol v2 resolves ``completed`` only from an acknowledgement carrying
+    this handle's sequence number. ``written`` is independent: shutdown uses it
+    to prove a safety command reached the OS serial driver before teardown.
+    """
+
+    command: str
+    sequence: Optional[int] = None
+    written: threading.Event = field(default_factory=threading.Event)
+    completed: threading.Event = field(default_factory=threading.Event)
+    result: Optional[str] = None
+    reason: str = ""
 
 
 class Arduino(QObject):
@@ -58,6 +77,7 @@ class Arduino(QObject):
         self.serial_com = None
         self.connected = False
         self._lock = threading.RLock()  # guards queues + connection state
+        self._queue_condition = threading.Condition(self._lock)
         self._running = False
         self.ARDUINO_PORT = ARDUINO_SETTINGS["ARDUINO_PORT"]
         self.ok_event = threading.Event()
@@ -67,6 +87,7 @@ class Arduino(QObject):
         self._tx_queue = deque()
         self._priority_queue = deque()  # emergency stop jumps the line
         self._last_tx = 0.0
+        self._write_in_progress = 0
         self._io_thread = None
         # Protocol v2: per-command sequence numbers + checksums on
         # commands and status frames. Requires firmware
@@ -77,13 +98,24 @@ class Arduino(QObject):
         self._seq = 0
         self.last_done_seq = None
         self.checksum_failures = 0
+        self._pending_v2 = {}
+        self._queued_handles = {}
 
     # ------------------------------------------------------------------
     # Connection lifecycle
     # ------------------------------------------------------------------
 
-    def disconnect(self):
-        """Close the serial connection and stop the I/O thread."""
+    def disconnect(self, drain_timeout=0.0):
+        """Close the serial connection and stop the I/O thread.
+
+        When ``drain_timeout`` is positive, queued commands are allowed to
+        reach the serial driver first. This is used by application shutdown so
+        an emergency stop cannot be queued and then immediately discarded.
+        Returns whether the requested drain completed.
+        """
+        drained = True
+        if drain_timeout:
+            drained = self.wait_for_drain(drain_timeout)
         self._running = False
         io_thread = self._io_thread
         if io_thread and io_thread.is_alive() and io_thread is not threading.current_thread():
@@ -91,6 +123,7 @@ class Arduino(QObject):
         with self._lock:
             self._tx_queue.clear()
             self._priority_queue.clear()
+            self._fail_pending("DISCONNECTED", "Serial connection closed")
             if self.serial_com:
                 self.logger.info("Closing serial connection")
                 try:
@@ -101,6 +134,8 @@ class Arduino(QObject):
                     self.serial_com = None
             self.connected = False
             self.connection_ready_event.clear()
+            self._queue_condition.notify_all()
+        return drained
 
     @pyqtSlot()
     def verify_connection(self, tries=3, timeout_s=5.0):
@@ -111,9 +146,14 @@ class Arduino(QObject):
 
         for attempt in range(1, tries + 1):
             self.ok_event.clear()
-            with self._lock:
-                self._priority_queue.append("T")
-            if self.ok_event.wait(timeout_s):
+            handle = self.send_tracked("T", priority=True)
+            if handle is None:
+                return False
+            if self.protocol_v2:
+                verified = handle.completed.wait(timeout_s) and handle.result == "OK"
+            else:
+                verified = self.ok_event.wait(timeout_s)
+            if verified:
                 self.logger.debug("Connection verified on attempt %d", attempt)
                 return True
             self.logger.warning("No OK on verify attempt %d", attempt)
@@ -184,7 +224,13 @@ class Arduino(QObject):
 
     def run(self):
         """Connect to Arduino and start reading data."""
-        self.connect_to_arduino()
+        try:
+            self.connect_to_arduino()
+        finally:
+            # The QObject is hosted by a QThread in the application. Always
+            # signal that its startup slot returned so the Qt event loop can be
+            # shut down deterministically instead of leaking across reconnects.
+            self.finished.emit()
 
     # Keeping compatibility with old method name
     def try_connect(self):
@@ -210,6 +256,19 @@ class Arduino(QObject):
         self.serial_com.write(payload)
         self.serial_com.flush()
         self.logger.debug("TX: %s", command)
+        with self._lock:
+            handle = self._queued_handles.pop(command, None)
+            if handle is not None:
+                handle.written.set()
+
+    def _write_queued(self, command):
+        """Write a dequeued command while making drain state observable."""
+        try:
+            self._write_now(command)
+        finally:
+            with self._queue_condition:
+                self._write_in_progress -= 1
+                self._queue_condition.notify_all()
 
     def _service_tx_queue(self):
         """Send queued commands, pacing normal traffic to the firmware's
@@ -219,7 +278,8 @@ class Arduino(QObject):
                 if not self._priority_queue:
                     break
                 cmd = self._priority_queue.popleft()
-            self._write_now(cmd)
+                self._write_in_progress += 1
+            self._write_queued(cmd)
 
         with self._lock:
             due = (
@@ -229,8 +289,20 @@ class Arduino(QObject):
             cmd = self._tx_queue.popleft() if due else None
             if cmd is not None:
                 self._last_tx = time.time()
+                self._write_in_progress += 1
         if cmd is not None:
-            self._write_now(cmd)
+            self._write_queued(cmd)
+
+    def wait_for_drain(self, timeout_s=1.0):
+        """Wait until all queued writes have reached ``serial.flush()``."""
+        deadline = time.monotonic() + max(0.0, float(timeout_s))
+        with self._queue_condition:
+            while self._priority_queue or self._tx_queue or self._write_in_progress:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    return False
+                self._queue_condition.wait(remaining)
+        return True
 
     def read_from_com(self):
         """I/O loop: services the TX queue, reads lines, watches for
@@ -291,7 +363,31 @@ class Arduino(QObject):
         with self._lock:
             self._tx_queue.clear()
             self._priority_queue.clear()
+            self._fail_pending("DISCONNECTED", "Serial link lost")
+            self._queue_condition.notify_all()
         self.connection_lost.emit()
+
+    def _fail_pending(self, result, reason):
+        """Resolve all outstanding v2 handles after teardown/link loss."""
+        for handle in self._pending_v2.values():
+            handle.result = result
+            handle.reason = reason
+            handle.completed.set()
+        self._pending_v2.clear()
+        for handle in self._queued_handles.values():
+            handle.reason = reason
+            handle.written.set()
+        self._queued_handles.clear()
+
+    def _resolve_v2_ack(self, seq, result, reason=""):
+        handle = self._pending_v2.pop(seq, None)
+        if handle is None:
+            self.logger.warning("Ignoring stale/unknown %s acknowledgement seq=%s", result, seq)
+            return False
+        handle.result = result
+        handle.reason = reason
+        handle.completed.set()
+        return True
 
     # ------------------------------------------------------------------
     # Message handling
@@ -312,6 +408,9 @@ class Arduino(QObject):
                 # in-flight value can never reach the safety checks
                 end_marker = data.rindex("|STATUS_END") + len("|STATUS_END")
                 trailer = data[end_marker:]
+                if self.protocol_v2 and not trailer.startswith("*"):
+                    self.logger.warning("Rejected unchecksummed v2 status frame: %s", data)
+                    return
                 if trailer.startswith("*"):
                     frame = data[:end_marker]
                     try:
@@ -370,6 +469,13 @@ class Arduino(QObject):
             if tokens[0] == "BUSY":
                 # v1: bare BUSY; v2: BUSY|<seq>
                 self.logger.warning("Firmware dropped a command: %s", data)
+                if len(tokens) >= 2:
+                    try:
+                        seq = int(tokens[1])
+                    except ValueError:
+                        return
+                    if not self._resolve_v2_ack(seq, "BUSY", "Firmware busy"):
+                        return
                 self.error_emit.emit("BUSY")
             elif tokens[0] == "ERR" and len(tokens) >= 3:
                 # v2 command error: ERR|<seq>|<reason>
@@ -377,6 +483,12 @@ class Arduino(QObject):
                 self.logger.error(
                     "Firmware rejected command seq=%s: %s", tokens[1], reason
                 )
+                try:
+                    seq = int(tokens[1])
+                except ValueError:
+                    return
+                if not self._resolve_v2_ack(seq, "ERR", reason):
+                    return
                 self.error_emit.emit(reason)
             elif tokens[0] == "DONE":
                 # v1: bare DONE; v2: DONE|<seq>
@@ -384,7 +496,9 @@ class Arduino(QObject):
                     try:
                         self.last_done_seq = int(tokens[1])
                     except ValueError:
-                        pass
+                        return
+                    if not self._resolve_v2_ack(self.last_done_seq, "DONE"):
+                        return
                 self.done_emit.emit()
             elif tokens[0] == "ZEROS" and len(tokens) >= 3:
                 self.zeros_emit.emit(int(tokens[1]), int(tokens[2]))
@@ -411,6 +525,13 @@ class Arduino(QObject):
             ):
                 self.logger.debug("Arduino acknowledged test command")
             elif tokens[0] == "OK":
+                if len(tokens) >= 2:
+                    try:
+                        seq = int(tokens[1])
+                    except ValueError:
+                        return
+                    if not self._resolve_v2_ack(seq, "OK"):
+                        return
                 self.ok_event.set()
             else:
                 self.logger.debug("Unrecognized data format: %s", data)
@@ -430,10 +551,19 @@ class Arduino(QObject):
         send() used to freeze the UI thread exactly when the device was
         misbehaving, and the caller could not tell.
         """
+        return self.send_tracked(command) is not None
+
+    def send_tracked(self, command, priority=False):
+        """Queue a command and return its observable lifecycle handle.
+
+        Existing callers may continue using :meth:`send` as a boolean API.
+        Reset/shutdown code uses this method when it must correlate a v2 ack or
+        prove that a safety command was physically written before disconnect.
+        """
         command = str(command).strip()
         if not command:
             self.logger.warning("Refusing to send empty Arduino command")
-            return False
+            return None
 
         usable = (
             self._running
@@ -442,17 +572,22 @@ class Arduino(QObject):
         )
         if not usable:
             self.logger.error("Cannot send '%s' - not connected", command)
-            return False
+            return None
 
         is_emergency = command.startswith("X")
-        with self._lock:
+        handle = CommandHandle(command=command)
+        with self._queue_condition:
             if self.protocol_v2:
                 self._seq = (self._seq + 1) % 1000000
+                handle.sequence = self._seq
                 body = f"{self._seq}:{command}"
                 command = f"#{body}*{xor_checksum(body):02X}"
-            if is_emergency:
+                self._pending_v2[self._seq] = handle
+            self._queued_handles[command] = handle
+            if is_emergency or priority:
                 # An emergency stop never waits in line
                 self._priority_queue.append(command)
             else:
                 self._tx_queue.append(command)
-        return True
+            self._queue_condition.notify_all()
+        return handle

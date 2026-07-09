@@ -146,3 +146,21 @@ class TestVerifyConnection:
         arduino.connection_ready_event.set()
         arduino.verify_connection(tries=1, timeout_s=0.01)
         assert not arduino.connection_ready_event.is_set()
+
+
+class TestDrainBeforeDisconnect:
+    def test_safety_queue_is_written_before_drain_completes(self, arduino):
+        arduino.send("P40")
+        arduino.send("X")
+
+        arduino._service_tx_queue()
+
+        assert arduino.wait_for_drain(0.1) is True
+        payloads = [call.args[0] for call in arduino.serial_com.write.call_args_list]
+        assert payloads == [b"X\n", b"P40\n"]
+
+    def test_disconnect_reports_drain_timeout_then_clears_queue(self, arduino):
+        arduino.send("X")
+
+        assert arduino.disconnect(drain_timeout=0.01) is False
+        assert not arduino._priority_queue

@@ -34,6 +34,7 @@ def make_window(state="idle"):
     window.max_right_edit.value.return_value = 10
     window.current_use_pulse_setting = True
     window.current_pulse_rate = 2.5
+    window.protocol_stop_requested = False
     return window
 
 
@@ -131,9 +132,7 @@ class TestStartGates:
         assert w.protocol_state == "running"
         assert w.protocol_running is True
 
-    def test_fault_state_also_requires_full_gate_chain(self, controller, monkeypatch):
-        """Restarting after a fault goes through the same confirmation +
-        connection gates as a cold start."""
+    def test_fault_state_requires_recovery_before_restart(self, controller, monkeypatch):
         pc, w = controller
         w.protocol_state = "fault"
         confirmed = []
@@ -141,8 +140,9 @@ class TestStartGates:
             pc, "confirm_start", lambda: confirmed.append(1) or False
         )
         pc.start_or_stop()
-        assert confirmed
+        assert not confirmed
         assert w.protocol_state == "fault"
+        w._show_timed_error.assert_called_once()
 
     def test_active_state_routes_to_stop(self, controller, monkeypatch):
         pc, w = controller
@@ -257,7 +257,10 @@ class TestPanelStop:
         w.protocol_state = state
         pc.panel_stop_requested()
         w.stop_actuators.assert_called_once()
-        w.treatment_panel.set_idle.assert_called_once()
+        if state == "idle":
+            w.treatment_panel.set_idle.assert_called_once()
+        else:
+            w.treatment_panel.set_idle.assert_not_called()
 
 
 class TestStopProtocol:
@@ -266,3 +269,31 @@ class TestStopProtocol:
         pc.stop_protocol()
         assert w.protocol_state == "stopping"
         w.stop_actuators.assert_called_once()
+
+
+class TestCompletionOutcomes:
+    def test_faulted_completion_keeps_fault_state(self, controller):
+        pc, w = controller
+        w.protocol_state = "fault"
+        pc.protocol_completed(False)
+        assert w.protocol_state == "fault"
+        w.treatment_panel.set_idle.assert_not_called()
+        w._show_safety_alert.assert_called_once()
+
+    def test_user_stop_stays_gated_until_reset_without_fault_alert(self, controller):
+        pc, w = controller
+        w.protocol_state = "stopping"
+        w.protocol_stop_requested = True
+        pc.protocol_completed(False)
+        assert w.protocol_state == "stopping"
+        assert w.protocol_stop_requested is True
+        w._show_safety_alert.assert_not_called()
+
+    def test_start_exception_recovers_state(self, controller, monkeypatch):
+        pc, w = controller
+        monkeypatch.setattr(pc, "confirm_start", lambda: True)
+        w.ensure_arduino_connection.side_effect = RuntimeError("boom")
+        pc.start_or_stop()
+        assert w.protocol_state == "idle"
+        assert w.protocol_running is False
+        assert w.worker is None

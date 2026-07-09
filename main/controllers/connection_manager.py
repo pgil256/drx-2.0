@@ -24,6 +24,14 @@ class ConnectionManager:
         """Setup Arduino interface."""
         window = self.window
         try:
+            # Never overwrite a live transport/QThread pair. Reconnects used
+            # to leak the old Qt event loop and could abort with
+            # "QThread: Destroyed while thread is still running".
+            if getattr(window, "arduino", None) is not None or getattr(
+                window, "thread", None
+            ) is not None:
+                if not self.teardown_arduino():
+                    raise RuntimeError("Previous Arduino thread did not stop")
             print("Showing loading spinner")
             window.loading_spinner.show()
             window.disable_actuator_controls()
@@ -125,7 +133,7 @@ class ConnectionManager:
         # Forcefully disconnect current connection (disconnect() joins the
         # I/O thread itself; the long settling sleeps predate that)
         if hasattr(window, 'arduino') and window.arduino:
-            window.arduino.disconnect()
+            self.teardown_arduino()
             time.sleep(0.5)  # Allow time for port to release
 
         # Reset GPIO pins to safe state
@@ -149,6 +157,30 @@ class ConnectionManager:
                 "Unable to establish reliable connection to Arduino. Please check connections and try again."
             )
             return False
+
+    def teardown_arduino(self, drain_timeout=0.0):
+        """Stop both transport layers and release their references safely."""
+        window = self.window
+        drained = True
+        arduino = getattr(window, "arduino", None)
+        thread = getattr(window, "thread", None)
+
+        if arduino is not None:
+            drained = arduino.disconnect(drain_timeout=drain_timeout)
+
+        if thread is not None:
+            thread.quit()
+            if not thread.wait(3000):
+                window.logger.error("Arduino QThread did not stop within 3 seconds")
+                # Preserve the references: dropping the final QThread wrapper
+                # while it is still running can abort the process.
+                return False
+            else:
+                thread.deleteLater()
+
+        window.arduino = None
+        window.thread = None
+        return drained
 
 
     def reset_arduino(self, event=None):
@@ -209,9 +241,14 @@ class ConnectionManager:
                 "Arduino reset and actuators reinitialized."
             )
             window.initial_setup_complete = True
+            window.protocol_stop_requested = False
+            if hasattr(window, "set_protocol_state"):
+                window.set_protocol_state("idle")
             print("Reset sequence completed successfully via worker.")
         else:
             window.start_button.setEnabled(True)  # Re-enable start button even on failure
+            if hasattr(window, "set_protocol_state"):
+                window.set_protocol_state("fault")
             window._show_timed_error(
              "Reset sequence failed. Check logs and Arduino connection."
              )
@@ -225,6 +262,8 @@ class ConnectionManager:
         # Make sure to clear the reset_in_progress flag in case of error too
         window.reset_in_progress = False
         window.start_button.setEnabled(True)  # Re-enable start button on error
+        if hasattr(window, "set_protocol_state"):
+            window.set_protocol_state("fault")
         window._show_timed_error(
          f"Could not complete reset sequence:\n{error_message}"
         )

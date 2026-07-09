@@ -16,6 +16,8 @@ Behavior mirrors main/motor/motor.ino:
 - 'Y' replies "Reset|", reboots (state reset + boot delay), then announces
   "Ready to Go" -- it never replies DONE.
 - P/I/K/A reply "BUSY" while a move is running (bRunning).
+- FIT commands remain active until their timer ends, emit DONE on physical
+  completion, and reply BUSY to conflicting FIT commands.
 - L5 zero marks accept the delimited form (L5|a|b) and echo "ZEROS|a|b".
 - Pressure above 80 lbs during a ramp emits
   "ERROR: Pressure limit exceeded" and stops everything.
@@ -53,11 +55,14 @@ class FakeArduino:
         self.jerking: bool = False
         self.b_running: bool = False
         self.measure_pressure: bool = False
+        self.fit_moving: bool = False
         self.high_frequency_status: bool = False
         self.status_acknowledged: bool = True
         self.host_v2: bool = False
         self._current_seq = None  # seq of command being processed
         self._active_seq = None   # seq of motion/pressure command in flight
+        self._active_fit_seq = None
+        self._fit_end_time = 0.0
 
         # Configurable behavior (defaults mirror motor.ino timing)
         self.movement_speed: float = 5000.0  # units per second (fast for tests)
@@ -174,6 +179,7 @@ class FakeArduino:
                 last_movement_time = now
                 self._update_movement(dt)
                 self._update_pressure(dt)
+                self._update_fit(now)
 
                 # High-frequency status updates
                 if self.high_frequency_status:
@@ -181,7 +187,7 @@ class FakeArduino:
                         if self._send_status():
                             last_hf_status_time = now
                 # Idle status (firmware LOOP_STATUS_DELAY path)
-                elif not self.b_running and not self.measure_pressure:
+                elif not self.b_running and not self.measure_pressure and not self.fit_moving:
                     if now - last_idle_status_time >= self.idle_status_interval:
                         if self._send_status():
                             last_idle_status_time = now
@@ -195,12 +201,15 @@ class FakeArduino:
         """Mirror firmware resetFunc(): drop all activity, re-init state."""
         self.b_running = False
         self.measure_pressure = False
+        self.fit_moving = False
         self.jerking = False
         self.status_acknowledged = True
         self.high_frequency_status = False
         self.host_v2 = False
         self._current_seq = None
         self._active_seq = None
+        self._active_fit_seq = None
+        self._fit_end_time = 0.0
         self._target_position_a = None
         self._target_position_b = None
         self._target_position_c = None
@@ -346,10 +355,35 @@ class FakeArduino:
                 self.jerking = True
                 self._ack("DONE", self._current_seq)
 
+        elif cmd_type == 'F':
+            direction = cmd[1:2]
+            if direction == "0":
+                self.fit_moving = False
+                self._fit_end_time = 0.0
+                self._active_fit_seq = None
+                self._ack("DONE", self._current_seq)
+            elif self.fit_moving:
+                self._ack("BUSY", self._current_seq)
+            elif direction in ("+", "-", "F", "R"):
+                self.fit_moving = True
+                self._active_fit_seq = self._current_seq
+                # Shortened for tests while preserving slow/fast ordering.
+                self._fit_end_time = time.time() + (
+                    0.05 if direction in ("+", "-") else 0.2
+                )
+            else:
+                if self._current_seq is not None:
+                    self._write(f"ERR|{self._current_seq}|Invalid F direction\n")
+                else:
+                    self._write("ERROR: Invalid F direction\n")
+
         elif cmd_type == 'X':
             self.b_running = False
             self.measure_pressure = False
             self.jerking = False
+            self.fit_moving = False
+            self._fit_end_time = 0.0
+            self._active_fit_seq = None
             self._target_position_a = None
             self._target_position_b = None
             self._target_position_c = None
@@ -462,6 +496,14 @@ class FakeArduino:
             self.pressure += step
         else:
             self.pressure -= step
+
+    def _update_fit(self, now: float):
+        if not self.fit_moving or now < self._fit_end_time:
+            return
+        self.fit_moving = False
+        self._fit_end_time = 0.0
+        self._ack("DONE", self._active_fit_seq)
+        self._active_fit_seq = None
 
     def _send_status(self) -> bool:
         """Send status in the real Arduino format.

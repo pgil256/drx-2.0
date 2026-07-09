@@ -585,9 +585,10 @@ class Protocols(QtCore.QRunnable):
     def _fail(self, reason: str, reset_needed: bool = False):
         """Common failure exit: log, optionally request recovery, emit."""
         print(f"Protocol {self.protocol} failed: {reason}")
+        self.is_running = False
+        self.signals.finished.emit(False)
         if reset_needed:
             self.signals.reset_needed.emit()
-        self.signals.finished.emit(False)
         return False
 
     def _initial_pressure(self) -> float:

@@ -305,6 +305,20 @@ def test_setup_arduino_badge_toggle(shell):
     assert s._arduino_badge._label.text() == "Arduino connected"
 
 
+def test_setup_stop_controls_are_never_in_motion_lock_group(shell):
+    s = shell.setup
+    locked = s.control_buttons()
+    for row in s._rows.values():
+        assert all(button not in locked for button in row.safety_buttons)
+        assert all(button in locked for button in row.motion_buttons)
+
+
+def test_leg_length_go_is_disabled(shell):
+    row = shell.setup._rows["leg_length"]
+    go = next(button for button in row.motion_buttons if button.text() == "Go")
+    assert not go.isEnabled()
+
+
 # ----- support -----
 def test_support_accordion_and_signals(shell):
     from ui.screens.support import _FailureItem

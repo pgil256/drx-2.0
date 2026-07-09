@@ -21,6 +21,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from helpers.reset_worker import ResetWorker, ResetWorkerSignals
+from helpers.arduino import CommandHandle
 
 
 def make_main_window(use_event=True):
@@ -216,6 +217,21 @@ class TestTryCommandWithRetry:
 
         assert result is True
         assert arduino.send.call_count == 2
+
+    def test_v2_waits_for_the_specific_command_handle(self):
+        arduino = MagicMock()
+        arduino.protocol_v2 = True
+        handle = CommandHandle(command="I131140", sequence=7)
+        handle.result = "DONE"
+        handle.completed.set()
+        arduino.send_tracked.return_value = handle
+        worker = make_worker(arduino=arduino, use_event=True)
+
+        assert worker._try_command_with_retry(
+            "I131140", "Horizontal Reset", timeout=0.1
+        ) is True
+        arduino.send.assert_not_called()
+        arduino.send_tracked.assert_called_once_with("I131140")
 
 
 @pytest.mark.unit

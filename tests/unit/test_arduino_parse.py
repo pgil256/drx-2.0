@@ -166,24 +166,52 @@ class TestProtocolV2Receive:
     """Seq-bearing acks and checksummed status frames."""
 
     def test_done_with_seq(self, arduino, qtbot):
+        arduino._running = True
+        arduino.protocol_v2 = True
+        handle = arduino.send_tracked("K1300")
         with qtbot.waitSignal(arduino.done_emit, timeout=1000):
-            arduino.handle_com("DONE|17")
-        assert arduino.last_done_seq == 17
+            arduino.handle_com(f"DONE|{handle.sequence}")
+        assert arduino.last_done_seq == handle.sequence
+        assert handle.completed.is_set()
+        assert handle.result == "DONE"
 
     def test_busy_with_seq_emits_error(self, arduino, qtbot):
+        arduino._running = True
+        arduino.protocol_v2 = True
+        handle = arduino.send_tracked("K1300")
         with qtbot.waitSignal(arduino.error_emit, timeout=1000) as blocker:
-            arduino.handle_com("BUSY|4")
+            arduino.handle_com(f"BUSY|{handle.sequence}")
         assert blocker.args == ["BUSY"]
+        assert handle.result == "BUSY"
 
     def test_err_with_seq_and_reason(self, arduino, qtbot):
+        arduino._running = True
+        arduino.protocol_v2 = True
+        handle = arduino.send_tracked("P50")
         with qtbot.waitSignal(arduino.error_emit, timeout=1000) as blocker:
-            arduino.handle_com("ERR|9|Invalid P value")
+            arduino.handle_com(
+                f"ERR|{handle.sequence}|Invalid P value"
+            )
         assert blocker.args == ["Invalid P value"]
+        assert handle.result == "ERR"
 
     def test_ok_with_seq_sets_event(self, arduino):
+        arduino._running = True
+        arduino.protocol_v2 = True
+        handle = arduino.send_tracked("T", priority=True)
         arduino.ok_event.clear()
-        arduino.handle_com("OK|3")
+        arduino.handle_com(f"OK|{handle.sequence}")
         assert arduino.ok_event.is_set()
+        assert handle.result == "OK"
+
+    def test_stale_done_does_not_release_pending_command(self, arduino, qtbot):
+        arduino._running = True
+        arduino.protocol_v2 = True
+        handle = arduino.send_tracked("K1300")
+        with qtbot.assertNotEmitted(arduino.done_emit, wait=100):
+            arduino.handle_com(f"DONE|{handle.sequence + 999}")
+        assert not handle.completed.is_set()
+        assert handle.sequence in arduino._pending_v2
 
     def test_status_with_valid_checksum_accepted(self, arduino, qtbot):
         frame = "STATUS_START|S|1500|2000|1200|45.3|STATUS_END"
@@ -201,6 +229,13 @@ class TestProtocolV2Receive:
         with qtbot.assertNotEmitted(arduino.status_emit, wait=100):
             arduino.handle_com(line)
         assert arduino.checksum_failures == 1
+
+    def test_v2_rejects_unchecksummed_status(self, arduino, qtbot):
+        arduino.protocol_v2 = True
+        with qtbot.assertNotEmitted(arduino.status_emit, wait=100):
+            arduino.handle_com(
+                "STATUS_START|S|1500|2000|1200|45.3|STATUS_END"
+            )
 
 
 @pytest.mark.unit

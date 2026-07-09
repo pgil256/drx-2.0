@@ -135,11 +135,11 @@ class TestProtocolStateMachine:
         assert not h.ui.start_button.isEnabled()
         assert h.protocol_running is True  # still owns the hardware
 
-    def test_fault_keeps_banner_but_allows_restart(self, qtbot):
+    def test_fault_keeps_banner_and_requires_recovery(self, qtbot):
         h = StateMachineHarness(qtbot)
         h.treatment_panel.set_fault("test")
         h.set_protocol_state("fault")
-        assert h.ui.start_button.isEnabled()
+        assert not h.ui.start_button.isEnabled()
         assert h.protocol_running is False
 
     def test_nav_blocked_while_active(self, qtbot):

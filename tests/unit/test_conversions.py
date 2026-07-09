@@ -215,11 +215,11 @@ class TestSetToDistance:
         KneeSpa.set_to_distance(stub, 1.0, "A", 1900)
         stub.I2Cstatus_event.clear.assert_called_once()
 
-    def test_re_enables_actuator_controls(self):
-        """Controls are re-enabled after the command is dispatched."""
+    def test_keeps_controls_locked_until_firmware_done(self):
+        """Queue acceptance is not physical completion; DONE unlocks later."""
         stub = make_distance_stub()
         KneeSpa.set_to_distance(stub, 1.0, "A", 1900)
-        stub.enable_actuator_controls.assert_called_once()
+        stub.enable_actuator_controls.assert_not_called()
 
 
 @pytest.mark.unit
@@ -348,11 +348,11 @@ class TestSetToCDistanceSideEffects:
         stub.loading_spinner.show.assert_called_once()
         stub.loading_spinner.hide.assert_called_once()
 
-    def test_disables_then_enables_controls(self):
+    def test_disables_until_firmware_done(self):
         stub = make_c_stub()
         KneeSpa.set_to_c_distance(stub, 0.0)
         stub.disable_actuator_controls.assert_called_once()
-        stub.enable_actuator_controls.assert_called_once()
+        stub.enable_actuator_controls.assert_not_called()
 
     def test_returns_false_and_hides_spinner_on_bad_input(self):
         """FROZEN: non-numeric degrees raise inside the try; the method swallows

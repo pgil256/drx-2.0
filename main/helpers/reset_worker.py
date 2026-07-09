@@ -83,15 +83,37 @@ class ResetWorker(QRunnable):
         for attempt in (1, 2):
             debug(f"Attempting '{operation_name}' with command: {command}",
                   component="ResetWorker", attempt=attempt)
+            # ``is True`` is intentional: unittest MagicMock fabricates truthy
+            # attributes on demand, which otherwise routes legacy/mock tests
+            # through the v2-only API.
+            use_v2 = (
+                getattr(self.arduino, "protocol_v2", False) is True
+                and hasattr(self.arduino, "send_tracked")
+            )
             self.main_window.I2Cstatus = 0  # Reset flag BEFORE sending command
             if hasattr(self.main_window, 'I2Cstatus_event'):
                 self.main_window.I2Cstatus_event.clear()
-            if not self.arduino.send(command):
+            handle = self.arduino.send_tracked(command) if use_v2 else None
+            queued = handle is not None if use_v2 else self.arduino.send(command)
+            if not queued:
                 debug(f"Failed to send command for {operation_name}",
                       component="ResetWorker", level="ERROR")
                 return False
 
-            if self._wait_for_done(timeout=timeout, operation_name=operation_name):
+            if use_v2:
+                if handle.completed.wait(timeout=timeout):
+                    if handle.result == "DONE":
+                        return True
+                    debug(
+                        f"{operation_name} rejected: {handle.result} {handle.reason}",
+                        component="ResetWorker", level="WARNING",
+                    )
+                else:
+                    debug(
+                        f"Timeout waiting for sequenced {operation_name}",
+                        component="ResetWorker", level="WARNING",
+                    )
+            elif self._wait_for_done(timeout=timeout, operation_name=operation_name):
                 return True
             debug(f"Timeout waiting for {operation_name} completion (attempt {attempt})",
                   component="ResetWorker", level="WARNING")

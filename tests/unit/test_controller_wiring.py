@@ -190,6 +190,13 @@ class TestSetupReset:
         KneeSpa._setup_reset(stub, "leg_length")
         stub.reset_extra_button_clicked.assert_called_once()
 
+    def test_pressure_reset_sends_real_release(self):
+        stub = make_stub()
+        KneeSpa._setup_reset(stub, "pressure")
+        stub.arduino.send.assert_called_once_with("P0")
+        stub._reflect_setup.assert_not_called()
+        stub.treatment_panel.set_stopping.assert_called_once()
+
 
 # ----- Setup stop -----
 # Routed through the base stop paths (bare 'X' + link-down alarm). The row
@@ -233,6 +240,24 @@ class TestSetupGo:
         stub = make_stub()
         KneeSpa._on_setup_go(stub, "pressure")
         stub._apply_setup_pressure.assert_called_once()
+
+    def test_leg_go_is_refused_without_locking_controls(self):
+        stub = make_stub()
+        result = KneeSpa._on_setup_go(stub, "leg_length")
+        assert result is False
+        stub.disable_actuator_controls.assert_not_called()
+        stub.loading_spinner.show.assert_not_called()
+        stub._show_timed_error.assert_called_once()
+
+    def test_horizontal_go_uses_calibrated_absolute_position(self):
+        stub = make_stub()
+        stub.shell.setup.row_value.return_value = -10
+        stub.config.BMarks = {
+            "-25": 0, "-20": 380, "-15": 760, "-10": 1140,
+            "-5": 1520, "0": 1900, "5": 2280,
+        }
+        KneeSpa._on_setup_go(stub, "horizontal")
+        stub.arduino.send.assert_called_once_with("I131140")
 
     def test_apply_pressure_clamps_above_max(self):
         stub = make_stub()

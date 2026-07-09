@@ -126,6 +126,7 @@ bool positionReadValid = false;      // last readPosition() I2C result ok
 bool hostV2 = false;        // host has sent at least one framed command
 long currentCmdSeq = -1;    // seq of the command being processed (-1 = v1)
 long activeCmdSeq = -1;     // seq of the motion/pressure command in flight
+long activeFitCmdSeq = -1;  // seq of the timed FIT command in flight
 
 // Global variables
 uint8_t smcDeviceNumber = 13;
@@ -365,6 +366,17 @@ bool sendStatus() {
   return true;
 }
 
+// Stop the open-loop leg-length/FIT actuator. This actuator is driven by
+// GPIO rather than an SMC, so setting SMC speeds to zero does not affect it.
+void stopFIT() {
+  moveFITForward = false;
+  FITDelay = 0;
+  timeInFIT = 0;
+  activeFitCmdSeq = -1;
+  digitalWrite(DIR_FIT_FORWARD, LOW);
+  digitalWrite(DIR_FIT_REVERSE, LOW);
+}
+
 // Emergency stop all actuators
 void emergencyStop() {
   Serial.println("Emergency Stop");
@@ -384,6 +396,9 @@ void emergencyStop() {
   smcDeviceNumber = 14;
   setMotorSpeed(0);
   Serial.println("C stopped");
+
+  stopFIT();
+  Serial.println("FIT stopped");
 
   measurePressure = false;
   bRunning = false;
@@ -1064,6 +1079,18 @@ void processCommand(String cmd) {
         String direction = cmd.substring(1, 2);
         Serial.println(direction);
 
+        if (direction == "0") {
+          stopFIT();
+          Serial.println("Fit stopped.");
+          emitAck("DONE", currentCmdSeq);
+          break;
+        }
+
+        if (moveFITForward) {
+          emitAck("BUSY", currentCmdSeq);
+          break;
+        }
+
         if (direction == "+") {
           moveFITForward = true;
           FITDelay = FIT_SLOW_DELAY;
@@ -1088,15 +1115,16 @@ void processCommand(String cmd) {
           Serial.println("Fit fast reversing.");
           digitalWrite(DIR_FIT_FORWARD, HIGH);
           digitalWrite(DIR_FIT_REVERSE, LOW);
-        } else if (direction == "0") {
-          moveFITForward = false;
-          Serial.println("Fit stopped.");
-          digitalWrite(DIR_FIT_FORWARD, LOW);
-          digitalWrite(DIR_FIT_REVERSE, LOW);
+        } else {
+          emitCmdError("Invalid F direction");
+          break;
         }
 
         timeInFIT = 0;
-        emitAck("DONE", currentCmdSeq);
+        // Completion is emitted when the timed movement physically ends.
+        // The previous immediate DONE re-enabled conflicting UI controls
+        // while the FIT motor was still moving for up to six seconds.
+        activeFitCmdSeq = currentCmdSeq;
       }
       break; // FIXED: Added missing break statement
 
@@ -1192,7 +1220,7 @@ void loop() {
   // Maintain the filtered pressure value without blocking
   updatePressure();
 
-  bool activeMotion = bRunning || measurePressure || jerking;
+  bool activeMotion = bRunning || measurePressure || jerking || moveFITForward;
 
   // SAFETY: the physical stop button is honored in EVERY state --
   // including pressure application and pulsing, which previously
@@ -1319,6 +1347,8 @@ void loop() {
       Serial.println("Fit stopped.");
       Serial.println("fit done");
       moveFITForward = false;
+      emitAck("DONE", activeFitCmdSeq);
+      activeFitCmdSeq = -1;
     }
   }
 
