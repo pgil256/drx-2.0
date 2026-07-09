@@ -13,7 +13,7 @@
   - Fixed STOP pin logic (INPUT_PULLUP reads HIGH when not pressed)
 */
 
-#define VERSION "2026-06-11-FAILSAFE-2"
+#define VERSION "2026-07-08-FAILSAFE-5"
 #ifndef UNIT_TEST
 // Hardware libraries; native unit tests supply mocks and arduino_shim.h
 // (see test/) before including this file
@@ -24,9 +24,11 @@
 #endif
 
 // Watchdog: reboots the MCU if loop() hangs (e.g. wedged I2C or load
-// cell). NOTE: verify on hardware that the installed Mega bootloader
-// recovers from WDT resets (old stk500v2 bootloaders boot-loop); set to
-// 0 only if the bootloader cannot be updated.
+// cell). The production Mega's bootloader recovers cleanly from WDT
+// resets (verified on hardware, Phase E §3.2 / E4, 2026-07-08).
+// resetBoard() relies on the same mechanism; if a unit ever needs
+// ENABLE_WDT 0 (boot-looping bootloader), resetBoard() must be
+// reworked for it too.
 #define ENABLE_WDT 1
 
 // Pin definitions
@@ -44,7 +46,13 @@
 #define AFULLINCH          430
 #define BFULLINCH          620
 #define CFULLINCH          1880
-#define PRESSURE_SPEED     500
+// Pressure moves and the autonomous post-fault release drive the axial
+// actuator at the same speed position moves are known to move it at
+// (BC_SPEED). At the historical 500 the axial actuator never broke away
+// on-device (2026-07-08: +500 commanded for 5 s, zero counts of travel,
+// while 800-speed position moves ran fine), so pressure could never
+// build -- and worse, a post-fault release would not have moved either.
+#define PRESSURE_SPEED     800
 #define BC_SPEED           800
 #define C_SPEED            800
 #define MAX_JERKS          10
@@ -171,8 +179,20 @@ void emitCmdError(const char *reason);
 bool parseV2Frame(const String &raw, String &inner);
 bool isEmergencyBuffer(const String &b);
 
-// Makes Arduino restart
-void(* resetFunc) (void) = 0;
+// Force a true hardware reset by arming the shortest watchdog and
+// spinning. The previous jump-to-0 restart re-entered the program with
+// interrupts live and peripherals (TWI, UARTs, WDT) in mid-flight
+// state; on the production Mega it wedged the MCU until power cycle
+// (reproduced on hardware, 2026-07-08). Requires the WDT-safe
+// bootloader verified in Phase E §3.2.
+void resetBoard() {
+  Serial.flush();   // let queued diagnostics drain
+  Serial1.flush();  // "Reset|" must reach the host before the reset
+  wdt_enable(WDTO_15MS);
+#ifndef UNIT_TEST
+  for (;;) {}  // watchdog fires in ~15 ms
+#endif
+}
 
 // Required to allow motors to move
 void exitSafeStart() {
@@ -651,6 +671,17 @@ void processCommand(String cmd) {
       if (pressure >= desiredPressure)
         pressureDirection = -1;  // move back
 
+      // Already at/below the target with nowhere to go -- the common
+      // case is the host's post-protocol "P0" release arriving when no
+      // load was ever applied. Starting a backward move here would only
+      // trip the axial-at-zero guard and fault the host over a no-op.
+      if (pressureDirection < 0 && pressure <= desiredPressure) {
+        Serial.println("Pressure already at target; nothing to move");
+        sendStatus();
+        emitAck("DONE", currentCmdSeq);
+        break;
+      }
+
       Serial.print(" pressureDirection: ");
       Serial.println(pressureDirection);
 
@@ -671,7 +702,7 @@ void processCommand(String cmd) {
       releasingPressure = false;
       emergencyStop();
       Serial1.println("Reset|");
-      resetFunc();
+      resetBoard();
       break;
 
     // Emergency stop
@@ -1084,6 +1115,10 @@ void setup() {
 
   // Join I2C bus as slave
   Wire.begin(0x8);
+  // Wire busy-waits with no timeout by default; a wedged bus or dead
+  // SMC must time out (auto-recovering the TWI) rather than hang setup
+  // or the safety loop forever
+  Wire.setWireTimeout(25000, true);
 
   // Initialize serial communication
   Serial.begin(9600);
@@ -1301,25 +1336,27 @@ void loop() {
       Serial.print(loopLastPosition); Serial.print(" ");
       Serial.println(desiredPosition);
 
-      // Check if position reached with hysteresis
-      bool targetReached = false;
-      if (forward > 0) {
-        if (currentPos >= desiredPosition) {
-          targetReached = true;
-        }
-      } else if (currentPos <= desiredPosition) {
-        targetReached = true;
-      }
+      // Arrival uses the SAME symmetric POSITION_DEADBAND band as the
+      // command-time close-enough check (see 'I'/'K'/'A'): an actuator
+      // that settles within the deadband of its target has arrived. The
+      // old strict compare (>=/<=) never registered arrival when the
+      // axial actuator bottomed out at its home a few counts short of
+      // AZERO, so the stall detector below fired "Motor stalled" on a
+      // reset that had actually reached home.
+      bool targetReached =
+          (desiredPosition + POSITION_DEADBAND >= currentPos &&
+           currentPos + POSITION_DEADBAND >= desiredPosition);
 
       if (targetReached) {
         Serial.println("Stopped Moving - Target Reached");
         setMotorSpeed(0);
         bRunning = false;
         forward = 0;
-      }
-
-      // Handle stalling detection
-      if (loopLastPosition == (int)currentPos) {
+        loopStallCount = 0;
+      } else if (loopLastPosition == (int)currentPos) {
+        // Stall detection applies only while still SEEKING the target: a
+        // motionless actuator already within the deadband is home, not
+        // stalled (this branch is skipped once targetReached above).
         loopStallCount++;
         if (loopStallCount > 5) { // Stop if stalled for too long
           Serial.println("Motor stalled - stopping");
@@ -1365,8 +1402,12 @@ void loop() {
       return;
     }
     if (positionReadValid && pressureDirection < 0 &&
-        currentPos <= (uint16_t)(AZERO + POSITION_DEADBAND)) {
-      // Fully backed off; lower pressure is not achievable
+        currentPos <= (uint16_t)(AZERO + POSITION_DEADBAND) &&
+        pressure > desiredPressure) {
+      // Fully backed off with load still above target: lower pressure
+      // is genuinely not achievable. (When the target is already met --
+      // e.g. a P0 release with no load -- the reached-check below
+      // completes the move with DONE instead of faulting the host.)
       Serial1.println("ERROR: Axial at zero, pressure target not reached");
       setMotorSpeed(0);
       measurePressure = false;

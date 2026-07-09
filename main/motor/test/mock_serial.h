@@ -24,6 +24,7 @@ public:
 
     void begin(long baud) {}
     void setTimeout(long) {}
+    void flush() {}
 
     int available() {
         if (inputIndex < (int)currentInput.length()) return 1;

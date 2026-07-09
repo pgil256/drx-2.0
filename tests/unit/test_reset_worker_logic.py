@@ -45,7 +45,8 @@ def make_config(scale_calibrated=True):
     """Build a mocked config with the marks/calibration ResetWorker reads."""
     config = MagicMock()
     config.AMarks = {"0.0": 0, "0": 0}
-    config.BMarks = {"0.0": 1900, "0": 1900}
+    # Step 4 homes actuator B to the calibrated -10 deg BMarks position (1140).
+    config.BMarks = {"0.0": 1900, "0": 1900, "-15": 760, "-10": 1140}
     # run() reads CMarks["{:.1f}".format(0)] == CMarks["0.0"]
     config.CMarks = {"0.0": 1450}
     config.calibration = 1.0
@@ -314,12 +315,19 @@ class TestRunSequenceOrdering:
         assert l5_cmd == "L5|0|1900"
 
     def test_actuator_step_ordering(self):
-        """Actuators C ('I14'), B ('A13'), A ('I12') are issued in order."""
+        """Actuators C ('I14'), B ('I13'), A ('I12') are issued in order."""
         sent, _ = self._run_success()
         i14 = next(i for i, c in enumerate(sent) if c.startswith("I14"))
-        a13 = next(i for i, c in enumerate(sent) if c.startswith("A13"))
+        i13 = next(i for i, c in enumerate(sent) if c.startswith("I13"))
         i12 = next(i for i, c in enumerate(sent) if c.startswith("I12"))
-        assert i14 < a13 < i12
+        assert i14 < i13 < i12
+
+    def test_actuator_b_uses_bmarks_minus10_position(self):
+        """Actuator B homes to the calibrated -10 deg BMarks position (1140),
+        sent as an absolute 'I131140' -- not the old uncalibrated 'A133'."""
+        sent, _ = self._run_success()
+        i13_cmd = next(c for c in sent if c.startswith("I13"))
+        assert i13_cmd == "I131140"
 
     def test_calibration_is_last(self):
         """Step 6 issues the 'L0' calibration command last."""
@@ -328,15 +336,15 @@ class TestRunSequenceOrdering:
         assert l0_index == len(sent) - 1
 
     def test_full_command_sequence(self):
-        """The full ordered sequence matches Y, L5, I14, A13, I12, L0."""
+        """The full ordered sequence matches Y, L5, I14, I13, I12, L0."""
         sent, _ = self._run_success()
         prefixes = []
         for cmd in sent:
-            for pfx in ("Y", "L5", "I14", "A13", "I12", "L0"):
+            for pfx in ("Y", "L5", "I14", "I13", "I12", "L0"):
                 if cmd == pfx or cmd.startswith(pfx):
                     prefixes.append(pfx)
                     break
-        assert prefixes == ["Y", "L5", "I14", "A13", "I12", "L0"]
+        assert prefixes == ["Y", "L5", "I14", "I13", "I12", "L0"]
 
     def test_actuator_c_uses_cmarks_zero_position(self):
         """Actuator C command embeds the CMarks['0.0'] position (1450)."""

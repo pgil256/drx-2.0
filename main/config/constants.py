@@ -30,7 +30,9 @@ DEGREES = "\u00b0"
 # view layer; the modern UI is code-built under ui/)
 UI_PATHS = {
     "PROTOCOL_IMAGES": os.path.join(APP_BASE_DIR, "ui/media/images/graphics"),
-    "VIDEOS": os.path.join(APP_BASE_DIR, "ui/media/videos/1.mp4"),
+    # Directory of demo clips; the video modal plays every .mp4 in it, in
+    # sorted filename order (1.mp4, 2.mp4, ...).
+    "VIDEOS": os.path.join(APP_BASE_DIR, "ui/media/videos"),
 }
 
 DATA_PATHS = {
@@ -122,7 +124,7 @@ LEG_LENGTH_MAX = 6.0  # Maximum leg length in inches
 
 # Movement Configuration
 MOVEMENT_DELAY = 0.5  # seconds between movements
-DEFAULT_HORIZONTAL_POSITION = -15  # degrees
+DEFAULT_HORIZONTAL_POSITION = -10  # degrees
 
 # Default Positions
 DEFAULT_AXIAL_POSITION = 0  # inches

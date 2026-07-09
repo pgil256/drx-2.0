@@ -239,7 +239,10 @@ class Protocols(QtCore.QRunnable):
 
             current_command = starting_pressure
             pressure_tolerance = 3  # Acceptable pressure difference in lbs
-            max_wait_time = 5  # Increased max time to wait for pressure (seconds)
+            # Backstop above the firmware's own bounds (5s stall / 30s move
+            # timeout); firmware ERRORs flip is_running and exit early --
+            # see set_to_pressure for the full rationale
+            max_wait_time = 35  # max time to wait for pressure (seconds)
             max_retries = 5    # Increased max retries
             check_interval = 0.5  # Time between pressure checks in seconds
             last_check_time = 0  # Track when we last printed a status update
@@ -399,7 +402,13 @@ class Protocols(QtCore.QRunnable):
     def set_to_pressure(self, target_pressure: float) -> bool:
         """Set axial pressure directly."""
         pressure_tolerance = 2  # Acceptable pressure difference in lbs
-        max_wait_time = 5  # Maximum time to wait for pressure to stabilize (seconds)
+        # Backstop only: the firmware owns pressure-move failure detection
+        # (no-progress fault at 5s, hard move bound at 30s) and its ERROR
+        # flips is_running, exiting the wait loop early with the specific
+        # fault reason. This window must sit ABOVE both firmware bounds --
+        # at the old 5s it raced the firmware's 5s stall check and won,
+        # aborting with a generic timeout before the diagnosis arrived.
+        max_wait_time = 35  # Maximum time to wait for pressure to stabilize (seconds)
         
         try:
             if not self.is_running:

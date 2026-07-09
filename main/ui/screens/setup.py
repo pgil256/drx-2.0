@@ -158,7 +158,7 @@ class _PosRow(QWidget):
     def __init__(self, label, parent=None):
         super().__init__(parent)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(4, 9, 4, 9)
+        lay.setContentsMargins(4, 5, 4, 5)
         lay.setSpacing(8)
         cap = QLabel(label.upper())
         cap.setFont(sans_font(size="--text-xs", weight=600, tracking=0.06))
@@ -257,10 +257,13 @@ class SetupScreen(QWidget):
         col = QVBoxLayout()
         col.setSpacing(_GAP)
 
-        live = DSCard("Live Position")
+        # padded=False + tight host margins: the default 24px card padding on
+        # top of the row heights pushed the whole window past 768 on-device
+        # (the fullscreen window can't go below the layout's minimum height).
+        live = DSCard("Live Position", padded=False)
         live_host = QWidget()
         lv = QVBoxLayout(live_host)
-        lv.setContentsMargins(0, 0, 0, 0)
+        lv.setContentsMargins(20, 8, 20, 8)
         lv.setSpacing(0)
         self._pos = {}
         live_rows = ["Axial", "Lateral", "Horizontal", "Leg Length", "Pressure"]
@@ -289,7 +292,7 @@ class SetupScreen(QWidget):
     def _safety_row(self, label, val, unit):
         w = QWidget()
         lay = QHBoxLayout(w)
-        lay.setContentsMargins(0, 11, 0, 11)
+        lay.setContentsMargins(0, 7, 0, 7)
         lay.setSpacing(8)
         lbl = QLabel(label)
         lbl.setFont(sans_font(size="--text-sm", weight=600))

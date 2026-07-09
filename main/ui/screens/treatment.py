@@ -171,8 +171,8 @@ class TreatmentScreen(QWidget):
         card = DSCard("Treatment Monitor", header_right=self._phase_badge, padded=False)
         host = QWidget()
         v = QVBoxLayout(host)
-        v.setContentsMargins(24, 24, 24, 24)
-        v.setSpacing(18)
+        v.setContentsMargins(24, 16, 24, 16)
+        v.setSpacing(12)
         v.setAlignment(Qt.AlignHCenter)
 
         # Knee visual in a gradient panel.
@@ -305,7 +305,7 @@ class TreatmentScreen(QWidget):
         s_host = QWidget()
         sv = QVBoxLayout(s_host)
         sv.setContentsMargins(0, 6, 0, 6)
-        sv.setSpacing(24)
+        sv.setSpacing(16)
         self._settings = {}
         slider_specs = [
             ("duration", "Duration", DEFAULT_PROTOCOL_MINUTES,

@@ -38,6 +38,7 @@ public:
     void begin() {}
     void begin(uint8_t) {}
     void begin(int) {}
+    void setWireTimeout(uint32_t, bool) {}
 
     void beginTransmission(uint8_t address) {
         _currentAddress = address;

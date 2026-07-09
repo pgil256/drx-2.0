@@ -70,10 +70,14 @@ QPushButton[variant="ghost"]:disabled {
 }
 
 /* Touch sizes (from Button.jsx SIZES). Property is "dsSize" — "size" collides
- * with QWidget's built-in size property and would never match. */
-QPushButton[dsSize="sm"] { padding: 8px 16px; font-size: var(--text-sm); min-height: 40px; border-radius: var(--radius-md); }
-QPushButton[dsSize="md"] { padding: 12px 24px; font-size: var(--text-base); min-height: var(--touch-min); border-radius: var(--radius-md); }
-QPushButton[dsSize="lg"] { padding: 18px 32px; font-size: var(--text-lg); min-height: var(--touch-large); border-radius: var(--radius-lg); }
+ * with QWidget's built-in size property and would never match.
+ * NB: QSS min-height is the CONTENT box — padding and the 2px border add on
+ * top — while the DS CSS values (40/44/72) are border-box totals. Each
+ * min-height below is the DS total minus vertical padding and border so the
+ * rendered button matches the design height (md ≈ 44-49px, not 72px). */
+QPushButton[dsSize="sm"] { padding: 8px 16px; font-size: var(--text-sm); min-height: 20px; border-radius: var(--radius-md); }
+QPushButton[dsSize="md"] { padding: 12px 24px; font-size: var(--text-base); min-height: 16px; border-radius: var(--radius-md); }
+QPushButton[dsSize="lg"] { padding: 18px 32px; font-size: var(--text-lg); min-height: 32px; border-radius: var(--radius-lg); }
 
 /* ---- Sliders (two-tone filled track via sub-page/add-page; 8px groove, 24px handle) ----
  * Handle is a WHITE disc with a primary ring. NB: this follows the rendered

@@ -52,10 +52,30 @@ class TestLogin:
     def test_update_ui_after_login_drives_shell(self):
         stub = make_stub()
         stub.current_user = {"username": "Dr. Vasquez"}
+        stub._is_admin.return_value = False
         KneeSpa.update_ui_after_login(stub)
         stub.shell.login_succeeded.assert_called_once_with(
-            "Dr. Vasquez", goto="protocols"
+            "Dr. Vasquez", goto="protocols", title="Clinician", is_admin=False
         )
+
+    def test_update_ui_after_login_admin_title(self):
+        stub = make_stub()
+        stub.current_user = {"username": "Administrator", "status": "admin"}
+        stub._is_admin.return_value = True
+        KneeSpa.update_ui_after_login(stub)
+        stub.shell.login_succeeded.assert_called_once_with(
+            "Administrator", goto="protocols", title="Administrator",
+            is_admin=True,
+        )
+
+    def test_is_admin_checks_current_user_status(self):
+        stub = make_stub()
+        stub.current_user = {"username": "Admin", "status": "admin"}
+        assert KneeSpa._is_admin(stub)
+        stub.current_user = {"username": "User", "status": "user"}
+        assert not KneeSpa._is_admin(stub)
+        stub.current_user = None
+        assert not KneeSpa._is_admin(stub)
 
     def test_logout_clears_user(self):
         stub = make_stub()
@@ -63,6 +83,48 @@ class TestLogin:
         KneeSpa._on_logout(stub)
         assert stub.current_user is None
         stub.shell.logout.assert_called_once()
+
+    def test_exit_app_closes_window(self):
+        """Exit App routes through self.close() so closeEvent runs the full
+        hardware cleanup (Arduino disconnect + GPIO)."""
+        stub = make_stub()
+        stub._block_nav_during_treatment.return_value = False
+        KneeSpa._on_exit_app(stub)
+        stub.close.assert_called_once()
+
+    def test_exit_app_blocked_during_treatment(self):
+        stub = make_stub()
+        stub._block_nav_during_treatment.return_value = True
+        KneeSpa._on_exit_app(stub)
+        stub.close.assert_not_called()
+
+    def test_add_pin_persists_via_csv_helper(self):
+        stub = make_stub()
+        stub._is_admin.return_value = True
+        stub.csv.add_user.return_value = (True, "PIN added for Dr. New.")
+        KneeSpa._on_add_pin(stub, "Dr. New", "4321")
+        stub.csv.add_user.assert_called_once_with("Dr. New", "4321")
+        stub.shell.add_pin_succeeded.assert_called_once()
+        stub.shell.add_pin_failed.assert_not_called()
+
+    def test_add_pin_failure_stays_in_modal(self):
+        stub = make_stub()
+        stub._is_admin.return_value = True
+        stub.csv.add_user.return_value = (False, "That PIN is already in use.")
+        KneeSpa._on_add_pin(stub, "Dr. New", "4321")
+        stub.shell.add_pin_failed.assert_called_once_with(
+            "That PIN is already in use."
+        )
+        stub.shell.add_pin_succeeded.assert_not_called()
+
+    def test_add_pin_rejected_for_non_admin(self):
+        """The shell hides the button for non-admins, but the backend must
+        enforce it independently — the view can never bypass the check."""
+        stub = make_stub()
+        stub._is_admin.return_value = False
+        KneeSpa._on_add_pin(stub, "Sneaky", "4321")
+        stub.csv.add_user.assert_not_called()
+        stub.shell.add_pin_failed.assert_called_once()
 
     def test_logout_blocked_during_treatment(self):
         """Logging out mid-treatment would drop the operator's session while

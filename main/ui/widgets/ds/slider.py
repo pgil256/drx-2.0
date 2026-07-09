@@ -19,6 +19,10 @@ from ._common import mono_font, resolve, sans_font
 
 _LABEL_CSS = f"color: {resolve('--ink-800')}; background: transparent;"
 
+# Height of the styled slider handle (QSlider::handle in app.qss). The row must
+# reserve at least this so the handle disc is not clipped top/bottom.
+_HANDLE_PX = 24
+
 
 class DSSlider(QWidget):
     valueChanged = pyqtSignal(float)
@@ -47,6 +51,11 @@ class DSSlider(QWidget):
         self._slider.setRange(0, self._steps)
         self._slider.setSingleStep(1)
         self._slider.setPageStep(max(1, self._steps // 10))
+        # The styled handle is 24px tall and overflows the 8px groove via a
+        # -8px margin (app.qss). A horizontal QSlider's default height (~15px)
+        # is shorter than that, so the handle's top and bottom were clipped —
+        # reserve the full handle height so it renders as a complete disc.
+        self._slider.setMinimumHeight(_HANDLE_PX)
         self._slider.valueChanged.connect(self._on_slider)
         lay.addWidget(self._slider, 1)
 

@@ -65,6 +65,7 @@ from config.constants import (
     LEG_LENGTH_MAX,
     DEFAULT_PRESSURE,
     DEFAULT_LEG_LENGTH_POSITION,
+    DEFAULT_HORIZONTAL_POSITION,
     MIN_PRESSURE,
     DEFAULT_PROTOCOL_MINUTES,
     PROTOCOL_MINUTES_MIN,
@@ -77,7 +78,10 @@ from helpers.csv import CSVHelper
 from helpers.secure_auth import SecureAuthHelper
 from helpers import protocols
 from helpers.reset_worker import ResetWorker, ResetWorkerSignals
-from helpers.conversions import lateral_degrees_to_position
+from helpers.conversions import (
+    lateral_degrees_to_position,
+    horizontal_degrees_to_position,
+)
 from helpers.angles import pos_c_to_angle
 
 from helpers.logging import setup_logger
@@ -92,8 +96,12 @@ from controllers.auth_controller import AuthController
 from controllers.protocol_controller import ProtocolController
 from controllers.connection_manager import ConnectionManager
 
-# Suppress Qt warnings
-os.environ["QT_LOGGING_RULES"] = "*.debug=False;qt.qpa.xcb=False"
+# Suppress Qt warnings. Rule values must be lowercase true/false — Qt silently
+# rejects capitalized "False" as a malformed rule, so the suppression is a no-op.
+# QT_X11_NO_MITSHM disables X shared-memory image blits, which fail with
+# BadMatch (ShmPutImage) over VNC/remote X and can leave video frames black.
+os.environ["QT_X11_NO_MITSHM"] = "1"
+os.environ["QT_LOGGING_RULES"] = "*.debug=false;qt.qpa.xcb.warning=false"
 
 # Map a Setup jog action to the legacy (speed_factor, direction) pair used by
 # move_actuator ("20" = fast, "04" = slow; +1 forward, -1 reverse).
@@ -310,7 +318,7 @@ class KneeSpa(QMainWindow):
 
         # Actuator position tracking (legacy setup_actuator_controls defaults).
         self.axial_flexion_position = 0
-        self.horizontal_flexion_position = -10
+        self.horizontal_flexion_position = DEFAULT_HORIZONTAL_POSITION
         self.lateral_flexion_position = 0
         self.leg_length = DEFAULT_LEG_LENGTH_POSITION
         self.current_pressure = DEFAULT_PRESSURE
@@ -353,6 +361,13 @@ class KneeSpa(QMainWindow):
             # the window out of fullscreen (and could leave it hidden).
             # Keep Qt.Window so it stays a top-level kiosk window.
             self.setWindowFlags(Qt.Window | Qt.FramelessWindowHint)
+            # Kiosk guard: Qt derives a top-level window's minimum size from
+            # its layout, and showFullScreen() will NOT shrink below it — if
+            # font metrics ever push the layout minimum past the panel
+            # (1360x768), the window hangs off the bottom of the screen.
+            # An explicit minimum overrides the layout-derived one, so
+            # fullscreen always matches the display exactly.
+            self.setMinimumSize(1, 1)
             self.showFullScreen()
             print("Production mode: Set to full screen without frame")
         else:
@@ -454,6 +469,8 @@ class KneeSpa(QMainWindow):
         # Auth (the shell surfaces these; gating lives in the shell).
         s.login_attempted.connect(self._on_login_attempt)
         s.logout_requested.connect(self._on_logout)
+        s.exit_requested.connect(self._on_exit_app)
+        s.add_pin_submitted.connect(self._on_add_pin)
 
         # Setup screen.
         s.setup.jog_requested.connect(self._on_setup_jog)
@@ -533,7 +550,7 @@ class KneeSpa(QMainWindow):
         self._reflect_setup("leg_length", 0.0)
         self._reflect_setup("lateral", 0)
         self._reflect_setup("pressure", 0)
-        self._reflect_setup("horizontal", -10)
+        self._reflect_setup("horizontal", DEFAULT_HORIZONTAL_POSITION)
 
     # ----- Treatment: settings / duration -----
     @staticmethod
@@ -831,11 +848,43 @@ class KneeSpa(QMainWindow):
         self.current_user = None
         self.shell.logout()
 
+    def _on_exit_app(self):
+        """Exit App from the Profile screen — full cleanup via closeEvent."""
+        if self._block_nav_during_treatment():
+            return
+        print("Handling app exit")
+        self.close()
+
+    def _on_add_pin(self, username, pin):
+        """Persist a new user PIN (admin only; the shell hides the button for
+        non-admins, but re-check here so the view can never bypass it)."""
+        if not self._is_admin():
+            self.shell.add_pin_failed("Only administrators can add PINs.")
+            return
+        try:
+            ok, message = self.csv.add_user(username, pin)
+        except Exception as e:
+            self.logger.error("Add PIN failed: %s", e)
+            ok, message = False, "Could not save the new PIN."
+        if ok:
+            self.shell.add_pin_succeeded()
+            self._show_timed_error(message)
+        else:
+            self.shell.add_pin_failed(message)
+
+    def _is_admin(self):
+        return bool(self.current_user) and self.current_user.get("status") == "admin"
+
     def update_ui_after_login(self):
         """Update user interface with user details after login (modern shell:
         close the modal, set the user chip, and go to the Treatment screen)."""
         print("Updating UI after login")
-        self.shell.login_succeeded(self.current_user["username"], goto="protocols")
+        is_admin = self._is_admin()
+        title = "Administrator" if is_admin else "Clinician"
+        self.shell.login_succeeded(
+            self.current_user["username"], goto="protocols", title=title,
+            is_admin=is_admin,
+        )
 
     # ----- Support -----
     def _on_issue_activated(self, question):
@@ -960,6 +1009,14 @@ class KneeSpa(QMainWindow):
         """
         print(f"SAFETY ALERT: {message}")
         self.logger.error(f"Safety alert: {message}")
+        # Coalesce: a fault cascade (protocol abort -> firmware ERROR from
+        # the same event) used to stack a second modal on top of the first;
+        # fold follow-on messages into the box the operator already sees
+        existing = getattr(self, "_active_safety_alert", None)
+        if existing is not None and existing.isVisible():
+            if message not in existing.text():
+                existing.setText(existing.text() + "\n\n" + message)
+            return
         msg_box = QMessageBox(self)
         msg_box.setIcon(QMessageBox.Critical)
         msg_box.setWindowTitle("SAFETY STOP")
@@ -1136,10 +1193,23 @@ class KneeSpa(QMainWindow):
             return
 
         if actuator == self.actuator_b:
-            command = f"A{actuator}2"
+            # Home the horizontal actuator to the calibrated
+            # DEFAULT_HORIZONTAL_POSITION via its BMarks position, the same way
+            # the lateral branch above homes from CMarks. The old 'A132' inches
+            # path ignored BMarks and under-shot the true angle.
+            try:
+                position = horizontal_degrees_to_position(
+                    self.config.BMarks, DEFAULT_HORIZONTAL_POSITION
+                )
+            except ValueError as e:
+                print(f"Invalid horizontal position: {e}")
+                self.enable_actuator_controls()
+                self.loading_spinner.hide()
+                return
+            command = f"I13{position}"
             self.arduino.send(command)  # transmit data serially
-            self.horizontal_flexion_position = -10
-            self._reflect_setup("horizontal", -10)
+            self.horizontal_flexion_position = DEFAULT_HORIZONTAL_POSITION
+            self._reflect_setup("horizontal", DEFAULT_HORIZONTAL_POSITION)
             self.loading_spinner.hide()
 
             return

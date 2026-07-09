@@ -1,5 +1,7 @@
 from PyQt5.QtCore import QRunnable, QObject, pyqtSignal, pyqtSlot
 import time
+from config.constants import DEFAULT_HORIZONTAL_POSITION
+from helpers.conversions import horizontal_degrees_to_position
 from helpers.logging import (
     debug, debug_timing, debug_error, debug_state_change
 )
@@ -161,11 +163,21 @@ class ResetWorker(QRunnable):
             debug_timing("[STEP 3/6] Actuator C reset complete", start_time=step_start, component="ResetWorker")
             self.step_times.append(("Actuator C", time.time() - step_start))
 
-            # --- Step 4: Reset Actuator B ('A13') ---
+            # --- Step 4: Reset Actuator B ('I13') ---
             step_start = time.time()
-            debug("[STEP 4/6] Resetting Actuator B ('A13')", component="ResetWorker", level="INFO")
-            cmd_b = f"A13{3}" # Equivalent inches for -10 degrees
-            debug(f"Actuator B command: {cmd_b}", component="ResetWorker", inches=3)
+            debug("[STEP 4/6] Resetting Actuator B ('I13')", component="ResetWorker", level="INFO")
+            # Home the horizontal actuator to the calibrated
+            # DEFAULT_HORIZONTAL_POSITION (-10 deg) using its BMarks position,
+            # the same way Step 3 homes the lateral actuator from CMarks. The old
+            # 'A133' inches path ignored BMarks and physically landed near 0 deg
+            # (firmware 620*3 = 1860 ~= the BMarks 0-deg mark at 1900) -- the
+            # "resets to zero degrees" symptom.
+            pos_b = horizontal_degrees_to_position(
+                self.config.BMarks, DEFAULT_HORIZONTAL_POSITION
+            )
+            cmd_b = f"I13{pos_b}"
+            debug(f"Actuator B command: {cmd_b}", component="ResetWorker",
+                  degrees=DEFAULT_HORIZONTAL_POSITION, position=pos_b)
             if not self._try_command_with_retry(cmd_b, "Actuator B Reset", 30.0):
                 raise TimeoutError("Failed to reset Actuator B even after retry")
             debug_timing("[STEP 4/6] Actuator B reset complete", start_time=step_start, component="ResetWorker")

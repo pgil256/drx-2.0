@@ -521,7 +521,7 @@ def calibrate_axial(ard: ArduinoSerial, cfg: configparser.ConfigParser):
 
     # Step 1: Zero position
     print("--- Step 1: Move to ZERO (fully retracted) ---")
-    prompt_enter("Physically move actuator A to its home/zero position, then press Enter to start jogging.")
+    prompt_enter("Press Enter, then use the jog keys to DRIVE actuator A to its home/zero position (the Arduino moves it - do not push the mechanism).")
     refresh_status(ard)
     zero_pos = jog_loop(ard, "A", "Actuator A (zero position)")
     print(f"\n  Recorded ZERO position: {zero_pos}")
@@ -571,7 +571,7 @@ def calibrate_horizontal(ard: ArduinoSerial, cfg: configparser.ConfigParser):
 
     # Step 1: Zero position
     print("--- Step 1: Move to ZERO (neutral) ---")
-    prompt_enter("Move actuator B to its zero/neutral position, then press Enter.")
+    prompt_enter("Press Enter, then use the jog keys to DRIVE actuator B to its zero/neutral position (the Arduino moves it - do not push the mechanism).")
     refresh_status(ard)
     zero_pos = jog_loop(ard, "B", "Actuator B (zero position)")
     print(f"\n  Recorded ZERO position: {zero_pos}")

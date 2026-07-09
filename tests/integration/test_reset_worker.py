@@ -98,7 +98,7 @@ class TestResetWorkerSequence:
         # sequence is Y, zero marks, lateral home, horizontal home,
         # axial home, calibration.
         cmds = [c for c in fake.commands_received if not c.startswith("Q")]
-        prefixes = ["Y", "L5", "I14", "A13", "I12", "L0"]
+        prefixes = ["Y", "L5", "I14", "I13", "I12", "L0"]
         assert len(cmds) == len(prefixes), f"unexpected commands: {cmds}"
         for cmd, prefix in zip(cmds, prefixes):
             assert cmd.startswith(prefix), f"expected {prefix}, got {cmd} in {cmds}"

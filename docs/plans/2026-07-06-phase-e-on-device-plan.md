@@ -35,9 +35,11 @@ polarity, §4), a ruler/calipers (axial travel, §7), a known test weight and
 a way to load the cell (pressure, §5/§7), and a serial console on the Pi
 (`screen`/`minicom` or the app's debug log).
 
-**New login PINs** (rotated in Phase D; the old 1234/456/123 no longer
-work): **admin `418133`**, **user `362940`**. If you want different ones,
-regenerate hashes with the README "User provisioning" one-liner.
+**Login PINs must be exactly 4 digits** — the GUI keypad auto-submits on
+the 4th digit (`LoginModal`/`DSKeypad` are fixed at `length=4`), so the
+6-digit PINs originally rotated in Phase D cannot be entered. Provision
+your own 4-digit admin + user PINs on the device with the README "User
+provisioning" one-liner (the old 1234/456/123 hashes no longer exist).
 
 ---
 
@@ -75,7 +77,7 @@ so this compiles; the risk is entirely the bootloader (§3), not the code.
   cd main/motor && pio run -e mega -t upload   # or your usual avrdude flow
   ```
 - [ ] **2.3 Confirm the version.** On the serial console after reset you
-  must see `VERSION: 2026-06-11-FAILSAFE-2`. If you see an older version
+  must see `VERSION: 2026-07-08-FAILSAFE-3`. If you see an older version
   string, the upload didn't take — stop and fix before proceeding.
 
 > This firmware carries the reconciliation changes: the `J<ms>` pulse-rate
@@ -91,12 +93,19 @@ Batch-1 checklist §A. **This is the make-or-break step:** old Mega
 safety watchdog into a brick. Settle this before trusting anything else.
 
 - [ ] **3.1 (A1) Normal boot.** Power-cycle. Serial shows `All actuators
-  stopped` → load-cell init → `VERSION: 2026-06-11-FAILSAFE-2` → `Ready to
+  stopped` → load-cell init → `VERSION: 2026-07-08-FAILSAFE-3` → `Ready to
   Go`, with **no motor twitch** during boot.
 - [ ] **3.2 (A2) Watchdog recovery — CRITICAL, motors disconnected from any
   load.** Force a hang (e.g. unplug the load-cell DOUT mid-`L1` tare to wedge
   a blocking read). The board must **reset itself within ~2 s** and return to
   `Ready to Go`.
+  - **Bootloader half already verified 2026-07-08 via WDT test sketch:** 2 s
+    watchdog armed and not fed; board hardware-reset and re-booted cleanly
+    8+ consecutive cycles. Found while chasing the `Y`-command wedge: the
+    old jump-to-0 `resetFunc()` froze the MCU until power cycle on every
+    GUI-triggered reset; `Y` now does a real WDT reset (`resetBoard()`,
+    FAILSAFE-3). Remaining: confirm the recovery on the FAILSAFE firmware
+    itself via the forced-hang test above.
   - **If it boot-loops:** you've hit the bootloader bug. Either reflash a
     modern bootloader (Optiboot/known-good stk500v2), **or** set
     `ENABLE_WDT 0` in `motor.ino`, re-flash, and **record that the watchdog
@@ -105,8 +114,8 @@ safety watchdog into a brick. Settle this before trusting anything else.
     not).
 - [ ] **3.3 (A3) WDT reset is safe.** Trigger 3.2 while an actuator is
   mid-move: motion must **stop at reset and NOT resume** after boot.
-- [ ] **3.4 (E4) Record the bootloader verdict:** WDT-safe? **yes / no**. If
-  no, schedule a bootloader reflash for the fleet.
+- [x] **3.4 (E4) Record the bootloader verdict:** WDT-safe? **YES**
+  (2026-07-08, WDT test sketch, 8+ clean reset cycles at WDTO_2S).
 
 ---
 
@@ -273,7 +282,7 @@ kneespa.service`) so it's running fullscreen on the touchscreen.
   tappable, and a fault turns it red and keeps it up.
 - [ ] **9.2 (F2) PIN pad** keys are finger-sized, the in-field backspace is
   discoverable/tappable, digits mask correctly (single mask). Log in with the
-  new admin PIN `418133`.
+  4-digit admin PIN you provisioned (§0).
 - [ ] **9.3 (F3) Press feedback** — label-based controls (profile, home,
   assistance, time +/-, setup-page e-stop) visibly dim while pressed.
 - [ ] **9.4 Fullscreen sanity (Phase C fix).** Confirm the app comes up

@@ -374,6 +374,130 @@ void test_pressure_stall_detected(void) {
     TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: No pressure progress"));
 }
 
+// A position move that settles within POSITION_DEADBAND of its target has
+// arrived and must complete with DONE -- never be misreported as a stall.
+// Repro for the reset "Motor stalled" fault: the axial actuator homes toward
+// AZERO=0 but bottoms out at its physical home a few counts short of 0.
+void test_axial_home_within_deadband_not_stalled(void) {
+    keepAlive();
+    _millis_value = 300;             // past the rate-limit window
+    keepAlive();
+    AZERO = 0;
+    Wire.position_12 = 800;          // start well away from home
+    Serial1.injectCommand("I120");   // home the axial actuator
+
+    loop();                          // command accepted, move starts
+    TEST_ASSERT_TRUE(bRunning);
+
+    // Actuator reaches its physical home 15 counts short of AZERO and can
+    // move no further. The old strict `currentPos <= desiredPosition` never
+    // registered arrival, so the stall detector fired after 5 frozen reads.
+    Wire.position_12 = 15;
+    for (int i = 0; i < 8; i++) {    // well past the 5-read stall threshold
+        keepAlive();
+        loop();
+    }
+
+    TEST_ASSERT_FALSE(bRunning);
+    TEST_ASSERT_FALSE(Serial1.outputContains("ERROR: Motor stalled"));
+    TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
+}
+
+// The deadband arrival change must NOT disable the stall safety net: a motor
+// commanded but frozen far outside the deadband is a genuine stall.
+void test_genuine_stall_still_detected(void) {
+    keepAlive();
+    smcDeviceNumber = 12;
+    desiredPosition = 4000;          // far from the frozen position below
+    forward = 1;
+    Wire.position_12 = 800;          // frozen, well outside the deadband
+    bRunning = true;
+    activeCmdSeq = -1;
+    loopLastPosition = 800;
+    loopStallCount = 0;
+
+    for (int i = 0; i < 8; i++) {    // > the 5-read stall threshold
+        keepAlive();
+        loop();
+    }
+
+    TEST_ASSERT_FALSE(bRunning);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Motor stalled"));
+}
+
+// --- P0 release semantics (2026-07-08 on-device finding) ---
+// The host sends X + P0 after every aborted protocol. When no load was
+// ever applied, the old code started a backward move whose first loop
+// iteration hit the axial-at-zero guard and emitted "ERROR: Axial at
+// zero, pressure target not reached" -- which the host escalates to a
+// DEVICE SAFETY STOP over what was actually a no-op.
+
+void test_p0_with_no_load_completes_done_without_error(void) {
+    keepAlive();
+    AZERO = 0;
+    Wire.position_12 = 10;  // axial at home
+    pressure = 0;           // no load ever applied
+
+    processCommand("P0");
+
+    TEST_ASSERT_FALSE(measurePressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
+    TEST_ASSERT_FALSE(Serial1.outputContains("ERROR: Axial at zero"));
+    // A no-op release must not drive the motor at all
+    bool motorDriven = false;
+    for (int i = 0; i < Wire.commandCount; i++) {
+        if (Wire.commands[i].address == 12 && Wire.commands[i].dataLen >= 1 &&
+            (Wire.commands[i].data[0] == 0x85 || Wire.commands[i].data[0] == 0x86)) {
+            motorDriven = true;
+        }
+    }
+    TEST_ASSERT_FALSE(motorDriven);
+}
+
+// A release that reaches the travel floor just as the load clears must
+// complete DONE via the reached-check, not fault on the at-zero guard.
+void test_release_reaching_zero_with_target_met_completes_done(void) {
+    keepAlive();
+    AZERO = 0;
+    Wire.position_12 = 10;   // within AZERO + POSITION_DEADBAND
+    measurePressure = true;
+    pressureDirection = -1;
+    desiredPressure = 0;
+    scale._raw = 0;          // load fully cleared
+    pressureMoveStart = _millis_value;
+    pressureProgressTime = _millis_value;
+    pressureProgressValue = 5;
+
+    loop();
+
+    TEST_ASSERT_FALSE(measurePressure);
+    TEST_ASSERT_FALSE(Serial1.outputContains("ERROR: Axial at zero"));
+    TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
+}
+
+// Backed off to the floor with load still above target is a genuine
+// fault; the DONE paths above must not mask it.
+void test_release_at_zero_with_load_still_faults(void) {
+    keepAlive();
+    AZERO = 0;
+    Wire.position_12 = 10;
+    measurePressure = true;
+    pressureDirection = -1;
+    desiredPressure = 0;
+    scale._raw = 20;         // 20 lbs still applied
+    pressure = 20;
+    pressureSampleCount = 3;
+    pressureSamples[0] = pressureSamples[1] = pressureSamples[2] = 20;
+    pressureMoveStart = _millis_value;
+    pressureProgressTime = _millis_value;
+    pressureProgressValue = 20;
+
+    loop();
+
+    TEST_ASSERT_FALSE(measurePressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Axial at zero"));
+}
+
 // --- Protocol v2 framing (loop-driven) ---
 
 static String v2Frame(int seq, const char *cmd) {
@@ -497,6 +621,11 @@ int main(int argc, char **argv) {
     RUN_TEST(test_commands_not_merged_under_rate_limit);
     RUN_TEST(test_pressure_move_time_bound);
     RUN_TEST(test_pressure_stall_detected);
+    RUN_TEST(test_axial_home_within_deadband_not_stalled);
+    RUN_TEST(test_genuine_stall_still_detected);
+    RUN_TEST(test_p0_with_no_load_completes_done_without_error);
+    RUN_TEST(test_release_reaching_zero_with_target_met_completes_done);
+    RUN_TEST(test_release_at_zero_with_load_still_faults);
 
     RUN_TEST(test_v2_framed_T_acks_with_seq);
     RUN_TEST(test_v2_framed_X_bypasses_rate_limiter);

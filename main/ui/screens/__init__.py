@@ -8,6 +8,7 @@ Phase 3. Built in code (not Qt Designer) per the modernization plan.
 
 from .help import HelpScreen
 from .home import HomeScreen
+from .profile import ProfileScreen
 from .setup import SetupScreen
 from .support import SupportScreen
 from .treatment import TreatmentScreen
@@ -18,4 +19,5 @@ __all__ = [
     "TreatmentScreen",
     "HelpScreen",
     "SupportScreen",
+    "ProfileScreen",
 ]

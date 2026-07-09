@@ -51,21 +51,23 @@ def test_drawn_icons_render_non_null(app):
 
 
 # ----- shell: nav + gating -----
-def test_shell_builds_with_five_screens(shell):
+def test_shell_builds_with_six_screens(shell):
     from ui.screens import (
         HelpScreen,
         HomeScreen,
+        ProfileScreen,
         SetupScreen,
         SupportScreen,
         TreatmentScreen,
     )
 
-    assert shell.stack.count() == 5
+    assert shell.stack.count() == 6
     assert isinstance(shell.home, HomeScreen)
     assert isinstance(shell.setup, SetupScreen)
     assert isinstance(shell.treatment, TreatmentScreen)
     assert isinstance(shell.help, HelpScreen)
     assert isinstance(shell.support, SupportScreen)
+    assert isinstance(shell.profile, ProfileScreen)
 
 
 def test_gated_pages_bounce_to_login_when_logged_out(shell):
@@ -112,6 +114,88 @@ def test_login_success_and_logout_flow(shell):
     assert shell.stack.currentIndex() == PAGES.index("protocols")
     shell.logout()
     assert shell.stack.currentIndex() == PAGES.index("home")
+
+
+def test_avatar_opens_profile_and_logout_button_logs_out(shell):
+    from ui.app_shell import PAGES
+
+    # Logged out: the avatar pops the login modal, not the profile page.
+    shell.set_user(None)
+    shell.top_bar._avatar.click()
+    assert not shell.login_modal.isHidden()
+    shell.login_modal.close_overlay()
+
+    # Logged in: the avatar navigates to the profile page (no logout).
+    shell.login_succeeded("Dr. Vasquez", title="Clinician")
+    fired = []
+    shell.logout_requested.connect(lambda: fired.append(True))
+    shell.top_bar._avatar.click()
+    assert shell.stack.currentIndex() == PAGES.index("profile")
+    assert not fired
+    assert shell.profile._name.text() == "Dr. Vasquez"
+    assert shell.profile._title.text() == "Clinician"
+
+    # The profile Log Out button surfaces the shell's logout signal.
+    shell.profile._logout.click()
+    assert fired
+
+
+def test_profile_add_pin_admin_only_and_exit(shell):
+    # Non-admin: Add PIN hidden, Exit App present and wired.
+    shell.login_succeeded("Dr. Vasquez", title="Clinician", is_admin=False)
+    assert not shell.profile._add_pin.isVisibleTo(shell.profile)
+
+    exits = []
+    shell.exit_requested.connect(lambda: exits.append(True))
+    shell.profile._exit.click()
+    assert exits
+
+    # Admin: Add PIN visible; clicking opens the Add PIN modal.
+    shell.login_succeeded("Administrator", title="Administrator", is_admin=True)
+    assert shell.profile._add_pin.isVisibleTo(shell.profile)
+    shell.profile._add_pin.click()
+    assert not shell.add_pin_modal.isHidden()
+    shell.add_pin_modal.close_overlay()
+
+    # Logged out again: Add PIN hides.
+    shell.set_user(None)
+    assert not shell.profile._add_pin.isVisibleTo(shell.profile)
+
+
+def test_add_pin_modal_two_step_flow(shell):
+    m = shell.add_pin_modal
+    submitted = []
+    shell.add_pin_submitted.connect(lambda name, pin: submitted.append((name, pin)))
+
+    shell.show_add_pin()
+    assert not m.isHidden()
+    m._name.setText("Dr. New")
+
+    # Step 1: enter — no submission yet, keypad flips to confirm.
+    m._keypad.set_value("")
+    m._keypad._press("4"); m._keypad._press("3"); m._keypad._press("2"); m._keypad._press("1")
+    assert submitted == []
+    assert m._keypad._title.text() == "Confirm New PIN"
+
+    # Mismatched confirm restarts the flow with an error.
+    for d in "9999":
+        m._keypad._press(d)
+    assert submitted == []
+    assert "did not match" in m._error.text()
+    assert m._keypad._title.text() == "Enter New PIN"
+
+    # Matching enter + confirm emits (username, pin).
+    for d in "4321" + "4321":
+        m._keypad._press(d)
+    assert submitted == [("Dr. New", "4321")]
+
+    # Controller error feedback restarts entry inside the modal…
+    shell.add_pin_failed("That PIN is already in use. Choose another.")
+    assert "already in use" in m._error.text()
+    assert not m.isHidden()
+    # …and success dismisses it.
+    shell.add_pin_succeeded()
+    assert m.isHidden()
 
 
 # ----- treatment run-state model -----
@@ -308,6 +392,59 @@ def test_video_modal_degrades_without_vlc(app, monkeypatch):
     finally:
         modal.cleanup()
         modal.deleteLater()
+
+
+def test_video_modal_skip_next_prev(shell):
+    m = shell.video_modal
+    eng = m._engine
+    assert eng.count() == 3  # 1.mp4 / 2.mp4 / 3.mp4 ship in media/videos
+    shell.show_video()
+    assert m._clip_label.text() == "1 / 3"
+    m._toggle()  # play
+    m._skip(+1)
+    assert eng.index() == 1 and m._clip_label.text() == "2 / 3"
+    assert m._playing and m._poll.isActive()  # skip keeps playing
+    m._skip(-1)
+    assert eng.index() == 0
+    m._skip(-1)  # wraps to the last clip
+    assert eng.index() == 2 and m._clip_label.text() == "3 / 3"
+    m.close_overlay()
+    assert m.isHidden()
+    assert eng.index() == 0  # close rewinds to the first clip
+
+
+def test_video_modal_advances_through_playlist_on_clip_end(shell, monkeypatch):
+    m = shell.video_modal
+    shell.show_video()
+    m._toggle()  # play clip 1
+    monkeypatch.setattr(m._engine, "ended", lambda: True)
+    m._on_poll()  # clip 1 ended → clip 2 keeps playing
+    assert m._engine.index() == 1
+    assert m._playing and m._poll.isActive()
+    m._on_poll()  # clip 2 ended → clip 3
+    assert m._engine.index() == 2
+    states = []
+    m.play_toggled.connect(states.append)
+    m._on_poll()  # last clip ended → poster restored, rewound to clip 1
+    assert not m._playing and not m._poll.isActive()
+    assert m._engine.index() == 0
+    assert m._watermark.isVisibleTo(m)
+    assert states == [False]
+
+
+def test_video_modal_audio_not_disabled(app):
+    """The demo clips carry narration — the VLC instance must not be created
+    with --no-audio (regression guard for the legacy silent-player options)."""
+    import ui.modals.video_modal as vm
+
+    m = vm.VideoModal()
+    try:
+        m._toggle()  # forces _ensure_player → vlc.Instance(...)
+        args = vm.vlc.Instance.call_args[0][0]
+        assert "--no-audio" not in args
+    finally:
+        m.cleanup()
+        m.deleteLater()
 
 
 def test_video_modal_recovers_from_sustained_none_position(shell, monkeypatch):

@@ -11,7 +11,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-from helpers.conversions import lateral_degrees_to_position
+from helpers.conversions import (
+    lateral_degrees_to_position,
+    horizontal_degrees_to_position,
+)
 from kneespa import KneeSpa
 from config.config import Configuration
 
@@ -21,6 +24,17 @@ CMARKS = {
     "0.0": 1450,
     "17.5": 2281,
     "20.0": 2400,
+}
+
+# Default BMarks (config._set_default_b_marks); integer-degree string keys.
+BMARKS = {
+    "-25": 0,
+    "-20": 380,
+    "-15": 760,
+    "-10": 1140,
+    "-5": 1520,
+    "0": 1900,
+    "5": 2280,
 }
 
 
@@ -61,6 +75,48 @@ class TestLateralDegreesToPosition:
         marks = {k: str(v) for k, v in CMARKS.items()}
         position, _ = lateral_degrees_to_position(marks, 17.5)
         assert position == 2281
+
+
+@pytest.mark.unit
+class TestHorizontalDegreesToPosition:
+    """The calibrated horizontal (B actuator) degrees->position map used to
+    home the reset. Unlike the frozen A13<inches> jog path, this reads BMarks."""
+
+    def test_home_minus_10_hits_exact_mark(self):
+        """-10 deg -> BMarks['-10'] == 1140 (the reset home position)."""
+        assert horizontal_degrees_to_position(BMARKS, -10) == 1140
+
+    def test_zero_degrees_exact_mark(self):
+        assert horizontal_degrees_to_position(BMARKS, 0) == 1900
+
+    def test_float_input_matches_integer_key(self):
+        """A float like -15.0 still resolves the integer-string key '-15'."""
+        assert horizontal_degrees_to_position(BMARKS, -15.0) == 760
+
+    def test_float_style_key_tolerated(self):
+        """A table written with '-15.0' keys still resolves."""
+        marks = {"-20.0": 380, "-15.0": 760, "0.0": 1900}
+        assert horizontal_degrees_to_position(marks, -15) == 760
+
+    def test_interpolates_between_marks(self):
+        # -12.5 lies halfway between -15(760) and -10(1140): 760 + 380*0.5 = 950
+        assert horizontal_degrees_to_position(BMARKS, -12.5) == 950
+
+    def test_clamps_below_range(self):
+        """Below the smallest mark clamps to its position, never extrapolates."""
+        assert horizontal_degrees_to_position(BMARKS, -40) == 0
+
+    def test_clamps_above_range(self):
+        assert horizontal_degrees_to_position(BMARKS, 30) == 2280
+
+    def test_string_values_accepted(self):
+        # configparser yields strings for both keys and values.
+        marks = {k: str(v) for k, v in BMARKS.items()}
+        assert horizontal_degrees_to_position(marks, -15) == 760
+
+    def test_empty_table_raises(self):
+        with pytest.raises(ValueError):
+            horizontal_degrees_to_position({}, -15)
 
 
 # ---------------------------------------------------------------------------
