@@ -76,13 +76,13 @@ main/motor/.pio/
 node_modules/
 package-lock.json
 
-# Runtime secrets / per-device state — never commit (templates are tracked
+# Runtime secrets / per-device state ? never commit (templates are tracked
 # as *.example; see README "User provisioning")
 main/config/kneespa.cfg
 main/data/user_pins.csv
 main/data/auth_state.json
 
-# Design-source scratch — reference material dropped in the working tree,
+# Design-source scratch ? reference material dropped in the working tree,
 # never part of the app build (the code-built UI lives under main/ui/)
 _ds/
 app/
@@ -128,3 +128,7 @@ claude_old/
 
 
 main/motor/.native-build/
+
+# Local agent config
+AGENTS.md
+.mcp.json
