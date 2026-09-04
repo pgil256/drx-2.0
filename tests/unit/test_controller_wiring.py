@@ -25,6 +25,49 @@ def make_stub():
     return stub
 
 
+# ----- cloud patient lookup result (external data) -----
+class TestCloudLookupResult:
+    def test_non_dict_result_is_reported_as_unavailable(self):
+        stub = make_stub()
+        stub.protocol_running = False
+        KneeSpa._on_cloud_lookup_done(stub, ["not", "a", "patient"])
+        stub.shell.treatment.set_patient_error.assert_called_once_with("Cloud unavailable")
+        assert stub.cloud_patient is None
+
+    def test_garbage_setting_is_skipped_not_raised(self):
+        stub = make_stub()
+        stub.protocol_running = False
+        KneeSpa._on_cloud_lookup_done(stub, {
+            "patient_id": 7, "display_name": "Jane D.",
+            "settings": {"max_pressure_lb": "sixty", "duration_min": 15,
+                         "max_left_deg": None, "protocol_number": "3"},
+        })
+        stub.shell.treatment.set_patient.assert_called_once_with("Jane D.")
+        stub.shell.treatment.set_settings.assert_called_once_with({"duration": 15})
+        stub.shell.treatment.select_protocol.assert_called_once_with(3)
+
+    def test_lookup_resolving_mid_treatment_is_ignored(self):
+        stub = make_stub()
+        stub.protocol_running = True
+        KneeSpa._on_cloud_lookup_done(stub, {
+            "patient_id": 7, "display_name": "Jane D.",
+            "settings": {"max_pressure_lb": 70},
+        })
+        stub.shell.treatment.set_settings.assert_not_called()
+        stub.shell.treatment.select_protocol.assert_not_called()
+        stub.shell.treatment.set_patient.assert_not_called()
+
+
+# ----- stop paths must alarm, never raise -----
+class TestStopGuards:
+    def test_row_stop_with_no_transport_alarms_instead_of_raising(self):
+        stub = make_stub()
+        stub.arduino = None
+        KneeSpa.stop_position_flexion_button(stub, "12")
+        stub._show_timed_error.assert_called_once()
+        assert "STOP NOT DELIVERED" in stub._show_timed_error.call_args[0][0]
+
+
 # ----- auth (verification itself lives in controllers.auth_controller) -----
 class TestLogin:
     def test_login_attempt_seeds_pin_and_delegates(self):
@@ -195,7 +238,11 @@ class TestSetupReset:
         KneeSpa._setup_reset(stub, "pressure")
         stub.arduino.send.assert_called_once_with("P0")
         stub._reflect_setup.assert_not_called()
-        stub.treatment_panel.set_stopping.assert_called_once()
+        # The treatment banner is reserved for protocol stops: set_stopping()
+        # here had no matching set_idle(), so "STOPPING - RELEASING TRACTION"
+        # stayed over the top bar until the next treatment or Arduino reset.
+        stub.treatment_panel.set_stopping.assert_not_called()
+        stub.loading_spinner.hide.assert_called_once()
 
 
 # ----- Setup stop -----
@@ -345,15 +392,28 @@ class TestSettings:
         stub._confirm_mid_protocol_change.return_value = True
         stub._prev_settings = {}
         KneeSpa._on_setting_changed(stub, "max_left", 15)
-        assert stub.worker.max_left == -15
+        stub.worker.request_live_angle.assert_called_once_with("left", 15)
+
+    def test_setting_max_right_routes_live_request(self):
+        stub = make_stub()
+        stub._confirm_mid_protocol_change.return_value = True
+        stub._prev_settings = {}
+        KneeSpa._on_setting_changed(stub, "max_right", 12)
+        stub.worker.request_live_angle.assert_called_once_with("right", 12)
+
+    def test_setting_pressure_routes_live_request(self):
+        stub = make_stub()
+        stub._confirm_mid_protocol_change.return_value = True
+        stub._prev_settings = {}
+        KneeSpa._on_setting_changed(stub, "max_pressure", 70)
+        stub.worker.request_live_pressure.assert_called_once_with(70)
 
     def test_setting_pulse_rate_sets_use_pulse(self):
         stub = make_stub()
         stub._confirm_mid_protocol_change.return_value = True
         stub._prev_settings = {}
         KneeSpa._on_setting_changed(stub, "pulse_rate", 0)
-        assert stub.worker.pulse_rate == 0
-        assert stub.worker.use_pulse is False
+        stub.worker.request_live_pulse_rate.assert_called_once_with(0)
 
     def test_duration_change_does_not_touch_running_worker(self):
         """Duration is pre-run only — a stray live change must NOT mutate the

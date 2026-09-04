@@ -382,6 +382,19 @@ class TestEmergencyStop:
         assert args[0] == 1000
         assert args[1] == controller._emergency_stop_phase2
 
+    def test_marks_intentional_stop_before_sending_commands(self):
+        """Firmware cleanup responses must observe the stopping state."""
+        stub = MagicMock()
+        stub.protocol_state = "running"
+        controller = ProtocolController(stub)
+
+        with patch.object(pc_mod, "QTimer"), patch.object(pc_mod, "GPIO"):
+            controller.emergency_stop_clicked(None)
+
+        assert stub.protocol_stop_requested is True
+        assert stub.protocol_state == "stopping"
+        stub.stop_actuators.assert_called_once()
+
 
 @pytest.mark.unit
 class TestConfirmMidProtocolChange:

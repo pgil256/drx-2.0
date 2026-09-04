@@ -1,8 +1,11 @@
-# tests/unit/test_constants.py
+import os
+import subprocess
+import sys
+
 import pytest
 
 from config.constants import (
-    PRESSURE_MAX, MIN_PRESSURE, AXIAL_MAX,
+    PRESSURE_MAX, PRESSURE_WARNING_MAX, MIN_PRESSURE, AXIAL_MAX,
     LATERAL_MIN, LATERAL_MAX, HORIZONTAL_MIN, HORIZONTAL_MAX,
     EMERGENCYSTOP, EXTRAFORWARD, EXTRABACKWARD, EXTRAENABLE,
     ACTUATORS, PROTOCOL_MAPPING, PROTOCOL_DEFAULT_SETTINGS,
@@ -16,6 +19,9 @@ class TestSafetyLimits:
 
     def test_pressure_max(self):
         assert PRESSURE_MAX == 80
+
+    def test_pressure_warning_max(self):
+        assert PRESSURE_WARNING_MAX == 100
 
     def test_min_pressure(self):
         assert MIN_PRESSURE == 10
@@ -32,7 +38,9 @@ class TestSafetyLimits:
         assert LATERAL_MIN < LATERAL_MAX
 
     def test_horizontal_range(self):
-        assert HORIZONTAL_MIN == 50
+        # The calibrated -25 deg BMarks mark is position 0; a floor of 50 clamped
+        # and then flagged legal -25 deg moves (211 false warnings in device logs).
+        assert HORIZONTAL_MIN == 0
         assert HORIZONTAL_MAX == 4500
         assert HORIZONTAL_MIN < HORIZONTAL_MAX
 
@@ -98,6 +106,46 @@ class TestProtocolConfig:
 
     def test_pressure_increment_positive(self):
         assert PROTOCOL_DEFAULT_SETTINGS["PRESSURE_INCREMENT"] > 0
+
+    def test_numeric_pulse_cadence_enabled_by_default(self):
+        env = os.environ.copy()
+        env.pop("KNEESPA_PULSE_RATE_FIRMWARE", None)
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys; sys.path.insert(0, 'main'); "
+                    "from config.constants import PULSE_RATE_FIRMWARE_SUPPORT; "
+                    "print(int(PULSE_RATE_FIRMWARE_SUPPORT))"
+                ),
+            ],
+            check=True,
+            capture_output=True,
+            env=env,
+            text=True,
+        )
+        assert result.stdout.strip() == "1"
+
+    def test_numeric_pulse_cadence_has_zero_override(self):
+        env = os.environ.copy()
+        env["KNEESPA_PULSE_RATE_FIRMWARE"] = "0"
+        result = subprocess.run(
+            [
+                sys.executable,
+                "-c",
+                (
+                    "import sys; sys.path.insert(0, 'main'); "
+                    "from config.constants import PULSE_RATE_FIRMWARE_SUPPORT; "
+                    "print(int(PULSE_RATE_FIRMWARE_SUPPORT))"
+                ),
+            ],
+            check=True,
+            capture_output=True,
+            env=env,
+            text=True,
+        )
+        assert result.stdout.strip() == "0"
 
 
 @pytest.mark.unit

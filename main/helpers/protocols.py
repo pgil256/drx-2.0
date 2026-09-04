@@ -4,7 +4,7 @@ import threading
 import logging
 from helpers.logging import setup_logger
 from helpers.conversions import lateral_degrees_to_position
-from typing import Optional
+from typing import Optional, Tuple
 
 from PyQt5 import QtCore, QtGui, QtWidgets, uic
 from PyQt5.QtCore import QUrl, Qt, QObject
@@ -14,6 +14,7 @@ from config.constants import (
     AXIAL_MAX,
     LATERAL_MIN,
     LATERAL_MAX,
+    LATERAL_MAX_DEGREES,
     PROTOCOL_DEFAULT_SETTINGS,
     PULSE_RATE_FIRMWARE_SUPPORT,
     MIN_JERK_INTERVAL_MS,
@@ -94,6 +95,25 @@ class Protocols(QtCore.QRunnable):
         self.target_pos_c = None
         self.angle_set = False
         self._last_overpressure_correction = 0.0
+        # Live Treatment-slider requests originate on the Qt UI thread and are
+        # consumed by the protocol worker. Revisions coalesce rapid slider
+        # movement and ensure a newer request cannot be cleared by an older
+        # command that is still completing.
+        self._live_settings_lock = threading.Lock()
+        self._pressure_revision = 0
+        self._applied_pressure_revision = 0
+        self._angle_revisions = {"left": 0, "right": 0}
+        self._applied_angle_revisions = {"left": 0, "right": 0}
+        self._pulse_revision = 0
+        self._applied_pulse_revision = 0
+        self._active_lateral_side = None
+        self._live_phase = False
+        # Firmware pulsing believed active (a J was sent and no JS since).
+        # GUI-thread paths (pause, pulse slider -> 0) consult this before
+        # sending JS: on pre-FAILSAFE-6 firmware JS zeroes whichever SMC was
+        # last addressed, so a JS during the ramp or a lateral move stalled
+        # that move and failed the treatment.
+        self._pulse_active = False
 
         # Connect signals if arduino is provided
         if ser is not None and hasattr(ser, "status_emit"):
@@ -152,7 +172,18 @@ class Protocols(QtCore.QRunnable):
                     f"Applied pressure {pressure} exceeds setpoint {max_p}; "
                     "commanding back-off"
                 )
-                self.arduino.send(f"P{max_p}")
+                if self._live_phase and not self.is_paused:
+                    # Route through the worker: its hold loop stops pulsing
+                    # first (JS), applies the target, then re-arms. A direct
+                    # P from this GUI-thread slot raced the pulse handler for
+                    # the axial SMC.
+                    with self._live_settings_lock:
+                        self._pressure_revision += 1
+                elif self.is_paused:
+                    # Held static: nothing else is driving the axial SMC
+                    self.arduino.send(f"P{max_p}")
+                # During the ramp the worker's own pressure sequence is in
+                # control of the axial SMC; leave it alone.
         except Exception as e:
             print(f"Setpoint check error: {e}")
 
@@ -197,12 +228,11 @@ class Protocols(QtCore.QRunnable):
         print("Protocol pause requested — holding")
         self.is_paused = True
         self._pause_started = time.time()
-        # Stop any active firmware pulse so the limb is held static (NOT 'X').
-        if self.arduino:
-            try:
-                self.arduino.send("JS")
-            except Exception as e:
-                print(f"Error stopping pulse on pause: {e}")
+        # Stop an ACTIVE firmware pulse so the limb is held static (NOT 'X').
+        # Unconditional JS used to stall an in-flight ramp/lateral move on
+        # the deployed firmware (see _pulse_active).
+        if self._pulse_active and not self._send_pulse_stop():
+            print("Error stopping pulse on pause")
 
     def resume(self):
         """Resume a paused protocol, shifting the clock past the paused span."""
@@ -219,6 +249,149 @@ class Protocols(QtCore.QRunnable):
         while self.is_running and self.is_paused:
             time.sleep(0.1)
 
+    # ----- Live treatment settings ---------------------------------------
+    def request_live_pressure(self, value: float) -> bool:
+        """Queue a new pressure ceiling for the active protocol.
+
+        The worker applies increases in normal pressure increments and applies
+        decreases directly. Hardware commands stay on the protocol thread so a
+        slider event cannot race an in-flight pressure or lateral move.
+        """
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return False
+        if value < 0 or value > MAX_SAFE_PRESSURE:
+            return False
+        with self._live_settings_lock:
+            self.max_pressure = value
+            self._pressure_revision += 1
+        return True
+
+    def request_live_angle(self, side: str, value: float) -> bool:
+        """Queue a left or right lateral limit for the active protocol."""
+        if side not in ("left", "right"):
+            return False
+        try:
+            value = abs(float(value))
+        except (TypeError, ValueError):
+            return False
+        if value > abs(LATERAL_MAX_DEGREES):
+            return False
+        with self._live_settings_lock:
+            if side == "left":
+                self.max_left = -value
+            else:
+                self.max_right = value
+            self._angle_revisions[side] += 1
+        return True
+
+    def request_live_pulse_rate(self, value: float) -> bool:
+        """Queue a pulse cadence change; zero stops pulsing immediately."""
+        try:
+            value = float(value)
+        except (TypeError, ValueError):
+            return False
+        max_rate = 1000.0 / MIN_JERK_INTERVAL_MS
+        if value < 0 or value > max_rate:
+            return False
+        with self._live_settings_lock:
+            self.pulse_rate = value
+            self.use_pulse = value > 0
+            self._pulse_revision += 1
+
+        # Turning pulsing off is a safety-reducing action and must not wait for
+        # the worker to leave a blocking pressure/position wait. Arduino.send()
+        # is thread-safe and only enqueues onto the single-owner I/O thread.
+        # Only when pulsing is actually active, though: otherwise the worker
+        # simply never starts it (see _pulse_active for why JS is not free).
+        if value == 0 and self.is_running and self.arduino and self._pulse_active:
+            return self._send_pulse_stop()
+        return True
+
+    def _mark_angle_applied(self, side: str) -> None:
+        with self._live_settings_lock:
+            self._applied_angle_revisions[side] = self._angle_revisions[side]
+
+    def _apply_live_pressure_target(self, target: float) -> bool:
+        """Apply a live pressure target without bypassing the ramp limit."""
+        current = float(self.current_pressure)
+        if abs(target - current) <= 2:
+            return True
+        if target < current:
+            return self.set_to_pressure(target)
+
+        command = current
+        while self.is_running and command < target:
+            command = min(target, command + PRESSURE_INCREMENT)
+            if not self.set_to_pressure(command):
+                return False
+        return self.is_running
+
+    def _sync_live_pulse(self, pulse_active: bool) -> Tuple[bool, bool]:
+        """Bring firmware pulse on/off and cadence in sync with the slider."""
+        with self._live_settings_lock:
+            use_pulse = self.use_pulse
+            revision = self._pulse_revision
+
+        if self.is_paused or not use_pulse:
+            if pulse_active and self.arduino and not self._send_pulse_stop():
+                return False, pulse_active
+            with self._live_settings_lock:
+                self._applied_pulse_revision = revision
+            return True, False
+
+        if not pulse_active or revision != self._applied_pulse_revision:
+            if not self._start_pulse():
+                return False, pulse_active
+            pulse_active = True
+            with self._live_settings_lock:
+                self._applied_pulse_revision = revision
+        return True, pulse_active
+
+    def _service_live_motion_updates(
+        self, pulse_active: bool
+    ) -> Tuple[bool, bool]:
+        """Apply coalesced pressure/angle requests on the protocol thread."""
+        with self._live_settings_lock:
+            pressure_revision = self._pressure_revision
+            pressure_target = float(self.max_pressure)
+            side = self._active_lateral_side
+            angle_revision = self._angle_revisions.get(side, 0)
+            angle_target = (
+                self.max_left if side == "left"
+                else self.max_right if side == "right"
+                else None
+            )
+            pressure_pending = pressure_revision != self._applied_pressure_revision
+            angle_pending = (
+                side is not None
+                and angle_revision != self._applied_angle_revisions[side]
+            )
+
+        if not pressure_pending and not angle_pending:
+            return True, pulse_active
+
+        # Pressure and position moves must not compete with axial pulsing.
+        if pulse_active:
+            if not self._send_pulse_stop():
+                return False, pulse_active
+            pulse_active = False
+
+        if pressure_pending:
+            if not self._apply_live_pressure_target(pressure_target):
+                return False, pulse_active
+            with self._live_settings_lock:
+                self._applied_pressure_revision = pressure_revision
+
+        if angle_pending:
+            if not self.set_to_c_distance(angle_target):
+                return False, pulse_active
+            with self._live_settings_lock:
+                self._applied_angle_revisions[side] = angle_revision
+
+        return self._sync_live_pulse(pulse_active)
+
     def _start_pulse(self) -> bool:
         """Start firmware pulsing. Sends ``J<interval_ms>`` only on a flashed
         device (PULSE_RATE_FIRMWARE_SUPPORT); otherwise a bare ``J`` so the old
@@ -229,7 +402,38 @@ class Protocols(QtCore.QRunnable):
             interval = int(round(1000.0 / self.pulse_rate))
             interval = max(MIN_JERK_INTERVAL_MS, min(MAX_JERK_INTERVAL_MS, interval))
             cmd = f"J{interval}"
-        return self.arduino.send(cmd)
+        ok = bool(self.arduino.send(cmd))
+        if ok:
+            self._pulse_active = True
+        return ok
+
+    def _send_pulse_stop(self) -> bool:
+        """Send ``JS`` and record that firmware pulsing is no longer active."""
+        if not self.arduino:
+            self._pulse_active = False
+            return False
+        try:
+            ok = bool(self.arduino.send("JS"))
+        except Exception as e:
+            print(f"Error sending JS: {e}")
+            ok = False
+        if ok:
+            self._pulse_active = False
+        return ok
+
+    def _disconnect_status(self):
+        """Detach from the Arduino status signal once this run is over.
+
+        The per-run connect in __init__ was never undone, so every finished
+        worker kept being invoked on every status frame for the kiosk's
+        uptime (N workers after N treatments)."""
+        ser = self.arduino
+        if ser is None or not hasattr(ser, "status_emit"):
+            return
+        try:
+            ser.status_emit.disconnect(self.update_status)
+        except (TypeError, RuntimeError):
+            pass  # already disconnected / signal gone
 
     def run_pressure_sequence(self, starting_pressure: float, target_pressure: float) -> bool:
             """Run a sequence of pressure increases from start to target."""
@@ -561,7 +765,7 @@ class Protocols(QtCore.QRunnable):
 
             # Always send stop pulse command ('JS') if start command ('J') was sent, to ensure it stops.
             if pulse_command_active_j and self.arduino:
-                if not self.arduino.send("JS"): print("Warning: Failed to send JS command")
+                if not self._send_pulse_stop(): print("Warning: Failed to send JS command")
                 print(f"Protocol {self.protocol} ({time.time()}): Sent 'JS' (stop pulse) to Arduino.")
 
             return True
@@ -569,7 +773,7 @@ class Protocols(QtCore.QRunnable):
         except Exception as e:
             print(f"Error during pulse sequence: {e}")
             # Try to send stop command on error too
-            if self.arduino: self.arduino.send("JS")
+            self._send_pulse_stop()
             return False
 
     # ------------------------------------------------------------------
@@ -615,35 +819,50 @@ class Protocols(QtCore.QRunnable):
         return True
 
     def _pulse_or_hold_phase(self) -> bool:
-        """Run the treatment hold, pulsing while use_pulse is on.
-
-        Responsive to live use_pulse changes; ends when the duration
-        elapses or the protocol is stopped.
-        """
+        """Run a hold that responds to every live Treatment setting."""
         if not self.is_running:
             return True
 
-        main_phase_loop_active = True
+        self._live_phase = True
+        pulse_active = False
+        pulse_stop_failed = False
+        last_keepalive_time = time.time()
         print(
             f"Protocol {self.protocol}: entering pulse/hold phase "
             f"(use_pulse={self.use_pulse})"
         )
-        while main_phase_loop_active and self.is_running and self.check_duration():
-            if self.use_pulse:
-                if not self.apply_continuous_pulse():
-                    # Pulse failure leaves the machine in an unknown motion
-                    # state: request the recovery reset (previously only
-                    # protocols 2/3 did)
-                    return self._fail("pulse sequence failed", reset_needed=True)
-                main_phase_loop_active = False
-            else:
-                self._wait_while_paused()
-                time.sleep(0.5)
+        try:
+            while self.is_running and self.check_duration():
+                if self.is_paused:
+                    ok, pulse_active = self._sync_live_pulse(pulse_active)
+                    if not ok:
+                        return self._fail("could not stop pulse for pause")
+                    self._wait_while_paused()
+                    continue
 
-        # Ensure pulse is stopped however the loop exited
-        if self.arduino and hasattr(self.arduino, "send"):
-            if not self.arduino.send("JS"):
-                return self._fail("could not send final JS")
+                ok, pulse_active = self._service_live_motion_updates(pulse_active)
+                if not ok:
+                    return self._fail(
+                        "live treatment setting could not be applied",
+                        reset_needed=True,
+                    )
+                ok, pulse_active = self._sync_live_pulse(pulse_active)
+                if not ok:
+                    return self._fail("pulse update failed", reset_needed=True)
+
+                if time.time() - last_keepalive_time >= 30:
+                    if not self.arduino.send("T"):
+                        return self._fail("keepalive failed")
+                    last_keepalive_time = time.time()
+                time.sleep(0.2)
+        finally:
+            self._live_phase = False
+            if pulse_active and self.arduino and not self._send_pulse_stop():
+                self.logger.error("Could not stop pulse while leaving hold phase")
+                self.signals.reset_needed.emit()
+                pulse_stop_failed = True
+        if pulse_stop_failed:
+            return self._fail("could not send final JS")
         return True
 
     def _release(self, center_first: bool) -> bool:
@@ -659,23 +878,31 @@ class Protocols(QtCore.QRunnable):
         self.signals.finished.emit(True)
         return True
 
-    def _run_standard_protocol(self, banner: str, target_angle) -> None:
+    def _run_standard_protocol(
+        self, banner: str, target_side: Optional[str] = None
+    ) -> None:
         """Protocols 1-3: ramp, optional lateral move, pulse/hold, release."""
         if not self._preamble(banner):
             return
 
         moved_lateral = False
-        if self.is_running and target_angle is not None:
+        if self.is_running and target_side is not None:
+            self._active_lateral_side = target_side
+            target_angle = (
+                self.max_left if target_side == "left" else self.max_right
+            )
             print(f"Moving to {target_angle}°")
             if not self.set_to_c_distance(target_angle):
                 self._fail("lateral positioning failed")
                 return
+            self._mark_angle_applied(target_side)
             moved_lateral = True
 
         if not self._pulse_or_hold_phase():
             return
 
         self._release(center_first=moved_lateral)
+        self._active_lateral_side = None
 
     def protocol_1(self):
         """Axial protocol - pressure only."""
@@ -686,14 +913,14 @@ class Protocols(QtCore.QRunnable):
         """Axial with left lateral movement."""
         print("Running protocol 2...")
         self._run_standard_protocol(
-            ">>Starting left lateral protocol", self.max_left
+            ">>Starting left lateral protocol", "left"
         )
 
     def protocol_3(self):
         """Axial with right lateral movement."""
         print("Running protocol 3...")
         self._run_standard_protocol(
-            ">>Starting right lateral protocol", self.max_right
+            ">>Starting right lateral protocol", "right"
         )
 
     def protocol_4(self):
@@ -702,107 +929,97 @@ class Protocols(QtCore.QRunnable):
         if not self._preamble(">>Starting oscillating lateral protocol"):
             return
 
-        # Oscillation parameters
-        oscillation_period = 30  # Total time for one complete cycle (left->right->left) in seconds
-        hold_at_extreme = 2      # Time to hold at each extreme position
+        oscillation_period = 30
+        hold_at_extreme = 2
+        position_at_left = True
+        last_position_change = time.time()
+        last_keepalive_time = time.time()
+        pulse_active = False
+        pulse_stop_failed = False
+        self._active_lateral_side = "left"
+        self._live_phase = True
 
-        # Main oscillation loop
-        if self.is_running:
-            print(f"Starting oscillation between {self.max_left}° and {self.max_right}°")
-            oscillation_start_time = time.time()
-            position_at_left = True  # Start at left position
-            last_position_change = oscillation_start_time
-            pulse_active = False
-
-            # Move to initial left position
+        try:
+            print(
+                f"Starting oscillation between {self.max_left}° "
+                f"and {self.max_right}°"
+            )
             if not self.set_to_c_distance(self.max_left):
                 self._fail("initial lateral positioning failed")
                 return
-
-            # Start pulsing if enabled
-            if self.use_pulse and self.arduino:
-                if not self._start_pulse():
-                    self._fail("could not start pulsing", reset_needed=True)
-                    return
-                pulse_active = True
-                print(f"Protocol 4: Started continuous pulsing")
+            self._mark_angle_applied("left")
 
             while self.is_running and self.check_duration():
-                # Hold on pause: pause() sent 'JS'; on resume re-arm pulsing.
                 if self.is_paused:
+                    ok, pulse_active = self._sync_live_pulse(pulse_active)
+                    if not ok:
+                        self._fail("could not stop pulse for pause")
+                        return
                     self._wait_while_paused()
-                    if not self.is_running:
-                        break
-                    if pulse_active and self.use_pulse and self.arduino:
-                        if not self._start_pulse():
-                            self._fail("could not restart pulsing", reset_needed=True)
-                            return
                     last_position_change = time.time()
                     continue
 
-                current_time = time.time()
-                time_since_position_change = current_time - last_position_change
-
-                # Check if it's time to switch positions
-                if time_since_position_change >= (oscillation_period / 2):
-                    # Switch position
-                    if position_at_left:
-                        # Move to right
-                        print(f"Oscillating to right {self.max_right}°")
-                        self.signals.progress.emit(f">>Moving to right {self.max_right}°")
-                        if not self.set_to_c_distance(self.max_right):
-                            self._fail("oscillation move failed")
-                            return
-                        position_at_left = False
-                    else:
-                        # Move to left
-                        print(f"Oscillating to left {self.max_left}°")
-                        self.signals.progress.emit(f">>Moving to left {self.max_left}°")
-                        if not self.set_to_c_distance(self.max_left):
-                            self._fail("oscillation move failed")
-                            return
-                        position_at_left = True
-
-                    last_position_change = current_time
-
-                    # Hold briefly at extreme position
-                    if hold_at_extreme > 0:
-                        hold_start = time.time()
-                        while time.time() - hold_start < hold_at_extreme and self.is_running and self.check_duration():
-                            time.sleep(0.1)
-
-                # Handle pulse state changes
-                if self.use_pulse and not pulse_active and self.arduino:
-                    # Pulse was turned on
-                    if not self._start_pulse():
-                        self._fail("could not restart pulsing", reset_needed=True)
-                        return
-                    pulse_active = True
-                    print(f"Protocol 4: Restarted pulsing")
-                elif not self.use_pulse and pulse_active and self.arduino:
-                    # Pulse was turned off
-                    if not self.arduino.send("JS"):
-                        self._fail("could not stop pulsing", reset_needed=True)
-                        return
-                    pulse_active = False
-                    print(f"Protocol 4: Stopped pulsing")
-
-                # Send periodic keepalive
-                if int(current_time) % 30 == 0:
-                    if self.arduino:
-                        if not self.arduino.send("T"):
-                            self._fail("keepalive failed")
-                            return
-
-                time.sleep(0.1)  # Main loop sleep
-
-            # Stop pulsing if it was active
-            if pulse_active and self.arduino:
-                if not self.arduino.send("JS"):
-                    self._fail("could not stop final pulsing", reset_needed=True)
+                ok, pulse_active = self._service_live_motion_updates(pulse_active)
+                if not ok:
+                    self._fail(
+                        "live treatment setting could not be applied",
+                        reset_needed=True,
+                    )
                     return
-                print(f"Protocol 4: Stopped final pulsing")
+                ok, pulse_active = self._sync_live_pulse(pulse_active)
+                if not ok:
+                    self._fail("pulse update failed", reset_needed=True)
+                    return
 
+                current_time = time.time()
+                if current_time - last_position_change >= oscillation_period / 2:
+                    if pulse_active:
+                        if not self._send_pulse_stop():
+                            self._fail("could not stop pulse for lateral move")
+                            return
+                        pulse_active = False
+
+                    side = "right" if position_at_left else "left"
+                    self._active_lateral_side = side
+                    target = self.max_right if side == "right" else self.max_left
+                    print(f"Oscillating to {side} {target}°")
+                    self.signals.progress.emit(f">>Moving to {side} {target}°")
+                    if not self.set_to_c_distance(target):
+                        self._fail("oscillation move failed")
+                        return
+                    self._mark_angle_applied(side)
+                    position_at_left = side == "left"
+                    last_position_change = time.time()
+
+                    hold_start = time.time()
+                    while (
+                        time.time() - hold_start < hold_at_extreme
+                        and self.is_running
+                        and self.check_duration()
+                    ):
+                        time.sleep(0.1)
+
+                ok, pulse_active = self._sync_live_pulse(pulse_active)
+                if not ok:
+                    self._fail("could not restart pulse", reset_needed=True)
+                    return
+
+                if current_time - last_keepalive_time >= 30:
+                    if not self.arduino.send("T"):
+                        self._fail("keepalive failed")
+                        return
+                    last_keepalive_time = current_time
+                time.sleep(0.1)
+        finally:
+            self._live_phase = False
+            self._active_lateral_side = None
+            if pulse_active and self.arduino and not self._send_pulse_stop():
+                self.logger.error("Could not stop pulse while leaving protocol 4")
+                self.signals.reset_needed.emit()
+                pulse_stop_failed = True
+        if pulse_stop_failed:
+            self._fail("could not stop final pulsing")
+            return
         self._release(center_first=True)
 
     def run(self):
@@ -842,6 +1059,9 @@ class Protocols(QtCore.QRunnable):
             time.sleep(0.1)
             self.is_running = False
             self.signals.finished.emit(False)
+        finally:
+            # This run is over: stop being invoked on every status frame
+            self._disconnect_status()
 
     def stop(self):
         """Safely stop a running protocol and release applied traction.
@@ -855,6 +1075,7 @@ class Protocols(QtCore.QRunnable):
         """
         print("Initiating protocol stop sequence...")
         self.is_running = False
+        self._disconnect_status()
 
         if not self.arduino:
             print("Warning: No Arduino connection available for stop sequence")
@@ -866,6 +1087,7 @@ class Protocols(QtCore.QRunnable):
             # (X jumps the transport's queue and the firmware's limiter)
             stop_sent = self.arduino.send("X")
             print(f"Emergency stop command sent: {'Success' if stop_sent else 'FAILED'}")
+            self._pulse_active = False  # X halts pulsing along with everything else
 
             # Actively release traction; the firmware ramps the axial
             # actuator back until the load cell reads zero

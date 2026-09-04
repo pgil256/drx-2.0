@@ -26,14 +26,15 @@ import smtplib
 import threading
 import shutil
 from email.mime.text import MIMEText
-from datetime import datetime
+from datetime import datetime, timezone
 from PyQt5 import QtWidgets, QtCore
 from PyQt5.QtCore import (
     Qt,
     QTimer,
     QThread,
     QObject,
-    QTime
+    QTime,
+    pyqtSignal,
 )
 from PyQt5.QtWidgets import (
     QApplication,
@@ -70,6 +71,7 @@ from config.constants import (
     DEFAULT_PROTOCOL_MINUTES,
     PROTOCOL_MINUTES_MIN,
     PROTOCOL_MINUTES_MAX,
+    DATA_PATHS,
 )
 
 from config.config import Configuration
@@ -83,6 +85,15 @@ from helpers.conversions import (
     horizontal_degrees_to_position,
 )
 from helpers.angles import pos_c_to_angle
+from helpers.cloud_client import CloudClient
+
+try:
+    from dotenv import load_dotenv as _load_dotenv
+    _cloud_env = os.path.join(os.path.dirname(os.path.dirname(__file__)), "cloud.env")
+    if os.path.isfile(_cloud_env):
+        _load_dotenv(_cloud_env, override=False)
+except ImportError:
+    pass
 
 from helpers.logging import setup_logger
 
@@ -102,6 +113,15 @@ from controllers.connection_manager import ConnectionManager
 # BadMatch (ShmPutImage) over VNC/remote X and can leave video frames black.
 os.environ["QT_X11_NO_MITSHM"] = "1"
 os.environ["QT_LOGGING_RULES"] = "*.debug=false;qt.qpa.xcb.warning=false"
+
+# Cloud patient settings -> Treatment Settings keys (and the cast applied).
+_CLOUD_SETTING_MAP = (
+    ("max_pressure_lb", "max_pressure", float),
+    ("max_left_deg", "max_left", float),
+    ("max_right_deg", "max_right", float),
+    ("pulse_rate_hz", "pulse_rate", float),
+    ("duration_min", "duration", int),
+)
 
 # Map a Setup jog action to the legacy (speed_factor, direction) pair used by
 # move_actuator ("20" = fast, "04" = slow; +1 forward, -1 reverse).
@@ -226,6 +246,11 @@ class _PhaseLabelAdapter:
             pass
 
 
+class _CloudBridge(QObject):
+    """Carries cloud API results from worker threads back to the UI."""
+    lookup_done = pyqtSignal(object)
+
+
 class _LegacyUi:
     """Namespace for the ``window.ui.<name>`` attributes the controllers use."""
 
@@ -307,6 +332,7 @@ class KneeSpa(QMainWindow):
         self.protocol_start_time = None
         self.protocol_duration = 0
         self._paused_at = None             # wall-clock pause anchor for the UI timer
+        self.last_measured_pressure = None  # latest load-cell reading (status_emit)
         self._prev_settings = {}           # for mid-protocol slider rollback
         self._selected_issue = None        # last-opened Support troubleshooting item
         self.current_use_pulse_setting = True
@@ -329,6 +355,11 @@ class KneeSpa(QMainWindow):
         self.LEG_LENGTH_SPEED_FAST = LEG_LENGTH_SPEED_FAST
 
         # Backend initialization
+        # QObject already exposes a thread() method. Keep the owned Arduino
+        # QThread under a distinct name so first-time connection setup cannot
+        # mistake that inherited method for a live worker thread.
+        self.arduino = None
+        self.arduino_thread = None
         self.I2Cstatus = 0  # Keep for compatibility
         self.I2Cstatus_event = threading.Event()  # Thread-safe event for synchronization
         self.config = Configuration(config_path=config_path)
@@ -382,7 +413,7 @@ class KneeSpa(QMainWindow):
         )
 
         # Always-visible treatment banner: live pressure, time remaining,
-        # and a permanent STOP control on every page while a protocol runs.
+        # and a permanent EMERGENCY STOP control while a protocol runs.
         # Deliberately kept on top of the modern shell: the SafetyMonitor's
         # fault banner must stay visible regardless of the active screen.
         self.treatment_panel = TreatmentStatusPanel(parent=self)
@@ -408,6 +439,10 @@ class KneeSpa(QMainWindow):
             self._show_timed_error(f"Failed to load CSV data: {str(e)}")
 
         self.current_user = None
+        self.cloud_client = CloudClient()
+        self.cloud_patient = None
+        self._cloud_bridge = _CloudBridge()
+        self._cloud_bridge.lookup_done.connect(self._on_cloud_lookup_done)
 
         # --- legacy attribute contract for the controllers ---
         self.ui = _LegacyUi(self)
@@ -460,8 +495,13 @@ class KneeSpa(QMainWindow):
 
         # Initialize GPIO setup
         self.setup_gpio()
-        # Initialize the Arduino instance afterward
-        self.setup_arduino()
+        # Let the first event-loop turn paint the window before serial probing
+        # or reset work begins. In debug/windowed mode the final ``show()`` is
+        # called by main() after construction; a synchronous connection wait
+        # here allowed firmware notices to appear before the app itself.
+        QTimer.singleShot(100, self.setup_arduino)
+        if self.cloud_client.enabled:
+            QTimer.singleShot(5000, self._retry_pending_uploads)
 
     # ----- view ↔ backend wiring -----
     def _connect_shell(self):
@@ -483,6 +523,7 @@ class KneeSpa(QMainWindow):
         s.setup.emergency_stop_requested.connect(self._on_estop)
 
         # Treatment screen.
+        s.treatment.patient_pin_submitted.connect(self._on_patient_pin)
         s.treatment.protocol_selected.connect(self._on_protocol_selected)
         s.treatment.start_requested.connect(self.start_or_stop_protocol)
         s.treatment.resume_requested.connect(self._on_treatment_resume)
@@ -596,6 +637,69 @@ class KneeSpa(QMainWindow):
     def _on_protocol_selected(self, n):
         self.protocol_value = str(n)
 
+    def _on_patient_pin(self, pin):
+        if not self.cloud_client.enabled:
+            self.shell.treatment.set_patient_error("Cloud not configured")
+            return
+        bridge = self._cloud_bridge
+
+        def _lookup():
+            result = self.cloud_client.lookup_pin(pin)
+            bridge.lookup_done.emit(result)
+
+        threading.Thread(target=_lookup, daemon=True).start()
+
+    def _on_cloud_lookup_done(self, result):
+        # External data: a non-object body (captive portal, proxy page) or a
+        # null/garbage field must never raise out of this slot and leave the
+        # patient half-applied.
+        if not isinstance(result, dict):
+            self.cloud_patient = None
+            self.shell.treatment.set_patient_error("Cloud unavailable")
+            return
+        if "error" in result:
+            self.cloud_patient = None
+            if result["error"] == "rate_limited":
+                self.shell.treatment.set_patient_error("Too many lookups")
+            else:
+                self.shell.treatment.set_patient_error("Unknown PIN")
+            return
+        if self.protocol_running:
+            # A lookup that resolves after START must not re-map the live
+            # settings/protocol underneath the running worker
+            self.logger.warning("Ignoring patient lookup that resolved during a treatment")
+            self.shell.treatment.set_patient_error("Lookup ignored during treatment")
+            return
+        self.cloud_patient = result
+        self.shell.treatment.set_patient(result.get("display_name", "Unknown"))
+        settings = result.get("settings")
+        if not isinstance(settings, dict):
+            return
+        mapped = {}
+        for src, dst, cast in _CLOUD_SETTING_MAP:
+            value = settings.get(src)
+            if value is None:
+                continue
+            try:
+                mapped[dst] = cast(value)
+            except (TypeError, ValueError):
+                self.logger.warning("Ignoring invalid cloud setting %s=%r", src, value)
+        if mapped:
+            self.shell.treatment.set_settings(mapped)
+        try:
+            proto = int(settings.get("protocol_number"))
+        except (TypeError, ValueError):
+            proto = None
+        if proto in (1, 2, 3, 4):
+            self.shell.treatment.select_protocol(proto)
+
+    def _retry_pending_uploads(self):
+        threading.Thread(
+            target=self.cloud_client.retry_pending,
+            args=(DATA_PATHS.get("PENDING_UPLOADS"),),
+            daemon=True,
+        ).start()
+
     def _on_setting_changed(self, key, value):
         """A Treatment Settings slider moved. Mid-protocol changes are gated by a
         one-time safety confirmation; on cancel the slider rolls back."""
@@ -609,14 +713,13 @@ class KneeSpa(QMainWindow):
         if not self.worker:
             return
         if key == "max_pressure":
-            self.worker.max_pressure = value
+            self.worker.request_live_pressure(value)
         elif key == "max_left":
-            self.worker.max_left = -abs(value)
+            self.worker.request_live_angle("left", value)
         elif key == "max_right":
-            self.worker.max_right = abs(value)
+            self.worker.request_live_angle("right", value)
         elif key == "pulse_rate":
-            self.worker.pulse_rate = value
-            self.worker.use_pulse = value > 0
+            self.worker.request_live_pulse_rate(value)
         # "duration" is a pre-run parameter — the Treatment screen locks its
         # slider during an active run, so it is deliberately NOT adjusted live
         # here (a mid-run shorten could silently end the treatment).
@@ -625,6 +728,10 @@ class KneeSpa(QMainWindow):
     def _seed_modern_run_inputs(self):
         """Snapshot the modern Settings sliders for the controllers and the
         mid-protocol rollback seam before a start/stop toggle."""
+        # A fresh run never starts paused. The anchor used to survive a
+        # banner EMERGENCY STOP taken while paused (that path bypasses
+        # _on_estop), after which PAUSE was permanently inert.
+        self._paused_at = None
         try:
             vals = self.shell.treatment.settings_values()
         except Exception:
@@ -642,6 +749,7 @@ class KneeSpa(QMainWindow):
     def start_or_stop_protocol(self):
         """Start/Stop button (see controllers.protocol_controller)."""
         self._seed_modern_run_inputs()
+        self._cloud_treatment_start = datetime.now(timezone.utc).isoformat()
         self.protocol.start_or_stop()
         if self.protocol_state == "running":
             try:
@@ -759,8 +867,12 @@ class KneeSpa(QMainWindow):
         elif key == "pressure":
             self.loading_spinner.show()
             self.disable_actuator_controls()
-            if KneeSpa._send_motion_command(self, "P0", "pressure release"):
-                self.treatment_panel.set_stopping()
+            # DONE re-enables the controls via set_done. The treatment banner
+            # is reserved for protocol stops: set_stopping() here had no
+            # matching set_idle(), so "STOPPING - RELEASING TRACTION" stayed
+            # over the top bar until the next treatment or Arduino reset.
+            KneeSpa._send_motion_command(self, "P0", "pressure release")
+            self.loading_spinner.hide()
 
     def _on_setup_go(self, key):
         """Move an actuator to its row's current slider value (the legacy Go
@@ -883,6 +995,11 @@ class KneeSpa(QMainWindow):
             return
         print("Handling logout")
         self.current_user = None
+        self.cloud_patient = None
+        try:
+            self.shell.treatment.clear_patient()
+        except Exception:
+            pass
         self.shell.logout()
 
     def _on_exit_app(self):
@@ -1038,11 +1155,14 @@ class KneeSpa(QMainWindow):
     def panel_stop_requested(self):
         self.protocol.panel_stop_requested()
 
-    def _show_safety_alert(self, message):
+    def _show_safety_alert(self, message: str, warning: bool = False) -> None:
         """Persistent, acknowledged alert for safety events.
 
         Safety stops used to auto-dismiss after 5 seconds, so an operator
         who looked away never knew an emergency stop fired.
+
+        Device-originated safety notices are warnings rather than emergency
+        stops, so they use the orange warning icon and title.
         """
         print(f"SAFETY ALERT: {message}")
         self.logger.error(f"Safety alert: {message}")
@@ -1051,15 +1171,23 @@ class KneeSpa(QMainWindow):
         # fold follow-on messages into the box the operator already sees
         existing = getattr(self, "_active_safety_alert", None)
         if existing is not None and existing.isVisible():
+            # Never let a later emergency inherit an existing warning's less
+            # urgent presentation. A warning added to a critical alert stays
+            # critical as well.
+            if not warning and existing.property("safetyWarning"):
+                existing.setIcon(QMessageBox.Critical)
+                existing.setWindowTitle("SAFETY STOP")
+                existing.setProperty("safetyWarning", False)
             if message not in existing.text():
                 existing.setText(existing.text() + "\n\n" + message)
             return
         msg_box = QMessageBox(self)
-        msg_box.setIcon(QMessageBox.Critical)
-        msg_box.setWindowTitle("SAFETY STOP")
+        msg_box.setIcon(QMessageBox.Warning if warning else QMessageBox.Critical)
+        msg_box.setWindowTitle("DEVICE SAFETY WARNING" if warning else "SAFETY STOP")
         msg_box.setText(message)
         msg_box.setStandardButtons(QMessageBox.Ok)
         msg_box.setWindowFlags(msg_box.windowFlags() | Qt.WindowStaysOnTopHint)
+        msg_box.setProperty("safetyWarning", warning)
         msg_box.show()  # non-modal so STOP controls stay reachable
         # Keep a reference so it is not garbage-collected
         self._active_safety_alert = msg_box
@@ -1229,7 +1357,16 @@ class KneeSpa(QMainWindow):
         self.disable_actuator_controls()
         print(actuator)
         if actuator == self.actuator_c:
-            position = self.config.CMarks["{:.1f}".format(0)]
+            # Tolerant lookup (same as the horizontal branch): a hand-edited
+            # CMarks without an exact "0.0" key raised KeyError out of this
+            # slot, which PyQt5 turns into a process abort.
+            try:
+                position, _ = lateral_degrees_to_position(self.config.CMarks, 0)
+            except ValueError as e:
+                print(f"Invalid lateral position: {e}")
+                self.enable_actuator_controls()
+                self.loading_spinner.hide()
+                return
             print(f" positioned to 0 degrees pos {position}")
             command = f"I14{position}"
             if not KneeSpa._send_motion_command(self, command, "lateral reset"):
@@ -1288,24 +1425,31 @@ class KneeSpa(QMainWindow):
         try:
             if not self.arduino.send("X"):  # Stop all movement
                 # A stop that could not even be queued is an alarm, not a
-                # log line: the link is down. The firmware's heartbeat
-                # timeout stops motion on its side within ~3 seconds.
+                # log line: the link is down and the physical E-stop is the
+                # only independent stop path.
                 self.logger.error("Emergency stop could not be sent - link down")
                 self._show_timed_error(
                     "STOP NOT DELIVERED - connection down. "
-                    "Device stops itself within 3 seconds."
+                    "Press the physical emergency stop immediately."
                 )
         except Exception as e:
             print(f"Error in emergency stop: {str(e)}")
             self._show_timed_error(f"Emergency stop failed: {str(e)}")
 
     def stop_position_flexion_button(self, actuator):
-        # Firmware 'X' stops all actuators regardless of suffix
-        if not self.arduino.send("X"):
+        # Firmware 'X' stops all actuators regardless of suffix. Guarded like
+        # stop_actuators: a torn-down transport (arduino is None) must still
+        # produce the STOP NOT DELIVERED alarm rather than an AttributeError.
+        try:
+            sent = bool(self.arduino and self.arduino.send("X"))
+        except Exception as exc:
+            self.logger.error("Actuator stop raised: %s", exc)
+            sent = False
+        if not sent:
             self.logger.error("Actuator stop could not be sent - link down")
             self._show_timed_error(
                 "STOP NOT DELIVERED - connection down. "
-                "Device stops itself within 3 seconds."
+                "Press the physical emergency stop immediately."
             )
 
     # ----- leg-length (FIT) jog handlers (open-loop F-commands + GPIO) -----
@@ -1477,6 +1621,12 @@ class KneeSpa(QMainWindow):
         """Device status -> safety supervision (see controllers.safety_monitor),
         plus the Treatment screen's live pressure/angle readouts."""
         try:
+            # Latest MEASURED load; the stop sequence waits on this before
+            # running the recovery reset (see ProtocolController).
+            self.last_measured_pressure = float(pressure)
+        except (TypeError, ValueError):
+            pass
+        try:
             self.shell.treatment.set_pressure(pressure)
             lateral_angle = pos_c_to_angle(steps, self.config.CMarks)
             self.shell.treatment.set_angle(lateral_angle)
@@ -1499,12 +1649,16 @@ class KneeSpa(QMainWindow):
         msg_box = QMessageBox(self)
         msg_box.setText(message)
         msg_box.setStandardButtons(QMessageBox.Ok)
+        # Release the box when it closes: a hidden QMessageBox (plus its
+        # timer) per error used to accumulate for the kiosk's uptime.
+        msg_box.setAttribute(Qt.WA_DeleteOnClose, True)
 
-        # Create a QTimer to close the dialog after 10 seconds
-        timer = QTimer(self)
+        # Auto-close after 5 s. Parenting the timer to the box means it dies
+        # with the box if the operator dismisses it first.
+        timer = QTimer(msg_box)
         timer.setSingleShot(True)
         timer.timeout.connect(msg_box.close)
-        timer.start(5000)  # 5 seconds in milliseconds
+        timer.start(5000)
 
         # Show the dialog without blocking
         msg_box.show()
@@ -1515,6 +1669,10 @@ class KneeSpa(QMainWindow):
     @QtCore.pyqtSlot(str)
     def handle_firmware_error(self, message):
         self.safety.on_firmware_error(message)
+
+    @QtCore.pyqtSlot(str)
+    def handle_firmware_warning(self, message):
+        self.safety.on_firmware_warning(message)
 
     @QtCore.pyqtSlot()
     def handle_pressure_released(self):
@@ -1537,6 +1695,11 @@ class KneeSpa(QMainWindow):
         """Setup timers for protocol events."""
         print("Setting up timers for protocol events")
         self.protocol_timer = QTimer(self)
+        # QTimer defaults to 0 ms. The controller's start() relied on a
+        # dialog-gated start(1000) that never ran on the modern UI, so the
+        # countdown fired on every event-loop pass for the whole treatment,
+        # pegging the GUI thread on the Pi.
+        self.protocol_timer.setInterval(1000)
         self.protocol_timer.timeout.connect(self.update_protocol_time)
 
     def setup_arduino(self, auto_reset=True):
@@ -1615,10 +1778,38 @@ def _sync_logs(destination):
     print(f"Logs synced to {destination}")
 
 
+def _install_excepthook():
+    """Log unhandled Python exceptions instead of letting PyQt5 abort.
+
+    PyQt5 >= 5.5 calls ``qFatal()`` when an exception escapes a slot, so one
+    stray ``KeyError`` in a button handler would kill the kiosk UI (and the
+    operator's on-screen STOP) mid-treatment. Record the full traceback to the
+    log files + stderr and keep the event loop alive instead. Only logging
+    happens here: the hook can fire on a worker thread, where touching widgets
+    is unsafe.
+    """
+    unhandled_log = setup_logger(component="Unhandled")
+
+    def _hook(exc_type, exc, tb):
+        if issubclass(exc_type, KeyboardInterrupt):
+            sys.__excepthook__(exc_type, exc, tb)
+            return
+        text = "".join(traceback.format_exception(exc_type, exc, tb))
+        print(f"UNHANDLED EXCEPTION (app kept running):\n{text}", file=sys.stderr)
+        try:
+            unhandled_log.error("Unhandled exception:\n%s", text)
+        except Exception:
+            pass
+
+    sys.excepthook = _hook
+
+
 # Main function without direct access to Arduino
 def main():
     """Main function to start the application."""
     import argparse
+
+    _install_excepthook()
 
     parser = argparse.ArgumentParser(description="KneeSpa Application")
     parser.add_argument(

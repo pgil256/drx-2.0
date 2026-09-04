@@ -86,13 +86,20 @@ class TestPositionResponse:
 
 @pytest.mark.unit
 class TestFirmwareSafetyMessages:
-    """ERROR:/BUSY/RELEASED/ZEROS lines are safety telemetry that used to
-    be dropped as 'unrecognized data'."""
+    """Firmware notices must not be dropped as unrecognized data."""
 
     def test_error_line_emits_error_signal(self, arduino, qtbot):
         with qtbot.waitSignal(arduino.error_emit, timeout=1000) as blocker:
             arduino.handle_com("ERROR: Pressure limit exceeded")
         assert blocker.args == ["Pressure limit exceeded"]
+
+    def test_warning_line_emits_separate_advisory_signal(self, arduino, qtbot):
+        errors = []
+        arduino.error_emit.connect(errors.append)
+        with qtbot.waitSignal(arduino.warning_emit, timeout=1000) as blocker:
+            arduino.handle_com("WARNING: Motor stalled")
+        assert blocker.args == ["Motor stalled"]
+        assert errors == []
 
     def test_busy_emits_error_signal(self, arduino, qtbot):
         with qtbot.waitSignal(arduino.error_emit, timeout=1000) as blocker:

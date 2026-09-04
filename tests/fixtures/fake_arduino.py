@@ -19,8 +19,8 @@ Behavior mirrors main/motor/motor.ino:
 - FIT commands remain active until their timer ends, emit DONE on physical
   completion, and reply BUSY to conflicting FIT commands.
 - L5 zero marks accept the delimited form (L5|a|b) and echo "ZEROS|a|b".
-- Pressure above 80 lbs during a ramp emits
-  "ERROR: Pressure limit exceeded" and stops everything.
+- Treatment targets remain capped at 80 lbs. Measured pressure above 100 lbs
+  emits an advisory WARNING without stopping operation.
 - Protocol v2 frames ("#<seq>:<CMD>*<XX>") are verified and acked with
   the sequence echoed (DONE|<seq>, BUSY|<seq>, OK|<seq>, ERR|<seq>|...);
   status frames then carry a trailing "*<XX>" checksum.
@@ -41,6 +41,7 @@ except (ImportError, ModuleNotFoundError):
     PTY_AVAILABLE = False
 
 MAX_PRESSURE_LBS = 80.0
+PRESSURE_WARNING_LBS = 100.0
 
 
 class FakeArduino:
@@ -95,6 +96,7 @@ class FakeArduino:
         self._target_position_b: Optional[int] = None
         self._target_position_c: Optional[int] = None
         self._target_pressure: Optional[float] = None
+        self._pressure_warning_issued = False
 
         # Track commands received (for assertions)
         self.commands_received: List[str] = []
@@ -472,14 +474,12 @@ class FakeArduino:
         if self._target_pressure is None:
             return
 
-        # Firmware safety: over-limit during a ramp -> ERROR + stop
-        if self.measure_pressure and self.pressure > MAX_PRESSURE_LBS:
-            self._write("ERROR: Pressure limit exceeded\n")
-            self.b_running = False
-            self.measure_pressure = False
-            self.jerking = False
-            self._target_pressure = None
-            return
+        if self.pressure > PRESSURE_WARNING_LBS:
+            if not self._pressure_warning_issued:
+                self._write("WARNING: Pressure warning threshold exceeded\n")
+                self._pressure_warning_issued = True
+        else:
+            self._pressure_warning_issued = False
 
         step = self.pressure_rate * dt
         diff = self._target_pressure - self.pressure

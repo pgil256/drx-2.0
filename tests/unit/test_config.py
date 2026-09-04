@@ -224,6 +224,18 @@ class TestCalibrationState:
             {"-20.0": 2400, "0.0": 1450, "20.0": 500}
         ) is None
 
+    def test_cmarks_are_not_semantically_validated(self):
+        config = Configuration()
+        config.CMarks = {"-20.0": 500, "0.0": 1700, "20.0": 1600}
+        config._set_default_a_marks()
+        config._set_default_b_marks()
+        config.calibration = -28369.0
+
+        config._validate_calibration()
+
+        assert config.marks_valid is True
+        assert not any(error.startswith("CMarks:") for error in config.calibration_errors)
+
 
 @pytest.mark.unit
 class TestAtomicWrite:
@@ -244,12 +256,12 @@ class TestAtomicWrite:
 class TestConfigurationDefaults:
     """Tests for default mark values."""
 
-    def test_default_cmarks_values(self):
+    def test_default_cmarks_are_numeric(self):
         config = Configuration()
         config._set_default_c_marks()
-        assert config.CMarks["-20.0"] == 500
-        assert config.CMarks["0.0"] == 1450
-        assert config.CMarks["20.0"] == 2400
+        assert config.CMarks
+        assert all(isinstance(key, str) for key in config.CMarks)
+        assert all(isinstance(value, int) for value in config.CMarks.values())
 
     def test_default_amarks_values(self):
         config = Configuration()

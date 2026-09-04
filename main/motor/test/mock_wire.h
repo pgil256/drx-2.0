@@ -52,12 +52,20 @@ public:
         return 1;
     }
 
+    // Tests set this to make the next N endTransmission() calls report a
+    // bus error (4 = other error), simulating a NACK / timed-out SMC write
+    int failTransmissions = 0;
+
     uint8_t endTransmission() {
         if (commandCount < MAX_WIRE_COMMANDS) {
             commands[commandCount].address = _currentAddress;
             memcpy(commands[commandCount].data, _txBuffer, _txLen);
             commands[commandCount].dataLen = _txLen;
             commandCount++;
+        }
+        if (failTransmissions > 0) {
+            failTransmissions--;
+            return 4;
         }
         return 0;
     }
@@ -84,6 +92,7 @@ public:
 
     void reset() {
         commandCount = 0;
+        failTransmissions = 0;
         _txLen = 0;
         _rxLen = 0;
         _rxIndex = 0;

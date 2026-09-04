@@ -33,6 +33,12 @@ class TestPinHashing:
         assert not SecureAuthHelper.verify_pin("1234", "")
         assert not SecureAuthHelper.verify_pin("1234", None)
 
+    def test_non_ascii_legacy_hash_is_rejected_not_raised(self):
+        """hmac.compare_digest raises TypeError on non-ASCII str; a mis-columned
+        CSV row must fail that one user, not abort the whole login loop."""
+        assert not SecureAuthHelper.verify_pin("1234", "Jäne Doe")
+        assert not SecureAuthHelper.verify_pin("1234", 12345)
+
 
 class _DialogStub:
     def accept(self):

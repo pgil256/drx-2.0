@@ -1,7 +1,10 @@
 from PyQt5.QtCore import QRunnable, QObject, pyqtSignal, pyqtSlot
 import time
 from config.constants import DEFAULT_HORIZONTAL_POSITION
-from helpers.conversions import horizontal_degrees_to_position
+from helpers.conversions import (
+    horizontal_degrees_to_position,
+    lateral_degrees_to_position,
+)
 from helpers.logging import (
     debug, debug_timing, debug_error, debug_state_change
 )
@@ -177,7 +180,9 @@ class ResetWorker(QRunnable):
             # --- Step 3: Reset Actuator C ('I14') ---
             step_start = time.time()
             debug("[STEP 3/6] Resetting Actuator C ('I14')", component="ResetWorker", level="INFO")
-            pos_c = self.config.CMarks["{:.1f}".format(0)]
+            # Tolerant lookup: a hand-edited CMarks without an exact "0.0" key
+            # used to KeyError here and abort the whole reset sequence.
+            pos_c, _ = lateral_degrees_to_position(self.config.CMarks, 0)
             cmd_c = f"I14{pos_c}"
             debug(f"Actuator C command: {cmd_c}", component="ResetWorker", position=pos_c)
             if not self._try_command_with_retry(cmd_c, "Actuator C Reset", 30.0):

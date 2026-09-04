@@ -134,12 +134,11 @@ Test each stop in all three states: (1) position move (`I14...`),
   another command — it must still act instantly (rate-limiter bypass).
 - [ ] **4.3 (B3) Host heartbeat.** Start a pressure ramp, then pull the Pi's
   serial cable (or `sudo systemctl stop kneespa.service`). Within ~3 s the
-  firmware stops and begins autonomous release; reconnect and confirm
-  `ERROR: Host heartbeat lost` was emitted.
+  firmware emits `WARNING: Host heartbeat lost` without interrupting motion.
+  Use the physical E-stop to halt, then reconnect.
 - [ ] **4.4 (B4) Load-cell fault.** Start a ramp, unplug the load-cell
-  connector: within ~0.5 s → stop + release attempt + `ERROR: Load cell not
-  responding` (release ends on travel/timeout bounds since the sensor is
-  dead — verify it stops, not runs indefinitely).
+  connector: within ~0.5 s → `WARNING: Load cell not responding`; operation
+  continues until the physical/software E-stop is used.
 
 ### 4.5 🔴 CONFIRM THE E-STOP GPIO POLARITY (new, ship-blocking)
 
@@ -156,8 +155,8 @@ Procedure (multimeter on BCM pin 16 vs ground):
 - [ ] **4.5a Boot state.** With the app running and idle, pin 16 reads
   **HIGH** (≈3.3 V). If it boots LOW, the machine is being told "stop" at
   rest, or the default is wrong — stop and investigate.
-- [ ] **4.5b Assert.** Trigger the e-stop (UI e-stop button / SafetyMonitor
-  trip). Pin 16 must drop to **LOW** (≈0 V) immediately, **and the machine
+- [ ] **4.5b Assert.** Trigger the UI/physical e-stop. Pin 16 must drop to
+  **LOW** (≈0 V) immediately, **and the machine
   must actually halt.** Watch the mechanism, not just the meter.
 - [ ] **4.5c The decisive check — does LOW mean STOP to the wiring?** Confirm
   the downstream interlock/relay/driver-enable treats **LOW as stop**. If the
@@ -179,11 +178,9 @@ Procedure (multimeter on BCM pin 16 vs ground):
 
 Batch-1 checklist §C. Use a safe test-load arrangement; never your hand.
 
-- [ ] **5.1 (C1) Ceiling everywhere.** Exceed 80 lbs during pulsing (state 3):
-  firmware stops + releases + `ERROR: Pressure limit exceeded`. (The ceiling
-  used to be OFF during pulsing.) The host-side monitor now reports the value
-  too — you should see the split "Pressure limit exceeded (NN > 80 lbs)"
-  message (Phase C), distinct from an axial trip.
+- [ ] **5.1 (C1) Pressure warning.** Treatment commands remain capped at
+  80 lbs. A measured value above 100 lbs emits `WARNING: Pressure warning
+  threshold exceeded` without interrupting operation; only E-stop halts it.
 - [ ] **5.2 (C2) Telemetry during pulse.** During `J`, the Pi keeps receiving
   `STATUS_START|...` frames (~1 Hz); status is no longer silent through the
   pulse phase.
@@ -191,8 +188,8 @@ Batch-1 checklist §C. Use a safe test-load arrangement; never your hand.
   reported pressure must NOT jump to ~1923 lbs (saturated samples are
   rejected + median-filtered).
 - [ ] **5.4 (C4) Stall/progress bound.** `P50` with the cell unable to rise:
-  within ~5 s → `ERROR: No pressure progress` + stop + release. Also confirm
-  the 30 s overall bound (`ERROR: Pressure move timeout`).
+  the disabled progress heuristic does not interrupt the move. At 30 s,
+  `WARNING: Pressure move timeout` appears and operation continues.
 - [ ] **5.5 (C5) Tare discipline.** `L0<factor>` / `L1` tare; unloaded reads
   0 ± 0.5 lbs and tracks a known weight. **Record: ______ lbs measured at
   ______ lbs reference.**
@@ -209,9 +206,10 @@ Batch-1 checklist §D, plus the **500 ms cadence** verification (new default).
 - [ ] **6.2 (D2) Reject corrupt commands.** From a console send `A12-1.0`,
   `Kabc`, `I991000`: each must answer `ERROR: ...` and **nothing moves**
   (`A12-1.0` used to command FULL EXTENSION).
-- [ ] **6.3 (D3) Stall counter.** Run ≥10 normal moves in a row — none may
-  stop early with `Motor stalled`. Then carefully block an actuator: it must
-  stop with `ERROR: Motor stalled` rather than grind.
+- [ ] **6.3 (D3) Stall timer.** Run ≥10 normal moves in a row — none may warn
+  early. Then carefully block an actuator: only after about 20 seconds without
+  meaningful encoder progress, it emits `WARNING: Motor stalled` and continues
+  until E-stop is used.
 - [ ] **6.4 (D4) Small-move behavior.** Command a move ≤25 counts: immediate
   `DONE`, no motion, UI does not hang.
 - [ ] **6.5 (D5) BUSY visibility.** Send a second move while one runs: host
@@ -221,11 +219,12 @@ Batch-1 checklist §D, plus the **500 ms cadence** verification (new default).
   **~500 ms (2 pulses/sec)**, matching the UI's stated default — not the old
   200 ms. (This is the H7 drift fix: `DEFAULT_JERK_INTERVAL_MS = 500` in
   `config/constants.py` paired with the `jerkInterval` initializer in `motor.ino`.)
-- [ ] **6.7 Enable host-settable cadence.** Set `KNEESPA_PULSE_RATE_FIRMWARE=1`
-  in the app environment and restart. Change the Treatment pulse-rate slider
-  and confirm the physical cadence tracks it (the app now sends `J<ms>`;
+- [ ] **6.7 Validate host-settable cadence.** Numeric cadence is enabled by
+  default for current firmware. Change the Treatment pulse-rate slider and
+  confirm the physical cadence tracks it (the app sends `J<ms>`;
   out-of-range values are clamped to 100–5000 ms in firmware). If anything
-  misbehaves, set the flag back to `0` (bare-`J` fallback) and report.
+  misbehaves, set `KNEESPA_PULSE_RATE_FIRMWARE=0`, restart for the bare-`J`
+  fallback, and report.
 
 ---
 

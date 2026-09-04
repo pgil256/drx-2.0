@@ -38,6 +38,13 @@ void setUp(void) {
     pressureSampleIndex = 0;
     pressureSampleCount = 0;
     pressureDirection = 0;
+    pressureWarningIssued = false;
+    heartbeatWarningIssued = false;
+    scaleWarningIssued = false;
+    axialTravelWarningIssued = false;
+    pressureTimeoutWarningIssued = false;
+    pressureProgressWarningIssued = false;
+    positionStallWarningIssued = false;
     lastCommandTime = 0;
     AZERO = 0;
     desiredPosition = 0;
@@ -52,12 +59,16 @@ void setUp(void) {
     loopPosition = 0;
     timeSinceLastStatus = 0;
     loopLastPosition = -1;
-    loopStallCount = 0;
+    loopStallStart = 0;
     scale._ready = true;
     scale._scale = 1.0;
     scale._offset = 0.0;
     scale._raw = 0;
     _pin_levels[STOP_PIN] = HIGH;  // button not pressed
+    STOP = true;                   // loop() mirrors the pin; direct processCommand tests need it too
+    stopWasPressed = false;
+    runningDevice = 12;
+    BZERO = 0;
     _wdt_enabled = false;
     hostV2 = false;
     currentCmdSeq = -1;
@@ -220,31 +231,56 @@ void test_stop_pin_honored_during_fit_motion(void) {
     TEST_ASSERT_TRUE(releasingPressure);
 }
 
-void test_pressure_ceiling_enforced_during_jerking(void) {
+void test_treatment_pressure_does_not_raise_warning(void) {
     jerking = true;
     keepAlive();
     scale._raw = 85;  // 85 lbs with scale=1, offset=0
 
     loop();
 
-    TEST_ASSERT_FALSE(jerking);
-    TEST_ASSERT_TRUE(releasingPressure);
-    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Pressure limit exceeded"));
+    TEST_ASSERT_TRUE(jerking);
+    TEST_ASSERT_FALSE(releasingPressure);
+    TEST_ASSERT_FALSE(Serial1.outputContains("WARNING: Pressure"));
 }
 
-void test_pressure_ceiling_enforced_during_position_move(void) {
+void test_pressure_warning_does_not_stop_position_move(void) {
     bRunning = true;
+    desiredPosition = 4000;
+    forward = 1;
+    smcDeviceNumber = 12;
+    Wire.position_12 = 800;
+    loopLastPosition = 800;
+    loopStallStart = _millis_value;
     keepAlive();
-    scale._raw = 85;
+    scale._raw = PRESSURE_WARNING_LBS + 10;
 
     loop();
 
-    TEST_ASSERT_FALSE(bRunning);
-    TEST_ASSERT_TRUE(releasingPressure);
-    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Pressure limit exceeded"));
+    TEST_ASSERT_TRUE(bRunning);
+    TEST_ASSERT_FALSE(releasingPressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains(
+        "WARNING: Pressure warning threshold exceeded"));
 }
 
-void test_heartbeat_loss_stops_and_releases(void) {
+void test_pressure_warning_is_emitted_once_per_excursion(void) {
+    jerking = true;
+    keepAlive();
+    scale._raw = PRESSURE_WARNING_LBS + 10;
+
+    loop();
+    keepAlive();
+    loop();
+
+    TEST_ASSERT_TRUE(jerking);
+    TEST_ASSERT_FALSE(releasingPressure);
+    std::string output = Serial1.getOutput();
+    std::string warning = "WARNING: Pressure warning threshold exceeded";
+    size_t first = output.find(warning);
+    TEST_ASSERT_TRUE(first != std::string::npos);
+    TEST_ASSERT_TRUE(output.find(warning, first + 1) == std::string::npos);
+}
+
+void test_heartbeat_loss_warns_without_stopping(void) {
     bRunning = true;
     desiredPosition = 60000;  // unreachable: move stays active
     scale._raw = 30;          // load present, so the release stays active
@@ -254,12 +290,12 @@ void test_heartbeat_loss_stops_and_releases(void) {
 
     loop();
 
-    TEST_ASSERT_FALSE(bRunning);
-    TEST_ASSERT_TRUE(releasingPressure);
-    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Host heartbeat lost"));
+    TEST_ASSERT_TRUE(bRunning);
+    TEST_ASSERT_FALSE(releasingPressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("WARNING: Host heartbeat lost"));
 }
 
-void test_heartbeat_loss_stops_fit_motion(void) {
+void test_heartbeat_loss_does_not_stop_fit_motion(void) {
     moveFITForward = true;
     FITDelay = FIT_FAST_DELAY;
     _pin_levels[DIR_FIT_FORWARD] = HIGH;
@@ -267,14 +303,15 @@ void test_heartbeat_loss_stops_fit_motion(void) {
     pressure = 30;
     lastHostTraffic = 0;
     _millis_value = HEARTBEAT_TIMEOUT + 1000;
+    timeInFIT = 0;  // isolate heartbeat behavior from the FIT duration timer
     lastScaleReady = _millis_value;
 
     loop();
 
-    TEST_ASSERT_FALSE(moveFITForward);
-    TEST_ASSERT_EQUAL(LOW, _pin_levels[DIR_FIT_FORWARD]);
-    TEST_ASSERT_TRUE(releasingPressure);
-    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Host heartbeat lost"));
+    TEST_ASSERT_TRUE(moveFITForward);
+    TEST_ASSERT_EQUAL(HIGH, _pin_levels[DIR_FIT_FORWARD]);
+    TEST_ASSERT_FALSE(releasingPressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("WARNING: Host heartbeat lost"));
 }
 
 void test_heartbeat_not_tripped_when_idle(void) {
@@ -288,8 +325,12 @@ void test_heartbeat_not_tripped_when_idle(void) {
     TEST_ASSERT_FALSE(releasingPressure);
 }
 
-void test_load_cell_fault_during_pressure(void) {
+void test_load_cell_warning_does_not_stop_pressure_move(void) {
     measurePressure = true;
+    pressureDirection = 1;
+    desiredPressure = 50;
+    pressure = 20;
+    Wire.position_12 = 2000;
     scale._ready = false;
     lastScaleReady = 0;
     _millis_value = SCALE_READ_TIMEOUT + 100;
@@ -297,9 +338,9 @@ void test_load_cell_fault_during_pressure(void) {
 
     loop();
 
-    TEST_ASSERT_FALSE(measurePressure);
-    TEST_ASSERT_TRUE(releasingPressure);
-    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Load cell not responding"));
+    TEST_ASSERT_TRUE(measurePressure);
+    TEST_ASSERT_FALSE(releasingPressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("WARNING: Load cell not responding"));
 }
 
 void test_release_drives_axial_backward(void) {
@@ -415,7 +456,7 @@ void test_commands_not_merged_under_rate_limit(void) {
     TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
 }
 
-void test_pressure_move_time_bound(void) {
+void test_pressure_move_timeout_warns_without_stopping(void) {
     keepAlive();
     measurePressure = true;
     pressureDirection = 1;
@@ -429,12 +470,31 @@ void test_pressure_move_time_bound(void) {
 
     loop();
 
-    TEST_ASSERT_FALSE(measurePressure);
-    TEST_ASSERT_TRUE(releasingPressure);
-    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Pressure move timeout"));
+    TEST_ASSERT_TRUE(measurePressure);
+    TEST_ASSERT_FALSE(releasingPressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("WARNING: Pressure move timeout"));
 }
 
-void test_pressure_stall_detected(void) {
+// Owner policy: warnings never stop a pressure move -- only an E-stop does.
+void test_axial_travel_warning_does_not_stop_pressure_move(void) {
+    keepAlive();
+    measurePressure = true;
+    pressureDirection = 1;
+    pressure = 20;
+    desiredPressure = 50;
+    pressureMoveStart = _millis_value;
+    smcDeviceNumber = 12;
+    Wire.position_12 = AXIAL_MAX_POS;
+
+    loop();
+
+    TEST_ASSERT_TRUE(measurePressure);
+    TEST_ASSERT_FALSE(releasingPressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains(
+        "WARNING: Axial travel limit during pressure move"));
+}
+
+void test_pressure_progress_fault_is_disabled(void) {
     keepAlive();
     measurePressure = true;
     pressureDirection = 1;
@@ -452,9 +512,9 @@ void test_pressure_stall_detected(void) {
 
     loop();
 
-    TEST_ASSERT_FALSE(measurePressure);
-    TEST_ASSERT_TRUE(releasingPressure);
-    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: No pressure progress"));
+    TEST_ASSERT_TRUE(measurePressure);
+    TEST_ASSERT_FALSE(releasingPressure);
+    TEST_ASSERT_FALSE(Serial1.outputContains("ERROR: No pressure progress"));
 }
 
 // A position move that settles within POSITION_DEADBAND of its target has
@@ -474,9 +534,9 @@ void test_axial_home_within_deadband_not_stalled(void) {
 
     // Actuator reaches its physical home 15 counts short of AZERO and can
     // move no further. The old strict `currentPos <= desiredPosition` never
-    // registered arrival, so the stall detector fired after 5 frozen reads.
+    // registered arrival, so the stall detector eventually reported a stall.
     Wire.position_12 = 15;
-    for (int i = 0; i < 8; i++) {    // well past the 5-read stall threshold
+    for (int i = 0; i < 8; i++) {
         keepAlive();
         loop();
     }
@@ -486,9 +546,9 @@ void test_axial_home_within_deadband_not_stalled(void) {
     TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
 }
 
-// The deadband arrival change must NOT disable the stall safety net: a motor
-// commanded but frozen far outside the deadband is a genuine stall.
-void test_genuine_stall_still_detected(void) {
+// A frozen motor warns after the sustained no-progress interval but continues
+// until E-stop.
+void test_genuine_stall_warns_after_sustained_interval_without_stopping(void) {
     keepAlive();
     smcDeviceNumber = 12;
     desiredPosition = 4000;          // far from the frozen position below
@@ -497,15 +557,59 @@ void test_genuine_stall_still_detected(void) {
     bRunning = true;
     activeCmdSeq = -1;
     loopLastPosition = 800;
-    loopStallCount = 0;
+    loopStallStart = _millis_value;
 
-    for (int i = 0; i < 8; i++) {    // > the 5-read stall threshold
+    // Rapid repeated reads are not a stall; the encoder needs time to update.
+    for (int i = 0; i < 50; i++) {
         keepAlive();
         loop();
     }
+    TEST_ASSERT_TRUE(bRunning);
+    TEST_ASSERT_FALSE(Serial1.outputContains("WARNING: Motor stalled"));
 
-    TEST_ASSERT_FALSE(bRunning);
-    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Motor stalled"));
+    _millis_value = POSITION_STALL_MS - 100;
+    lastActiveStatus = _millis_value;
+    keepAlive();
+    loop();
+    TEST_ASSERT_TRUE(bRunning);
+
+    _millis_value = POSITION_STALL_MS;
+    lastActiveStatus = _millis_value;
+    keepAlive();
+    loop();
+
+    TEST_ASSERT_TRUE(bRunning);
+    TEST_ASSERT_TRUE(Serial1.outputContains("WARNING: Motor stalled"));
+}
+
+void test_position_progress_restarts_stall_timer(void) {
+    keepAlive();
+    desiredPosition = 4000;
+    forward = 1;
+    Wire.position_12 = 800;
+    bRunning = true;
+    activeCmdSeq = -1;
+    loopLastPosition = 800;
+    loopStallStart = _millis_value;
+
+    _millis_value = POSITION_STALL_MS - 100;
+    Wire.position_12 += POSITION_PROGRESS_COUNTS;
+    lastActiveStatus = _millis_value;
+    keepAlive();
+    loop();
+
+    _millis_value += POSITION_STALL_MS - 100;
+    lastActiveStatus = _millis_value;
+    keepAlive();
+    loop();
+    TEST_ASSERT_TRUE(bRunning);
+
+    _millis_value += 100;
+    lastActiveStatus = _millis_value;
+    keepAlive();
+    loop();
+    TEST_ASSERT_TRUE(bRunning);
+    TEST_ASSERT_TRUE(Serial1.outputContains("WARNING: Motor stalled"));
 }
 
 // --- P0 release semantics (2026-07-08 on-device finding) ---
@@ -558,9 +662,10 @@ void test_release_reaching_zero_with_target_met_completes_done(void) {
     TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
 }
 
-// Backed off to the floor with load still above target is a genuine
-// fault; the DONE paths above must not mask it.
-void test_release_at_zero_with_load_still_faults(void) {
+// Reaching the travel floor before the requested pressure no longer raises
+// a device safety fault. The move ends cleanly and reports DONE while the
+// firmware continues to enforce the axial travel floor.
+void test_release_at_zero_with_load_ends_without_fault(void) {
     keepAlive();
     AZERO = 0;
     Wire.position_12 = 10;
@@ -578,7 +683,8 @@ void test_release_at_zero_with_load_still_faults(void) {
     loop();
 
     TEST_ASSERT_FALSE(measurePressure);
-    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Axial at zero"));
+    TEST_ASSERT_FALSE(Serial1.outputContains("ERROR: Axial at zero"));
+    TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
 }
 
 // --- Protocol v2 framing (loop-driven) ---
@@ -679,6 +785,283 @@ void test_v1_status_has_no_checksum(void) {
     TEST_ASSERT_TRUE(out.find('*') == std::string::npos);
 }
 
+// --- FAILSAFE-6: STOP during a static hold / held-button behavior ---
+
+// The hold phase (motor zeroed, patient under load) sets no motion flag, so
+// the physical STOP used to be ignored for the longest phase of a treatment.
+void test_stop_pin_honored_during_static_hold(void) {
+    scale._raw = 30;  // 30 lbs applied, nothing moving
+    keepAlive();
+    _pin_levels[STOP_PIN] = LOW;
+
+    loop();
+
+    TEST_ASSERT_TRUE(releasingPressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Stop button pressed"));
+}
+
+void test_stop_pin_idle_without_load_is_inert(void) {
+    scale._raw = 0;
+    keepAlive();
+    _pin_levels[STOP_PIN] = LOW;
+
+    loop();
+
+    TEST_ASSERT_FALSE(releasingPressure);
+    TEST_ASSERT_FALSE(Serial1.outputContains("ERROR:"));
+}
+
+// A button held past an incomplete release must not re-fire a new release
+// (and a new ERROR) on every loop iteration.
+void test_held_stop_does_not_refire_after_incomplete_release(void) {
+    scale._raw = 30;
+    keepAlive();
+    _pin_levels[STOP_PIN] = LOW;
+    loop();
+    TEST_ASSERT_TRUE(releasingPressure);
+
+    // Release ends incomplete: axial already at its travel floor, load remains
+    AZERO = 0;
+    Wire.position_12 = 10;
+    keepAlive();
+    loop();
+    TEST_ASSERT_FALSE(releasingPressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Release incomplete"));
+
+    keepAlive();
+    loop();
+    keepAlive();
+    loop();
+
+    TEST_ASSERT_FALSE(releasingPressure);
+    std::string out = Serial1.getOutput();
+    std::string needle = "ERROR: Stop button pressed";
+    size_t first = out.find(needle);
+    TEST_ASSERT_TRUE(first != std::string::npos);
+    TEST_ASSERT_TRUE(out.find(needle, first + 1) == std::string::npos);
+}
+
+void test_motion_commands_refused_while_stop_engaged(void) {
+    STOP = false;  // loop() read the pin LOW
+    Wire.position_12 = 100;
+
+    processCommand("P50");
+    TEST_ASSERT_FALSE(measurePressure);
+    processCommand("I121000");
+    TEST_ASSERT_FALSE(bRunning);
+    processCommand("K1500");
+    TEST_ASSERT_FALSE(bRunning);
+    processCommand("A122");
+    TEST_ASSERT_FALSE(bRunning);
+    processCommand("J");
+    TEST_ASSERT_FALSE(jerking);
+    processCommand("F+");
+    TEST_ASSERT_FALSE(moveFITForward);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Stop button engaged"));
+
+    // Non-motion commands still work
+    Serial1.reset();
+    processCommand("X");
+    TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
+    processCommand("T");
+    TEST_ASSERT_TRUE(Serial1.outputContains("OK"));
+}
+
+// The host's e-stop chain asserts the stop line, then sends X + P0. The
+// release must still be accepted while the line is held.
+void test_pressure_release_allowed_while_stop_engaged(void) {
+    STOP = false;
+    pressure = 30;
+    Wire.position_12 = 2000;
+
+    processCommand("P0");
+
+    TEST_ASSERT_TRUE(measurePressure);
+    TEST_ASSERT_EQUAL(-1, pressureDirection);
+    TEST_ASSERT_FALSE(Serial1.outputContains("Stop button engaged"));
+}
+
+// --- FAILSAFE-6: JS / per-move device targeting ---
+
+static int countSpeedZeroWrites(uint8_t device) {
+    int n = 0;
+    for (int i = 0; i < Wire.commandCount; i++) {
+        if (Wire.commands[i].address == device && Wire.commands[i].dataLen == 3 &&
+            Wire.commands[i].data[0] == 0x85 && Wire.commands[i].data[1] == 0 &&
+            Wire.commands[i].data[2] == 0)
+            n++;
+    }
+    return n;
+}
+
+void test_js_only_stops_axial_when_pulsing(void) {
+    jerking = true;
+    smcDeviceNumber = 14;  // something else was addressed last
+    Wire.reset();
+
+    processCommand("JS");
+
+    TEST_ASSERT_FALSE(jerking);
+    TEST_ASSERT_EQUAL(1, countSpeedZeroWrites(12));
+    TEST_ASSERT_EQUAL(0, countSpeedZeroWrites(14));
+}
+
+void test_js_leaves_in_flight_lateral_move_running(void) {
+    bRunning = true;
+    runningDevice = 14;
+    smcDeviceNumber = 14;
+    jerking = false;
+    Wire.reset();
+
+    processCommand("JS");
+
+    TEST_ASSERT_TRUE(bRunning);
+    for (int i = 0; i < Wire.commandCount; i++) {
+        bool speedCmd = Wire.commands[i].dataLen == 3 &&
+                        (Wire.commands[i].data[0] == 0x85 ||
+                         Wire.commands[i].data[0] == 0x86);
+        TEST_ASSERT_FALSE(Wire.commands[i].address == 14 && speedCmd);
+    }
+    TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
+}
+
+void test_position_move_tracks_its_own_device_during_pressure_move(void) {
+    keepAlive();
+    // Lateral move in flight on SMC 14, already at target
+    bRunning = true;
+    runningDevice = 14;
+    desiredPosition = 1500;
+    forward = 1;
+    Wire.position_14 = 1500;
+    loopLastPosition = 1200;
+    loopStallStart = _millis_value;
+    // Concurrent axial pressure move, far from done
+    measurePressure = true;
+    pressureDirection = 1;
+    desiredPressure = 50;
+    scale._raw = 20;
+    Wire.position_12 = 100;
+    pressureMoveStart = _millis_value;
+
+    loop();
+
+    TEST_ASSERT_FALSE(bRunning);        // judged on SMC 14, not SMC 12
+    TEST_ASSERT_TRUE(measurePressure);  // pressure move continues
+    TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
+}
+
+void test_pulse_start_refused_during_axial_pressure_move(void) {
+    measurePressure = true;
+
+    processCommand("J");
+
+    TEST_ASSERT_FALSE(jerking);
+    TEST_ASSERT_TRUE(Serial1.outputContains("BUSY"));
+}
+
+void test_pulse_status_slot_rests_motor(void) {
+    keepAlive();
+    jerking = true;
+    jerksCompleted = MAX_JERKS;
+    lastJerkTime = 0;
+    _millis_value = jerkInterval + 1;
+    keepAlive();
+    Wire.reset();
+
+    loop();
+
+    TEST_ASSERT_TRUE(jerking);
+    TEST_ASSERT_EQUAL(0, jerksCompleted);
+    TEST_ASSERT_EQUAL(1, countSpeedZeroWrites(12));
+}
+
+// --- FAILSAFE-6: input validation ---
+
+void test_l5_rejects_out_of_range_zero_marks(void) {
+    AZERO = 100;
+    BZERO = 1900;
+
+    processCommand("L5|16000|1900");
+    TEST_ASSERT_EQUAL(100, AZERO);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Invalid L5 zero marks"));
+    TEST_ASSERT_FALSE(Serial1.outputContains("ZEROS|"));
+
+    processCommand("L5|-5|1900");
+    TEST_ASSERT_EQUAL(100, AZERO);
+
+    processCommand("L5|150|-20");  // BZERO below HORIZONTAL_MIN_POS
+    TEST_ASSERT_EQUAL(1900, BZERO);
+
+    processCommand("L5|150|5000");  // BZERO above HORIZONTAL_MAX_POS
+    TEST_ASSERT_EQUAL(1900, BZERO);
+
+    Serial1.reset();
+    processCommand("L5|150|1900");
+    TEST_ASSERT_EQUAL(150, AZERO);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ZEROS|150|1900"));
+    TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
+}
+
+void test_axial_floor_applied_before_clamp(void) {
+    AZERO = 160;
+    Wire.position_12 = 2000;
+
+    processCommand("I1210");  // below the floor -> AZERO
+
+    TEST_ASSERT_TRUE(bRunning);
+    TEST_ASSERT_EQUAL(160, desiredPosition);
+}
+
+void test_l0_rejects_zero_or_garbage_factor(void) {
+    scale._scale = 1.0;
+
+    processCommand("L0abc");
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Invalid L0 factor"));
+    TEST_ASSERT_EQUAL_FLOAT(1.0, scale._scale);
+
+    processCommand("L00");
+    TEST_ASSERT_EQUAL_FLOAT(1.0, scale._scale);
+
+    Serial1.reset();
+    processCommand("L0-4360.14");
+    TEST_ASSERT_FLOAT_WITHIN(0.01, -4360.14, scale._scale);
+    TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
+}
+
+// --- FAILSAFE-6: e-stop I2C acknowledgement, misc ---
+
+void test_emergency_stop_retries_unacknowledged_write(void) {
+    Wire.reset();
+    Wire.failTransmissions = 2;  // exitSafeStart + speed write of attempt 1
+
+    emergencyStop();
+
+    TEST_ASSERT_EQUAL(2, countSpeedZeroWrites(12));
+    TEST_ASSERT_FALSE(Serial1.outputContains("Motor stop not acknowledged"));
+}
+
+void test_emergency_stop_reports_persistent_i2c_failure(void) {
+    Wire.reset();
+    Wire.failTransmissions = 100;
+
+    emergencyStop();
+
+    TEST_ASSERT_EQUAL(3, countSpeedZeroWrites(12));
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Motor stop not acknowledged 12"));
+}
+
+void test_v2_ack_seq_survives_beyond_int16(void) {
+    emitAck("DONE", 40000L);
+    TEST_ASSERT_TRUE(Serial1.outputContains("DONE|40000"));
+}
+
+void test_position_read_does_not_burn_dead_wait(void) {
+    _millis_value = 0;
+    smcDeviceNumber = 12;
+    readPosition();
+    TEST_ASSERT_EQUAL(0, (int)_millis_value);
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
 
@@ -694,12 +1077,13 @@ int main(int argc, char **argv) {
     RUN_TEST(test_stop_pin_honored_during_pressure);
     RUN_TEST(test_stop_pin_honored_during_jerking);
     RUN_TEST(test_stop_pin_honored_during_fit_motion);
-    RUN_TEST(test_pressure_ceiling_enforced_during_jerking);
-    RUN_TEST(test_pressure_ceiling_enforced_during_position_move);
-    RUN_TEST(test_heartbeat_loss_stops_and_releases);
-    RUN_TEST(test_heartbeat_loss_stops_fit_motion);
+    RUN_TEST(test_treatment_pressure_does_not_raise_warning);
+    RUN_TEST(test_pressure_warning_does_not_stop_position_move);
+    RUN_TEST(test_pressure_warning_is_emitted_once_per_excursion);
+    RUN_TEST(test_heartbeat_loss_warns_without_stopping);
+    RUN_TEST(test_heartbeat_loss_does_not_stop_fit_motion);
     RUN_TEST(test_heartbeat_not_tripped_when_idle);
-    RUN_TEST(test_load_cell_fault_during_pressure);
+    RUN_TEST(test_load_cell_warning_does_not_stop_pressure_move);
     RUN_TEST(test_release_drives_axial_backward);
     RUN_TEST(test_release_completes_when_load_clears);
     RUN_TEST(test_release_bounded_by_timeout);
@@ -707,13 +1091,33 @@ int main(int argc, char **argv) {
     RUN_TEST(test_watchdog_enabled_by_setup);
     RUN_TEST(test_x_bypasses_rate_limiter);
     RUN_TEST(test_commands_not_merged_under_rate_limit);
-    RUN_TEST(test_pressure_move_time_bound);
-    RUN_TEST(test_pressure_stall_detected);
+    RUN_TEST(test_pressure_move_timeout_warns_without_stopping);
+    RUN_TEST(test_axial_travel_warning_does_not_stop_pressure_move);
+    RUN_TEST(test_pressure_progress_fault_is_disabled);
     RUN_TEST(test_axial_home_within_deadband_not_stalled);
-    RUN_TEST(test_genuine_stall_still_detected);
+    RUN_TEST(test_genuine_stall_warns_after_sustained_interval_without_stopping);
+    RUN_TEST(test_position_progress_restarts_stall_timer);
     RUN_TEST(test_p0_with_no_load_completes_done_without_error);
     RUN_TEST(test_release_reaching_zero_with_target_met_completes_done);
-    RUN_TEST(test_release_at_zero_with_load_still_faults);
+    RUN_TEST(test_release_at_zero_with_load_ends_without_fault);
+
+    RUN_TEST(test_stop_pin_honored_during_static_hold);
+    RUN_TEST(test_stop_pin_idle_without_load_is_inert);
+    RUN_TEST(test_held_stop_does_not_refire_after_incomplete_release);
+    RUN_TEST(test_motion_commands_refused_while_stop_engaged);
+    RUN_TEST(test_pressure_release_allowed_while_stop_engaged);
+    RUN_TEST(test_js_only_stops_axial_when_pulsing);
+    RUN_TEST(test_js_leaves_in_flight_lateral_move_running);
+    RUN_TEST(test_position_move_tracks_its_own_device_during_pressure_move);
+    RUN_TEST(test_pulse_start_refused_during_axial_pressure_move);
+    RUN_TEST(test_pulse_status_slot_rests_motor);
+    RUN_TEST(test_l5_rejects_out_of_range_zero_marks);
+    RUN_TEST(test_axial_floor_applied_before_clamp);
+    RUN_TEST(test_l0_rejects_zero_or_garbage_factor);
+    RUN_TEST(test_emergency_stop_retries_unacknowledged_write);
+    RUN_TEST(test_emergency_stop_reports_persistent_i2c_failure);
+    RUN_TEST(test_v2_ack_seq_survives_beyond_int16);
+    RUN_TEST(test_position_read_does_not_burn_dead_wait);
 
     RUN_TEST(test_v2_framed_T_acks_with_seq);
     RUN_TEST(test_v2_framed_X_bypasses_rate_limiter);

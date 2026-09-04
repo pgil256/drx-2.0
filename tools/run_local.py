@@ -17,6 +17,10 @@ Usage:
     python tools/run_local.py            # windowed GUI on your desktop
     QT_QPA_PLATFORM=offscreen python tools/run_local.py   # headless (CI/grab)
 
+Default local credentials:
+    admin / 1234
+    user  / 5678
+
 This is a developer convenience ONLY: it does not change application code, it is
 never imported by the app, and the Arduino/connection state it shows is faked
 (the badge reads "connected" even though nothing is plugged in). Use the real
@@ -27,12 +31,22 @@ import os
 import sys
 from unittest.mock import MagicMock
 
+
+def _seed_local_credentials():
+    """Provide predictable sandbox users without touching production data."""
+    os.environ.setdefault("ADMIN_PIN", "1234")
+    os.environ.setdefault("ADMIN_USERNAME", "Sandbox Administrator")
+    os.environ.setdefault("USER_PIN", "5678")
+    os.environ.setdefault("USER_USERNAME", "Sandbox User")
+
+
 # 1) stub Pi-only / optional native deps before the app imports them
 for _name in ("RPi", "RPi.GPIO", "vlc"):
     sys.modules.setdefault(_name, MagicMock())
 
 # A missing demo-video file shouldn't refuse launch on a dev box.
 os.environ.setdefault("KNEESPA_SKIP_PATH_VALIDATION", "1")
+_seed_local_credentials()
 
 # The app uses imports rooted at main/ (config.*, ui.*, helpers.*).
 _MAIN = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))), "main")
@@ -42,6 +56,7 @@ if _MAIN not in sys.path:
 from PyQt5.QtWidgets import QApplication  # noqa: E402
 
 import kneespa  # noqa: E402
+import controllers.connection_manager as _connection_manager  # noqa: E402
 import helpers.arduino as _ardmod  # noqa: E402
 
 
@@ -62,30 +77,43 @@ class _DevArduino(_ardmod.Arduino):
     def run(self):
         self.connect_to_arduino()
 
+    def verify_connection(self, *args, **kwargs):
+        return self.connected
+
     def send(self, *args, **kwargs):
         return True
 
 
 def main():
-    kneespa.Arduino = _DevArduino
-    # The I2C reset handshake also needs the (absent) hardware; skip it.
-    kneespa.KneeSpa.reset_arduino = lambda self, *a, **k: None
+    # ConnectionManager owns Arduino construction after the controller split,
+    # so patch the dependency at that boundary rather than on kneespa.py.
+    _connection_manager.Arduino = _DevArduino
+    # The I2C reset handshake also needs the (absent) hardware; skip it. The
+    # reset callback now lives on ConnectionManager as well.
+    _connection_manager.ConnectionManager.reset_arduino = (
+        lambda self, *a, **k: self.window.loading_spinner.hide()
+    )
 
     app = QApplication(sys.argv)
     app.setStyle("Fusion")
     try:
+        # Some unit-test harnesses replace QApplication with a lightweight
+        # stand-in. Font registration requires a real Qt application and can
+        # crash the process when none exists.
+        if not hasattr(QApplication, "instance") or QApplication.instance() is None:
+            raise RuntimeError("no real Qt application instance")
         from ui.theme import apply_theme
         print(f"Theme applied: {apply_theme(app)}")
     except Exception as err:  # never let a theme issue block launch
         print(f"Theme not applied, continuing with default style: {err}")
 
+    # Same crash guard as the device launcher (PyQt5 aborts on an unhandled
+    # slot exception otherwise).
+    kneespa._install_excepthook()
     window = kneespa.KneeSpa(debug_mode=True)
     # Match the device panel exactly (production runs fullscreen on a fixed
     # 1366x768 touchscreen; windowed debug mode would otherwise size to hint).
     window.setFixedSize(1366, 768)
-    # reset_arduino (which normally hides it) is stubbed out, so hide it here.
-    if hasattr(window, "loading_spinner"):
-        window.loading_spinner.hide()
     window.show()
     print("KneeSpa launched (debug/windowed, no hardware). Close the window to exit.")
     app.exec_()

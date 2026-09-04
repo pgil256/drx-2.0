@@ -3,6 +3,7 @@ import time
 import threading
 from collections import deque
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Optional
 
 import serial
@@ -59,7 +60,8 @@ class Arduino(QObject):
     buffer_warning = pyqtSignal(str)
     connection_lost = pyqtSignal()  # Signal for connection loss
     display_weight_emit = pyqtSignal(str)  # Added missing signal for weight display
-    error_emit = pyqtSignal(str)  # Firmware ERROR:/BUSY lines (safety events)
+    error_emit = pyqtSignal(str)  # Firmware ERROR:/BUSY command and device errors
+    warning_emit = pyqtSignal(str)  # Firmware WARNING: advisory notices
     released_emit = pyqtSignal()  # Firmware finished an autonomous pressure release
     zeros_emit = pyqtSignal(int, int)  # Firmware echo of applied AZERO/BZERO
 
@@ -100,6 +102,36 @@ class Arduino(QObject):
         self.checksum_failures = 0
         self._pending_v2 = {}
         self._queued_handles = {}
+        # The physical-touch E2E harness can opt into a raw serial transcript
+        # without opening /dev/serial0 a second time (which would steal bytes
+        # from this single-owner transport). Normal application runs leave the
+        # variable unset and pay no file-I/O cost.
+        self._serial_trace_path = os.environ.get(
+            "KNEESPA_SERIAL_TRACE_FILE", ""
+        ).strip()
+        self._serial_trace_lock = threading.Lock()
+        self._serial_trace_disabled = False
+
+    def _trace_serial(self, direction: str, data: str) -> None:
+        """Append one timestamped raw TX/RX line when tracing is enabled.
+
+        Trace failures are deliberately non-fatal: diagnostics must never
+        interfere with serial safety or motion control.
+        """
+        if not self._serial_trace_path or self._serial_trace_disabled:
+            return
+        safe_data = str(data).replace("\r", "\\r").replace("\n", "\\n")
+        timestamp = datetime.now().astimezone().isoformat(timespec="milliseconds")
+        try:
+            directory = os.path.dirname(os.path.abspath(self._serial_trace_path))
+            os.makedirs(directory, exist_ok=True)
+            with self._serial_trace_lock:
+                with open(self._serial_trace_path, "a", encoding="utf-8") as trace:
+                    trace.write(f"[{timestamp}] {direction} {safe_data}\n")
+                    trace.flush()
+        except OSError as exc:
+            self._serial_trace_disabled = True
+            self.logger.warning("Serial trace disabled after write failure: %s", exc)
 
     # ------------------------------------------------------------------
     # Connection lifecycle
@@ -255,6 +287,7 @@ class Arduino(QObject):
         payload = (command + "\n").encode()
         self.serial_com.write(payload)
         self.serial_com.flush()
+        self._trace_serial("TX", command)
         self.logger.debug("TX: %s", command)
         with self._lock:
             handle = self._queued_handles.pop(command, None)
@@ -321,6 +354,7 @@ class Arduino(QObject):
                         self.serial_com.readline().decode(errors="replace").strip()
                     )
                     if data:
+                        self._trace_serial("RX", data)
                         last_rx = time.time()
                         probe_sent_at = None
                         self.handle_com(data)
@@ -359,8 +393,8 @@ class Arduino(QObject):
     def _handle_link_lost(self):
         self.connected = False
         self.connection_ready_event.clear()
-        self._running = False
         with self._lock:
+            self._running = False  # under the lock: pairs with send()'s check
             self._tx_queue.clear()
             self._priority_queue.clear()
             self._fail_pending("DISCONNECTED", "Serial link lost")
@@ -457,6 +491,11 @@ class Arduino(QObject):
                 message = data[len("ERROR:"):].strip()
                 self.logger.error("Firmware error: %s", message)
                 self.error_emit.emit(message)
+                return
+            if data.startswith("WARNING:"):
+                message = data[len("WARNING:"):].strip()
+                self.logger.warning("Firmware warning: %s", message)
+                self.warning_emit.emit(message)
                 return
             if data == "RELEASED":
                 self.logger.info("Firmware completed autonomous pressure release")
@@ -565,18 +604,20 @@ class Arduino(QObject):
             self.logger.warning("Refusing to send empty Arduino command")
             return None
 
-        usable = (
-            self._running
-            and self.serial_com is not None
-            and getattr(self.serial_com, "is_open", False)
-        )
-        if not usable:
-            self.logger.error("Cannot send '%s' - not connected", command)
-            return None
-
         is_emergency = command.startswith("X")
         handle = CommandHandle(command=command)
         with self._queue_condition:
+            # Evaluate connectivity under the same lock link-loss uses to
+            # clear the queues, so a stop cannot be reported as queued and
+            # then silently dropped by a concurrent _handle_link_lost
+            usable = (
+                self._running
+                and self.serial_com is not None
+                and getattr(self.serial_com, "is_open", False)
+            )
+            if not usable:
+                self.logger.error("Cannot send '%s' - not connected", command)
+                return None
             if self.protocol_v2:
                 self._seq = (self._seq + 1) % 1000000
                 handle.sequence = self._seq

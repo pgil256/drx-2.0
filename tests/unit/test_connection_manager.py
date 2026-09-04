@@ -85,6 +85,42 @@ class TestResetGating:
 
 
 @pytest.mark.unit
+class TestReadyToGo:
+    def test_boot_banner_does_not_fake_a_done(self, manager):
+        """ResetWorker waits for the banner on Arduino.ready_event; setting the
+        DONE event here as well could satisfy the NEXT step's wait early and
+        shift every later DONE by one homing step."""
+        cm, w = manager
+        w.I2Cstatus = 0
+        w.I2Cstatus_event = MagicMock()
+        cm.ready_to_go()
+        w.I2Cstatus_event.set.assert_not_called()
+        assert w.I2Cstatus == 0
+
+
+@pytest.mark.unit
+class TestLateConnect:
+    def test_late_connect_schedules_reset(self, manager, monkeypatch):
+        """A connection that comes up after setup_arduino() stopped waiting
+        still owes the device its reset / zero-mark / calibration sequence."""
+        cm, w = manager
+        scheduled = []
+        monkeypatch.setattr(
+            "controllers.connection_manager.QTimer.singleShot",
+            lambda ms, fn: scheduled.append((ms, fn)),
+        )
+        cm._on_late_connect()
+        assert scheduled == [(0, cm.reset_arduino)]
+
+    def test_calibration_pushes_tolerate_missing_transport(self, manager):
+        cm, w = manager
+        w.arduino = None
+        cm.send_zero_mark()      # must not raise
+        cm.send_calibration()
+        assert w.logger.error.called
+
+
+@pytest.mark.unit
 class TestCalibrationPushes:
     def test_zero_mark_uses_delimited_form(self, manager):
         """Regression: this copy still sent the legacy fixed-width L5,
@@ -112,9 +148,9 @@ class TestThreadTeardown:
         cm, w = manager
         arduino = w.arduino
         arduino.disconnect.return_value = True
-        w.thread = MagicMock()
-        w.thread.wait.return_value = True
-        thread = w.thread
+        w.arduino_thread = MagicMock()
+        w.arduino_thread.wait.return_value = True
+        thread = w.arduino_thread
 
         assert cm.teardown_arduino(drain_timeout=1.5) is True
 
@@ -123,7 +159,17 @@ class TestThreadTeardown:
         thread.wait.assert_called_once_with(3000)
         thread.deleteLater.assert_called_once()
         assert w.arduino is None
-        assert w.thread is None
+        assert w.arduino_thread is None
+
+    def test_teardown_ignores_inherited_qobject_thread_method(self, manager):
+        """A fresh QMainWindow has thread(), but no owned Arduino QThread."""
+        cm, w = manager
+        w.arduino = None
+        w.thread = lambda: "qt-affinity-thread"
+
+        assert cm.teardown_arduino() is True
+        assert w.arduino is None
+        assert w.arduino_thread is None
 
 
 @pytest.mark.unit

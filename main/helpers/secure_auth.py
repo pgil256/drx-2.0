@@ -110,6 +110,7 @@ class SecureAuthHelper:
         """
         if not stored_hash:
             return False
+        stored_hash = str(stored_hash)  # tolerate a non-str cell from the CSV
         if stored_hash.startswith(PBKDF2_PREFIX + "$"):
             try:
                 _, iterations, salt_hex, hash_hex = stored_hash.split("$")
@@ -124,7 +125,12 @@ class SecureAuthHelper:
                 return False
         # Legacy unsalted SHA-256
         legacy = hashlib.sha256(str(pin).encode()).hexdigest()
-        return hmac.compare_digest(legacy, stored_hash)
+        try:
+            return hmac.compare_digest(legacy, str(stored_hash))
+        except (TypeError, ValueError):
+            # compare_digest raises on non-ASCII str input; one mis-columned
+            # CSV row must not abort the login loop for every later user
+            return False
 
     @staticmethod
     def hash_pin(pin):

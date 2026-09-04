@@ -48,6 +48,10 @@ DATA_PATHS = {
         "KNEESPA_AUTH_STATE_PATH",
         os.path.join(APP_BASE_DIR, "data/auth_state.json"),
     ),
+    "PENDING_UPLOADS": os.environ.get(
+        "KNEESPA_PENDING_UPLOADS_PATH",
+        os.path.join(APP_BASE_DIR, "data/pending_uploads.json"),
+    ),
 }
 
 # GPIO Pin Configuration
@@ -98,12 +102,18 @@ ACTUATORS = {
 
 # Safety Limits
 MIN_PRESSURE = 10  # Minimum pressure in lbs
-PRESSURE_MAX = 80  # Maximum safe pressure in lbs
+PRESSURE_MAX = 80  # Maximum treatment setpoint in lbs
+PRESSURE_WARNING_MAX = 100  # Warning-only measured-pressure threshold
 AXIAL_MAX = 4600  # Maximum axial position
 LATERAL_MIN = 500  # Minimum lateral position
 LATERAL_MAX = 2400  # Maximum lateral position
-HORIZONTAL_MIN = 50  # Minimum horizontal position (-5 degrees)
-HORIZONTAL_MAX = 4500  # Maximum horizontal position (-25 degrees)
+# Horizontal (B actuator) encoder envelope. Positions follow the calibrated
+# BMarks convention (-25 deg = 0 ... +5 deg ~= 2280 on the bench unit); the
+# SafetyMonitor derives its legal band from BMarks/CMarks when the device is
+# calibrated and only falls back to these static values. The old MIN of 50
+# came from a legacy convention and clamped/flagged legal -25 deg moves.
+HORIZONTAL_MIN = 0  # Minimum horizontal position (calibrated -25 deg mark)
+HORIZONTAL_MAX = 4500  # Maximum horizontal position (envelope ceiling)
 AXIAL_MIN_INCHES = ACTUATORS["AXIAL"]["LIMITS"][0]
 AXIAL_MAX_INCHES = ACTUATORS["AXIAL"]["LIMITS"][1]
 LATERAL_MIN_DEGREES = ACTUATORS["LATERAL"]["LIMITS"][0]
@@ -140,14 +150,11 @@ PROTOCOL_MAPPING = {
     4: "AC4"
 }
 
-# Pulse-rate configuration (Phase 3.5 §15.2).
-# The firmware pulse cadence (motor.ino jerkInterval) only becomes host-settable
-# after the device is reflashed with the numeric-`J<ms>` build. Until then the
-# worker MUST keep sending a bare `J` (on/off) — a numeric `J<ms>` is a no-op on
-# the old firmware and would silently disable pulsing. Flip this to True only on
-# a flashed device.
+# Pulse-rate configuration (Phase 3.5 §15.2). Numeric J<ms> cadence is enabled
+# for the current firmware by default. Set KNEESPA_PULSE_RATE_FIRMWARE=0 as the
+# field rollback when connecting to older firmware that only understands bare J.
 PULSE_RATE_FIRMWARE_SUPPORT = (
-    os.environ.get("KNEESPA_PULSE_RATE_FIRMWARE", "0") == "1"
+    os.environ.get("KNEESPA_PULSE_RATE_FIRMWARE", "1") == "1"
 )
 MIN_JERK_INTERVAL_MS = 100   # fastest safe pulse (~10/sec)
 MAX_JERK_INTERVAL_MS = 5000  # slowest pulse the slider can request (0.2/sec)

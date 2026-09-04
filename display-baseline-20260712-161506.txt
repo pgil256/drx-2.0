@@ -1,0 +1,398 @@
+KneeSpa display diagnostics
+Mode: --baseline
+Collected: 2026-07-12T16:15:06-07:00
+
+=== PI MODEL ===
+Raspberry Pi 4 Model B Rev 1.1
+
+=== OS AND KERNEL ===
+PRETTY_NAME="Raspbian GNU/Linux 10 (buster)"
+NAME="Raspbian GNU/Linux"
+VERSION_ID="10"
+VERSION="10 (buster)"
+VERSION_CODENAME=buster
+ID=raspbian
+ID_LIKE=debian
+HOME_URL="http://www.raspbian.org/"
+SUPPORT_URL="http://www.raspbian.org/RaspbianForums"
+BUG_REPORT_URL="http://www.raspbian.org/RaspbianBugs"
+Linux 5.10.103-v7l+ armv7l GNU/Linux
+Userspace bits: 32
+
+=== POWER HEALTH ===
+throttled=0x0
+temp=52.1'C
+usb_max_current_enable is unknown
+
+=== DISPLAY SESSION ===
+Session type: tty
+Desktop: LXDE
+DISPLAY: :1.0
+WAYLAND_DISPLAY: not set
+kmsprint is not installed.
+
+xrandr:
+RandR extension missing
+
+=== HDMI MONITOR AND EDID ===
+
+Connector: /sys/class/drm/card1-HDMI-A-1
+Status: connected
+No readable EDID was supplied by this connector.
+
+=== USB DEVICES ===
+Bus 002 Device 001: ID 1d6b:0003 Linux Foundation 3.0 root hub
+Bus 001 Device 003: ID 2341:0042 Arduino SA Mega 2560 R3 (CDC ACM)
+Bus 001 Device 052: ID 27c0:0859  
+Bus 001 Device 035: ID 1a86:8095 QinHeng Electronics 
+Bus 001 Device 002: ID 2109:3431 VIA Labs, Inc. Hub
+Bus 001 Device 001: ID 1d6b:0002 Linux Foundation 2.0 root hub
+
+/:  Bus 02.Port 1: Dev 1, Class=root_hub, Driver=xhci_hcd/4p, 5000M
+/:  Bus 01.Port 1: Dev 1, Class=root_hub, Driver=xhci_hcd/1p, 480M
+    |__ Port 1: Dev 2, If 0, Class=Hub, Driver=hub/4p, 480M
+        |__ Port 1: Dev 35, If 0, Class=Hub, Driver=hub/4p, 480M
+        |__ Port 4: Dev 3, If 1, Class=CDC Data, Driver=cdc_acm, 12M
+        |__ Port 4: Dev 3, If 0, Class=Communications, Driver=cdc_acm, 12M
+
+USB products reported by the kernel:
+1-1.1.1  27c0:0859  wch.cn  TouchScreen
+1-1.1  1a86:8095  unknown  USB Hub
+1-1  2109:3431  unknown  USB2.0 Hub
+usb1  1d6b:0002  Linux 5.10.103-v7l+ xhci-hcd  xHCI Host Controller
+usb2  1d6b:0003  Linux 5.10.103-v7l+ xhci-hcd  xHCI Host Controller
+
+=== INPUT AND TOUCH DEVICES ===
+I: Bus=0019 Vendor=0001 Product=0001 Version=0100
+N: Name="soc:shutdown_button@1a"
+P: Phys=gpio-keys/input0
+S: Sysfs=/devices/platform/soc/soc:shutdown_button@1a/input/input0
+U: Uniq=
+H: Handlers=kbd event0 
+B: PROP=0
+B: EV=3
+B: KEY=100000 0 0 0
+
+
+libinput is not installed.
+
+Persistent input-device links:
+/dev/input/by-id is not present.
+total 0
+lrwxrwxrwx 1 root root 9 Jul  8 17:17 platform-soc:shutdown_button@1a-event -> ../event0
+
+=== RELEVANT BOOT CONFIGURATION ===
+
+Config: /boot/config.txt
+hdmi_force_hotplug=1
+hdmi_group=2
+hdmi_mode=39
+hdmi_mode=39
+hdmi_drive=2
+dtoverlay=vc4-fkms-v3d
+
+=== RECENT RELEVANT KERNEL EVENTS ===
+Jul 12 16:09:21 kneespa kernel: usb 1-1.1.1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+Jul 12 16:09:21 kneespa kernel: usb 1-1.1.1: Product: TouchScreen
+Jul 12 16:09:21 kneespa kernel: usb 1-1.1.1: Manufacturer: wch.cn
+Jul 12 16:09:21 kneespa kernel: usb 1-1.1.1: SerialNumber: 9LQ0172005164
+Jul 12 16:09:21 kneespa kernel: input: wch.cn TouchScreen as /devices/platform/scb/fd500000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0/usb1/1-1/1-1.1/1-1.1.1/1-1.1.1:1.0/0003:27C0:0859.0173/input/input252
+Jul 12 16:09:21 kneespa kernel: hid-multitouch 0003:27C0:0859.0173: input,hiddev96,hidraw0: USB HID v1.10 Device [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input0
+Jul 12 16:09:21 kneespa kernel: hid-generic 0003:27C0:0859.0174: hiddev97,hidraw1: USB HID v1.10 Device [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input1
+Jul 12 16:09:21 kneespa kernel: input: wch.cn TouchScreen as /devices/platform/scb/fd500000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0/usb1/1-1/1-1.1/1-1.1.1/1-1.1.1:1.2/0003:27C0:0859.0175/input/input253
+Jul 12 16:09:21 kneespa kernel: hid-generic 0003:27C0:0859.0175: input,hidraw2: USB HID v1.10 Mouse [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input2
+Jul 12 16:09:23 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:09:24 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:09:26 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:09:27 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:09:29 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:09:30 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:09:34 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:09:35 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:09:37 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:09:38 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:09:40 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:09:41 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:09:43 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:09:44 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:09:46 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:09:47 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:09:49 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:09:50 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:09:52 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:09:54 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:09:55 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:09:56 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:09:58 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:10:00 kneespa kernel: usb 1-1.1-port1: cannot reset (err = -71)
+Jul 12 16:10:00 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:10:02 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:10:04 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:10:05 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:10:07 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:10:08 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:10:10 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:10:12 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 42 using xhci_hcd
+Jul 12 16:10:12 kneespa kernel: usb 1-1.1.1: can't restore configuration #1 (error=-71)
+Jul 12 16:10:12 kneespa kernel: usb 1-1.1.1: USB disconnect, device number 42
+Jul 12 16:10:13 kneespa kernel: usb 1-1.1.1: new full-speed USB device number 43 using xhci_hcd
+Jul 12 16:10:13 kneespa kernel: usb 1-1.1.1: New USB device found, idVendor=27c0, idProduct=0859, bcdDevice= 1.50
+Jul 12 16:10:13 kneespa kernel: usb 1-1.1.1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+Jul 12 16:10:13 kneespa kernel: usb 1-1.1.1: Product: TouchScreen
+Jul 12 16:10:13 kneespa kernel: usb 1-1.1.1: Manufacturer: wch.cn
+Jul 12 16:10:13 kneespa kernel: usb 1-1.1.1: SerialNumber: 9LQ0172005164
+Jul 12 16:10:13 kneespa kernel: input: wch.cn TouchScreen as /devices/platform/scb/fd500000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0/usb1/1-1/1-1.1/1-1.1.1/1-1.1.1:1.0/0003:27C0:0859.0176/input/input254
+Jul 12 16:10:13 kneespa kernel: hid-multitouch 0003:27C0:0859.0176: input,hiddev96,hidraw0: USB HID v1.10 Device [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input0
+Jul 12 16:10:13 kneespa kernel: hid-generic 0003:27C0:0859.0177: hiddev97,hidraw1: USB HID v1.10 Device [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input1
+Jul 12 16:10:13 kneespa kernel: input: wch.cn TouchScreen as /devices/platform/scb/fd500000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0/usb1/1-1/1-1.1/1-1.1.1/1-1.1.1:1.2/0003:27C0:0859.0178/input/input255
+Jul 12 16:10:13 kneespa kernel: hid-generic 0003:27C0:0859.0178: input,hidraw2: USB HID v1.10 Mouse [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input2
+Jul 12 16:10:16 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 43 using xhci_hcd
+Jul 12 16:10:18 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 43 using xhci_hcd
+Jul 12 16:10:19 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 43 using xhci_hcd
+Jul 12 16:10:20 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 43 using xhci_hcd
+Jul 12 16:10:22 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 43 using xhci_hcd
+Jul 12 16:10:23 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 43 using xhci_hcd
+Jul 12 16:10:25 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 43 using xhci_hcd
+Jul 12 16:10:26 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 43 using xhci_hcd
+Jul 12 16:10:27 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 43 using xhci_hcd
+Jul 12 16:10:28 kneespa kernel: usb 1-1.1.1: can't restore configuration #1 (error=-71)
+Jul 12 16:10:28 kneespa kernel: usb 1-1.1.1: USB disconnect, device number 43
+Jul 12 16:10:28 kneespa kernel: usb 1-1.1.1: new full-speed USB device number 44 using xhci_hcd
+Jul 12 16:10:28 kneespa kernel: usb 1-1.1.1: New USB device found, idVendor=27c0, idProduct=0859, bcdDevice= 1.50
+Jul 12 16:10:28 kneespa kernel: usb 1-1.1.1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+Jul 12 16:10:28 kneespa kernel: usb 1-1.1.1: Product: TouchScreen
+Jul 12 16:10:28 kneespa kernel: usb 1-1.1.1: Manufacturer: wch.cn
+Jul 12 16:10:28 kneespa kernel: usb 1-1.1.1: SerialNumber: 9LQ0172005164
+Jul 12 16:10:28 kneespa kernel: input: wch.cn TouchScreen as /devices/platform/scb/fd500000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0/usb1/1-1/1-1.1/1-1.1.1/1-1.1.1:1.0/0003:27C0:0859.0179/input/input256
+Jul 12 16:10:28 kneespa kernel: hid-multitouch 0003:27C0:0859.0179: input,hiddev96,hidraw0: USB HID v1.10 Device [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input0
+Jul 12 16:10:28 kneespa kernel: hid-generic 0003:27C0:0859.017A: hiddev97,hidraw1: USB HID v1.10 Device [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input1
+Jul 12 16:10:28 kneespa kernel: input: wch.cn TouchScreen as /devices/platform/scb/fd500000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0/usb1/1-1/1-1.1/1-1.1.1/1-1.1.1:1.2/0003:27C0:0859.017B/input/input257
+Jul 12 16:10:28 kneespa kernel: hid-generic 0003:27C0:0859.017B: input,hidraw2: USB HID v1.10 Mouse [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input2
+Jul 12 16:10:30 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 44 using xhci_hcd
+Jul 12 16:10:33 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 44 using xhci_hcd
+Jul 12 16:10:33 kneespa kernel: usb 1-1.1.1: can't restore configuration #1 (error=-71)
+Jul 12 16:10:33 kneespa kernel: usb 1-1.1.1: USB disconnect, device number 44
+Jul 12 16:10:34 kneespa kernel: usb 1-1.1.1: new full-speed USB device number 45 using xhci_hcd
+Jul 12 16:10:34 kneespa kernel: usb 1-1.1.1: New USB device found, idVendor=27c0, idProduct=0859, bcdDevice= 1.50
+Jul 12 16:10:34 kneespa kernel: usb 1-1.1.1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+Jul 12 16:10:34 kneespa kernel: usb 1-1.1.1: Product: TouchScreen
+Jul 12 16:10:34 kneespa kernel: usb 1-1.1.1: Manufacturer: wch.cn
+Jul 12 16:10:34 kneespa kernel: usb 1-1.1.1: SerialNumber: 9LQ0172005164
+Jul 12 16:10:34 kneespa kernel: input: wch.cn TouchScreen as /devices/platform/scb/fd500000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0/usb1/1-1/1-1.1/1-1.1.1/1-1.1.1:1.0/0003:27C0:0859.017C/input/input258
+Jul 12 16:10:34 kneespa kernel: hid-multitouch 0003:27C0:0859.017C: input,hiddev96,hidraw0: USB HID v1.10 Device [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input0
+Jul 12 16:10:34 kneespa kernel: hid-generic 0003:27C0:0859.017D: hiddev97,hidraw1: USB HID v1.10 Device [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input1
+Jul 12 16:10:34 kneespa kernel: input: wch.cn TouchScreen as /devices/platform/scb/fd500000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0/usb1/1-1/1-1.1/1-1.1.1/1-1.1.1:1.2/0003:27C0:0859.017E/input/input259
+Jul 12 16:10:34 kneespa kernel: hid-generic 0003:27C0:0859.017E: input,hidraw2: USB HID v1.10 Mouse [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input2
+Jul 12 16:10:36 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 45 using xhci_hcd
+Jul 12 16:10:37 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 45 using xhci_hcd
+Jul 12 16:10:39 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 45 using xhci_hcd
+Jul 12 16:10:41 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 45 using xhci_hcd
+Jul 12 16:10:43 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 45 using xhci_hcd
+Jul 12 16:10:44 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 45 using xhci_hcd
+Jul 12 16:10:46 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 45 using xhci_hcd
+Jul 12 16:10:47 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 45 using xhci_hcd
+Jul 12 16:10:49 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 45 using xhci_hcd
+Jul 12 16:10:51 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 45 using xhci_hcd
+Jul 12 16:10:52 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 45 using xhci_hcd
+Jul 12 16:10:54 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 45 using xhci_hcd
+Jul 12 16:10:56 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 45 using xhci_hcd
+Jul 12 16:10:57 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 45 using xhci_hcd
+Jul 12 16:10:59 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 45 using xhci_hcd
+Jul 12 16:11:00 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 45 using xhci_hcd
+Jul 12 16:11:02 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 45 using xhci_hcd
+Jul 12 16:11:03 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 45 using xhci_hcd
+Jul 12 16:11:04 kneespa kernel: usb 1-1.1.1: can't restore configuration #1 (error=-71)
+Jul 12 16:11:04 kneespa kernel: usb 1-1.1.1: USB disconnect, device number 45
+Jul 12 16:11:04 kneespa kernel: usb 1-1.1.1: new full-speed USB device number 46 using xhci_hcd
+Jul 12 16:11:04 kneespa kernel: usb 1-1.1.1: New USB device found, idVendor=27c0, idProduct=0859, bcdDevice= 1.50
+Jul 12 16:11:04 kneespa kernel: usb 1-1.1.1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+Jul 12 16:11:04 kneespa kernel: usb 1-1.1.1: Product: TouchScreen
+Jul 12 16:11:04 kneespa kernel: usb 1-1.1.1: Manufacturer: wch.cn
+Jul 12 16:11:04 kneespa kernel: usb 1-1.1.1: SerialNumber: 9LQ0172005164
+Jul 12 16:11:04 kneespa kernel: input: wch.cn TouchScreen as /devices/platform/scb/fd500000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0/usb1/1-1/1-1.1/1-1.1.1/1-1.1.1:1.0/0003:27C0:0859.017F/input/input260
+Jul 12 16:11:04 kneespa kernel: hid-multitouch 0003:27C0:0859.017F: input,hiddev96,hidraw0: USB HID v1.10 Device [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input0
+Jul 12 16:11:04 kneespa kernel: hid-generic 0003:27C0:0859.0180: hiddev97,hidraw1: USB HID v1.10 Device [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input1
+Jul 12 16:11:04 kneespa kernel: input: wch.cn TouchScreen as /devices/platform/scb/fd500000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0/usb1/1-1/1-1.1/1-1.1.1/1-1.1.1:1.2/0003:27C0:0859.0181/input/input261
+Jul 12 16:11:04 kneespa kernel: hid-generic 0003:27C0:0859.0181: input,hidraw2: USB HID v1.10 Mouse [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input2
+Jul 12 16:11:05 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 46 using xhci_hcd
+Jul 12 16:11:07 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 46 using xhci_hcd
+Jul 12 16:11:07 kneespa kernel: usb 1-1.1.1: can't restore configuration #1 (error=-71)
+Jul 12 16:11:07 kneespa kernel: usb 1-1.1.1: USB disconnect, device number 46
+Jul 12 16:11:07 kneespa kernel: usb 1-1.1.1: new full-speed USB device number 47 using xhci_hcd
+Jul 12 16:11:08 kneespa kernel: usb 1-1.1.1: New USB device found, idVendor=27c0, idProduct=0859, bcdDevice= 1.50
+Jul 12 16:11:08 kneespa kernel: usb 1-1.1.1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+Jul 12 16:11:08 kneespa kernel: usb 1-1.1.1: Product: TouchScreen
+Jul 12 16:11:08 kneespa kernel: usb 1-1.1.1: Manufacturer: wch.cn
+Jul 12 16:11:08 kneespa kernel: usb 1-1.1.1: SerialNumber: 9LQ0172005164
+Jul 12 16:11:08 kneespa kernel: input: wch.cn TouchScreen as /devices/platform/scb/fd500000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0/usb1/1-1/1-1.1/1-1.1.1/1-1.1.1:1.0/0003:27C0:0859.0182/input/input262
+Jul 12 16:11:08 kneespa kernel: hid-multitouch 0003:27C0:0859.0182: input,hiddev96,hidraw0: USB HID v1.10 Device [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input0
+Jul 12 16:11:08 kneespa kernel: hid-generic 0003:27C0:0859.0183: hiddev97,hidraw1: USB HID v1.10 Device [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input1
+Jul 12 16:11:08 kneespa kernel: input: wch.cn TouchScreen as /devices/platform/scb/fd500000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0/usb1/1-1/1-1.1/1-1.1.1/1-1.1.1:1.2/0003:27C0:0859.0184/input/input263
+Jul 12 16:11:08 kneespa kernel: hid-generic 0003:27C0:0859.0184: input,hidraw2: USB HID v1.10 Mouse [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input2
+Jul 12 16:11:09 kneespa kernel: usb 1-1.1-port1: cannot reset (err = -71)
+Jul 12 16:11:09 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 47 using xhci_hcd
+Jul 12 16:11:11 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 47 using xhci_hcd
+Jul 12 16:11:12 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 47 using xhci_hcd
+Jul 12 16:11:14 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 47 using xhci_hcd
+Jul 12 16:11:15 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 47 using xhci_hcd
+Jul 12 16:11:17 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 47 using xhci_hcd
+Jul 12 16:11:18 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 47 using xhci_hcd
+Jul 12 16:11:20 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 47 using xhci_hcd
+Jul 12 16:11:21 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 47 using xhci_hcd
+Jul 12 16:11:23 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 47 using xhci_hcd
+Jul 12 16:11:25 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 47 using xhci_hcd
+Jul 12 16:11:26 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 47 using xhci_hcd
+Jul 12 16:11:28 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 47 using xhci_hcd
+Jul 12 16:11:29 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 47 using xhci_hcd
+Jul 12 16:11:29 kneespa kernel: usb 1-1.1.1: device firmware changed
+Jul 12 16:11:29 kneespa kernel: usb 1-1.1.1: USB disconnect, device number 47
+Jul 12 16:11:30 kneespa kernel: usb 1-1.1.1: new full-speed USB device number 48 using xhci_hcd
+Jul 12 16:11:30 kneespa kernel: usb 1-1.1.1: New USB device found, idVendor=27c0, idProduct=0859, bcdDevice= 1.50
+Jul 12 16:11:30 kneespa kernel: usb 1-1.1.1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+Jul 12 16:11:30 kneespa kernel: usb 1-1.1.1: Product: TouchScreen
+Jul 12 16:11:30 kneespa kernel: usb 1-1.1.1: Manufacturer: wch.cn
+Jul 12 16:11:30 kneespa kernel: usb 1-1.1.1: SerialNumber: 9LQ0172005164
+Jul 12 16:11:30 kneespa kernel: input: wch.cn TouchScreen as /devices/platform/scb/fd500000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0/usb1/1-1/1-1.1/1-1.1.1/1-1.1.1:1.0/0003:27C0:0859.0185/input/input264
+Jul 12 16:11:30 kneespa kernel: hid-multitouch 0003:27C0:0859.0185: input,hiddev96,hidraw0: USB HID v1.10 Device [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input0
+Jul 12 16:11:30 kneespa kernel: hid-generic 0003:27C0:0859.0186: hiddev97,hidraw1: USB HID v1.10 Device [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input1
+Jul 12 16:11:30 kneespa kernel: input: wch.cn TouchScreen as /devices/platform/scb/fd500000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0/usb1/1-1/1-1.1/1-1.1.1/1-1.1.1:1.2/0003:27C0:0859.0187/input/input265
+Jul 12 16:11:30 kneespa kernel: hid-generic 0003:27C0:0859.0187: input,hidraw2: USB HID v1.10 Mouse [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input2
+Jul 12 16:11:31 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:11:33 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:11:34 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:11:36 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:11:38 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:11:39 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:11:41 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:11:42 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:11:44 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:11:45 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:11:47 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:11:48 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:11:50 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:11:51 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:11:52 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:11:54 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:11:56 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:11:57 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:11:58 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:12:00 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:12:01 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:12:03 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:12:05 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:12:07 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:12:08 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:12:10 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:12:10 kneespa kernel: usb 1-1.1-port1: cannot reset (err = -71)
+Jul 12 16:12:11 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:12:13 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:12:14 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:12:16 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:12:18 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:12:19 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:12:20 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:12:22 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:12:24 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 48 using xhci_hcd
+Jul 12 16:12:24 kneespa kernel: usb 1-1.1.1: can't restore configuration #1 (error=-71)
+Jul 12 16:12:24 kneespa kernel: usb 1-1.1.1: USB disconnect, device number 48
+Jul 12 16:12:24 kneespa kernel: usb 1-1.1.1: new full-speed USB device number 49 using xhci_hcd
+Jul 12 16:12:24 kneespa kernel: usb 1-1.1.1: New USB device found, idVendor=27c0, idProduct=0859, bcdDevice= 1.50
+Jul 12 16:12:24 kneespa kernel: usb 1-1.1.1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+Jul 12 16:12:24 kneespa kernel: usb 1-1.1.1: Product: TouchScreen
+Jul 12 16:12:24 kneespa kernel: usb 1-1.1.1: Manufacturer: wch.cn
+Jul 12 16:12:24 kneespa kernel: usb 1-1.1.1: SerialNumber: 9LQ0172005164
+Jul 12 16:12:25 kneespa kernel: input: wch.cn TouchScreen as /devices/platform/scb/fd500000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0/usb1/1-1/1-1.1/1-1.1.1/1-1.1.1:1.0/0003:27C0:0859.0188/input/input266
+Jul 12 16:12:25 kneespa kernel: hid-multitouch 0003:27C0:0859.0188: input,hiddev96,hidraw0: USB HID v1.10 Device [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input0
+Jul 12 16:12:25 kneespa kernel: hid-generic 0003:27C0:0859.0189: hiddev97,hidraw1: USB HID v1.10 Device [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input1
+Jul 12 16:12:25 kneespa kernel: input: wch.cn TouchScreen as /devices/platform/scb/fd500000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0/usb1/1-1/1-1.1/1-1.1.1/1-1.1.1:1.2/0003:27C0:0859.018A/input/input267
+Jul 12 16:12:25 kneespa kernel: hid-generic 0003:27C0:0859.018A: input,hidraw2: USB HID v1.10 Mouse [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input2
+Jul 12 16:12:26 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 49 using xhci_hcd
+Jul 12 16:12:28 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 49 using xhci_hcd
+Jul 12 16:12:29 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 49 using xhci_hcd
+Jul 12 16:12:31 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 49 using xhci_hcd
+Jul 12 16:12:32 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 49 using xhci_hcd
+Jul 12 16:12:34 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 49 using xhci_hcd
+Jul 12 16:12:34 kneespa kernel: usb 1-1.1.1: can't restore configuration #1 (error=-71)
+Jul 12 16:12:34 kneespa kernel: usb 1-1.1.1: USB disconnect, device number 49
+Jul 12 16:12:34 kneespa kernel: usb 1-1.1.1: new full-speed USB device number 50 using xhci_hcd
+Jul 12 16:12:34 kneespa kernel: usb 1-1.1.1: New USB device found, idVendor=27c0, idProduct=0859, bcdDevice= 1.50
+Jul 12 16:12:34 kneespa kernel: usb 1-1.1.1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+Jul 12 16:12:34 kneespa kernel: usb 1-1.1.1: Product: TouchScreen
+Jul 12 16:12:34 kneespa kernel: usb 1-1.1.1: Manufacturer: wch.cn
+Jul 12 16:12:34 kneespa kernel: usb 1-1.1.1: SerialNumber: 9LQ0172005164
+Jul 12 16:12:34 kneespa kernel: input: wch.cn TouchScreen as /devices/platform/scb/fd500000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0/usb1/1-1/1-1.1/1-1.1.1/1-1.1.1:1.0/0003:27C0:0859.018B/input/input268
+Jul 12 16:12:34 kneespa kernel: hid-multitouch 0003:27C0:0859.018B: input,hiddev96,hidraw0: USB HID v1.10 Device [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input0
+Jul 12 16:12:34 kneespa kernel: hid-generic 0003:27C0:0859.018C: hiddev97,hidraw1: USB HID v1.10 Device [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input1
+Jul 12 16:12:34 kneespa kernel: input: wch.cn TouchScreen as /devices/platform/scb/fd500000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0/usb1/1-1/1-1.1/1-1.1.1/1-1.1.1:1.2/0003:27C0:0859.018D/input/input269
+Jul 12 16:12:34 kneespa kernel: hid-generic 0003:27C0:0859.018D: input,hidraw2: USB HID v1.10 Mouse [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input2
+Jul 12 16:12:37 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:12:39 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:12:41 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:12:43 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:12:44 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:12:46 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:12:47 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:12:49 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:12:51 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:12:52 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:12:53 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:12:55 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:12:57 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:12:58 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:00 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:02 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:04 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:05 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:06 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:08 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:09 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:11 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:13 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:14 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:16 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:17 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:19 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:20 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:22 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:23 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:27 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:29 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:31 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:33 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:34 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:36 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:38 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 50 using xhci_hcd
+Jul 12 16:13:38 kneespa kernel: usb 1-1.1.1: can't restore configuration #1 (error=-71)
+Jul 12 16:13:38 kneespa kernel: usb 1-1.1.1: USB disconnect, device number 50
+Jul 12 16:13:38 kneespa kernel: usb 1-1.1.1: new full-speed USB device number 51 using xhci_hcd
+Jul 12 16:13:38 kneespa kernel: usb 1-1.1.1: New USB device found, idVendor=27c0, idProduct=0859, bcdDevice= 1.50
+Jul 12 16:13:38 kneespa kernel: usb 1-1.1.1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+Jul 12 16:13:38 kneespa kernel: usb 1-1.1.1: Product: TouchScreen
+Jul 12 16:13:38 kneespa kernel: usb 1-1.1.1: Manufacturer: wch.cn
+Jul 12 16:13:38 kneespa kernel: usb 1-1.1.1: SerialNumber: 9LQ0172005164
+Jul 12 16:13:38 kneespa kernel: input: wch.cn TouchScreen as /devices/platform/scb/fd500000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0/usb1/1-1/1-1.1/1-1.1.1/1-1.1.1:1.0/0003:27C0:0859.018E/input/input270
+Jul 12 16:13:38 kneespa kernel: hid-multitouch 0003:27C0:0859.018E: input,hiddev96,hidraw0: USB HID v1.10 Device [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input0
+Jul 12 16:13:38 kneespa kernel: hid-generic 0003:27C0:0859.018F: hiddev97,hidraw1: USB HID v1.10 Device [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input1
+Jul 12 16:13:38 kneespa kernel: input: wch.cn TouchScreen as /devices/platform/scb/fd500000.pcie/pci0000:00/0000:00:00.0/0000:01:00.0/usb1/1-1/1-1.1/1-1.1.1/1-1.1.1:1.2/0003:27C0:0859.0190/input/input271
+Jul 12 16:13:38 kneespa kernel: hid-generic 0003:27C0:0859.0190: input,hidraw2: USB HID v1.10 Mouse [wch.cn TouchScreen] on usb-0000:01:00.0-1.1.1/input2
+Jul 12 16:13:41 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 51 using xhci_hcd
+Jul 12 16:13:43 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 51 using xhci_hcd
+Jul 12 16:13:44 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 51 using xhci_hcd
+Jul 12 16:13:46 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 51 using xhci_hcd
+Jul 12 16:13:47 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 51 using xhci_hcd
+Jul 12 16:13:49 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 51 using xhci_hcd
+Jul 12 16:13:50 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 51 using xhci_hcd
+Jul 12 16:13:53 kneespa kernel: usb 1-1.1.1: reset full-speed USB device number 51 using xhci_hcd
+Jul 12 16:13:53 kneespa kernel: usb 1-1.1.1: device firmware changed
+Jul 12 16:13:53 kneespa kernel: usb 1-1.1.1: USB disconnect, device number 51
+Jul 12 16:13:53 kneespa kernel: usb 1-1.1.1: new full-speed USB device number 52 using xhci_hcd
+Jul 12 16:13:54 kneespa kernel: usb 1-1.1.1: New USB device found, idVendor=27c0, idProduct=0859, bcdDevice= 1.50
+Jul 12 16:13:54 kneespa kernel: usb 1-1.1.1: New USB device strings: Mfr=1, Product=2, SerialNumber=3
+Jul 12 16:13:54 kneespa kernel: usb 1-1.1.1: Product: TouchScreen
+Jul 12 16:13:54 kneespa kernel: usb 1-1.1.1: Manufacturer: wch.cn
+Jul 12 16:13:54 kneespa kernel: usb 1-1.1.1: SerialNumber: 9LQ0172005164
+Jul 12 16:13:54 kneespa kernel: usb 1-1.1.1: can't set config #1, error -71
+
+Report saved to: /home/pi/KneeSpa-display-diagnostics/display-baseline-20260712-161506.txt
+Send this report with the monitor manufacturer/model from its rear label.
+Press Enter to close this window...
