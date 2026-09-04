@@ -13,7 +13,7 @@
   - Fixed STOP pin logic (INPUT_PULLUP reads HIGH when not pressed)
 */
 
-#define VERSION "2026-06-11-FAILSAFE-2"
+#define VERSION "2026-09-04-FAILSAFE-6"
 #ifndef UNIT_TEST
 // Hardware libraries; native unit tests supply mocks and arduino_shim.h
 // (see test/) before including this file
@@ -24,9 +24,11 @@
 #endif
 
 // Watchdog: reboots the MCU if loop() hangs (e.g. wedged I2C or load
-// cell). NOTE: verify on hardware that the installed Mega bootloader
-// recovers from WDT resets (old stk500v2 bootloaders boot-loop); set to
-// 0 only if the bootloader cannot be updated.
+// cell). The production Mega's bootloader recovers cleanly from WDT
+// resets (verified on hardware, Phase E §3.2 / E4, 2026-07-08).
+// resetBoard() relies on the same mechanism; if a unit ever needs
+// ENABLE_WDT 0 (boot-looping bootloader), resetBoard() must be
+// reworked for it too.
 #define ENABLE_WDT 1
 
 // Pin definitions
@@ -44,7 +46,13 @@
 #define AFULLINCH          430
 #define BFULLINCH          620
 #define CFULLINCH          1880
-#define PRESSURE_SPEED     500
+// Pressure moves and the autonomous post-fault release drive the axial
+// actuator at the same speed position moves are known to move it at
+// (BC_SPEED). At the historical 500 the axial actuator never broke away
+// on-device (2026-07-08: +500 commanded for 5 s, zero counts of travel,
+// while 800-speed position moves ran fine), so pressure could never
+// build -- and worse, a post-fault release would not have moved either.
+#define PRESSURE_SPEED     800
 #define BC_SPEED           800
 #define C_SPEED            800
 #define MAX_JERKS          10
@@ -54,10 +62,14 @@
 #define FIT_FAST_DELAY     (6 * 1000)
 #define LOOP_STATUS_DELAY  5000
 #define MIN_PRESSURE_LBS   0
-#define MAX_PRESSURE_LBS   80
+#define MAX_PRESSURE_LBS   80     // maximum accepted treatment target
+#define PRESSURE_WARNING_LBS 100  // warning-only measured-pressure threshold
 #define AXIAL_MIN_POS      0
 #define AXIAL_MAX_POS      4600
-#define HORIZONTAL_MIN_POS 50
+// The calibrated -25 deg horizontal mark (BMarks) sits at position 0; the old
+// floor of 50 silently clamped every legal -25 deg command ~0.5 deg short and
+// then tripped the host's limit warning on arrival.
+#define HORIZONTAL_MIN_POS 0
 #define HORIZONTAL_MAX_POS 4500
 #define LATERAL_MIN_POS    500
 #define LATERAL_MAX_POS    2400
@@ -66,15 +78,18 @@
 #define MAX_COMMAND_LENGTH 100
 
 // Fail-safe parameters
-#define HEARTBEAT_TIMEOUT     3000   // ms without host traffic while active -> stop
-#define SCALE_READ_TIMEOUT    500    // ms without HX711 ready while load matters -> fault
-#define PRESSURE_RELEASE_LBS  5.0    // autonomous release target after a fault
-#define RELEASE_TIMEOUT       15000  // ms bound on the autonomous release move
-#define PRESSURE_MOVE_TIMEOUT 30000  // ms bound on any single pressure move
-#define PRESSURE_STALL_MS     5000   // ms without pressure progress -> fault
-#define PRESSURE_STALL_DELTA  0.5    // lbs of progress expected within that window
+#define HEARTBEAT_TIMEOUT     10000  // sustained host silence before warning
+#define SCALE_READ_TIMEOUT    500    // ms without HX711 ready -> warning
+#define PRESSURE_RELEASE_LBS  5.0    // autonomous release target after E-stop
+#define RELEASE_TIMEOUT       15000  // ms bound on E-stop pressure release
+#define PRESSURE_MOVE_TIMEOUT 30000  // ms before advisory pressure warning
+#define PRESSURE_STALL_MS     5000   // legacy progress-check window
+#define PRESSURE_STALL_DELTA  0.5    // legacy progress-change threshold
+#define PRESSURE_PROGRESS_FAULT_ENABLED 0  // disabled: interferes with live control
 #define HX711_SATURATED       8388607L  // 24-bit ADC saturation magnitude
 #define POSITION_DEADBAND     25     // counts: symmetric close-enough band
+#define POSITION_STALL_MS     20000  // sustained no-progress time before warning
+#define POSITION_PROGRESS_COUNTS 4   // encoder progress that resets stall timer
 #define ACTIVE_STATUS_INTERVAL 1000  // ms: status cadence during motion (non-HF)
 
 // Status protection
@@ -106,6 +121,13 @@ unsigned long releaseStart = 0;
 unsigned long pressureMoveStart = 0; // start of current pressure move
 unsigned long pressureProgressTime = 0;
 float pressureProgressValue = 0;
+bool pressureWarningIssued = false;
+bool heartbeatWarningIssued = false;
+bool scaleWarningIssued = false;
+bool axialTravelWarningIssued = false;
+bool pressureTimeoutWarningIssued = false;
+bool pressureProgressWarningIssued = false;
+bool positionStallWarningIssued = false;
 bool positionReadValid = false;      // last readPosition() I2C result ok
 
 // Protocol v2 framing. The host opts in per command by sending
@@ -118,6 +140,7 @@ bool positionReadValid = false;      // last readPosition() I2C result ok
 bool hostV2 = false;        // host has sent at least one framed command
 long currentCmdSeq = -1;    // seq of the command being processed (-1 = v1)
 long activeCmdSeq = -1;     // seq of the motion/pressure command in flight
+long activeFitCmdSeq = -1;  // seq of the timed FIT command in flight
 
 // Global variables
 uint8_t smcDeviceNumber = 13;
@@ -127,7 +150,9 @@ int CZERO = 0;
 int AInches = 0;
 int BInches = 0;
 float CInches = 0;
-bool STOP = false;
+bool STOP = true;            // mirrors STOP_PIN: INPUT_PULLUP idles HIGH (= not pressed)
+bool stopWasPressed = false; // previous loop's button state (press-edge detection)
+uint8_t runningDevice = 12;  // SMC addressed by the position move in flight
 bool bRunning = false;
 bool measurePressure = false;
 int forward = 1;
@@ -136,6 +161,8 @@ int pressureDirection = 0;
 uint16_t position = 0;
 uint16_t desiredPosition = 3;
 bool highFrequencyStatus = false;
+int loopLastPosition = -1;
+unsigned long loopStallStart = 0;
 elapsedMillis timeSinceLastStatus = 0; // Timer for high-frequency updates
 const unsigned long HIGH_FREQ_INTERVAL = 1000; // ms for frequent updates (adjust as needed)
 
@@ -168,11 +195,24 @@ bool jerkDirectionChanged = false;
 uint8_t xorChecksum(const String &s, unsigned int from, unsigned int to);
 void emitAck(const char *token, long seq);
 void emitCmdError(const char *reason);
+void emitSafetyWarning(const char *reason);
 bool parseV2Frame(const String &raw, String &inner);
 bool isEmergencyBuffer(const String &b);
 
-// Makes Arduino restart
-void(* resetFunc) (void) = 0;
+// Force a true hardware reset by arming the shortest watchdog and
+// spinning. The previous jump-to-0 restart re-entered the program with
+// interrupts live and peripherals (TWI, UARTs, WDT) in mid-flight
+// state; on the production Mega it wedged the MCU until power cycle
+// (reproduced on hardware, 2026-07-08). Requires the WDT-safe
+// bootloader verified in Phase E §3.2.
+void resetBoard() {
+  Serial.flush();   // let queued diagnostics drain
+  Serial1.flush();  // "Reset|" must reach the host before the reset
+  wdt_enable(WDTO_15MS);
+#ifndef UNIT_TEST
+  for (;;) {}  // watchdog fires in ~15 ms
+#endif
+}
 
 // Required to allow motors to move
 void exitSafeStart() {
@@ -181,8 +221,10 @@ void exitSafeStart() {
   Wire.endTransmission();
 }
 
-// Set motor speed and direction
-void setMotorSpeed(int16_t speed) {
+// Set motor speed and direction. Returns the Wire::endTransmission() code
+// of the speed write (0 = acknowledged) so safety-critical callers can
+// notice a NACK/timeout instead of assuming the SMC took the command.
+uint8_t setMotorSpeed(int16_t speed) {
   // Clamp speed to valid range
   if (speed > 3200) speed = 3200;
   if (speed < -3200) speed = -3200;
@@ -206,7 +248,7 @@ void setMotorSpeed(int16_t speed) {
   Wire.write(cmd);
   Wire.write(speed & 0x1F);
   Wire.write(speed >> 5 & 0x7F);
-  Wire.endTransmission();
+  return Wire.endTransmission();
 }
 
 // Read actuator position once over I2C; returns true on success
@@ -217,12 +259,11 @@ static bool readPositionOnce(uint16_t &out) {
   Wire.write(12);    // Variable ID: position signed
   Wire.endTransmission();
 
-  // Read response with timeout
-  unsigned long startTime = millis();
-  while (Wire.available() < 2 && millis() - startTime < 50) {
-    delay(1); // Short delay to prevent blocking
-  }
-
+  // requestFrom() performs the (timeout-bounded, see setWireTimeout) read
+  // itself. The old pre-request wait on Wire.available() could never be
+  // satisfied -- nothing is in the RX buffer before requestFrom -- so every
+  // position read burned its full 50 ms, stretching the safety loop (and
+  // the STOP-button poll) by 100-400 ms during motion.
   int returned = Wire.requestFrom(smcDeviceNumber, (uint8_t)2);
   if (returned != 2) {
     Serial.print("Wire error on device ");
@@ -345,6 +386,32 @@ bool sendStatus() {
   return true;
 }
 
+// Stop the open-loop leg-length/FIT actuator. This actuator is driven by
+// GPIO rather than an SMC, so setting SMC speeds to zero does not affect it.
+void stopFIT() {
+  moveFITForward = false;
+  FITDelay = 0;
+  timeInFIT = 0;
+  activeFitCmdSeq = -1;
+  digitalWrite(DIR_FIT_FORWARD, LOW);
+  digitalWrite(DIR_FIT_REVERSE, LOW);
+}
+
+// Zero one SMC on the emergency-stop path, retrying a NACKed/timed-out I2C
+// write. The stop used to be fire-and-forget: a transient bus fault
+// coincident with STOP/X left that SMC at its last speed while the firmware
+// reported everything stopped.
+static void stopDeviceOrReport(uint8_t device) {
+  smcDeviceNumber = device;
+  uint8_t rc = 1;
+  for (uint8_t attempt = 0; attempt < 3 && rc != 0; attempt++)
+    rc = setMotorSpeed(0);
+  if (rc != 0) {
+    Serial1.print("ERROR: Motor stop not acknowledged ");
+    Serial1.println((int)device);
+  }
+}
+
 // Emergency stop all actuators
 void emergencyStop() {
   Serial.println("Emergency Stop");
@@ -353,17 +420,17 @@ void emergencyStop() {
   // drop the in-flight sequence so a later completion cannot echo it
   activeCmdSeq = -1;
 
-  smcDeviceNumber = 12;
-  setMotorSpeed(0);
+  stopDeviceOrReport(12);
   Serial.println("A stopped");
 
-  smcDeviceNumber = 13;
-  setMotorSpeed(0);
+  stopDeviceOrReport(13);
   Serial.println("B stopped");
 
-  smcDeviceNumber = 14;
-  setMotorSpeed(0);
+  stopDeviceOrReport(14);
   Serial.println("C stopped");
+
+  stopFIT();
+  Serial.println("FIT stopped");
 
   measurePressure = false;
   bRunning = false;
@@ -372,9 +439,8 @@ void emergencyStop() {
 }
 
 // Emergency stop, then autonomously back the axial actuator off until
-// the load is released. Screw actuators hold force after a plain stop,
-// so every fault path must actively release the patient. Bounded by
-// load (< PRESSURE_RELEASE_LBS), travel (AZERO), and time.
+// the load is released. This is reserved for an actual E-stop input.
+// Bounded by load (< PRESSURE_RELEASE_LBS), travel (AZERO), and time.
 void emergencyStopAndRelease(const char *reason) {
   if (releasingPressure)
     return;  // a release is already the active fault response
@@ -392,6 +458,15 @@ void emergencyStopAndRelease(const char *reason) {
   setMotorSpeed(-PRESSURE_SPEED);  // negative = back off / reduce pressure
 }
 
+// Advisory device notice. Warnings never alter motion or protocol state;
+// only the physical/explicit emergency-stop path may do that.
+void emitSafetyWarning(const char *reason) {
+  Serial.print("Safety warning: ");
+  Serial.println(reason);
+  Serial1.print("WARNING: ");
+  Serial1.println(reason);
+}
+
 // XOR checksum over s[from..to)
 uint8_t xorChecksum(const String &s, unsigned int from, unsigned int to) {
   uint8_t x = 0;
@@ -405,7 +480,7 @@ void emitAck(const char *token, long seq) {
   Serial1.print(token);
   if (seq >= 0) {
     Serial1.print("|");
-    Serial1.print((int)seq);
+    Serial1.print(seq);  // long: (int) truncated seq > 32767 on AVR
   }
   Serial1.println("");
 }
@@ -415,13 +490,24 @@ void emitAck(const char *token, long seq) {
 void emitCmdError(const char *reason) {
   if (currentCmdSeq >= 0) {
     Serial1.print("ERR|");
-    Serial1.print((int)currentCmdSeq);
+    Serial1.print(currentCmdSeq);  // long (see emitAck)
     Serial1.print("|");
     Serial1.println(reason);
   } else {
     Serial1.print("ERROR: ");
     Serial1.println(reason);
   }
+}
+
+// While the physical STOP is held nothing may START moving: a motion command
+// accepted then would run for one loop, trip the stop, and leave a fresh
+// error + release cycle behind it (a twitch and error spam per command)
+bool rejectIfStopEngaged() {
+  if (!STOP) {
+    emitCmdError("Stop button engaged");
+    return true;
+  }
+  return false;
 }
 
 // Parse "#<seq>:<CMD>*<XX>" into inner CMD; verifies the checksum.
@@ -633,7 +719,15 @@ void processCommand(String cmd) {
         emitCmdError("Invalid P value");
         return;
       }
-      desiredPressure = clampPressureTarget(parameter.toFloat());
+      localPressure = clampPressureTarget(parameter.toFloat());
+      // While the physical STOP is engaged only a RELEASE (target at or
+      // below the current load) may start. The host's e-stop chain asserts
+      // the stop line and then sends X + P0 -- that P0 must keep working.
+      if (!STOP && localPressure > pressure) {
+        emitCmdError("Stop button engaged");
+        return;
+      }
+      desiredPressure = localPressure;
       Serial.print("desiredPressure ");
       Serial.println(desiredPressure);
 
@@ -651,12 +745,26 @@ void processCommand(String cmd) {
       if (pressure >= desiredPressure)
         pressureDirection = -1;  // move back
 
+      // Already at/below the target with nowhere to go -- the common
+      // case is the host's post-protocol "P0" release arriving when no
+      // load was ever applied. Starting a backward move here would only
+      // trip the axial-at-zero guard and fault the host over a no-op.
+      if (pressureDirection < 0 && pressure <= desiredPressure) {
+        Serial.println("Pressure already at target; nothing to move");
+        sendStatus();
+        emitAck("DONE", currentCmdSeq);
+        break;
+      }
+
       Serial.print(" pressureDirection: ");
       Serial.println(pressureDirection);
 
       pressureMoveStart = millis();
       pressureProgressTime = millis();
       pressureProgressValue = pressure;
+      axialTravelWarningIssued = false;
+      pressureTimeoutWarningIssued = false;
+      pressureProgressWarningIssued = false;
       setMotorSpeed(PRESSURE_SPEED * pressureDirection);
       measurePressure = true;
       activeCmdSeq = currentCmdSeq;
@@ -671,7 +779,7 @@ void processCommand(String cmd) {
       releasingPressure = false;
       emergencyStop();
       Serial1.println("Reset|");
-      resetFunc();
+      resetBoard();
       break;
 
     // Emergency stop
@@ -697,6 +805,7 @@ void processCommand(String cmd) {
 
     // Position control
     case 'I':
+      if (rejectIfStopEngaged()) return;
       if (bRunning || releasingPressure) {
         emitAck("BUSY", currentCmdSeq);  // never silently drop a motion command
         return;
@@ -707,21 +816,28 @@ void processCommand(String cmd) {
         emitCmdError("Invalid device");
         return;
       }
+      if (measurePressure && parameter.toInt() == 12) {
+        // The axial SMC is already being driven by a pressure move
+        emitAck("BUSY", currentCmdSeq);
+        return;
+      }
       smcDeviceNumber = parameter.toInt();
       Serial.println(smcDeviceNumber);
 
       parameter = cmd.substring(3);
-      if (!isNumeric(parameter) || parameter.toInt() < 0) {
-        // Reject corrupt input: toInt() garbage would become position 0
+      if (!isNumeric(parameter) || parameter.toInt() < 0 || parameter.toInt() > 65000) {
+        // Reject corrupt input: toInt() garbage would become position 0,
+        // and a >16-bit value would wrap to an arbitrary target
         emitCmdError("Invalid I value");
         return;
       }
       localDesiredPosition = parameter.toInt();
+      // Axial floor FIRST, then the travel clamp, so AZERO can never
+      // re-raise a target the clamp just bounded (L5 rejects out-of-range
+      // marks too; this keeps the order right regardless)
+      if (smcDeviceNumber == 12 && (long)localDesiredPosition <= (long)AZERO)
+        localDesiredPosition = (uint16_t)AZERO;
       localDesiredPosition = clampPositionTarget(smcDeviceNumber, localDesiredPosition);
-
-      if (smcDeviceNumber == 12)
-        if (localDesiredPosition <= AZERO)
-          localDesiredPosition = AZERO;
 
       localPosition = readPosition();
       if (!positionReadValid) {
@@ -760,11 +876,16 @@ void processCommand(String cmd) {
       Serial.println(position);
 
       activeCmdSeq = currentCmdSeq;
+      loopLastPosition = localPosition;
+      loopStallStart = millis();
+      positionStallWarningIssued = false;
+      runningDevice = smcDeviceNumber;
       bRunning = true;
       break;
 
     // C Position (lateral flexion) control
     case 'K':
+      if (rejectIfStopEngaged()) return;
       if (bRunning || releasingPressure) {
         emitAck("BUSY", currentCmdSeq);  // never silently drop a motion command
         return;
@@ -775,9 +896,9 @@ void processCommand(String cmd) {
       parameter = cmd.substring(1);
       Serial.println(parameter);
 
-      if (!isNumeric(parameter) || parameter.toInt() < 0) {
+      if (!isNumeric(parameter) || parameter.toInt() < 0 || parameter.toInt() > 65000) {
         // Reject corrupt input: toInt() garbage would drive the lateral
-        // actuator to its clamp floor (500)
+        // actuator to its clamp floor (500); >16-bit values would wrap
         emitCmdError("Invalid K value");
         return;
       }
@@ -818,11 +939,16 @@ void processCommand(String cmd) {
       Serial.println(position);
 
       activeCmdSeq = currentCmdSeq;
+      loopLastPosition = localPosition;
+      loopStallStart = millis();
+      positionStallWarningIssued = false;
+      runningDevice = smcDeviceNumber;
       bRunning = true;
       break;
 
     // Position in inches
     case 'A':
+      if (rejectIfStopEngaged()) return;
       if (bRunning || releasingPressure) {
         emitAck("BUSY", currentCmdSeq);  // never silently drop a motion command
         return;
@@ -831,6 +957,11 @@ void processCommand(String cmd) {
       parameter = cmd.substring(1, 3);
       if (parameter.toInt() < 12 || parameter.toInt() > 14) {
         emitCmdError("Invalid device");
+        return;
+      }
+      if (measurePressure && parameter.toInt() == 12) {
+        // The axial SMC is already being driven by a pressure move
+        emitAck("BUSY", currentCmdSeq);
         return;
       }
       smcDeviceNumber = parameter.toInt();
@@ -897,6 +1028,10 @@ void processCommand(String cmd) {
 
       setMotorSpeed(forward * BC_SPEED); // Start motor immediately
       activeCmdSeq = currentCmdSeq;
+      loopLastPosition = localPosition;
+      loopStallStart = millis();
+      positionStallWarningIssued = false;
+      runningDevice = smcDeviceNumber;
       bRunning = true;
       break;
 
@@ -907,8 +1042,18 @@ void processCommand(String cmd) {
 
       switch (stage) {
         case 0: // Set calibration factor
-          if (cmd.length() > 2)
-            calibration_factor = cmd.substring(2).toFloat();
+          if (cmd.length() > 2) {
+            parameter = cmd.substring(2);
+            // A zero/garbage factor used to be applied silently: set_scale(0)
+            // makes updatePressure() bail out forever (pressure frozen at
+            // its last value) while lastScaleReady keeps advancing, so even
+            // the "Load cell not responding" notice never fires.
+            if (!isNumeric(parameter) || parameter.toFloat() == 0) {
+              emitCmdError("Invalid L0 factor");
+              break;
+            }
+            calibration_factor = parameter.toFloat();
+          }
           Serial.print("calibration_factor: ");
           Serial.println(calibration_factor);
           scale.set_scale(calibration_factor);
@@ -934,16 +1079,33 @@ void processCommand(String cmd) {
           break;
 
         case 5: // Set zero marks
-          if (cmd.length() > 2 && cmd.charAt(2) == '|') {
-            // Delimited form: L5|<azero>|<bzero> -- unambiguous for any
-            // digit count
-            AZERO = getValue(cmd, '|', 1).toInt();
-            BZERO = getValue(cmd, '|', 2).toInt();
-          } else {
-            // Legacy fixed-width form ("L5{:3} {:3}"): corrupts 4-digit
-            // values (1900 parses as 190); kept for old hosts only
-            AZERO = cmd.substring(2, 5).toInt();
-            BZERO = cmd.substring(5, 9).toInt();
+          {
+            long newAZero, newBZero;
+            if (cmd.length() > 2 && cmd.charAt(2) == '|') {
+              // Delimited form: L5|<azero>|<bzero> -- unambiguous for any
+              // digit count
+              newAZero = getValue(cmd, '|', 1).toInt();
+              newBZero = getValue(cmd, '|', 2).toInt();
+            } else {
+              // Legacy fixed-width form ("L5{:3} {:3}"): corrupts 4-digit
+              // values (1900 parses as 190); kept for old hosts only
+              newAZero = cmd.substring(2, 5).toInt();
+              newBZero = cmd.substring(5, 9).toInt();
+            }
+            // The marks feed the axial floor (I/A), the E-stop release
+            // floor and the "at home" checks as signed ints compared
+            // against uint16 positions. An unvalidated value (typo'd
+            // config, corrupt line) used to be applied as-is: above
+            // AXIAL_MAX_POS it re-raised every clamped target past the
+            // travel limit; negative it wrapped to ~65k and ended the
+            // release after one iteration. Keep the previous marks instead.
+            if (newAZero < AXIAL_MIN_POS || newAZero > AXIAL_MAX_POS ||
+                newBZero < HORIZONTAL_MIN_POS || newBZero > HORIZONTAL_MAX_POS) {
+              emitCmdError("Invalid L5 zero marks");
+              break;
+            }
+            AZERO = (int)newAZero;
+            BZERO = (int)newBZero;
           }
           Serial.print("AZERO: ");
           Serial.print(AZERO);
@@ -997,12 +1159,30 @@ void processCommand(String cmd) {
 
       if (parameter == "S") {
           Serial.println("stop jerking");
+          // Stop only the pulsing axial motor, and only if pulsing was
+          // active. setMotorSpeed(0) used to hit whichever SMC was last
+          // addressed: a JS from the host's live pulse-rate control during
+          // a K/I move zeroed THAT actuator mid-travel and left bRunning
+          // set forever (no DONE, then BUSY for every command until X).
+          if (jerking) {
+              smcDeviceNumber = 12;
+              setMotorSpeed(0);
+          }
           jerkDirection = 0;
           jerking = false;
           jerksCompleted = 0; // Reset counter
-          setMotorSpeed(0);
           emitAck("DONE", currentCmdSeq);
       } else {
+          if (rejectIfStopEngaged()) return;
+          // Pulsing drives the axial SMC: refuse to overlap an in-flight
+          // axial pressure/position move or the E-stop release. The host
+          // worker only starts J once those moves have reported DONE, and
+          // it treats BUSY as transient.
+          if (measurePressure || releasingPressure ||
+              (bRunning && runningDevice == 12)) {
+              emitAck("BUSY", currentCmdSeq);
+              return;
+          }
           // Optional numeric parameter sets the pulse cadence in ms (J<ms>,
           // Phase 3.5 §15.2). A bare 'J' keeps the current jerkInterval.
           // Out-of-range / malformed values are ignored so a bad rate can
@@ -1033,6 +1213,19 @@ void processCommand(String cmd) {
         String direction = cmd.substring(1, 2);
         Serial.println(direction);
 
+        if (direction == "0") {
+          stopFIT();
+          Serial.println("Fit stopped.");
+          emitAck("DONE", currentCmdSeq);
+          break;
+        }
+
+        if (moveFITForward) {
+          emitAck("BUSY", currentCmdSeq);
+          break;
+        }
+        if (rejectIfStopEngaged()) break;
+
         if (direction == "+") {
           moveFITForward = true;
           FITDelay = FIT_SLOW_DELAY;
@@ -1057,15 +1250,16 @@ void processCommand(String cmd) {
           Serial.println("Fit fast reversing.");
           digitalWrite(DIR_FIT_FORWARD, HIGH);
           digitalWrite(DIR_FIT_REVERSE, LOW);
-        } else if (direction == "0") {
-          moveFITForward = false;
-          Serial.println("Fit stopped.");
-          digitalWrite(DIR_FIT_FORWARD, LOW);
-          digitalWrite(DIR_FIT_REVERSE, LOW);
+        } else {
+          emitCmdError("Invalid F direction");
+          break;
         }
 
         timeInFIT = 0;
-        emitAck("DONE", currentCmdSeq);
+        // Completion is emitted when the timed movement physically ends.
+        // The previous immediate DONE re-enabled conflicting UI controls
+        // while the FIT motor was still moving for up to six seconds.
+        activeFitCmdSeq = currentCmdSeq;
       }
       break; // FIXED: Added missing break statement
 
@@ -1084,6 +1278,10 @@ void setup() {
 
   // Join I2C bus as slave
   Wire.begin(0x8);
+  // Wire busy-waits with no timeout by default; a wedged bus or dead
+  // SMC must time out (auto-recovering the TWI) rather than hang setup
+  // or the safety loop forever
+  Wire.setWireTimeout(25000, true);
 
   // Initialize serial communication
   Serial.begin(9600);
@@ -1140,9 +1338,7 @@ void setup() {
 }
 
 // Loop state (file scope rather than function statics so the native
-// tests can reset them between cases)
-int loopLastPosition = -1;
-int loopStallCount = 0;
+// tests can reset it between cases)
 unsigned long lastActiveStatus = 0;
 
 // Main loop function - FIXED jerking logic
@@ -1157,38 +1353,54 @@ void loop() {
   // Maintain the filtered pressure value without blocking
   updatePressure();
 
-  bool activeMotion = bRunning || measurePressure || jerking;
+  bool activeMotion = bRunning || measurePressure || jerking || moveFITForward;
 
   // SAFETY: the physical stop button is honored in EVERY state --
-  // including pressure application and pulsing, which previously
-  // ignored it entirely
-  if (!STOP && activeMotion) {
+  // including pressure application, pulsing, AND the static hold. During
+  // the hold (the longest phase of a treatment: motor zeroed, patient
+  // under load) no motion flag is set, so the button used to be ignored
+  // there entirely. A press with load present now runs the same
+  // stop-and-release. That case is edge-triggered so a held button cannot
+  // re-fire a fresh release every loop after one ends incomplete; motion
+  // commands are refused while the button is held (rejectIfStopEngaged).
+  bool stopPressed = !STOP;
+  bool loadPresent = pressure > PRESSURE_RELEASE_LBS;
+  if (stopPressed && (activeMotion || (loadPresent && !stopWasPressed))) {
     emergencyStopAndRelease("Stop button pressed");
     activeMotion = false;
   }
+  stopWasPressed = stopPressed;
 
-  // SAFETY: pressure ceiling enforced in EVERY state, not only inside
-  // an active pressure move (pulsing and position moves can also wind
-  // traction past the limit)
-  if (pressure > MAX_PRESSURE_LBS && !releasingPressure) {
-    emergencyStopAndRelease("Pressure limit exceeded");
-    activeMotion = false;
+  // Measured-pressure warning. Treatment targets remain capped separately at
+  // MAX_PRESSURE_LBS; this high telemetry threshold is advisory only.
+  if (pressure > PRESSURE_WARNING_LBS) {
+    if (!pressureWarningIssued) {
+      emitSafetyWarning("Pressure warning threshold exceeded");
+      pressureWarningIssued = true;
+    }
+  } else {
+    pressureWarningIssued = false;
   }
 
-  // SAFETY: heartbeat -- if the host goes silent while we are moving or
-  // holding load, stop and release rather than continuing forever
+  // Host-heartbeat and load-cell notices are advisory. Motion continues until
+  // an actual E-stop is asserted.
   if (activeMotion && millis() - lastHostTraffic > HEARTBEAT_TIMEOUT) {
-    emergencyStopAndRelease("Host heartbeat lost");
-    activeMotion = false;
+    if (!heartbeatWarningIssued) {
+      emitSafetyWarning("Host heartbeat lost");
+      heartbeatWarningIssued = true;
+    }
+  } else {
+    heartbeatWarningIssued = false;
   }
 
-  // SAFETY: a load cell that stops producing data while load matters is
-  // a sensor fault; without this, pressure is whatever stale value the
-  // last good read left behind
   if ((measurePressure || jerking) &&
       millis() - lastScaleReady > SCALE_READ_TIMEOUT) {
-    emergencyStopAndRelease("Load cell not responding");
-    activeMotion = false;
+    if (!scaleWarningIssued) {
+      emitSafetyWarning("Load cell not responding");
+      scaleWarningIssued = true;
+    }
+  } else {
+    scaleWarningIssued = false;
   }
 
   // Autonomous post-fault release: back the axial actuator off until
@@ -1255,7 +1467,12 @@ void loop() {
       lastJerkTime = millis();
 
       if (jerksCompleted >= MAX_JERKS) {
-        // Send status update and reset counter
+        // Status/rest slot. Pulses alternate +/- and MAX_JERKS is even, so
+        // the 10th pulse always leaves the motor in reverse; leaving that
+        // applied through this slot made every 11-interval cycle 5 forward
+        // / 6 reverse -- a steady backward creep under load. Rest instead.
+        smcDeviceNumber = 12;
+        setMotorSpeed(0);
         sendStatus();
         jerksCompleted = 0;
       } else {
@@ -1284,13 +1501,19 @@ void loop() {
       Serial.println("Fit stopped.");
       Serial.println("fit done");
       moveFITForward = false;
+      emitAck("DONE", activeFitCmdSeq);
+      activeFitCmdSeq = -1;
     }
   }
 
   // Running motor handler (position control)
   // (STOP pin already handled unconditionally at the top of loop())
   if (bRunning) {
-    // No need to set motor speed here - already set in processCommand
+    // Address the SMC this move belongs to: the pressure and pulse handlers
+    // below reset smcDeviceNumber to 12 every iteration, so a concurrent
+    // K/I13 move used to have its arrival judged against the wrong axis
+    // (and its stop sent to the wrong SMC)
+    smcDeviceNumber = runningDevice;
     uint16_t currentPos = readPosition();
 
     if (positionReadValid) {
@@ -1301,38 +1524,40 @@ void loop() {
       Serial.print(loopLastPosition); Serial.print(" ");
       Serial.println(desiredPosition);
 
-      // Check if position reached with hysteresis
-      bool targetReached = false;
-      if (forward > 0) {
-        if (currentPos >= desiredPosition) {
-          targetReached = true;
-        }
-      } else if (currentPos <= desiredPosition) {
-        targetReached = true;
-      }
+      // Arrival uses the SAME symmetric POSITION_DEADBAND band as the
+      // command-time close-enough check (see 'I'/'K'/'A'): an actuator
+      // that settles within the deadband of its target has arrived. The
+      // old strict compare (>=/<=) never registered arrival when the
+      // axial actuator bottomed out at its home a few counts short of
+      // AZERO, so the stall detector below fired "Motor stalled" on a
+      // reset that had actually reached home.
+      bool targetReached =
+          (desiredPosition + POSITION_DEADBAND >= currentPos &&
+           currentPos + POSITION_DEADBAND >= desiredPosition);
 
       if (targetReached) {
         Serial.println("Stopped Moving - Target Reached");
         setMotorSpeed(0);
         bRunning = false;
         forward = 0;
-      }
-
-      // Handle stalling detection
-      if (loopLastPosition == (int)currentPos) {
-        loopStallCount++;
-        if (loopStallCount > 5) { // Stop if stalled for too long
-          Serial.println("Motor stalled - stopping");
-          Serial1.println("ERROR: Motor stalled");
-          setMotorSpeed(0);
-          bRunning = false;
-          loopStallCount = 0;
-        }
+        loopLastPosition = -1;
+        loopStallStart = 0;
       } else {
-        // Movement resumed: a counter that never reset here used to
-        // accumulate across the whole session and stop healthy moves
-        loopStallCount = 0;
-        loopLastPosition = currentPos;
+        // Loop iterations are much faster than encoder updates, so a poll
+        // count can report a false stall almost immediately. Require a full
+        // no-progress interval instead. Small encoder jitter or movement in
+        // the wrong direction does not reset the timer; meaningful movement
+        // toward the target does.
+        long progress = ((long)currentPos - (long)loopLastPosition) * forward;
+        if (loopLastPosition < 0 || progress >= POSITION_PROGRESS_COUNTS) {
+          loopLastPosition = currentPos;
+          loopStallStart = millis();
+          positionStallWarningIssued = false;
+        } else if (millis() - loopStallStart >= POSITION_STALL_MS &&
+                   !positionStallWarningIssued) {
+          emitSafetyWarning("Motor stalled");
+          positionStallWarningIssued = true;
+        }
       }
     }
     // On an invalid position read, skip arrival/stall decisions this
@@ -1357,17 +1582,29 @@ void loop() {
     smcDeviceNumber = 12;
     uint16_t currentPos = readPosition();
 
-    // Travel envelope: a pressure move may not push past the axial
-    // travel limits chasing an unreachable target
+    // Travel envelope notice: a forward pressure move that reaches the
+    // axial travel limit warns ONCE and keeps going. Owner policy
+    // (2026-09-04): warnings never stop a pressure move -- only an
+    // E-stop (physical STOP / 'X') does. AXIAL_MAX_POS is far beyond the
+    // host's 0-4 in working range, so this is diagnostic in practice.
     if (positionReadValid && pressureDirection > 0 &&
         currentPos >= AXIAL_MAX_POS) {
-      emergencyStopAndRelease("Axial travel limit during pressure move");
-      return;
+      if (!axialTravelWarningIssued) {
+        emitSafetyWarning("Axial travel limit during pressure move");
+        axialTravelWarningIssued = true;
+      }
+    } else {
+      axialTravelWarningIssued = false;
     }
     if (positionReadValid && pressureDirection < 0 &&
-        currentPos <= (uint16_t)(AZERO + POSITION_DEADBAND)) {
-      // Fully backed off; lower pressure is not achievable
-      Serial1.println("ERROR: Axial at zero, pressure target not reached");
+        currentPos <= (uint16_t)(AZERO + POSITION_DEADBAND) &&
+        pressure > desiredPressure) {
+      // The actuator cannot back off any farther. End this pressure move
+      // without raising a device safety fault; the host can continue to
+      // display the measured pressure while the travel floor remains
+      // enforced here. The normal cleanup below emits DONE.
+      Serial.println(
+          "Axial at zero before pressure target; ending pressure move");
       setMotorSpeed(0);
       measurePressure = false;
       pressureDirection = 0;
@@ -1376,21 +1613,26 @@ void loop() {
     // Time bound on the whole move
     if (measurePressure &&
         millis() - pressureMoveStart > PRESSURE_MOVE_TIMEOUT) {
-      emergencyStopAndRelease("Pressure move timeout");
-      return;
+      if (!pressureTimeoutWarningIssued) {
+        emitSafetyWarning("Pressure move timeout");
+        pressureTimeoutWarningIssued = true;
+      }
     }
 
-    // Progress check: motor commanded but pressure not changing means a
-    // frozen sensor or mechanical stall -- both are faults
-    if (measurePressure) {
+    // The pressure-progress warning is disabled. Some valid live adjustments
+    // hold a nearly constant load for longer than this heuristic allows,
+    // causing false notices. If re-enabled, it remains advisory.
+    if (PRESSURE_PROGRESS_FAULT_ENABLED && measurePressure) {
       float progress = pressure - pressureProgressValue;
       if ((pressureDirection > 0 && progress >= PRESSURE_STALL_DELTA) ||
           (pressureDirection < 0 && progress <= -PRESSURE_STALL_DELTA)) {
         pressureProgressValue = pressure;
         pressureProgressTime = millis();
-      } else if (millis() - pressureProgressTime > PRESSURE_STALL_MS) {
-        emergencyStopAndRelease("No pressure progress");
-        return;
+        pressureProgressWarningIssued = false;
+      } else if (millis() - pressureProgressTime > PRESSURE_STALL_MS &&
+                 !pressureProgressWarningIssued) {
+        emitSafetyWarning("No pressure progress");
+        pressureProgressWarningIssued = true;
       }
     }
 

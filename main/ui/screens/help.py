@@ -49,8 +49,8 @@ class _ProtocolHelpPanel(QFrame):
             f" #ProtoHelp QLabel {{ background: transparent; }}"
         )
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(20, 18, 20, 18)
-        lay.setSpacing(8)
+        lay.setContentsMargins(16, 12, 16, 12)
+        lay.setSpacing(5)
 
         head = QHBoxLayout()
         head.setSpacing(12)
@@ -101,8 +101,8 @@ class HelpScreen(QWidget):
                          padded=False)
         grid_host = QWidget()
         grid = QGridLayout(grid_host)
-        grid.setContentsMargins(16, 16, 16, 16)
-        grid.setSpacing(14)
+        grid.setContentsMargins(12, 12, 12, 12)
+        grid.setSpacing(12)
         for i, p in enumerate(HELP_PROTOCOLS):
             grid.addWidget(_ProtocolHelpPanel(p), i // 2, i % 2)
         for c in (0, 1):

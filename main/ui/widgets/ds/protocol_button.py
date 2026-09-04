@@ -40,6 +40,17 @@ class DSProtocolButton(QPushButton):
         self.toggled.connect(lambda _checked: self._render())
         self._render()
 
+    # QPushButton.sizeHint() sizes to its (empty) text + style padding and
+    # ignores the child layout, so the tile collapsed to ~51px and squeezed the
+    # number label down to ~10px — clipping the digit top and bottom. Defer to
+    # the layout so the tile grows to fit the number + name, like the DS flex
+    # button (padding 14px 8px, no fixed height).
+    def sizeHint(self):
+        return self.layout().sizeHint()
+
+    def minimumSizeHint(self):
+        return self.layout().minimumSize()
+
     def changeEvent(self, event):
         super().changeEvent(event)
         # EnabledChange == QEvent.EnabledChange (value 98)

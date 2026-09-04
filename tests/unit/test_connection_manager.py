@@ -85,6 +85,42 @@ class TestResetGating:
 
 
 @pytest.mark.unit
+class TestReadyToGo:
+    def test_boot_banner_does_not_fake_a_done(self, manager):
+        """ResetWorker waits for the banner on Arduino.ready_event; setting the
+        DONE event here as well could satisfy the NEXT step's wait early and
+        shift every later DONE by one homing step."""
+        cm, w = manager
+        w.I2Cstatus = 0
+        w.I2Cstatus_event = MagicMock()
+        cm.ready_to_go()
+        w.I2Cstatus_event.set.assert_not_called()
+        assert w.I2Cstatus == 0
+
+
+@pytest.mark.unit
+class TestLateConnect:
+    def test_late_connect_schedules_reset(self, manager, monkeypatch):
+        """A connection that comes up after setup_arduino() stopped waiting
+        still owes the device its reset / zero-mark / calibration sequence."""
+        cm, w = manager
+        scheduled = []
+        monkeypatch.setattr(
+            "controllers.connection_manager.QTimer.singleShot",
+            lambda ms, fn: scheduled.append((ms, fn)),
+        )
+        cm._on_late_connect()
+        assert scheduled == [(0, cm.reset_arduino)]
+
+    def test_calibration_pushes_tolerate_missing_transport(self, manager):
+        cm, w = manager
+        w.arduino = None
+        cm.send_zero_mark()      # must not raise
+        cm.send_calibration()
+        assert w.logger.error.called
+
+
+@pytest.mark.unit
 class TestCalibrationPushes:
     def test_zero_mark_uses_delimited_form(self, manager):
         """Regression: this copy still sent the legacy fixed-width L5,
@@ -104,6 +140,36 @@ class TestCalibrationPushes:
         w.config.calibration = 1.0
         cm.send_calibration()
         assert not w.arduino.send.called
+
+
+@pytest.mark.unit
+class TestThreadTeardown:
+    def test_teardown_disconnects_quits_waits_and_clears_references(self, manager):
+        cm, w = manager
+        arduino = w.arduino
+        arduino.disconnect.return_value = True
+        w.arduino_thread = MagicMock()
+        w.arduino_thread.wait.return_value = True
+        thread = w.arduino_thread
+
+        assert cm.teardown_arduino(drain_timeout=1.5) is True
+
+        arduino.disconnect.assert_called_once_with(drain_timeout=1.5)
+        thread.quit.assert_called_once()
+        thread.wait.assert_called_once_with(3000)
+        thread.deleteLater.assert_called_once()
+        assert w.arduino is None
+        assert w.arduino_thread is None
+
+    def test_teardown_ignores_inherited_qobject_thread_method(self, manager):
+        """A fresh QMainWindow has thread(), but no owned Arduino QThread."""
+        cm, w = manager
+        w.arduino = None
+        w.thread = lambda: "qt-affinity-thread"
+
+        assert cm.teardown_arduino() is True
+        assert w.arduino is None
+        assert w.arduino_thread is None
 
 
 @pytest.mark.unit
@@ -131,12 +197,16 @@ class TestEnsureConnection:
         cm, w = manager
         w.arduino.connected = True
         w.arduino.verify_connection.return_value = False
+        old_arduino = w.arduino
         w.setup_gpio = lambda: setattr(w, "gpio_reset", True)
-        monkeypatch.setattr(cm, "setup_arduino", lambda auto_reset: True)
+        def fake_setup(auto_reset):
+            w.arduino = MagicMock()
+            return True
+        monkeypatch.setattr(cm, "setup_arduino", fake_setup)
 
         assert cm.ensure_arduino_connection() is True
 
-        w.arduino.disconnect.assert_called_once()
+        old_arduino.disconnect.assert_called_once()
         assert w.gpio_reset
         sent = [c.args[0] for c in w.arduino.send.call_args_list]
         assert sent == ["L5|160|1900", "L0-28369.0"]
@@ -158,13 +228,14 @@ class TestEnsureConnection:
         """A start must NOT proceed on a dead link; the operator is told."""
         cm, w = manager
         w.arduino.connected = False
+        old_arduino = w.arduino
         w.setup_gpio = lambda: None
         monkeypatch.setattr(cm, "setup_arduino", lambda auto_reset: False)
 
         assert cm.ensure_arduino_connection() is False
         assert w.errors, "operator was not shown a connection error"
         # No calibration pushed onto a link that never came up.
-        assert not w.arduino.send.called
+        assert not old_arduino.send.called
 
     def test_reconnect_skips_auto_reset(self, manager, monkeypatch):
         """The re-setup must use auto_reset=False: ensure_arduino_connection
@@ -173,9 +244,13 @@ class TestEnsureConnection:
         w.arduino.connected = False
         w.setup_gpio = lambda: None
         seen = []
+        def fake_setup(auto_reset):
+            seen.append(auto_reset)
+            w.arduino = MagicMock()
+            return True
         monkeypatch.setattr(
             cm, "setup_arduino",
-            lambda auto_reset: seen.append(auto_reset) or True,
+            fake_setup,
         )
         cm.ensure_arduino_connection()
         assert seen == [False]

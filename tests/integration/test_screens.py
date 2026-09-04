@@ -6,6 +6,8 @@ support accordion), the modal overlays, and the drawn icon / glyph helpers.
 conftest forces QT_QPA_PLATFORM=offscreen; no backend is involved.
 """
 
+from unittest.mock import MagicMock
+
 import pytest
 
 pytestmark = pytest.mark.integration
@@ -51,21 +53,23 @@ def test_drawn_icons_render_non_null(app):
 
 
 # ----- shell: nav + gating -----
-def test_shell_builds_with_five_screens(shell):
+def test_shell_builds_with_six_screens(shell):
     from ui.screens import (
         HelpScreen,
         HomeScreen,
+        ProfileScreen,
         SetupScreen,
         SupportScreen,
         TreatmentScreen,
     )
 
-    assert shell.stack.count() == 5
+    assert shell.stack.count() == 6
     assert isinstance(shell.home, HomeScreen)
     assert isinstance(shell.setup, SetupScreen)
     assert isinstance(shell.treatment, TreatmentScreen)
     assert isinstance(shell.help, HelpScreen)
     assert isinstance(shell.support, SupportScreen)
+    assert isinstance(shell.profile, ProfileScreen)
 
 
 def test_gated_pages_bounce_to_login_when_logged_out(shell):
@@ -114,6 +118,88 @@ def test_login_success_and_logout_flow(shell):
     assert shell.stack.currentIndex() == PAGES.index("home")
 
 
+def test_avatar_opens_profile_and_logout_button_logs_out(shell):
+    from ui.app_shell import PAGES
+
+    # Logged out: the avatar pops the login modal, not the profile page.
+    shell.set_user(None)
+    shell.top_bar._avatar.click()
+    assert not shell.login_modal.isHidden()
+    shell.login_modal.close_overlay()
+
+    # Logged in: the avatar navigates to the profile page (no logout).
+    shell.login_succeeded("Dr. Vasquez", title="Clinician")
+    fired = []
+    shell.logout_requested.connect(lambda: fired.append(True))
+    shell.top_bar._avatar.click()
+    assert shell.stack.currentIndex() == PAGES.index("profile")
+    assert not fired
+    assert shell.profile._name.text() == "Dr. Vasquez"
+    assert shell.profile._title.text() == "Clinician"
+
+    # The profile Log Out button surfaces the shell's logout signal.
+    shell.profile._logout.click()
+    assert fired
+
+
+def test_profile_add_pin_admin_only_and_exit(shell):
+    # Non-admin: Add PIN hidden, Exit App present and wired.
+    shell.login_succeeded("Dr. Vasquez", title="Clinician", is_admin=False)
+    assert not shell.profile._add_pin.isVisibleTo(shell.profile)
+
+    exits = []
+    shell.exit_requested.connect(lambda: exits.append(True))
+    shell.profile._exit.click()
+    assert exits
+
+    # Admin: Add PIN visible; clicking opens the Add PIN modal.
+    shell.login_succeeded("Administrator", title="Administrator", is_admin=True)
+    assert shell.profile._add_pin.isVisibleTo(shell.profile)
+    shell.profile._add_pin.click()
+    assert not shell.add_pin_modal.isHidden()
+    shell.add_pin_modal.close_overlay()
+
+    # Logged out again: Add PIN hides.
+    shell.set_user(None)
+    assert not shell.profile._add_pin.isVisibleTo(shell.profile)
+
+
+def test_add_pin_modal_two_step_flow(shell):
+    m = shell.add_pin_modal
+    submitted = []
+    shell.add_pin_submitted.connect(lambda name, pin: submitted.append((name, pin)))
+
+    shell.show_add_pin()
+    assert not m.isHidden()
+    m._name.setText("Dr. New")
+
+    # Step 1: enter — no submission yet, keypad flips to confirm.
+    m._keypad.set_value("")
+    m._keypad._press("4"); m._keypad._press("3"); m._keypad._press("2"); m._keypad._press("1")
+    assert submitted == []
+    assert m._keypad._title.text() == "Confirm New PIN"
+
+    # Mismatched confirm restarts the flow with an error.
+    for d in "9999":
+        m._keypad._press(d)
+    assert submitted == []
+    assert "did not match" in m._error.text()
+    assert m._keypad._title.text() == "Enter New PIN"
+
+    # Matching enter + confirm emits (username, pin).
+    for d in "4321" + "4321":
+        m._keypad._press(d)
+    assert submitted == [("Dr. New", "4321")]
+
+    # Controller error feedback restarts entry inside the modal…
+    shell.add_pin_failed("That PIN is already in use. Choose another.")
+    assert "already in use" in m._error.text()
+    assert not m.isHidden()
+    # …and success dismisses it.
+    shell.add_pin_succeeded()
+    assert m.isHidden()
+
+
 # ----- treatment run-state model -----
 def test_treatment_run_state_button_gating(shell):
     t = shell.treatment
@@ -125,6 +211,8 @@ def test_treatment_run_state_button_gating(shell):
     t.set_run_state(running=True, paused=False)
     assert not t._start_btn.isEnabled() and t._pause_btn.isEnabled()
     assert all(not tile.isEnabled() for tile in t._proto_buttons.values())
+    assert not t._keypad.isEnabled()                # patient PIN is a pre-run input
+    assert t._settings["max_pressure"].isEnabled()  # live settings stay reachable
 
     t.set_run_state(running=True, paused=True)
     assert t._start_btn.isEnabled() and not t._pause_btn.isEnabled()
@@ -159,6 +247,10 @@ def test_treatment_duration_slider_locks_during_run(shell):
     assert dur.isEnabled()                      # editable again after stop
 
 
+def test_treatment_stop_button_uses_concise_label(shell):
+    assert shell.treatment._estop_btn.text() == "STOP/RESET"
+
+
 def test_treatment_protocol_select_and_settings(shell):
     t = shell.treatment
     picked, settings = [], []
@@ -168,11 +260,14 @@ def test_treatment_protocol_select_and_settings(shell):
     t._proto_buttons[3].click()
     assert picked[-1] == 3
     assert "Right Lateral" in t._title.text()
+    assert "right-side angle" in t._desc.text()
 
-    t._settings["max_pressure"].set_value(65)
-    # set_value is programmatic; emulate a user change via the inner slider.
-    inner = t._settings["pulse_rate"]
-    inner.valueChanged.emit(3.0)
+    t.set_settings({"max_pressure": 65})
+    assert t.settings_values()["max_pressure"] == 65
+    assert settings == []                            # programmatic: no re-emit
+    # Emulate a user tap on a stepper arrow.
+    t._settings["pulse_rate"].set_value(2.8)
+    t._settings["pulse_rate"]._increment()
     assert ("pulse_rate", 3.0) in settings
 
 
@@ -182,9 +277,32 @@ def test_treatment_telemetry_setters(shell):
     assert t._phase_badge._label.text() == "Holding…"
     t.set_progress(15, 30)  # half done
     assert abs(t._progress_fraction - 0.5) < 1e-6
-    assert t._timer.text() == "0:15"
+    assert t._time_stat._value == "0:15"
     t.set_pressure(72)
-    t.set_angle(-12)  # exercises the knee rotation path
+    assert t._pressure_stat._value == "72"
+    t.set_angle(-12)
+    assert t._angle_stat._value == "-12°"
+
+
+def test_treatment_patient_keypad_round_trip(shell):
+    t = shell.treatment
+    pins = []
+    t.patient_pin_submitted.connect(pins.append)
+
+    for d in "4321":
+        t._keypad._press(d)                       # auto-submits at 4 digits
+    assert pins == ["4321"]
+    assert t._patient_label.text() == "Looking up…"
+
+    t.set_patient_error("Unknown PIN")
+    assert t._patient_label.text() == "Unknown PIN"
+    assert t._keypad.value() == ""                # cleared for a retry
+
+    t.set_patient("Jane D.")
+    assert t._patient_label.text() == "Jane D."
+
+    t.clear_patient()
+    assert t._patient_label.text() == "No patient linked"
 
 
 # ----- setup -----
@@ -219,6 +337,20 @@ def test_setup_arduino_badge_toggle(shell):
     assert s._arduino_badge._label.text() == "Arduino offline"
     s.set_arduino_connected(True)
     assert s._arduino_badge._label.text() == "Arduino connected"
+
+
+def test_setup_stop_controls_are_never_in_motion_lock_group(shell):
+    s = shell.setup
+    locked = s.control_buttons()
+    for row in s._rows.values():
+        assert all(button not in locked for button in row.safety_buttons)
+        assert all(button in locked for button in row.motion_buttons)
+
+
+def test_leg_length_go_is_disabled(shell):
+    row = shell.setup._rows["leg_length"]
+    go = next(button for button in row.motion_buttons if button.text() == "Go")
+    assert not go.isEnabled()
 
 
 # ----- support -----
@@ -277,6 +409,21 @@ def test_video_modal_play_toggle(shell):
     assert shell.video_modal.isHidden()
 
 
+def test_video_modal_play_button_icon_tracks_state(shell):
+    m = shell.video_modal
+    shell.show_video()
+    play_icon_key = m._small_play.icon().cacheKey()
+
+    m._toggle()
+    pause_icon_key = m._small_play.icon().cacheKey()
+    assert pause_icon_key != play_icon_key
+    assert m._small_play.toolTip() == "Pause video"
+
+    m._toggle()
+    assert m._small_play.icon().cacheKey() != pause_icon_key
+    assert m._small_play.toolTip() == "Play video"
+
+
 def test_video_modal_stops_playback_on_close(shell):
     m = shell.video_modal
     shell.show_video()
@@ -310,6 +457,202 @@ def test_video_modal_degrades_without_vlc(app, monkeypatch):
         modal.deleteLater()
 
 
+def test_video_modal_skip_next_prev(shell):
+    m = shell.video_modal
+    eng = m._engine
+    assert eng.count() == 3  # 1.mp4 / 2.mp4 / 3.mp4 ship in media/videos
+    shell.show_video()
+    assert m._clip_label.text() == "1 / 3"
+    m._toggle()  # play
+    m._skip(+1)
+    assert eng.index() == 1 and m._clip_label.text() == "2 / 3"
+    assert m._playing and m._poll.isActive()  # skip keeps playing
+    m._skip(-1)
+    assert eng.index() == 0
+    m._skip(-1)  # wraps to the last clip
+    assert eng.index() == 2 and m._clip_label.text() == "3 / 3"
+    m.close_overlay()
+    assert m.isHidden()
+    assert eng.index() == 0  # close rewinds to the first clip
+
+
+def test_video_modal_advances_through_playlist_on_clip_end(shell, monkeypatch):
+    m = shell.video_modal
+    shell.show_video()
+    m._toggle()  # play clip 1
+    monkeypatch.setattr(m._engine, "playback_state", lambda: "ended")
+    m._on_poll()  # clip 1 ended → clip 2 keeps playing
+    assert m._engine.index() == 1
+    assert m._playing and m._poll.isActive()
+    m._on_poll()  # clip 2 ended → clip 3
+    assert m._engine.index() == 2
+    states = []
+    m.play_toggled.connect(states.append)
+    m._on_poll()  # last clip ended → poster restored, rewound to clip 1
+    assert not m._playing and not m._poll.isActive()
+    assert m._engine.index() == 0
+    assert m._watermark.isVisibleTo(m)
+    assert states == [False]
+
+
+def test_video_modal_audio_not_disabled(app):
+    """The demo clips carry narration — the VLC instance must not be created
+    with --no-audio (regression guard for the legacy silent-player options)."""
+    import ui.modals.video_modal as vm
+
+    vm.vlc.Instance.reset_mock()
+    player = vm.vlc.Instance.return_value.media_player_new.return_value
+    player.play.return_value = 0
+    player.audio_get_mute.return_value = 0
+    player.audio_get_volume.return_value = 100
+
+    m = vm.VideoModal()
+    try:
+        m._toggle()  # forces _ensure_player → vlc.Instance(...)
+        args = vm.vlc.Instance.call_args[0][0]
+        assert "--no-audio" not in args
+        player.audio_set_mute.assert_called_with(False)
+        player.audio_set_volume.assert_called_with(100)
+    finally:
+        m.cleanup()
+        m.deleteLater()
+
+
+def test_vlc_engine_forces_selected_alsa_device(app, monkeypatch):
+    """The app must use the same direct ALSA path that passed Pi Test 3."""
+    import ui.modals.video_modal as vm
+
+    device = "sysdefault:CARD=Headphones"
+    monkeypatch.setattr(vm.sys, "platform", "linux")
+    vm.vlc.Instance.reset_mock()
+    player = vm.vlc.Instance.return_value.media_player_new.return_value
+    player.play.return_value = 0
+    player.audio_get_mute.return_value = 0
+    player.audio_get_volume.return_value = 100
+
+    surface = vm.QWidget()
+    engine = vm._VlcEngine(surface, audio_device=device, volume=100)
+    try:
+        assert engine.play()
+        options = vm.vlc.Instance.call_args[0][0]
+        assert "--aout=alsa" in options
+        assert f"--alsa-audio-device={device}" in options
+    finally:
+        engine.release()
+        surface.deleteLater()
+
+
+def test_video_modal_discovers_direct_alsa_outputs(monkeypatch):
+    import ui.modals.video_modal as vm
+
+    output = (
+        "null\n"
+        "sysdefault:CARD=Headphones\n"
+        "    Headphones\n"
+        "sysdefault:CARD=vc4hdmi0\n"
+        "    HDMI 1\n"
+    )
+    monkeypatch.setattr(vm.sys, "platform", "linux")
+    monkeypatch.setattr(vm.shutil, "which", lambda command: "/usr/bin/aplay")
+    monkeypatch.setattr(
+        vm.subprocess,
+        "run",
+        lambda *args, **kwargs: MagicMock(stdout=output),
+    )
+
+    assert vm._discover_alsa_devices() == [
+        "sysdefault:CARD=Headphones",
+        "sysdefault:CARD=vc4hdmi0",
+    ]
+
+
+def test_video_modal_volume_and_mute_controls(shell, monkeypatch):
+    m = shell.video_modal
+    volumes = []
+    muted = []
+    writes = []
+    monkeypatch.setattr(m._engine, "set_volume", volumes.append)
+    monkeypatch.setattr(m._engine, "set_muted", muted.append)
+    monkeypatch.setattr(
+        "ui.modals.video_modal._write_audio_preference",
+        lambda name, value: writes.append((name, value)),
+    )
+
+    m._volume_slider.setValue(37)
+    assert volumes == [37]
+    assert m._volume_value.text() == "37%"
+    assert writes == [("video_volume", 37)]
+
+    m._mute_btn.click()
+    assert muted[-1] is True
+    assert m._mute_btn.text() == "Unmute"
+    m._mute_btn.click()
+    assert muted[-1] is False
+    assert m._mute_btn.text() == "Mute"
+
+
+def test_video_modal_audio_controls_have_touch_targets(shell):
+    m = shell.video_modal
+
+    for button in (m._prev_btn, m._small_play, m._next_btn, m._mute_btn):
+        assert button.width() >= 48
+        assert button.height() >= 48
+    assert m._output_combo.height() >= 48
+    assert m._output_combo.width() >= 190
+    assert m._volume_slider.height() >= 48
+    assert m._volume_slider.width() >= 180
+
+
+def test_video_modal_output_selector_restarts_on_direct_device(app, monkeypatch):
+    import ui.modals.video_modal as vm
+
+    headphones = "sysdefault:CARD=Headphones"
+    hdmi = "sysdefault:CARD=vc4hdmi0"
+    monkeypatch.setattr(vm, "_discover_alsa_devices", lambda: [headphones, hdmi])
+
+    modal = vm.VideoModal()
+    try:
+        assert modal._output_combo.currentText() == "Choose output…"
+        assert modal._engine.audio_device() == ""
+        modal._toggle()
+        assert modal._playing
+        modal._output_combo.setCurrentIndex(2)
+        assert modal._engine.audio_device() == hdmi
+        assert modal._playing and modal._poll.isActive()
+    finally:
+        modal.cleanup()
+        modal.deleteLater()
+
+
+def test_vlc_engine_position_uses_relative_clock_when_elapsed_stays_zero():
+    """Some VLC outputs advance get_position while get_time remains at zero."""
+    import ui.modals.video_modal as vm
+
+    player = MagicMock()
+    player.get_length.return_value = 120_000
+    player.get_time.return_value = 0
+    player.get_position.return_value = 0.25
+    engine = object.__new__(vm._VlcEngine)
+    engine._player = player
+
+    assert engine.position() == (30.0, 120.0)
+
+
+def test_video_modal_poll_updates_elapsed_total_and_progress(shell, monkeypatch):
+    m = shell.video_modal
+    shell.show_video()
+    m._toggle()
+    monkeypatch.setattr(m._engine, "playback_state", lambda: "playing")
+    monkeypatch.setattr(m._engine, "position", lambda: (15.0, 60.0))
+
+    m._on_poll()
+
+    assert m._elapsed.text() == "0:15"
+    assert m._total.text() == "1:00"
+    assert m._progress_fraction == 0.25
+    assert m._vfill.width() == int(m._track.width() * 0.25)
+
+
 def test_video_modal_recovers_from_sustained_none_position(shell, monkeypatch):
     """VLC dying mid-playback (position() stuck at None) must recover to the
     poster instead of polling a dead player forever."""
@@ -321,8 +664,9 @@ def test_video_modal_recovers_from_sustained_none_position(shell, monkeypatch):
     states = []
     m.play_toggled.connect(states.append)
     monkeypatch.setattr(m._engine, "position", lambda: None)
+    monkeypatch.setattr(m._engine, "playback_state", lambda: "stopped")
 
-    # First two None polls are tolerated (VLC opens media lazily)...
+    # A brief stopped/no-position state is tolerated...
     m._on_poll()
     m._on_poll()
     assert m._poll.isActive()
@@ -333,6 +677,21 @@ def test_video_modal_recovers_from_sustained_none_position(shell, monkeypatch):
     assert not m._playing
     assert m._watermark.isVisibleTo(m)
     assert states == [False]
+
+
+def test_video_modal_does_not_fail_while_vlc_is_opening(shell, monkeypatch):
+    """Slow Pi media startup must not be mistaken for a dead player."""
+    m = shell.video_modal
+    shell.show_video()
+    m._toggle()
+    monkeypatch.setattr(m._engine, "position", lambda: None)
+    monkeypatch.setattr(m._engine, "playback_state", lambda: "opening")
+
+    for _ in range(m._MAX_NONE_POLLS + 5):
+        m._on_poll()
+
+    assert m._playing
+    assert m._poll.isActive()
 
 
 def test_video_modal_none_run_reset_by_valid_poll(shell, monkeypatch):

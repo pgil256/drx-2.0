@@ -43,12 +43,27 @@ def test_pause_noop_when_not_running():
 def test_pause_sets_state_and_stops_pulse():
     w = make_worker()
     w.is_running = True
+    w._pulse_active = True  # firmware pulsing is on
     w.arduino.reset_mock()
     w.pause()
     assert w.is_paused is True
     assert w._pause_started is not None
     # Pause must HOLD (stop pulsing) and never send an emergency stop.
     w.arduino.send.assert_called_once_with("JS")
+    assert w._pulse_active is False
+
+
+def test_pause_without_active_pulse_sends_nothing():
+    """During the ramp or a lateral move no pulse is running. A JS there
+    stalled the in-flight move on the deployed firmware (JS zeroed whichever
+    SMC was last addressed), failing the treatment after its timeout."""
+    w = make_worker()
+    w.is_running = True
+    w._pulse_active = False
+    w.arduino.reset_mock()
+    w.pause()
+    assert w.is_paused is True
+    w.arduino.send.assert_not_called()
 
 
 def test_resume_clears_pause_and_shifts_clock():

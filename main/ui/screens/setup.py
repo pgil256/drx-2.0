@@ -45,7 +45,8 @@ ROWS = [
     {"key": "horizontal", "name": "Horizontal", "sub": "−25° to +5°", "unit": "°",
      "min": -25, "max": 5, "step": 2.5, "value": -10, "pos_tone": "cyan"},
     {"key": "leg_length", "name": "Leg Length", "sub": "0–6 in", "unit": " in",
-     "min": 0, "max": 6, "step": 0.5, "value": 0, "pos_tone": "default"},
+     "min": 0, "max": 6, "step": 0.5, "value": 0, "pos_tone": "default",
+     "supports_go": False},
     {"key": "pressure", "name": "Pressure", "sub": "0–80 lbs", "unit": " lbs",
      "min": 0, "max": 80, "step": 5, "value": 0, "pos_tone": "default"},
 ]
@@ -105,7 +106,8 @@ class _ActuatorRow(QWidget):
         lay.addWidget(name_host)
 
         # Jog cluster: «  ‹  ›  »  ↺
-        self.buttons = []  # all enable/disable-able controls in this row
+        self.motion_buttons = []
+        self.safety_buttons = []
         jog_row = QHBoxLayout()
         jog_row.setSpacing(6)
         specs = [
@@ -120,7 +122,7 @@ class _ActuatorRow(QWidget):
             b.setToolTip(action.replace("_", " ").title())
             b.clicked.connect(lambda _c, a=action, d=delta: self._on_jog(a, d))
             jog_row.addWidget(b)
-            self.buttons.append(b)
+            self.motion_buttons.append(b)
         lay.addLayout(jog_row)
 
         # Slider (label-less; the name block is the label).
@@ -131,11 +133,16 @@ class _ActuatorRow(QWidget):
 
         go = DSButton("Go", variant="primary", size="sm")
         go.clicked.connect(lambda: self.go.emit(self._key))
+        if not cfg.get("supports_go", True):
+            go.setEnabled(False)
+            go.setToolTip("Leg Length is open-loop; use Jog or Reset")
         stop = DSButton("Stop", variant="secondary", size="sm")
         stop.clicked.connect(lambda: self.stop.emit(self._key))
         lay.addWidget(go)
         lay.addWidget(stop)
-        self.buttons.extend((go, stop))
+        self.motion_buttons.append(go)
+        # Stop must remain reachable while the rest of the row is locked.
+        self.safety_buttons.append(stop)
 
     def set_value(self, value):
         """Set the slider without re-emitting (controller-driven reflect)."""
@@ -158,7 +165,7 @@ class _PosRow(QWidget):
     def __init__(self, label, parent=None):
         super().__init__(parent)
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(4, 9, 4, 9)
+        lay.setContentsMargins(4, 5, 4, 5)
         lay.setSpacing(8)
         cap = QLabel(label.upper())
         cap.setFont(sans_font(size="--text-xs", weight=600, tracking=0.06))
@@ -257,10 +264,13 @@ class SetupScreen(QWidget):
         col = QVBoxLayout()
         col.setSpacing(_GAP)
 
-        live = DSCard("Live Position")
+        # padded=False + tight host margins: the default 24px card padding on
+        # top of the row heights pushed the whole window past 768 on-device
+        # (the fullscreen window can't go below the layout's minimum height).
+        live = DSCard("Live Position", padded=False)
         live_host = QWidget()
         lv = QVBoxLayout(live_host)
-        lv.setContentsMargins(0, 0, 0, 0)
+        lv.setContentsMargins(20, 8, 20, 8)
         lv.setSpacing(0)
         self._pos = {}
         live_rows = ["Axial", "Lateral", "Horizontal", "Leg Length", "Pressure"]
@@ -289,7 +299,7 @@ class SetupScreen(QWidget):
     def _safety_row(self, label, val, unit):
         w = QWidget()
         lay = QHBoxLayout(w)
-        lay.setContentsMargins(0, 11, 0, 11)
+        lay.setContentsMargins(0, 7, 0, 7)
         lay.setSpacing(8)
         lbl = QLabel(label)
         lbl.setFont(sans_font(size="--text-sm", weight=600))
@@ -352,13 +362,15 @@ class SetupScreen(QWidget):
         self._refresh_live(key)
 
     def control_buttons(self):
-        """Jog / Go / Stop buttons + Reset-Arduino — the set locked while the MCU
-        is busy. The Emergency Stop and Mark-As-Default buttons are intentionally
-        excluded so e-stop is always reachable."""
+        """Controls that may be locked while the MCU is busy.
+
+        Row Stop buttons and Emergency Stop are deliberately excluded: a
+        safety action must remain reachable while physical motion is active.
+        """
         widgets = []
         for cfg in ROWS:
             row = self._rows.get(cfg["key"])
             if row is not None:
-                widgets.extend(row.buttons)
+                widgets.extend(row.motion_buttons)
         widgets.append(self._reset_btn)
         return widgets

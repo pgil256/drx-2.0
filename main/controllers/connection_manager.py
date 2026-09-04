@@ -3,7 +3,7 @@
 
 Owns setup, verification, the reset sequence orchestration, and the
 calibration/zero-mark pushes that follow a (re)connect. Connection
-state (arduino, thread, reset_in_progress, initial_setup_complete)
+state (arduino, arduino_thread, reset_in_progress, initial_setup_complete)
 stays on the window; this module owns the transitions.
 """
 import time
@@ -24,6 +24,14 @@ class ConnectionManager:
         """Setup Arduino interface."""
         window = self.window
         try:
+            # Never overwrite a live transport/QThread pair. Reconnects used
+            # to leak the old Qt event loop and could abort with
+            # "QThread: Destroyed while thread is still running".
+            if getattr(window, "arduino", None) is not None or getattr(
+                window, "arduino_thread", None
+            ) is not None:
+                if not self.teardown_arduino():
+                    raise RuntimeError("Previous Arduino thread did not stop")
             print("Showing loading spinner")
             window.loading_spinner.show()
             window.disable_actuator_controls()
@@ -33,7 +41,7 @@ class ConnectionManager:
             window.arduino = Arduino()  # no parent!
             print("Arduino instance created")
 
-            window.thread = QThread()  # no parent!
+            window.arduino_thread = QThread()  # no parent!
             print("Thread instance created for Arduino")
 
             # 2 - Connect Worker's Signals to Form method slots to post data
@@ -42,17 +50,17 @@ class ConnectionManager:
 
             # 3 - Move the Worker object to the Thread object
             print("Moving Arduino object to thread")
-            window.arduino.moveToThread(window.thread)
+            window.arduino.moveToThread(window.arduino_thread)
 
             # 4 - Connect Worker Signals to the Thread slots
             print("Connecting Arduino finished signal to thread quit")
-            window.arduino.finished.connect(window.thread.quit)
+            window.arduino.finished.connect(window.arduino_thread.quit)
             window.arduino.ready_to_go_emit.connect(self.ready_to_go)
             window.arduino.buffer_warning.connect(window.handle_buffer_warning)
 
             # 5 - Connect Thread started signal to Worker operational slot method
             print("Connecting thread started signal to Arduino run method")
-            window.thread.started.connect(window.arduino.run)
+            window.arduino_thread.started.connect(window.arduino.run)
 
             # Additional Arduino signal connections
             print("Connecting Arduino position, status, and pressure signals")
@@ -61,12 +69,13 @@ class ConnectionManager:
             window.arduino.connection_lost.connect(window.handle_connection_lost)
             window.arduino.connection_failed.connect(window.handle_connection_failed)
             window.arduino.error_emit.connect(window.handle_firmware_error)
+            window.arduino.warning_emit.connect(window.handle_firmware_warning)
             window.arduino.released_emit.connect(window.handle_pressure_released)
             window.arduino.zeros_emit.connect(window.handle_zeros_echo)
 
             # 6 - Start the thread
             print("Starting Arduino thread")
-            window.thread.start()
+            window.arduino_thread.start()
             print("Thread started for Arduino")
 
             # Wait for "Ready to Go" signal with timeout
@@ -91,6 +100,14 @@ class ConnectionManager:
                 window.loading_spinner.hide()
 
                 print("Arduino initialization timed out")
+                if auto_reset:
+                    # The transport keeps retrying in the background (its
+                    # connect loop can outlast this wait). When it does come
+                    # up the MCU still needs the reset / zero-mark /
+                    # calibration sequence -- without this a late connect ran
+                    # treatments on an un-homed, factory-calibrated device
+                    # with the limit checks disabled.
+                    window.arduino.connection_ready.connect(self._on_late_connect)
 
             return connection_ready  # Indicate success or failure
 
@@ -125,7 +142,7 @@ class ConnectionManager:
         # Forcefully disconnect current connection (disconnect() joins the
         # I/O thread itself; the long settling sleeps predate that)
         if hasattr(window, 'arduino') and window.arduino:
-            window.arduino.disconnect()
+            self.teardown_arduino()
             time.sleep(0.5)  # Allow time for port to release
 
         # Reset GPIO pins to safe state
@@ -149,6 +166,36 @@ class ConnectionManager:
                 "Unable to establish reliable connection to Arduino. Please check connections and try again."
             )
             return False
+
+    def _on_late_connect(self):
+        """The Arduino connected after setup_arduino() gave up waiting: run the
+        reset sequence it would have scheduled had the connection been on time."""
+        print("Arduino connected late; running the deferred reset sequence")
+        QTimer.singleShot(0, self.reset_arduino)
+
+    def teardown_arduino(self, drain_timeout=0.0):
+        """Stop both transport layers and release their references safely."""
+        window = self.window
+        drained = True
+        arduino = getattr(window, "arduino", None)
+        thread = getattr(window, "arduino_thread", None)
+
+        if arduino is not None:
+            drained = arduino.disconnect(drain_timeout=drain_timeout)
+
+        if thread is not None:
+            thread.quit()
+            if not thread.wait(3000):
+                window.logger.error("Arduino QThread did not stop within 3 seconds")
+                # Preserve the references: dropping the final QThread wrapper
+                # while it is still running can abort the process.
+                return False
+            else:
+                thread.deleteLater()
+
+        window.arduino = None
+        window.arduino_thread = None
+        return drained
 
 
     def reset_arduino(self, event=None):
@@ -209,9 +256,14 @@ class ConnectionManager:
                 "Arduino reset and actuators reinitialized."
             )
             window.initial_setup_complete = True
+            window.protocol_stop_requested = False
+            if hasattr(window, "set_protocol_state"):
+                window.set_protocol_state("idle")
             print("Reset sequence completed successfully via worker.")
         else:
             window.start_button.setEnabled(True)  # Re-enable start button even on failure
+            if hasattr(window, "set_protocol_state"):
+                window.set_protocol_state("fault")
             window._show_timed_error(
              "Reset sequence failed. Check logs and Arduino connection."
              )
@@ -225,6 +277,8 @@ class ConnectionManager:
         # Make sure to clear the reset_in_progress flag in case of error too
         window.reset_in_progress = False
         window.start_button.setEnabled(True)  # Re-enable start button on error
+        if hasattr(window, "set_protocol_state"):
+            window.set_protocol_state("fault")
         window._show_timed_error(
          f"Could not complete reset sequence:\n{error_message}"
         )
@@ -232,6 +286,9 @@ class ConnectionManager:
     def send_zero_mark(self):
         window = self.window
         print("send_zero_mark")
+        if getattr(window, "arduino", None) is None:
+            window.logger.error("send_zero_mark: no Arduino transport")
+            return
         a_zero = window.config.AMarks.get("0.0", window.config.AMarks.get("0", 0))
         b_zero = window.config.BMarks.get("0.0", window.config.BMarks.get("0", 0))
         # Delimited form: the legacy fixed-width format truncated any
@@ -242,6 +299,11 @@ class ConnectionManager:
     def send_calibration(self):
         window = self.window
         print("send_calibration")
+        if getattr(window, "arduino", None) is None:
+            # Also reached 5 s after a reset via QTimer.singleShot, by which
+            # time a reconnect may have torn the transport down
+            window.logger.error("send_calibration: no Arduino transport")
+            return
         if not window.config.scale_calibrated:
             # Never push an implausible/default factor: the firmware
             # would happily produce raw-count "pressure" readings
@@ -266,11 +328,17 @@ class ConnectionManager:
         window.enable_actuator_controls()
 
     def ready_to_go(self):
-        """Set the I2C status to ready."""
-        window = self.window
-        print("Setting I2C status to ready")
-        window.I2Cstatus = 1
-        window.I2Cstatus_event.set()  # Signal the thread-safe event  
+        """Firmware announced "Ready to Go" (its boot banner after a reset).
+
+        Deliberately does NOT set ``I2Cstatus_event``. ResetWorker already
+        waits for the banner on ``Arduino.ready_event`` (set on the I/O
+        thread); this GUI-thread slot arrives a little later, and setting the
+        DONE event here could land after the worker had cleared it for the
+        NEXT step (the L5 zero mark) -- that step then returned instantly on
+        the stale set, every later DONE was attributed one step early, and a
+        homing step could be skipped while the reset still reported success.
+        """
+        print("Firmware ready (boot banner received)")
 
 
     def handle_connection_failed(self, message):

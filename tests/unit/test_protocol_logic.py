@@ -3,8 +3,14 @@ import pytest
 import time
 from unittest.mock import MagicMock, patch
 
-from helpers.protocols import Protocols, MIN_PRESSURE, MAX_SAFE_PRESSURE, PRESSURE_INCREMENT
 from config.config import Configuration
+from helpers.conversions import lateral_degrees_to_position
+from helpers.protocols import (
+    MAX_SAFE_PRESSURE,
+    MIN_PRESSURE,
+    PRESSURE_INCREMENT,
+    Protocols,
+)
 
 
 def make_protocol(**kwargs):
@@ -66,40 +72,41 @@ class TestSetToCDistance:
     def test_exact_mark_lookup(self):
         p = make_protocol()
         p.is_running = True
-        p.current_pos_c = 1450  # Already at target to avoid timeout
+        expected_position = int(p.config.CMarks["0.0"])
+        p.current_pos_c = expected_position  # Already at target to avoid timeout
 
         result = p.set_to_c_distance(0.0)
         assert result is True
-        # Should have sent K command with position from CMarks["0.0"]
-        p.arduino.send.assert_called_with("K1450")
+        p.arduino.send.assert_called_with(f"K{expected_position}")
 
     def test_negative_degree(self):
         p = make_protocol()
         p.is_running = True
-        p.current_pos_c = 500  # At target
+        expected_position = int(p.config.CMarks["-20.0"])
+        p.current_pos_c = expected_position  # At target
 
         result = p.set_to_c_distance(-20.0)
         assert result is True
-        p.arduino.send.assert_called_with("K500")
+        p.arduino.send.assert_called_with(f"K{expected_position}")
 
     def test_positive_degree(self):
         p = make_protocol()
         p.is_running = True
-        p.current_pos_c = 2281  # At target
+        expected_position = int(p.config.CMarks["17.5"])
+        p.current_pos_c = expected_position  # At target
 
         result = p.set_to_c_distance(17.5)
         assert result is True
-        p.arduino.send.assert_called_with("K2281")
+        p.arduino.send.assert_called_with(f"K{expected_position}")
 
     def test_interpolation_between_marks(self):
         """Degrees between marks should interpolate position linearly."""
         p = make_protocol()
         p.is_running = True
-        # Input -18.75 rounds to -19.0 (nearest 0.5)
-        # -20.0 -> 500, -17.5 -> 619
-        # ratio = (-19 - (-20)) / (-17.5 - (-20)) = 1/2.5 = 0.4
-        # position = 500 + (119 * 0.4) ~= 547
-        p.current_pos_c = 547
+        expected_position, _ = lateral_degrees_to_position(
+            p.config.CMarks, -18.75
+        )
+        p.current_pos_c = expected_position
 
         result = p.set_to_c_distance(-18.75)
         assert result is True
@@ -107,26 +114,28 @@ class TestSetToCDistance:
         call_arg = p.arduino.send.call_args[0][0]
         assert call_arg.startswith("K")
         position = int(call_arg[1:])
-        assert 540 <= position <= 555
+        assert position == expected_position
 
     def test_clamps_below_minus_20(self):
         p = make_protocol()
         p.is_running = True
-        p.current_pos_c = 500
+        expected_position = int(p.config.CMarks["-20.0"])
+        p.current_pos_c = expected_position
 
         result = p.set_to_c_distance(-25.0)  # Should clamp to -20
         assert result is True
-        p.arduino.send.assert_called_with("K500")
+        p.arduino.send.assert_called_with(f"K{expected_position}")
 
     def test_clamps_above_max_mark(self):
         """Values above 20 clamp to 20.0."""
         p = make_protocol()
         p.is_running = True
-        p.current_pos_c = 2400
+        expected_position = int(p.config.CMarks["20.0"])
+        p.current_pos_c = expected_position
 
         result = p.set_to_c_distance(25.0)  # Clamps to 20.0
         assert result is True
-        p.arduino.send.assert_called_with("K2400")
+        p.arduino.send.assert_called_with(f"K{expected_position}")
 
     def test_duplicate_degree_marks_no_division_error(self):
         """Regression: duplicate-degree CMarks keys (e.g. "-20" and "-20.00"

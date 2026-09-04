@@ -81,6 +81,7 @@ package-lock.json
 main/config/kneespa.cfg
 main/data/user_pins.csv
 main/data/auth_state.json
+cloud.env
 
 # Design-source scratch ? reference material dropped in the working tree,
 # never part of the app build (the code-built UI lives under main/ui/)

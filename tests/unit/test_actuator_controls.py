@@ -194,20 +194,19 @@ class TestMoveActuatorHorizontal:
         assert stub.horizontal_flexion_position == HORIZONTAL_MIN_DEGREES
 
     def test_in_range_sends_expected_command(self):
-        """In-range move sends ``A13<inches>`` and advances the position."""
+        """In-range move sends the calibrated absolute BMarks position."""
         # Start at 0; slow step (speed_factor <= 4) is 5, direction +1 -> 5 deg.
         stub = make_kneespa_stub(horizontal=0)
         KneeSpa.move_actuator(stub, ACTUATOR_B, None, "1", 1)
-        # inches = abs((pos + 25) / 5) = abs((5 + 25) / 5) = 6.0
-        stub.arduino.send.assert_called_once_with(f"A{ACTUATOR_B}6.0")
+        stub.arduino.send.assert_called_once_with("I132280")
         assert stub.horizontal_flexion_position == 5
 
     def test_fast_speed_uses_larger_step(self):
         """speed_factor > 4 uses a step of 10 degrees."""
         stub = make_kneespa_stub(horizontal=-25)
         KneeSpa.move_actuator(stub, ACTUATOR_B, None, "5", 1)
-        # -25 + 10 = -15 -> inches = abs((-15 + 25) / 5) = 2.0
-        stub.arduino.send.assert_called_once_with(f"A{ACTUATOR_B}2.0")
+        # -25 + 10 = -15 -> calibrated BMarks position 760.
+        stub.arduino.send.assert_called_once_with("I13760")
         assert stub.horizontal_flexion_position == -15
 
     def test_at_max_boundary_is_inclusive(self):
@@ -218,6 +217,15 @@ class TestMoveActuatorHorizontal:
         KneeSpa.move_actuator(stub, ACTUATOR_B, None, "1", 1)
         stub.arduino.send.assert_called_once()
         assert stub.horizontal_flexion_position == HORIZONTAL_MAX_DEGREES
+
+    def test_failed_send_does_not_change_displayed_position(self):
+        stub = make_kneespa_stub(horizontal=-10)
+        stub.arduino.send.return_value = False
+        result = KneeSpa.move_actuator(stub, ACTUATOR_B, None, "1", 1)
+        assert result is False
+        assert stub.horizontal_flexion_position == -10
+        stub._reflect_setup.assert_not_called()
+        stub.enable_actuator_controls.assert_called_once()
 
 
 @pytest.mark.unit
@@ -284,6 +292,45 @@ class TestMoveActuatorLateral:
         stub.arduino.send.assert_called_once_with(f"K{expected_pos}")
         assert stub.lateral_flexion_position == 2.5
 
+
+@pytest.mark.unit
+class TestLegLengthBounds:
+    @staticmethod
+    def _stub(position):
+        stub = MagicMock()
+        stub.leg_length = position
+        stub.LEG_LENGTH_MIN = 0.0
+        stub.LEG_LENGTH_MAX = 6.0
+        stub.arduino.send.return_value = True
+        return stub
+
+    def test_forward_at_max_sends_nothing(self):
+        stub = self._stub(6.0)
+        with patch.object(kneespa.GPIO, "output") as gpio_output:
+            assert KneeSpa.forward_button_clicked(stub) is False
+        gpio_output.assert_not_called()
+        stub.arduino.send.assert_not_called()
+
+    def test_reverse_at_min_sends_nothing(self):
+        stub = self._stub(0.0)
+        with patch.object(kneespa.GPIO, "output") as gpio_output:
+            assert KneeSpa.reverse_button_clicked(stub) is False
+        gpio_output.assert_not_called()
+        stub.arduino.send.assert_not_called()
+
+    def test_fast_forward_at_max_restores_without_spinner(self):
+        stub = self._stub(6.0)
+        assert KneeSpa.forward_fast_button_clicked(stub) is False
+        stub.loading_spinner.show.assert_not_called()
+
+    def test_failed_leg_send_keeps_estimate(self):
+        stub = self._stub(2.0)
+        stub.arduino.send.return_value = False
+        with patch.object(kneespa.GPIO, "output") as gpio_output:
+            assert KneeSpa.forward_button_clicked(stub) is False
+        assert stub.leg_length == 2.0
+        gpio_output.assert_not_called()
+
     def test_position_rounded_to_increment(self):
         """The new position is snapped to the nearest 2.5-degree increment."""
         # Start at 1.0; slow step 2.5 -> 3.5 -> rounds to 2.5 (nearest 2.5).
@@ -334,6 +381,19 @@ class TestEmergencyStop:
         args, _ = mock_qtimer.singleShot.call_args
         assert args[0] == 1000
         assert args[1] == controller._emergency_stop_phase2
+
+    def test_marks_intentional_stop_before_sending_commands(self):
+        """Firmware cleanup responses must observe the stopping state."""
+        stub = MagicMock()
+        stub.protocol_state = "running"
+        controller = ProtocolController(stub)
+
+        with patch.object(pc_mod, "QTimer"), patch.object(pc_mod, "GPIO"):
+            controller.emergency_stop_clicked(None)
+
+        assert stub.protocol_stop_requested is True
+        assert stub.protocol_state == "stopping"
+        stub.stop_actuators.assert_called_once()
 
 
 @pytest.mark.unit

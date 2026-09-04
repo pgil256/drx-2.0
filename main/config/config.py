@@ -7,8 +7,6 @@ from typing import Optional
 from config.constants import (
     CONFIG_PATH,
     DEFAULT_PROTOCOL_MINUTES,
-    LATERAL_MIN,
-    LATERAL_MAX,
 )
 
 # A real HX711 scale factor for this hardware is in the tens of
@@ -273,8 +271,10 @@ class Configuration:
     def _validate_calibration(self):
         """Decide marks_valid / scale_calibrated after a clean load."""
         marks_ok = True
-        for name, marks in (("CMarks", self.CMarks),
-                            ("AMarks", self.AMarks),
+        # CMarks is operator-calibrated device data. Once its keys and values
+        # have parsed as numbers in _load_marks(), preserve it exactly rather
+        # than imposing generated geometry, monotonicity, or range policy.
+        for name, marks in (("AMarks", self.AMarks),
                             ("BMarks", self.BMarks)):
             error = self.validate_marks(marks)
             if error:
@@ -285,22 +285,6 @@ class Configuration:
             "defaults in use" in e or "UNCALIBRATED" in e
             for e in self.calibration_errors
         )
-
-        # Range-vs-firmware-clamp mismatches are recorded but do not
-        # block: some shipped tables exceed LATERAL_MIN/MAX and the
-        # authoritative range is a pending hardware measurement.
-        try:
-            c_positions = [int(v) for v in self.CMarks.values()]
-            if c_positions and (
-                min(c_positions) < LATERAL_MIN or max(c_positions) > LATERAL_MAX
-            ):
-                self._flag_warning(
-                    f"CMarks span {min(c_positions)}-{max(c_positions)}, outside "
-                    f"the firmware clamp {LATERAL_MIN}-{LATERAL_MAX}; targets "
-                    "will be clamped"
-                )
-        except (ValueError, TypeError):
-            pass
 
         if abs(float(self.calibration)) < MIN_PLAUSIBLE_SCALE_FACTOR:
             self.scale_calibrated = False
@@ -402,12 +386,25 @@ class Configuration:
 
     def _set_default_c_marks(self):
         """Set default CMarks values for lateral actuator."""
-        self.CMarks = {}
-        for i in range(17):
-            angle = (i * 2.5) - 20
-            ratio = i / 16
-            position = int(round(LATERAL_MIN + ((LATERAL_MAX - LATERAL_MIN) * ratio)))
-            self.CMarks[str(angle)] = position
+        self.CMarks = {
+            "-20.0": 500,
+            "-17.5": 635,
+            "-15.0": 770,
+            "-12.5": 905,
+            "-10.0": 1042,
+            "-7.5": 1203,
+            "-5.0": 1364,
+            "-2.5": 1526,
+            "0.0": 1688,
+            "2.5": 1806,
+            "5.0": 1925,
+            "7.5": 2044,
+            "10.0": 2162,
+            "12.5": 2223,
+            "15.0": 2282,
+            "17.5": 2341,
+            "20.0": 2400,
+        }
 
     def _set_default_a_marks(self):
         """Set default AMarks values for axial actuator."""

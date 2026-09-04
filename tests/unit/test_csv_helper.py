@@ -1,13 +1,15 @@
 # tests/unit/test_csv_helper.py
 """Unit tests for CSVHelper (main/helpers/csv.py).
 
-CSVHelper loads user/PIN records either from environment variables (via
-SecureAuthHelper) or, as a fallback, from a hashed CSV file. These tests cover:
+CSVHelper loads user/PIN records from the runtime hashed CSV file merged with
+environment-variable users (via SecureAuthHelper). These tests cover:
 
   * load_csv() with a valid CSV, a missing file, and malformed rows
   * the legacy plaintext-pin -> hash conversion path
   * initialize_data() using the environment-variable override
   * initialize_data() falling back to the bundled CSV file
+  * the env + CSV merge (runtime-added PINs coexist with env users)
+  * add_user() runtime provisioning (admin "Add PIN")
 
 All tests assert CURRENT behavior and run on Windows (tmp_path + monkeypatch,
 no pty / POSIX gating).
@@ -351,9 +353,26 @@ class TestLoadCsvMalformed:
         assert data["hash_admin"]["username"] == "Administrator"
 
 
+@pytest.fixture
+def isolated_users_csv(monkeypatch, tmp_path):
+    """Point DATA_PATHS['USER_PINS'] at an empty header-only tmp CSV.
+
+    initialize_data() now always reads the runtime CSV (env users are merged
+    on top), so env-only tests must not observe a developer's real file.
+    """
+    path = tmp_path / "user_pins.csv"
+    path.write_text("pin_hash,username,email,status\n", encoding="utf-8")
+    monkeypatch.setitem(csv_module.DATA_PATHS, "USER_PINS", str(path))
+    return path
+
+
 @pytest.mark.unit
 class TestInitializeDataEnvOverride:
     """Tests for initialize_data() using environment-variable users."""
+
+    @pytest.fixture(autouse=True)
+    def _isolate_csv(self, isolated_users_csv):
+        return isolated_users_csv
 
     def test_admin_plaintext_pin_hashed(self, clean_auth_env):
         """ADMIN_PIN is salted-hashed (hash_pin_secure) and used as the key."""
@@ -593,3 +612,125 @@ class TestLoadCsvHeadlessRobustness:
 
         assert helper.users == {}
         assert not real_exists(missing)
+
+
+@pytest.mark.unit
+class TestInitializeDataMerge:
+    """Env users and CSV rows are merged (runtime-added PINs must survive a
+    restart even on devices provisioned via environment variables)."""
+
+    def test_env_and_csv_users_coexist(
+        self, clean_auth_env, isolated_users_csv
+    ):
+        csv_hash = SecureAuthHelper.hash_pin_secure("7042")
+        isolated_users_csv.write_text(
+            "pin_hash,username,email,status\n"
+            f"{csv_hash},CSV User,c@x,user\n",
+            encoding="utf-8",
+        )
+        clean_auth_env.setenv("ADMIN_PIN", "1111")
+
+        helper = CSVHelper()
+        helper.initialize_data()
+
+        assert len(helper.users) == 2
+        statuses = {rec["status"] for rec in helper.users.values()}
+        assert statuses == {"admin", "user"}
+
+
+@pytest.mark.unit
+class TestAddUser:
+    """Tests for add_user() — runtime PIN provisioning (admin Add PIN)."""
+
+    def test_add_user_in_memory_and_persisted(
+        self, clean_auth_env, isolated_users_csv
+    ):
+        helper = CSVHelper()
+        helper.initialize_data()
+
+        ok, message = helper.add_user("Dr. New", "4321")
+
+        assert ok
+        assert "Dr. New" in message
+        stored_hash = next(
+            h for h, r in helper.users.items() if r["username"] == "Dr. New"
+        )
+        assert stored_hash.startswith("pbkdf2_sha256$")
+        assert SecureAuthHelper.verify_pin("4321", stored_hash)
+        assert helper.users[stored_hash]["status"] == "user"
+
+        # Persisted: a fresh helper reloads the added user from the CSV.
+        helper2 = CSVHelper()
+        helper2.initialize_data()
+        assert any(r["username"] == "Dr. New" for r in helper2.users.values())
+
+    def test_add_user_mutates_users_dict_in_place(
+        self, clean_auth_env, isolated_users_csv
+    ):
+        """The window aliases helper.users; add_user must mutate, not rebind,
+        so the new PIN can log in without a restart."""
+        helper = CSVHelper()
+        helper.initialize_data()
+        alias = helper.users
+
+        helper.add_user("Dr. New", "4321")
+
+        assert alias is helper.users
+        assert len(alias) == 1
+
+    def test_add_user_rejects_duplicate_pin(
+        self, clean_auth_env, isolated_users_csv
+    ):
+        """A duplicate PIN would be ambiguous at login (first hash match
+        wins) — it must be rejected, even against a differently-salted hash."""
+        helper = CSVHelper()
+        helper.initialize_data()
+        helper.add_user("First", "4321")
+
+        ok, message = helper.add_user("Second", "4321")
+
+        assert not ok
+        assert "already in use" in message
+        assert len(helper.users) == 1
+
+    @pytest.mark.parametrize("bad_pin", ["", "12", "12345", "abcd", "12a4"])
+    def test_add_user_rejects_non_4_digit_pins(
+        self, clean_auth_env, isolated_users_csv, bad_pin
+    ):
+        helper = CSVHelper()
+        helper.initialize_data()
+
+        ok, _message = helper.add_user("User", bad_pin)
+
+        assert not ok
+        assert helper.users == {}
+
+    def test_add_user_blank_name_defaults(
+        self, clean_auth_env, isolated_users_csv
+    ):
+        helper = CSVHelper()
+        helper.initialize_data()
+
+        ok, _ = helper.add_user("   ", "4321")
+
+        assert ok
+        record = next(iter(helper.users.values()))
+        assert record["username"] == "User"
+
+    def test_add_user_write_failure_reports_not_raises(
+        self, clean_auth_env, isolated_users_csv, monkeypatch
+    ):
+        """A disk error must degrade to a (False, message) result — never a
+        crash, and never a phantom in-memory user that vanishes on reboot."""
+        helper = CSVHelper()
+        helper.initialize_data()
+
+        def boom(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr("builtins.open", boom)
+
+        ok, _message = helper.add_user("User", "4321")
+
+        assert not ok
+        assert helper.users == {}

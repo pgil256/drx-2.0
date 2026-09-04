@@ -44,18 +44,68 @@ class TestTreatmentStatusPanel:
         assert "SAFETY STOP" in panel.phase_label.text()
         assert "Pressure limit exceeded" in panel.phase_label.text()
 
+    def test_device_warning_is_orange_and_uses_warning_copy(self, qtbot):
+        panel = TreatmentStatusPanel()
+        qtbot.addWidget(panel)
+        panel.set_warning("Pressure limit exceeded")
+        assert panel.phase_label.text() == (
+            "DEVICE SAFETY WARNING: Pressure limit exceeded"
+        )
+        assert "rgb(196, 112, 0)" in panel.styleSheet()
+        assert panel.dismiss_button.isVisible()
+
+    def test_dismiss_idle_warning_hides_banner(self, qtbot):
+        panel = TreatmentStatusPanel()
+        qtbot.addWidget(panel)
+        panel.set_warning("Advisory only")
+
+        panel.dismiss_button.click()
+
+        assert not panel.isVisible()
+
+    def test_dismiss_running_warning_restores_treatment_banner(self, qtbot):
+        panel = TreatmentStatusPanel()
+        qtbot.addWidget(panel)
+        panel.set_running(50, 720)
+        panel.set_phase("RAMPING PRESSURE")
+        panel.set_warning("Advisory only")
+        panel.update_remaining(715)
+
+        panel.dismiss_button.click()
+
+        assert panel.isVisible()
+        assert panel.phase_label.text() == "RAMPING PRESSURE"
+        assert panel.time_label.text() == "11:55 left"
+        assert panel.stop_button.isEnabled()
+        assert not panel.dismiss_button.isVisible()
+
+    def test_fault_cannot_be_dismissed_or_replaced_by_warning(self, qtbot):
+        panel = TreatmentStatusPanel()
+        qtbot.addWidget(panel)
+        panel.set_fault("Pressure limit exceeded")
+
+        panel.set_warning("Advisory only")
+        panel.dismiss_warning()
+
+        assert panel.isVisible()
+        assert panel.phase_label.text() == (
+            "SAFETY STOP: Pressure limit exceeded"
+        )
+        assert not panel.dismiss_button.isVisible()
+
     def test_stop_button_emits_signal(self, qtbot):
         panel = TreatmentStatusPanel()
         qtbot.addWidget(panel)
         panel.set_running(40, 60)
+        assert panel.stop_button.text() == "EMERGENCY STOP"
         with qtbot.waitSignal(panel.stop_requested, timeout=1000):
             panel.stop_button.click()
 
-    def test_stopping_disables_stop_button(self, qtbot):
+    def test_stopping_keeps_emergency_stop_available(self, qtbot):
         panel = TreatmentStatusPanel()
         qtbot.addWidget(panel)
         panel.set_stopping()
-        assert not panel.stop_button.isEnabled()
+        assert panel.stop_button.isEnabled()
 
     def test_idle_resets(self, qtbot):
         panel = TreatmentStatusPanel()
@@ -135,11 +185,11 @@ class TestProtocolStateMachine:
         assert not h.ui.start_button.isEnabled()
         assert h.protocol_running is True  # still owns the hardware
 
-    def test_fault_keeps_banner_but_allows_restart(self, qtbot):
+    def test_fault_keeps_banner_and_requires_recovery(self, qtbot):
         h = StateMachineHarness(qtbot)
         h.treatment_panel.set_fault("test")
         h.set_protocol_state("fault")
-        assert h.ui.start_button.isEnabled()
+        assert not h.ui.start_button.isEnabled()
         assert h.protocol_running is False
 
     def test_nav_blocked_while_active(self, qtbot):

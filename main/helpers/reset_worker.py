@@ -1,5 +1,10 @@
 from PyQt5.QtCore import QRunnable, QObject, pyqtSignal, pyqtSlot
 import time
+from config.constants import DEFAULT_HORIZONTAL_POSITION
+from helpers.conversions import (
+    horizontal_degrees_to_position,
+    lateral_degrees_to_position,
+)
 from helpers.logging import (
     debug, debug_timing, debug_error, debug_state_change
 )
@@ -81,15 +86,37 @@ class ResetWorker(QRunnable):
         for attempt in (1, 2):
             debug(f"Attempting '{operation_name}' with command: {command}",
                   component="ResetWorker", attempt=attempt)
+            # ``is True`` is intentional: unittest MagicMock fabricates truthy
+            # attributes on demand, which otherwise routes legacy/mock tests
+            # through the v2-only API.
+            use_v2 = (
+                getattr(self.arduino, "protocol_v2", False) is True
+                and hasattr(self.arduino, "send_tracked")
+            )
             self.main_window.I2Cstatus = 0  # Reset flag BEFORE sending command
             if hasattr(self.main_window, 'I2Cstatus_event'):
                 self.main_window.I2Cstatus_event.clear()
-            if not self.arduino.send(command):
+            handle = self.arduino.send_tracked(command) if use_v2 else None
+            queued = handle is not None if use_v2 else self.arduino.send(command)
+            if not queued:
                 debug(f"Failed to send command for {operation_name}",
                       component="ResetWorker", level="ERROR")
                 return False
 
-            if self._wait_for_done(timeout=timeout, operation_name=operation_name):
+            if use_v2:
+                if handle.completed.wait(timeout=timeout):
+                    if handle.result == "DONE":
+                        return True
+                    debug(
+                        f"{operation_name} rejected: {handle.result} {handle.reason}",
+                        component="ResetWorker", level="WARNING",
+                    )
+                else:
+                    debug(
+                        f"Timeout waiting for sequenced {operation_name}",
+                        component="ResetWorker", level="WARNING",
+                    )
+            elif self._wait_for_done(timeout=timeout, operation_name=operation_name):
                 return True
             debug(f"Timeout waiting for {operation_name} completion (attempt {attempt})",
                   component="ResetWorker", level="WARNING")
@@ -153,7 +180,9 @@ class ResetWorker(QRunnable):
             # --- Step 3: Reset Actuator C ('I14') ---
             step_start = time.time()
             debug("[STEP 3/6] Resetting Actuator C ('I14')", component="ResetWorker", level="INFO")
-            pos_c = self.config.CMarks["{:.1f}".format(0)]
+            # Tolerant lookup: a hand-edited CMarks without an exact "0.0" key
+            # used to KeyError here and abort the whole reset sequence.
+            pos_c, _ = lateral_degrees_to_position(self.config.CMarks, 0)
             cmd_c = f"I14{pos_c}"
             debug(f"Actuator C command: {cmd_c}", component="ResetWorker", position=pos_c)
             if not self._try_command_with_retry(cmd_c, "Actuator C Reset", 30.0):
@@ -161,11 +190,21 @@ class ResetWorker(QRunnable):
             debug_timing("[STEP 3/6] Actuator C reset complete", start_time=step_start, component="ResetWorker")
             self.step_times.append(("Actuator C", time.time() - step_start))
 
-            # --- Step 4: Reset Actuator B ('A13') ---
+            # --- Step 4: Reset Actuator B ('I13') ---
             step_start = time.time()
-            debug("[STEP 4/6] Resetting Actuator B ('A13')", component="ResetWorker", level="INFO")
-            cmd_b = f"A13{3}" # Equivalent inches for -10 degrees
-            debug(f"Actuator B command: {cmd_b}", component="ResetWorker", inches=3)
+            debug("[STEP 4/6] Resetting Actuator B ('I13')", component="ResetWorker", level="INFO")
+            # Home the horizontal actuator to the calibrated
+            # DEFAULT_HORIZONTAL_POSITION (-10 deg) using its BMarks position,
+            # the same way Step 3 homes the lateral actuator from CMarks. The old
+            # 'A133' inches path ignored BMarks and physically landed near 0 deg
+            # (firmware 620*3 = 1860 ~= the BMarks 0-deg mark at 1900) -- the
+            # "resets to zero degrees" symptom.
+            pos_b = horizontal_degrees_to_position(
+                self.config.BMarks, DEFAULT_HORIZONTAL_POSITION
+            )
+            cmd_b = f"I13{pos_b}"
+            debug(f"Actuator B command: {cmd_b}", component="ResetWorker",
+                  degrees=DEFAULT_HORIZONTAL_POSITION, position=pos_b)
             if not self._try_command_with_retry(cmd_b, "Actuator B Reset", 30.0):
                 raise TimeoutError("Failed to reset Actuator B even after retry")
             debug_timing("[STEP 4/6] Actuator B reset complete", start_time=step_start, component="ResetWorker")

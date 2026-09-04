@@ -28,6 +28,7 @@ MOTOR_INO = REPO_ROOT / "main" / "motor" / "motor.ino"
 # (constants.py name, motor.ino #define name)
 PAIRS = [
     ("PRESSURE_MAX", "MAX_PRESSURE_LBS"),
+    ("PRESSURE_WARNING_MAX", "PRESSURE_WARNING_LBS"),
     ("AXIAL_MAX", "AXIAL_MAX_POS"),
     ("LATERAL_MIN", "LATERAL_MIN_POS"),
     ("LATERAL_MAX", "LATERAL_MAX_POS"),

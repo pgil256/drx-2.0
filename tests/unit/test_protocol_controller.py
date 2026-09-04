@@ -34,6 +34,7 @@ def make_window(state="idle"):
     window.max_right_edit.value.return_value = 10
     window.current_use_pulse_setting = True
     window.current_pulse_rate = 2.5
+    window.protocol_stop_requested = False
     return window
 
 
@@ -131,9 +132,7 @@ class TestStartGates:
         assert w.protocol_state == "running"
         assert w.protocol_running is True
 
-    def test_fault_state_also_requires_full_gate_chain(self, controller, monkeypatch):
-        """Restarting after a fault goes through the same confirmation +
-        connection gates as a cold start."""
+    def test_fault_state_requires_recovery_before_restart(self, controller, monkeypatch):
         pc, w = controller
         w.protocol_state = "fault"
         confirmed = []
@@ -141,8 +140,9 @@ class TestStartGates:
             pc, "confirm_start", lambda: confirmed.append(1) or False
         )
         pc.start_or_stop()
-        assert confirmed
+        assert not confirmed
         assert w.protocol_state == "fault"
+        w._show_timed_error.assert_called_once()
 
     def test_active_state_routes_to_stop(self, controller, monkeypatch):
         pc, w = controller
@@ -237,27 +237,146 @@ class TestStartProtocolGates:
         )
 
 
+# ----- start gate re-check after the confirm dialog -----
+class TestStartRecheck:
+    def test_fault_during_confirm_aborts_start(self, controller, monkeypatch):
+        """A firmware fault that lands while the confirm dialog's nested event
+        loop runs must not be overridden by the 'starting' transition."""
+        pc, w = controller
+        w.reset_in_progress = False
+
+        def confirm_with_fault():
+            w.protocol_state = "fault"
+            return True
+
+        monkeypatch.setattr(pc, "confirm_start", confirm_with_fault)
+        started = []
+        monkeypatch.setattr(pc, "start_protocol", lambda: started.append(1) or True)
+
+        pc.start_or_stop()
+
+        assert started == []
+        assert w.protocol_state == "fault"
+
+    def test_reset_during_confirm_aborts_start(self, controller, monkeypatch):
+        pc, w = controller
+        w.reset_in_progress = False
+
+        def confirm_with_reset():
+            w.reset_in_progress = True
+            return True
+
+        monkeypatch.setattr(pc, "confirm_start", confirm_with_reset)
+        started = []
+        monkeypatch.setattr(pc, "start_protocol", lambda: started.append(1) or True)
+
+        pc.start_or_stop()
+
+        assert started == []
+        assert w.protocol_state == "idle"
+
+    def test_running_not_forced_after_immediate_worker_failure(
+        self, controller, monkeypatch
+    ):
+        """start_protocol pumps events; if the worker's finished(False) is
+        processed inside it the machine is already idle and must stay idle."""
+        pc, w = controller
+        w.reset_in_progress = False
+        monkeypatch.setattr(pc, "confirm_start", lambda: True)
+        w.ensure_arduino_connection.return_value = True
+
+        def start_then_fail():
+            pc.set_state("idle")
+            return True
+
+        monkeypatch.setattr(pc, "start_protocol", start_then_fail)
+
+        pc.start_or_stop()
+
+        assert w.protocol_state == "idle"
+
+    def test_clean_start_reaches_running(self, controller, monkeypatch):
+        pc, w = controller
+        w.reset_in_progress = False
+        monkeypatch.setattr(pc, "confirm_start", lambda: True)
+        w.ensure_arduino_connection.return_value = True
+        monkeypatch.setattr(pc, "start_protocol", lambda: True)
+
+        pc.start_or_stop()
+
+        assert w.protocol_state == "running"
+
+
+# ----- release before the recovery reset -----
+class TestReleaseBeforeReset:
+    def test_reset_waits_while_load_present(self, controller):
+        pc, w = controller
+        w.last_measured_pressure = 30.0
+        pc._stop_phase3()
+        w.reset_arduino.assert_not_called()
+
+    def test_reset_runs_once_load_cleared(self, controller):
+        pc, w = controller
+        w.last_measured_pressure = 1.0
+        pc._stop_phase3()
+        w.reset_arduino.assert_called_once()
+
+    def test_reset_runs_immediately_without_telemetry(self, controller):
+        pc, w = controller
+        w.last_measured_pressure = None  # no status frame ever arrived
+        pc._stop_phase3()
+        w.reset_arduino.assert_called_once()
+
+    def test_reset_runs_after_bounded_wait(self, controller):
+        import time as _time
+
+        pc, w = controller
+        w.last_measured_pressure = 30.0
+        pc._reset_after_release(started=_time.time() - pc.RELEASE_WAIT_S - 1)
+        w.reset_arduino.assert_called_once()
+
+    def test_emergency_stop_phase3_also_waits(self, controller):
+        pc, w = controller
+        w.last_measured_pressure = 30.0
+        pc._emergency_stop_phase3()
+        w.reset_arduino.assert_not_called()
+
+
+# ----- UI pause anchor lifecycle -----
+class TestPauseAnchor:
+    def test_emergency_stop_clears_pause_anchor(self, controller):
+        pc, w = controller
+        w._paused_at = 1234.0
+        pc.emergency_stop_clicked(None)
+        assert w._paused_at is None
+
+    def test_completion_clears_pause_anchor(self, controller):
+        pc, w = controller
+        w._paused_at = 1234.0
+        pc.protocol_completed(True)
+        assert w._paused_at is None
+
+
 # ----- panel stop -----
 class TestPanelStop:
-    @pytest.mark.parametrize("state", ["starting", "running"])
-    def test_active_stop_goes_through_stop_protocol(
+    @pytest.mark.parametrize(
+        "state", ["idle", "starting", "running", "stopping", "fault"]
+    )
+    def test_panel_stop_always_uses_emergency_stop(
         self, controller, monkeypatch, state
     ):
         pc, w = controller
         w.protocol_state = state
-        stopped = []
-        monkeypatch.setattr(pc, "stop_protocol", lambda: stopped.append(1))
-        pc.panel_stop_requested()
-        assert stopped
+        events = []
+        monkeypatch.setattr(
+            pc,
+            "emergency_stop_clicked",
+            lambda event: events.append(event),
+        )
 
-    @pytest.mark.parametrize("state", ["idle", "fault"])
-    def test_inactive_stop_still_stops_hardware(self, controller, state):
-        """STOP on the banner in fault/idle: stop the machine anyway."""
-        pc, w = controller
-        w.protocol_state = state
         pc.panel_stop_requested()
-        w.stop_actuators.assert_called_once()
-        w.treatment_panel.set_idle.assert_called_once()
+
+        assert events == [None]
 
 
 class TestStopProtocol:
@@ -266,3 +385,46 @@ class TestStopProtocol:
         pc.stop_protocol()
         assert w.protocol_state == "stopping"
         w.stop_actuators.assert_called_once()
+
+
+class TestCompletionOutcomes:
+    def test_existing_safety_fault_is_not_cleared_or_duplicated(self, controller):
+        pc, w = controller
+        w.protocol_state = "fault"
+
+        pc.protocol_completed(False)
+
+        assert w.protocol_state == "fault"
+        w.treatment_panel.set_idle.assert_not_called()
+        w._show_timed_error.assert_not_called()
+        w._show_safety_alert.assert_not_called()
+
+    def test_worker_failure_logs_and_returns_to_idle(self, controller):
+        pc, w = controller
+        w.protocol_state = "running"
+        pc.protocol_completed(False)
+        assert w.protocol_state == "idle"
+        w.treatment_panel.set_idle.assert_called_once()
+        w._show_timed_error.assert_not_called()
+        w._show_safety_alert.assert_not_called()
+        w.logger.warning.assert_called_once_with(
+            "Treatment ended early; returning to idle"
+        )
+
+    def test_user_stop_stays_gated_until_reset_without_fault_alert(self, controller):
+        pc, w = controller
+        w.protocol_state = "stopping"
+        w.protocol_stop_requested = True
+        pc.protocol_completed(False)
+        assert w.protocol_state == "stopping"
+        assert w.protocol_stop_requested is True
+        w._show_safety_alert.assert_not_called()
+
+    def test_start_exception_recovers_state(self, controller, monkeypatch):
+        pc, w = controller
+        monkeypatch.setattr(pc, "confirm_start", lambda: True)
+        w.ensure_arduino_connection.side_effect = RuntimeError("boom")
+        pc.start_or_stop()
+        assert w.protocol_state == "idle"
+        assert w.protocol_running is False
+        assert w.worker is None

@@ -25,6 +25,49 @@ def make_stub():
     return stub
 
 
+# ----- cloud patient lookup result (external data) -----
+class TestCloudLookupResult:
+    def test_non_dict_result_is_reported_as_unavailable(self):
+        stub = make_stub()
+        stub.protocol_running = False
+        KneeSpa._on_cloud_lookup_done(stub, ["not", "a", "patient"])
+        stub.shell.treatment.set_patient_error.assert_called_once_with("Cloud unavailable")
+        assert stub.cloud_patient is None
+
+    def test_garbage_setting_is_skipped_not_raised(self):
+        stub = make_stub()
+        stub.protocol_running = False
+        KneeSpa._on_cloud_lookup_done(stub, {
+            "patient_id": 7, "display_name": "Jane D.",
+            "settings": {"max_pressure_lb": "sixty", "duration_min": 15,
+                         "max_left_deg": None, "protocol_number": "3"},
+        })
+        stub.shell.treatment.set_patient.assert_called_once_with("Jane D.")
+        stub.shell.treatment.set_settings.assert_called_once_with({"duration": 15})
+        stub.shell.treatment.select_protocol.assert_called_once_with(3)
+
+    def test_lookup_resolving_mid_treatment_is_ignored(self):
+        stub = make_stub()
+        stub.protocol_running = True
+        KneeSpa._on_cloud_lookup_done(stub, {
+            "patient_id": 7, "display_name": "Jane D.",
+            "settings": {"max_pressure_lb": 70},
+        })
+        stub.shell.treatment.set_settings.assert_not_called()
+        stub.shell.treatment.select_protocol.assert_not_called()
+        stub.shell.treatment.set_patient.assert_not_called()
+
+
+# ----- stop paths must alarm, never raise -----
+class TestStopGuards:
+    def test_row_stop_with_no_transport_alarms_instead_of_raising(self):
+        stub = make_stub()
+        stub.arduino = None
+        KneeSpa.stop_position_flexion_button(stub, "12")
+        stub._show_timed_error.assert_called_once()
+        assert "STOP NOT DELIVERED" in stub._show_timed_error.call_args[0][0]
+
+
 # ----- auth (verification itself lives in controllers.auth_controller) -----
 class TestLogin:
     def test_login_attempt_seeds_pin_and_delegates(self):
@@ -52,10 +95,30 @@ class TestLogin:
     def test_update_ui_after_login_drives_shell(self):
         stub = make_stub()
         stub.current_user = {"username": "Dr. Vasquez"}
+        stub._is_admin.return_value = False
         KneeSpa.update_ui_after_login(stub)
         stub.shell.login_succeeded.assert_called_once_with(
-            "Dr. Vasquez", goto="protocols"
+            "Dr. Vasquez", goto="protocols", title="Clinician", is_admin=False
         )
+
+    def test_update_ui_after_login_admin_title(self):
+        stub = make_stub()
+        stub.current_user = {"username": "Administrator", "status": "admin"}
+        stub._is_admin.return_value = True
+        KneeSpa.update_ui_after_login(stub)
+        stub.shell.login_succeeded.assert_called_once_with(
+            "Administrator", goto="protocols", title="Administrator",
+            is_admin=True,
+        )
+
+    def test_is_admin_checks_current_user_status(self):
+        stub = make_stub()
+        stub.current_user = {"username": "Admin", "status": "admin"}
+        assert KneeSpa._is_admin(stub)
+        stub.current_user = {"username": "User", "status": "user"}
+        assert not KneeSpa._is_admin(stub)
+        stub.current_user = None
+        assert not KneeSpa._is_admin(stub)
 
     def test_logout_clears_user(self):
         stub = make_stub()
@@ -63,6 +126,48 @@ class TestLogin:
         KneeSpa._on_logout(stub)
         assert stub.current_user is None
         stub.shell.logout.assert_called_once()
+
+    def test_exit_app_closes_window(self):
+        """Exit App routes through self.close() so closeEvent runs the full
+        hardware cleanup (Arduino disconnect + GPIO)."""
+        stub = make_stub()
+        stub._block_nav_during_treatment.return_value = False
+        KneeSpa._on_exit_app(stub)
+        stub.close.assert_called_once()
+
+    def test_exit_app_blocked_during_treatment(self):
+        stub = make_stub()
+        stub._block_nav_during_treatment.return_value = True
+        KneeSpa._on_exit_app(stub)
+        stub.close.assert_not_called()
+
+    def test_add_pin_persists_via_csv_helper(self):
+        stub = make_stub()
+        stub._is_admin.return_value = True
+        stub.csv.add_user.return_value = (True, "PIN added for Dr. New.")
+        KneeSpa._on_add_pin(stub, "Dr. New", "4321")
+        stub.csv.add_user.assert_called_once_with("Dr. New", "4321")
+        stub.shell.add_pin_succeeded.assert_called_once()
+        stub.shell.add_pin_failed.assert_not_called()
+
+    def test_add_pin_failure_stays_in_modal(self):
+        stub = make_stub()
+        stub._is_admin.return_value = True
+        stub.csv.add_user.return_value = (False, "That PIN is already in use.")
+        KneeSpa._on_add_pin(stub, "Dr. New", "4321")
+        stub.shell.add_pin_failed.assert_called_once_with(
+            "That PIN is already in use."
+        )
+        stub.shell.add_pin_succeeded.assert_not_called()
+
+    def test_add_pin_rejected_for_non_admin(self):
+        """The shell hides the button for non-admins, but the backend must
+        enforce it independently — the view can never bypass the check."""
+        stub = make_stub()
+        stub._is_admin.return_value = False
+        KneeSpa._on_add_pin(stub, "Sneaky", "4321")
+        stub.csv.add_user.assert_not_called()
+        stub.shell.add_pin_failed.assert_called_once()
 
     def test_logout_blocked_during_treatment(self):
         """Logging out mid-treatment would drop the operator's session while
@@ -128,6 +233,17 @@ class TestSetupReset:
         KneeSpa._setup_reset(stub, "leg_length")
         stub.reset_extra_button_clicked.assert_called_once()
 
+    def test_pressure_reset_sends_real_release(self):
+        stub = make_stub()
+        KneeSpa._setup_reset(stub, "pressure")
+        stub.arduino.send.assert_called_once_with("P0")
+        stub._reflect_setup.assert_not_called()
+        # The treatment banner is reserved for protocol stops: set_stopping()
+        # here had no matching set_idle(), so "STOPPING - RELEASING TRACTION"
+        # stayed over the top bar until the next treatment or Arduino reset.
+        stub.treatment_panel.set_stopping.assert_not_called()
+        stub.loading_spinner.hide.assert_called_once()
+
 
 # ----- Setup stop -----
 # Routed through the base stop paths (bare 'X' + link-down alarm). The row
@@ -171,6 +287,24 @@ class TestSetupGo:
         stub = make_stub()
         KneeSpa._on_setup_go(stub, "pressure")
         stub._apply_setup_pressure.assert_called_once()
+
+    def test_leg_go_is_refused_without_locking_controls(self):
+        stub = make_stub()
+        result = KneeSpa._on_setup_go(stub, "leg_length")
+        assert result is False
+        stub.disable_actuator_controls.assert_not_called()
+        stub.loading_spinner.show.assert_not_called()
+        stub._show_timed_error.assert_called_once()
+
+    def test_horizontal_go_uses_calibrated_absolute_position(self):
+        stub = make_stub()
+        stub.shell.setup.row_value.return_value = -10
+        stub.config.BMarks = {
+            "-25": 0, "-20": 380, "-15": 760, "-10": 1140,
+            "-5": 1520, "0": 1900, "5": 2280,
+        }
+        KneeSpa._on_setup_go(stub, "horizontal")
+        stub.arduino.send.assert_called_once_with("I131140")
 
     def test_apply_pressure_clamps_above_max(self):
         stub = make_stub()
@@ -258,15 +392,28 @@ class TestSettings:
         stub._confirm_mid_protocol_change.return_value = True
         stub._prev_settings = {}
         KneeSpa._on_setting_changed(stub, "max_left", 15)
-        assert stub.worker.max_left == -15
+        stub.worker.request_live_angle.assert_called_once_with("left", 15)
+
+    def test_setting_max_right_routes_live_request(self):
+        stub = make_stub()
+        stub._confirm_mid_protocol_change.return_value = True
+        stub._prev_settings = {}
+        KneeSpa._on_setting_changed(stub, "max_right", 12)
+        stub.worker.request_live_angle.assert_called_once_with("right", 12)
+
+    def test_setting_pressure_routes_live_request(self):
+        stub = make_stub()
+        stub._confirm_mid_protocol_change.return_value = True
+        stub._prev_settings = {}
+        KneeSpa._on_setting_changed(stub, "max_pressure", 70)
+        stub.worker.request_live_pressure.assert_called_once_with(70)
 
     def test_setting_pulse_rate_sets_use_pulse(self):
         stub = make_stub()
         stub._confirm_mid_protocol_change.return_value = True
         stub._prev_settings = {}
         KneeSpa._on_setting_changed(stub, "pulse_rate", 0)
-        assert stub.worker.pulse_rate == 0
-        assert stub.worker.use_pulse is False
+        stub.worker.request_live_pulse_rate.assert_called_once_with(0)
 
     def test_duration_change_does_not_touch_running_worker(self):
         """Duration is pre-run only — a stray live change must NOT mutate the

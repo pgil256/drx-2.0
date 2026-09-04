@@ -163,6 +163,20 @@ void test_X_stops_everything(void) {
     TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
 }
 
+// --- Y command (MCU reset) ---
+void test_Y_stops_motors_then_watchdog_resets(void) {
+    bRunning = true;
+    _wdt_enabled = false;
+    _wdt_timeout = -1;
+    processCommand("Y");
+    TEST_ASSERT_TRUE(Serial.outputContains("Emergency Stop"));
+    TEST_ASSERT_TRUE(Serial1.outputContains("Reset|"));
+    // The restart must be a real watchdog reset: the old jump-to-0
+    // restart wedged the MCU until power cycle (hardware, 2026-07-08)
+    TEST_ASSERT_TRUE(_wdt_enabled);
+    TEST_ASSERT_EQUAL(WDTO_15MS, _wdt_timeout);
+}
+
 // --- Buffer overflow protection ---
 void test_long_command_rejected(void) {
     // Create a command longer than MAX_COMMAND_LENGTH
@@ -315,6 +329,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_HF1_enables);
     RUN_TEST(test_HF0_disables);
     RUN_TEST(test_X_stops_everything);
+    RUN_TEST(test_Y_stops_motors_then_watchdog_resets);
     RUN_TEST(test_long_command_rejected);
     RUN_TEST(test_A_negative_inches_rejected);
     RUN_TEST(test_A_overrange_inches_rejected);
