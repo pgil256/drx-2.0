@@ -129,3 +129,7 @@ claude_old/
 
 
 main/motor/.native-build/
+
+# Local backup copies of the two files above (calibration + user PIN table)
+main/config/kneespa-backup*.cfg
+main/data/user_pins-backup*.csv
