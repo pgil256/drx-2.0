@@ -20,7 +20,7 @@ def test_protocol_defaults_fallbacks(tmp_path):
     cfg = make_config(tmp_path)
     d = cfg.protocol_defaults()
     assert d == {
-        "max_pressure": 50.0,
+        "max_pressure": 40.0,
         "max_left": 10.0,
         "max_right": 10.0,
         "pulse_rate": 2.0,
@@ -50,10 +50,42 @@ def test_duration_optional_keeps_existing(tmp_path):
     assert cfg.default_duration == 25.0
 
 
+def test_unmarked_protocol_defaults_are_ignored_and_dropped(tmp_path):
+    """A [ProtocolDefaults] section that was auto-written by an earlier build
+    (no operator ever pressed Mark As Default) must not pin old code defaults:
+    it is ignored on load and removed on the next save."""
+    cfg = make_config(tmp_path)
+    cfg._set_section("ProtocolDefaults", {
+        "max_pressure": 40, "max_left": 10, "max_right": 10,
+        "pulse_rate": 1.0, "duration": 12,
+    })
+    with open(cfg.configFile, "w", encoding="utf-8") as fh:
+        cfg.config.write(fh)
+    reloaded = Configuration(config_path=str(tmp_path / "kneespa.cfg"))
+    reloaded.get_config()
+    assert reloaded.default_pulse_rate == 2.0
+    assert reloaded.protocol_defaults_marked is False
+    reloaded.update_config()
+    again = Configuration(config_path=str(tmp_path / "kneespa.cfg"))
+    again.get_config()
+    assert not again.config.has_section("ProtocolDefaults")
+
+
+def test_marked_protocol_defaults_survive_unrelated_saves(tmp_path):
+    cfg = make_config(tmp_path)
+    cfg.save_protocol_defaults(60, 15, 18, 3, 20)
+    cfg.update_config()  # e.g. a calibration save
+    reloaded = Configuration(config_path=str(tmp_path / "kneespa.cfg"))
+    reloaded.get_config()
+    assert reloaded.protocol_defaults_marked is True
+    assert reloaded.default_pulse_rate == 3.0
+
+
 def test_legacy_config_without_duration_falls_back(tmp_path):
     """A pre-duration [ProtocolDefaults] section loads with the default duration."""
     cfg = make_config(tmp_path)
     cfg._set_section("ProtocolDefaults", {
+        "marked": 1,
         "max_pressure": 60, "max_left": 15, "max_right": 18, "pulse_rate": 3,
     })
     with open(cfg.configFile, "w", encoding="utf-8") as fh:
@@ -80,11 +112,11 @@ def test_device_id_generated_and_persisted(tmp_path):
 
 def test_malformed_protocol_default_keeps_fallback(tmp_path):
     cfg = make_config(tmp_path)
-    cfg._set_section("ProtocolDefaults", {"max_pressure": "garbage"})
+    cfg._set_section("ProtocolDefaults", {"marked": 1, "max_pressure": "garbage"})
     with open(cfg.configFile, "w", encoding="utf-8") as fh:
         cfg.config.write(fh)
 
     reloaded = Configuration(config_path=str(tmp_path / "kneespa.cfg"))
     reloaded.get_config()
     # Garbage value falls back to the __init__ default rather than crashing.
-    assert reloaded.default_max_pressure == 50.0
+    assert reloaded.default_max_pressure == 40.0

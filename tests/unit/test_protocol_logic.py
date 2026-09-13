@@ -201,6 +201,8 @@ class TestSetToPressure:
         p = make_protocol()
         p.is_running = True
         p.current_pressure = 50  # Already at target
+        # The device acks the move; the worker waits for that DONE
+        p.arduino.send.side_effect = lambda cmd: (p._on_firmware_done(), True)[1]
         result = p.set_to_pressure(50)
         assert result is True
         p.arduino.send.assert_called_with("P50")

@@ -42,7 +42,7 @@ from PyQt5.QtWidgets import (
 
 from config.constants import UI_PATHS
 from ui.theme import GLYPH, pause_icon, play_icon
-from ui.widgets.ds._common import drop_shadow, image_path, mono_font, resolve, sans_font
+from ui.widgets.ds._common import image_path, mono_font, resolve, sans_font
 
 from ._overlay import Overlay
 
@@ -500,7 +500,13 @@ class VideoModal(Overlay):
         card.setStyleSheet(
             f"#VideoCard {{ background: #ffffff; border-radius: {resolve('--radius-lg')}; }}"
         )
-        drop_shadow(card, blur=48, dy=8, alpha=51)
+        # No drop_shadow() here, on purpose. A QGraphicsEffect makes Qt
+        # composite the whole card through a cached source pixmap; with the
+        # native VLC surface (WA_NativeWindow) inside that card, the Pi's
+        # X11 backend stopped repainting the transport bar while a clip
+        # played: the volume slider and its "NN%" label responded to touch
+        # (VLC's volume changed) but the on-screen widgets went stale.
+        # The dim scrim already separates the card from the page.
 
         lay = QVBoxLayout(card)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -833,6 +839,13 @@ class VideoModal(Overlay):
                 self._engine.set_muted(True)
 
         self._volume_value.setText(f"{self._volume}%")
+        # Force a synchronous repaint of the audio row: with VLC rendering
+        # into its own X window next to these widgets, a queued update()
+        # could be starved on the Pi and leave the label showing the old
+        # value even though the volume had changed.
+        self._volume_value.repaint()
+        self._volume_slider.repaint()
+        self._mute_btn.repaint()
         if hasattr(self, "_engine"):
             self._engine.set_volume(self._volume)
         _write_audio_preference("video_volume", self._volume)

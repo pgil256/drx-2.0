@@ -361,6 +361,10 @@ class SetupScreen(QWidget):
         row.set_value(value)
         self._refresh_live(key)
 
+    def set_reset_enabled(self, enabled: bool) -> None:
+        """Allow recovery without unlocking individual actuator movement."""
+        self._reset_btn.setEnabled(enabled)
+
     def control_buttons(self):
         """Controls that may be locked while the MCU is busy.
 

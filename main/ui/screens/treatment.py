@@ -9,8 +9,8 @@ Everything on one 1366×768 screen, no modals::
     │ [ ▶ START ]           [ ❚❚ PAUSE ]           [ STOP/RESET ]     │
     └─────────────────────────────────────────────────────────────────┘
 
-The always-on ``TreatmentStatusPanel`` banner (kneespa.py) additionally shows
-phase / pressure / time / EMERGENCY STOP on every page while a protocol runs.
+The ``TreatmentStatusPanel`` banner (kneespa.py) stays hidden while a protocol
+runs -- this page's Live Status card and STOP button are the operator's view.
 
 View + signal surface only; the controller drives the setters below.
 
@@ -61,7 +61,7 @@ NO_PATIENT = "No patient linked"
 SETTING_SPECS = [
     ("duration", "Duration", DEFAULT_PROTOCOL_MINUTES,
      PROTOCOL_MINUTES_MIN, PROTOCOL_MINUTES_MAX, 1, " min"),
-    ("max_pressure", "Max Pressure", 50, 10, 80, 1, " lbs"),
+    ("max_pressure", "Max Pressure", 40, 10, 80, 1, " lbs"),
     ("max_left", "Max Angle L", 10, 0, 20, 1, "°"),
     ("max_right", "Max Angle R", 10, 0, 20, 1, "°"),
     ("pulse_rate", "Pulse Rate", 2, 0, 5, 0.2, "/sec"),

@@ -24,6 +24,10 @@ def make_window(state="idle"):
     window = MagicMock()
     window.protocol_state = state
     window.protocol_running = False
+    window.reset_in_progress = False
+    window._patient_lookup_id = 0
+    window.cloud_patient = {"patient_id": "test-patient"}
+    window._treatment_patient = dict(window.cloud_patient)
     window.current_user = {"username": "Dr", "status": "user"}
     window.config.calibrated = True
     window.config.a_factor = 1900
@@ -230,7 +234,7 @@ class TestStartProtocolGates:
         pc.start_protocol()
         worker = worker_cls.return_value
         worker.signals.reset_needed.connect.assert_called_once_with(
-            w.reset_arduino
+            pc._reset_after_failure
         )
         worker.signals.finished.connect.assert_called_once_with(
             pc.protocol_completed
@@ -239,6 +243,84 @@ class TestStartProtocolGates:
 
 # ----- start gate re-check after the confirm dialog -----
 class TestStartRecheck:
+    def test_declining_after_fault_does_not_enable_start(self, controller, monkeypatch):
+        pc, w = controller
+
+        def decline_with_fault():
+            pc.set_state("fault")
+            return False
+
+        monkeypatch.setattr(pc, "confirm_start", decline_with_fault)
+        pc.start_or_stop()
+
+        assert w.protocol_state == "fault"
+        w.ui.start_button.setEnabled.assert_called_with(False)
+
+    @pytest.mark.parametrize("connected", [False, True])
+    def test_fault_during_connection_check_is_preserved(
+        self, controller, monkeypatch, connected
+    ):
+        pc, w = controller
+        monkeypatch.setattr(pc, "confirm_start", lambda: True)
+        start = MagicMock(return_value=True)
+        monkeypatch.setattr(pc, "start_protocol", start)
+
+        def verify_with_fault():
+            pc.set_state("fault")
+            return connected
+
+        w.ensure_arduino_connection.side_effect = verify_with_fault
+        pc.start_or_stop()
+
+        start.assert_not_called()
+        assert w.protocol_state == "fault"
+        w.ui.start_button.setEnabled.assert_called_with(False)
+
+    def test_initial_progress_is_not_lost_or_overwritten(self, controller, monkeypatch):
+        pc, w = controller
+        worker = MagicMock()
+        worker.signals = protocols_module.WorkerSignals()
+        monkeypatch.setattr(protocols_module, "Protocols", lambda *a, **kw: worker)
+
+        def dispatch(_worker):
+            worker.signals.progress.emit("Pressure ramp")
+
+        w.threadpool.start.side_effect = dispatch
+        assert pc.start_protocol() is True
+        w.ui.status_label.setText.assert_called_with("Pressure ramp")
+        w.treatment_panel.set_phase.assert_called_with("PRESSURE RAMP")
+
+    def test_connection_exception_does_not_clear_fault(self, controller, monkeypatch):
+        pc, w = controller
+        monkeypatch.setattr(pc, "confirm_start", lambda: True)
+
+        def verify_with_fault():
+            pc.set_state("fault")
+            raise RuntimeError("connection interrupted")
+
+        w.ensure_arduino_connection.side_effect = verify_with_fault
+        pc.start_or_stop()
+
+        assert w.protocol_state == "fault"
+        w.ui.start_button.setEnabled.assert_called_with(False)
+
+    def test_reset_during_connection_check_keeps_start_disabled(self, controller, monkeypatch):
+        pc, w = controller
+        monkeypatch.setattr(pc, "confirm_start", lambda: True)
+        start = MagicMock(return_value=True)
+        monkeypatch.setattr(pc, "start_protocol", start)
+
+        def verify_with_reset():
+            w.reset_in_progress = True
+            return True
+
+        w.ensure_arduino_connection.side_effect = verify_with_reset
+        pc.start_or_stop()
+
+        start.assert_not_called()
+        assert w.protocol_state == "idle"
+        w.ui.start_button.setEnabled.assert_called_with(False)
+
     def test_fault_during_confirm_aborts_start(self, controller, monkeypatch):
         """A firmware fault that lands while the confirm dialog's nested event
         loop runs must not be overridden by the 'starting' transition."""
@@ -411,14 +493,17 @@ class TestCompletionOutcomes:
             "Treatment ended early; returning to idle"
         )
 
-    def test_user_stop_stays_gated_until_reset_without_fault_alert(self, controller):
+    @pytest.mark.parametrize("success", [False, True])
+    def test_user_stop_stays_gated_until_reset_without_fault_alert(self, controller, success):
         pc, w = controller
         w.protocol_state = "stopping"
         w.protocol_stop_requested = True
-        pc.protocol_completed(False)
+        pc.protocol_completed(success)
         assert w.protocol_state == "stopping"
         assert w.protocol_stop_requested is True
         w._show_safety_alert.assert_not_called()
+        record = w.cloud_client.post_treatment_async.call_args.args[0]
+        assert record["outcome"] == "stopped"
 
     def test_start_exception_recovers_state(self, controller, monkeypatch):
         pc, w = controller

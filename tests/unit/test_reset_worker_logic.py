@@ -345,18 +345,20 @@ class TestRunSequenceOrdering:
         i13_cmd = next(c for c in sent if c.startswith("I13"))
         assert i13_cmd == "I131140"
 
-    def test_calibration_is_last(self):
-        """Step 6 issues the 'L0' calibration command last."""
+    def test_calibration_is_the_final_step(self):
+        """Nothing follows the calibration acknowledgement: the open-loop
+        leg-length axis is no longer homed as part of the reset."""
         sent, _ = self._run_success()
         l0_index = next(i for i, c in enumerate(sent) if c.startswith("L0"))
-        assert l0_index == len(sent) - 1
+        assert sent[l0_index + 1:] == []
+        assert not any(c.startswith("F") for c in sent)
 
     def test_full_command_sequence(self):
-        """The full ordered sequence matches Y, L5, I14, I13, I12, L0."""
+        """The full ordered sequence ends at calibration (no FR homing)."""
         sent, _ = self._run_success()
         prefixes = []
         for cmd in sent:
-            for pfx in ("Y", "L5", "I14", "I13", "I12", "L0"):
+            for pfx in ("Y", "L5", "I14", "I13", "I12", "L0", "FR"):
                 if cmd == pfx or cmd.startswith(pfx):
                     prefixes.append(pfx)
                     break

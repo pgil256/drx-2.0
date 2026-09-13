@@ -2,12 +2,13 @@
 
 Reached from the top-bar avatar while logged in (the avatar no longer logs
 out directly). A single centered card shows the avatar mark, "Name — Title",
-and the account actions: Add PIN (admins only), Log Out, and Exit App.
+and the actions: Calibrate Actuators, Add PIN (admins only), Log Out, and Exit App.
 ``app_shell`` forwards the buttons as signals so the controller keeps one
 logout / shutdown path.
 
 Signals:
     add_pin_requested — the Add PIN button was tapped (admin only)
+    calibration_requested — the guided actuator calibration button was tapped
     logout_requested  — the Log Out button was tapped
     exit_requested    — the Exit App button was tapped
 """
@@ -24,6 +25,7 @@ _PAD = 20
 
 class ProfileScreen(QWidget):
     add_pin_requested = pyqtSignal()
+    calibration_requested = pyqtSignal()
     logout_requested = pyqtSignal()
     exit_requested = pyqtSignal()
 
@@ -68,6 +70,10 @@ class ProfileScreen(QWidget):
         vlay.addWidget(self._title)
 
         vlay.addSpacing(16)
+        self._calibration = DSButton("Calibrate Actuators", variant="secondary", full_width=True)
+        self._calibration.clicked.connect(self.calibration_requested)
+        self._calibration.hide()  # Temporarily hidden until calibration is released.
+        vlay.addWidget(self._calibration)
         self._add_pin = DSButton("Add PIN", variant="secondary", full_width=True)
         self._add_pin.clicked.connect(self.add_pin_requested)
         self._add_pin.setVisible(False)  # admins only (see set_user)
@@ -91,3 +97,4 @@ class ProfileScreen(QWidget):
         self._name.setText(username or "")
         self._title.setText(title if username else "")
         self._add_pin.setVisible(bool(username) and is_admin)
+        self._calibration.setEnabled(bool(username))

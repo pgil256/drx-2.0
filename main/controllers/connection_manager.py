@@ -95,7 +95,7 @@ class ConnectionManager:
 
                 print("Arduino connection verified by readiness event")
                 if auto_reset:
-                    QTimer.singleShot(0, self.reset_arduino)
+                    QTimer.singleShot(0, self._automatic_reset)
             else:
                 window.loading_spinner.hide()
 
@@ -171,7 +171,14 @@ class ConnectionManager:
         """The Arduino connected after setup_arduino() gave up waiting: run the
         reset sequence it would have scheduled had the connection been on time."""
         print("Arduino connected late; running the deferred reset sequence")
-        QTimer.singleShot(0, self.reset_arduino)
+        QTimer.singleShot(0, self._automatic_reset)
+
+    def _automatic_reset(self) -> None:
+        """Respect a physical stop received while connection setup was pending."""
+        if getattr(self.window, "_closing", False) is True:
+            return
+        if getattr(self.window, "_physical_stop_active", False) is not True:
+            self.reset_arduino()
 
     def teardown_arduino(self, drain_timeout=0.0):
         """Stop both transport layers and release their references safely."""
@@ -201,13 +208,19 @@ class ConnectionManager:
     def reset_arduino(self, event=None):
         """Reset Arduino and reinitialize actuators using ResetWorker."""
         window = self.window
+        if getattr(window, "_calibration_active", False) is True:
+            window._show_timed_error("Close actuator calibration before resetting Arduino.")
+            return
         print("Reset Arduino requested...")
+        if getattr(window, "_closing", False) is True:
+            return
 
         # Check if reset is already in progress to avoid multiple overlapping resets
         if window.reset_in_progress:
             print("Reset already in progress, ignoring duplicate request")
             return
 
+        window._physical_stop_active = False
         window.reset_in_progress = True  # Set flag to prevent overlapping resets
         window.initial_setup_complete = False
 
@@ -241,13 +254,15 @@ class ConnectionManager:
         """Slot called when ResetWorker finishes."""
         window = self.window
         print(f"Reset sequence finished signal received. Success: {success}")
+        if getattr(window, "_closing", False) is True:
+            return
+        if getattr(window, "_physical_stop_active", False) is True:
+            success = False
 
         # Clear the reset in progress flag
         window.reset_in_progress = False
 
         if success:
-            if window.initial_setup_complete == False:
-                window.reset_extra_button_clicked()
             window.loading_spinner.hide() # Hide spinner when done
             window.start_button.setText("Start")
             window.start_button.setStyleSheet(BUTTON_STYLES["START"])
@@ -259,11 +274,16 @@ class ConnectionManager:
             window.protocol_stop_requested = False
             if hasattr(window, "set_protocol_state"):
                 window.set_protocol_state("idle")
+            window.enable_actuator_controls()
             print("Reset sequence completed successfully via worker.")
         else:
-            window.start_button.setEnabled(True)  # Re-enable start button even on failure
+            window._release_leg_gpio()
+            window.initial_setup_complete = False
+            window.loading_spinner.hide()
+            window.start_button.setEnabled(False)
             if hasattr(window, "set_protocol_state"):
                 window.set_protocol_state("fault")
+            window.shell.setup.set_reset_enabled(True)
             window._show_timed_error(
              "Reset sequence failed. Check logs and Arduino connection."
              )
@@ -272,13 +292,18 @@ class ConnectionManager:
         """Slot called if ResetWorker emits an error signal."""
         window = self.window
         print(f"Reset error signal received: {error_message}")
+        if getattr(window, "_closing", False) is True:
+            return
         # Ensure spinner hides even if finished signal doesn't fire (though finally should handle it)
         window.loading_spinner.hide()
         # Make sure to clear the reset_in_progress flag in case of error too
         window.reset_in_progress = False
-        window.start_button.setEnabled(True)  # Re-enable start button on error
+        window._release_leg_gpio()
+        window.initial_setup_complete = False
+        window.start_button.setEnabled(False)
         if hasattr(window, "set_protocol_state"):
             window.set_protocol_state("fault")
+        window.shell.setup.set_reset_enabled(True)
         window._show_timed_error(
          f"Could not complete reset sequence:\n{error_message}"
         )

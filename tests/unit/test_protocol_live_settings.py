@@ -65,6 +65,82 @@ def test_start_pulse_marks_pulse_active():
     assert worker._pulse_active is True
 
 
+def _busy_send(worker):
+    """Arduino.send stub: the firmware answers BUSY to whatever was sent."""
+    def send(cmd):
+        worker._on_firmware_error("BUSY")
+        return True
+    return send
+
+
+def test_start_pulse_backs_off_when_firmware_busy():
+    """2026-09-10: J was sent while the firmware's P move was still driving;
+    the firmware replied BUSY and the treatment sat holding, never pulsing."""
+    worker = make_worker()
+    worker.arduino.reset_mock()
+    worker.arduino.send.side_effect = _busy_send(worker)
+
+    assert worker._start_pulse() is True
+    assert worker._pulse_active is False
+    assert worker.arduino.send.call_count == 1
+
+    # Within the back-off window nothing is resent
+    assert worker._start_pulse() is True
+    assert worker.arduino.send.call_count == 1
+
+    # Once the device accepts, the pulse is on
+    worker._pulse_retry_after = 0
+    worker.arduino.send.side_effect = None
+    worker.arduino.send.return_value = True
+    assert worker._start_pulse() is True
+    assert worker._pulse_active is True
+    assert worker.arduino.send.call_count == 2
+
+
+def test_sync_live_pulse_keeps_retrying_until_firmware_accepts():
+    worker = make_worker()
+    worker.arduino.reset_mock()
+    worker.arduino.send.side_effect = _busy_send(worker)
+
+    ok, active = worker._sync_live_pulse(False)
+    assert (ok, active) == (True, False)
+
+    worker._pulse_retry_after = 0
+    worker.arduino.send.side_effect = None
+    worker.arduino.send.return_value = True
+    ok, active = worker._sync_live_pulse(False)
+    assert (ok, active) == (True, True)
+
+
+def test_set_to_pressure_waits_for_firmware_done():
+    import threading
+    import time as _time
+    worker = make_worker()
+    worker.is_running = True
+    worker.current_pressure = 50  # already within tolerance
+
+    def send(cmd):
+        threading.Timer(0.3, worker._on_firmware_done).start()
+        return True
+    worker.arduino.send.side_effect = send
+
+    t0 = _time.time()
+    assert worker.set_to_pressure(50) is True
+    assert _time.time() - t0 >= 0.25
+
+
+def test_set_to_pressure_proceeds_if_done_never_arrives(monkeypatch):
+    import time as _time
+    monkeypatch.setattr(protocols_mod, "PRESSURE_DONE_SETTLE_S", 0.2)
+    worker = make_worker()
+    worker.is_running = True
+    worker.current_pressure = 50
+
+    t0 = _time.time()
+    assert worker.set_to_pressure(50) is True
+    assert 0.15 <= _time.time() - t0 < 2.0
+
+
 def test_overpressure_during_hold_routes_through_worker_revision():
     """The GUI-thread status slot must not send P itself while the worker's
     hold loop owns the axial SMC (it stops pulsing first, then applies)."""

@@ -4,8 +4,9 @@ Validate the high-priority audit fixes without importing GUI or hardware modules
 
 A fast, import-free snapshot check: each entry greps for the code shape a
 past audit fix introduced, so an accidental revert fails CI immediately.
-Patterns were updated 2026-07-05 for the reconciled FAILSAFE tree (single
-I/O-thread Arduino, decomposed controllers, emergencyStopAndRelease).
+Patterns cover the single-I/O-thread transport, decomposed controllers,
+cancellable protocol sends, and firmware target clamps. Behavioral regression
+tests run alongside these snapshots; text matches alone do not prove safety.
 Runs in CI next to scripts/check_limits_sync.py.
 """
 
@@ -47,7 +48,7 @@ def validate_fixes():
             [
                 r"connection_ready_event = threading\.Event\(\)",
                 r"def send\(self, command\):.*Never blocks on the port",
-                r"self\._priority_queue\.append\(command\)",
+                r"self\._priority_queue\.append\(\(command, handle\)\)",
             ],
             "Arduino readiness event and non-blocking queued send",
         ),
@@ -70,16 +71,18 @@ def validate_fixes():
         check(
             MAIN / "controllers" / "protocol_controller.py",
             [
-                r"if not window\.ensure_arduino_connection\(\):",
+                r"connected = window\.ensure_arduino_connection\(\)",
+                r"if not connected:.*?return\s+if not self\.start_protocol\(\):",
             ],
             "Protocol start is gated on Arduino readiness",
         ),
         check(
             MAIN / "helpers" / "protocols.py",
             [
-                r"if not self\.arduino\.send\(f\"P\{current_command\}\"\):",
+                r"if not self\._send_command\(f\"P\{current_command\}\"\):",
                 r"return False\s+.*Pressure did not stabilize",
-                r"if not self\.arduino\.send\(f\"K\{position\}\"\):",
+                r"if not self\._send_command\(f\"K\{position\}\"\):",
+                r"if self\._stop_requested\.is_set\(\):\s+return False",
                 r"Angle position not verified within timeout.*return False",
             ],
             "Protocols fail on unverified commands",
@@ -99,7 +102,8 @@ def validate_fixes():
                 r"#define MAX_PRESSURE_LBS\s+80",
                 r"clampPressureTarget",
                 r"clampPositionTarget",
-                r"emergencyStopAndRelease\(\"Pressure limit exceeded\"\)",
+                r"if \(target > MAX_PRESSURE_LBS\) return MAX_PRESSURE_LBS;",
+                r"localPressure = clampPressureTarget\(parameter\.toFloat\(\)\);",
             ],
             "Primary firmware has hard clamps",
         ),

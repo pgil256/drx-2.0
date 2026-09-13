@@ -1,4 +1,6 @@
+import math
 import os
+import re
 import time
 import threading
 from collections import deque
@@ -36,6 +38,41 @@ class CommandHandle:
     completed: threading.Event = field(default_factory=threading.Event)
     result: Optional[str] = None
     reason: str = ""
+    retries: int = 0  # link-level resends after a parse rejection
+
+
+# Firmware rejections that mean "I could not parse what arrived", i.e. the
+# command was NOT executed. On 2026-09-10 a single corrupted byte on
+# /dev/serial0 turned I131340 into an "Invalid I value" and the host faulted
+# the whole reset. A rejected command is always safe to resend once.
+PARSE_REJECTIONS = frozenset({
+    "A value out of range",
+    "Checksum mismatch",
+    "Command too long",
+    "Invalid A value",
+    "Invalid F direction",
+    "Invalid I value",
+    "Invalid K value",
+    "Invalid L0 factor",
+    "Invalid L5 zero marks",
+    "Invalid P value",
+    "Invalid device",
+    "Malformed frame",
+})
+# v1 rejections carry no sequence number; map the reason back to the
+# command letter it can have come from so the right recent write is resent.
+_REJECTION_LETTERS = {
+    "A value out of range": "A",
+    "Invalid A value": "A",
+    "Invalid F direction": "F",
+    "Invalid I value": "I",
+    "Invalid K value": "K",
+    "Invalid L0 factor": "L",
+    "Invalid L5 zero marks": "L",
+    "Invalid P value": "P",
+}
+RETRY_MATCH_WINDOW_S = 2.0
+MAX_LINK_RETRIES = 1
 
 
 class Arduino(QObject):
@@ -100,8 +137,14 @@ class Arduino(QObject):
         self._seq = 0
         self.last_done_seq = None
         self.checksum_failures = 0
+        # Once the device demonstrates checksummed telemetry, never accept a
+        # missing trailer as legacy traffic (UART damage can erase it).
+        self._status_checksum_required = False
         self._pending_v2 = {}
-        self._queued_handles = {}
+        # (written_at, handle) for the last few writes, newest last: lets a
+        # v1 "ERROR: Invalid X value" be matched to the command it rejected
+        self._recent_writes = deque(maxlen=16)
+        self.link_retries = 0  # parse rejections answered with a resend
         # The physical-touch E2E harness can opt into a raw serial transcript
         # without opening /dev/serial0 a second time (which would steal bytes
         # from this single-owner transport). Normal application runs leave the
@@ -153,8 +196,6 @@ class Arduino(QObject):
         if io_thread and io_thread.is_alive() and io_thread is not threading.current_thread():
             io_thread.join(timeout=3.0)
         with self._lock:
-            self._tx_queue.clear()
-            self._priority_queue.clear()
             self._fail_pending("DISCONNECTED", "Serial connection closed")
             if self.serial_com:
                 self.logger.info("Closing serial connection")
@@ -289,15 +330,21 @@ class Arduino(QObject):
         self.serial_com.flush()
         self._trace_serial("TX", command)
         self.logger.debug("TX: %s", command)
-        with self._lock:
-            handle = self._queued_handles.pop(command, None)
-            if handle is not None:
-                handle.written.set()
 
-    def _write_queued(self, command):
+    def _write_queued(self, command: str, handle: CommandHandle) -> None:
         """Write a dequeued command while making drain state observable."""
         try:
             self._write_now(command)
+            handle.written.set()
+            with self._lock:
+                self._recent_writes.append((time.time(), handle))
+        except Exception:
+            with self._lock:
+                self._pending_v2.pop(handle.sequence, None)
+                handle.result = "DISCONNECTED"
+                handle.reason = "Serial write failed"
+                handle.completed.set()
+            raise
         finally:
             with self._queue_condition:
                 self._write_in_progress -= 1
@@ -310,21 +357,21 @@ class Arduino(QObject):
             with self._lock:
                 if not self._priority_queue:
                     break
-                cmd = self._priority_queue.popleft()
+                cmd, handle = self._priority_queue.popleft()
                 self._write_in_progress += 1
-            self._write_queued(cmd)
+            self._write_queued(cmd, handle)
 
         with self._lock:
             due = (
                 self._tx_queue
                 and time.time() - self._last_tx >= self.SEND_INTERVAL_S
             )
-            cmd = self._tx_queue.popleft() if due else None
-            if cmd is not None:
+            queued = self._tx_queue.popleft() if due else None
+            if queued is not None:
                 self._last_tx = time.time()
                 self._write_in_progress += 1
-        if cmd is not None:
-            self._write_queued(cmd)
+        if queued is not None:
+            self._write_queued(*queued)
 
     def wait_for_drain(self, timeout_s=1.0):
         """Wait until all queued writes have reached ``serial.flush()``."""
@@ -395,26 +442,92 @@ class Arduino(QObject):
         self.connection_ready_event.clear()
         with self._lock:
             self._running = False  # under the lock: pairs with send()'s check
-            self._tx_queue.clear()
-            self._priority_queue.clear()
             self._fail_pending("DISCONNECTED", "Serial link lost")
             self._queue_condition.notify_all()
         self.connection_lost.emit()
 
+    def _discard_queued(self, result: str, reason: str) -> None:
+        """Cancel unsent commands under the queue lock without claiming a write."""
+        for queue in (self._tx_queue, self._priority_queue):
+            while queue:
+                _, handle = queue.popleft()
+                self._pending_v2.pop(handle.sequence, None)
+                handle.result = result
+                handle.reason = reason
+                handle.completed.set()
+
+    def cancel_pending_commands(self) -> None:
+        """Forget work aborted by a physical stop without interrupting its release."""
+        with self._queue_condition:
+            self._fail_pending("CANCELLED", "Physical emergency stop")
+            self._queue_condition.notify_all()
+
     def _fail_pending(self, result, reason):
-        """Resolve all outstanding v2 handles after teardown/link loss."""
+        """Resolve queued and outstanding v2 handles after teardown/link loss."""
+        self._discard_queued(result, reason)
         for handle in self._pending_v2.values():
             handle.result = result
             handle.reason = reason
             handle.completed.set()
         self._pending_v2.clear()
-        for handle in self._queued_handles.values():
-            handle.reason = reason
-            handle.written.set()
-        self._queued_handles.clear()
+
+    def _requeue_front(self, wire: str, handle: CommandHandle) -> None:
+        """Resend ahead of anything queued later, at the normal pacing."""
+        handle.retries += 1
+        self.link_retries += 1
+        self._tx_queue.appendleft((wire, handle))
+        self._queue_condition.notify_all()
+
+    def _retry_rejected_v2(self, seq, reason) -> bool:
+        """ERR|seq|<parse reason>: resend that exact command under a new
+        sequence number, once. Returns True if a resend was queued."""
+        with self._queue_condition:
+            handle = self._pending_v2.get(seq)
+            if handle is None or handle.retries >= MAX_LINK_RETRIES:
+                return False
+            self._pending_v2.pop(seq, None)
+            self._seq = (self._seq + 1) % 1000000
+            handle.sequence = self._seq
+            body = f"{self._seq}:{handle.command}"
+            wire = f"#{body}*{xor_checksum(body):02X}"
+            self._pending_v2[self._seq] = handle
+            self._requeue_front(wire, handle)
+        self.logger.warning(
+            "Firmware could not parse '%s' (%s); resending as seq=%s",
+            handle.command, reason, handle.sequence,
+        )
+        return True
+
+    def _retry_rejected_v1(self, reason) -> bool:
+        """Bare "ERROR: <parse reason>": find the most recent write it can
+        refer to and resend it once. Returns True if a resend was queued."""
+        letter = _REJECTION_LETTERS.get(reason)
+        now = time.time()
+        with self._queue_condition:
+            for written_at, handle in reversed(self._recent_writes):
+                if now - written_at > RETRY_MATCH_WINDOW_S:
+                    break
+                first = handle.command[:1]
+                if first in ("Q", "T", "X") or handle.sequence is not None:
+                    continue
+                if letter is not None and first != letter:
+                    continue
+                if handle.retries >= MAX_LINK_RETRIES:
+                    return False
+                self._recent_writes.remove((written_at, handle))
+                self._requeue_front(handle.command, handle)
+                break
+            else:
+                return False
+        self.logger.warning(
+            "Firmware could not parse '%s' (%s); resending once",
+            handle.command, reason,
+        )
+        return True
 
     def _resolve_v2_ack(self, seq, result, reason=""):
-        handle = self._pending_v2.pop(seq, None)
+        with self._lock:
+            handle = self._pending_v2.pop(seq, None)
         if handle is None:
             self.logger.warning("Ignoring stale/unknown %s acknowledgement seq=%s", result, seq)
             return False
@@ -427,68 +540,77 @@ class Arduino(QObject):
     # Message handling
     # ------------------------------------------------------------------
 
+    def _handle_status_report(self, data: str) -> None:
+        """Validate a complete telemetry report before publishing any values."""
+        frame, separator, checksum = data.partition("*")
+        if separator:
+            if not re.fullmatch(r"[0-9A-Fa-f]{2}", checksum):
+                self.checksum_failures += 1
+                self.logger.warning("Bad status checksum field: %s", data)
+                return
+            if xor_checksum(frame) != int(checksum, 16):
+                self.checksum_failures += 1
+                self.logger.warning("Rejected status frame with bad checksum: %s", data)
+                return
+        elif self.protocol_v2 or self._status_checksum_required:
+            self.checksum_failures += 1
+            self.logger.warning("Rejected unchecksummed status report: %s", data)
+            return
+
+        tokens = frame.split("|")
+        framed = tokens[0] == "STATUS_START"
+        if framed:
+            if len(tokens) != 7 or tokens[-1] != "STATUS_END":
+                self.logger.warning("Rejected malformed status frame: %s", data)
+                return
+            tokens = tokens[1:-1]
+        if len(tokens) != 5 or tokens[0] not in (("S",) if framed else ("S", "A")):
+            self.logger.warning("Rejected malformed status report: %s", data)
+            return
+        # int()/float() also accept underscores, Unicode digits and NaN/Inf;
+        # none of those are values the firmware writes onto this ASCII link.
+        if not all(re.fullmatch(r"[+-]?[0-9]+", token) for token in tokens[1:4]):
+            self.logger.warning("Rejected invalid status position: %s", data)
+            return
+        if not re.fullmatch(r"[+-]?[0-9]+(?:\.[0-9]+)?", tokens[4]):
+            self.logger.warning("Rejected invalid status pressure: %s", data)
+            return
+        pos_a, pos_b, pos_c = (int(token) for token in tokens[1:4])
+        pressure = float(tokens[4])
+        if not math.isfinite(pressure):
+            self.logger.warning("Rejected non-finite status pressure: %s", data)
+            return
+
+        if separator and not self._status_checksum_required:
+            self._status_checksum_required = True
+            self.logger.info("Checksummed status telemetry detected; checksums now required")
+        # Do not clamp or filter by travel limits here: a valid report of an
+        # actual excursion must still reach the safety monitor immediately.
+        self.status_emit.emit(pos_a, pos_b, pos_c, pressure)
+        if framed and self.connected and self.serial_com:
+            try:
+                self._write_now("Q")
+            except Exception:
+                self.logger.exception("Error sending status ack")
+
     def handle_com(self, data):
         """Handles incoming serial messages."""
         try:
-            # Handle STATUS_START format messages
-            if "STATUS_START|" in data:
-                if "|STATUS_END" not in data:
-                    # A truncated frame means corrupted values; never feed
-                    # them into the safety-limit checks
-                    self.logger.warning("Rejected truncated status frame: %s", data)
-                    return
-                # Protocol v2 status frames carry a trailing "*XX"
-                # checksum; verify it whenever present so a corrupted
-                # in-flight value can never reach the safety checks
-                end_marker = data.rindex("|STATUS_END") + len("|STATUS_END")
-                trailer = data[end_marker:]
-                if self.protocol_v2 and not trailer.startswith("*"):
-                    self.logger.warning("Rejected unchecksummed v2 status frame: %s", data)
-                    return
-                if trailer.startswith("*"):
-                    frame = data[:end_marker]
-                    try:
-                        expected = int(trailer[1:3], 16)
-                    except ValueError:
-                        self.logger.warning("Bad status checksum field: %s", data)
-                        return
-                    if xor_checksum(frame) != expected:
-                        self.checksum_failures += 1
-                        self.logger.warning(
-                            "Rejected status frame with bad checksum: %s", data
-                        )
-                        return
-                    data = frame
-                try:
-                    status_data = data.replace("STATUS_START|", "").replace(
-                        "|STATUS_END", ""
-                    )
-                    tokens = status_data.split("|")
-
-                    if tokens[0] == "S" and len(tokens) >= 5:
-                        pos_a = int(tokens[1])
-                        pos_b = int(tokens[2])
-                        pos_c = int(tokens[3])
-                        pressure = float(tokens[4])
-
-                        self.status_emit.emit(pos_a, pos_b, pos_c, pressure)
-
-                        # Acknowledge so the firmware sends the next frame.
-                        # Written by the I/O thread inline: no lock dance,
-                        # no sleep while holding a lock.
-                        if self.connected and self.serial_com:
-                            try:
-                                self._write_now("Q")
-                            except Exception:
-                                self.logger.exception("Error sending status ack")
-                except Exception:
-                    self.logger.exception("Error parsing status data: %s", data)
+            # Diagnostic text must never be interpreted as telemetry, even
+            # when it quotes a status frame.
+            if data.startswith("LOG|"):
+                self.logger.info("Firmware: %s", data[len("LOG|"):])
+                return
+            if data.startswith(("STATUS_START|", "S|", "A|")):
+                self._handle_status_report(data)
                 return
 
             # Firmware safety/error lines must reach the operator; they
             # were previously logged as "unrecognized" and dropped
             if data.startswith("ERROR:"):
                 message = data[len("ERROR:"):].strip()
+                if message in PARSE_REJECTIONS and self._retry_rejected_v1(message):
+                    return  # nothing executed; the resend is queued
                 self.logger.error("Firmware error: %s", message)
                 self.error_emit.emit(message)
                 return
@@ -501,7 +623,6 @@ class Arduino(QObject):
                 self.logger.info("Firmware completed autonomous pressure release")
                 self.released_emit.emit()
                 return
-
             # Handle regular messages
             tokens = data.split("|")
 
@@ -519,13 +640,15 @@ class Arduino(QObject):
             elif tokens[0] == "ERR" and len(tokens) >= 3:
                 # v2 command error: ERR|<seq>|<reason>
                 reason = tokens[2]
-                self.logger.error(
-                    "Firmware rejected command seq=%s: %s", tokens[1], reason
-                )
                 try:
                     seq = int(tokens[1])
                 except ValueError:
                     return
+                if reason in PARSE_REJECTIONS and self._retry_rejected_v2(seq, reason):
+                    return  # nothing executed; the resend is queued
+                self.logger.error(
+                    "Firmware rejected command seq=%s: %s", tokens[1], reason
+                )
                 if not self._resolve_v2_ack(seq, "ERR", reason):
                     return
                 self.error_emit.emit(reason)
@@ -545,15 +668,6 @@ class Arduino(QObject):
                 self.position_emit.emit(int(tokens[1]), 0, "", 0)
             elif tokens[0] == "PR" and len(tokens) >= 2:
                 self.pressure_emit.emit(tokens[1])
-            elif tokens[0] == "S" and len(tokens) >= 5:
-                self.status_emit.emit(
-                    int(tokens[1]), int(tokens[2]), int(tokens[3]), float(tokens[4])
-                )
-            elif tokens[0] == "A" and len(tokens) >= 5:
-                # L6 report: positions + pressure
-                self.status_emit.emit(
-                    int(tokens[1]), int(tokens[2]), int(tokens[3]), float(tokens[4])
-                )
             elif tokens[0] == "Ready to Go" or "Ready to Go" in data:
                 self.ready_event.set()
                 self.ready_to_go_emit.emit()
@@ -573,7 +687,9 @@ class Arduino(QObject):
                         return
                 self.ok_event.set()
             else:
-                self.logger.debug("Unrecognized data format: %s", data)
+                # Anything else the device says should be visible on the
+                # console (INFO), not buried in debug.log
+                self.logger.info("Unrecognized data format: %s", data)
         except Exception:
             self.logger.exception("Error handling data '%s'", data)
 
@@ -618,17 +734,23 @@ class Arduino(QObject):
             if not usable:
                 self.logger.error("Cannot send '%s' - not connected", command)
                 return None
+            if is_emergency:
+                # X stops the device, but it does not latch out later commands.
+                # Discard old work atomically so it cannot restart motion after
+                # the stop. New cleanup commands (P0/HF0) may still be queued.
+                self._discard_queued("CANCELLED", "Superseded by emergency stop")
             if self.protocol_v2:
                 self._seq = (self._seq + 1) % 1000000
                 handle.sequence = self._seq
                 body = f"{self._seq}:{command}"
                 command = f"#{body}*{xor_checksum(body):02X}"
                 self._pending_v2[self._seq] = handle
-            self._queued_handles[command] = handle
+            # Keep each write paired with its own handle, including identical
+            # legacy commands and priority probes with the same wire text.
             if is_emergency or priority:
                 # An emergency stop never waits in line
-                self._priority_queue.append(command)
+                self._priority_queue.append((command, handle))
             else:
-                self._tx_queue.append(command)
+                self._tx_queue.append((command, handle))
             self._queue_condition.notify_all()
         return handle

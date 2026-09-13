@@ -54,6 +54,9 @@ class ControlsHarness:
 
     def __init__(self, qtbot, n_buttons=3):
         self.protocol_running = False
+        self.protocol_state = "idle"
+        self.reset_in_progress = False
+        self.initial_setup_complete = True
         self.actuator_command_in_progress = False
         self.controls_enable_timer = None
         self.actuator_controls = []

@@ -5,9 +5,17 @@ Live measured pressure, target, phase, and time remaining used to be
 opt-in floating dialogs (off by default), so an operator could run a
 traction protocol completely blind; the on-screen emergency stop only
 existed on the Setup page. This panel overlays the top of the main
-window whenever a protocol is active or the device is in a fault state.
+window for device warnings and faults raised while no protocol is active
+(e.g. a jog on the Setup page tripping a limit).
+
+While a protocol is active the banner stays hidden: navigation is locked
+to the Protocols page, which already shows phase, pressure and time
+remaining inline with its own STOP control, and safety events are raised
+through the acknowledged safety-alert dialog. The extra red/orange strip
+across the top of the page was distracting during runs, so
+``suppress_when`` (a callable) gates every ``show()``.
 """
-from typing import Optional
+from typing import Callable, Optional
 
 from PyQt5.QtCore import Qt, QEvent, pyqtSignal
 from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QWidget
@@ -64,9 +72,17 @@ class TreatmentStatusPanel(QFrame):
 
     stop_requested = pyqtSignal()
 
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
+    def __init__(
+        self,
+        parent: Optional[QWidget] = None,
+        suppress_when: Optional[Callable[[], bool]] = None,
+    ) -> None:
         super().__init__(parent)
         self.setObjectName("treatmentPanel")
+        # Callable returning True while the banner must stay off-screen.
+        # State (mode, labels, colours) keeps tracking normally so nothing
+        # is lost; only the overlay is withheld.
+        self._suppress_when = suppress_when
 
         layout = QHBoxLayout(self)
         layout.setContentsMargins(16, 6, 16, 6)
@@ -249,7 +265,24 @@ class TreatmentStatusPanel(QFrame):
     def _fit_to_parent(self, parent: QWidget) -> None:
         self.setGeometry(0, 0, parent.width(), PANEL_HEIGHT)
 
+    def set_suppressed_when(self, predicate: Optional[Callable[[], bool]]) -> None:
+        """Install (or clear) the predicate that keeps the banner hidden."""
+        self._suppress_when = predicate
+
+    def is_suppressed(self) -> bool:
+        if self._suppress_when is None:
+            return False
+        try:
+            return bool(self._suppress_when())
+        except Exception:
+            return False
+
     def show(self) -> None:  # noqa: A003 - QWidget API
+        if self.is_suppressed():
+            # A banner left over from an idle-time warning must not linger
+            # into a run either.
+            super().hide()
+            return
         super().show()
         self.raise_()
 

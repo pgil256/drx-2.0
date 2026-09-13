@@ -17,6 +17,7 @@ class StubWindow:
         self.reset_in_progress = False
         self.initial_setup_complete = False
         self.loading_spinner = MagicMock()
+        self.shell = MagicMock()
         self.start_button = MagicMock()
         self.threadpool = MagicMock()
         self.logger = MagicMock()
@@ -35,6 +36,12 @@ class StubWindow:
 
     def reset_extra_button_clicked(self):
         self.leg_resets += 1
+
+    def _release_leg_gpio(self):
+        pass
+
+    def enable_actuator_controls(self):
+        pass
 
 
 @pytest.fixture
@@ -74,13 +81,13 @@ class TestResetGating:
         assert w.initial_setup_complete is True
         w.start_button.setEnabled.assert_called_with(True)
 
-    def test_reset_finished_failure_reenables_start(self, manager):
+    def test_reset_finished_failure_keeps_start_disabled(self, manager):
         cm, w = manager
         w.reset_in_progress = True
         cm._on_reset_finished(False)
         assert w.reset_in_progress is False
         assert w.initial_setup_complete is False
-        w.start_button.setEnabled.assert_called_with(True)
+        w.start_button.setEnabled.assert_called_with(False)
         assert any("failed" in e.lower() for e in w.errors)
 
 
@@ -110,7 +117,7 @@ class TestLateConnect:
             lambda ms, fn: scheduled.append((ms, fn)),
         )
         cm._on_late_connect()
-        assert scheduled == [(0, cm.reset_arduino)]
+        assert scheduled == [(0, cm._automatic_reset)]
 
     def test_calibration_pushes_tolerate_missing_transport(self, manager):
         cm, w = manager

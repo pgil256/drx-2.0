@@ -30,6 +30,8 @@ void setUp(void) {
     statusAcknowledged = true;
     highFrequencyStatus = false;
     jerking = false;
+    hostV2 = false;
+    currentCmdSeq = -1;
     _millis_value = 0;
 }
 
@@ -43,6 +45,58 @@ void test_status_format(void) {
     TEST_ASSERT_TRUE(out.find("|1500|") != std::string::npos);
     TEST_ASSERT_TRUE(out.find("|2000|") != std::string::npos);
     TEST_ASSERT_TRUE(out.find("|1200|") != std::string::npos);
+}
+
+static void assert_checksummed_report(const std::string &out) {
+    size_t start = out.find("STATUS_START|S|");
+    TEST_ASSERT_TRUE(start != std::string::npos);
+    size_t end = out.find("|STATUS_END", start);
+    TEST_ASSERT_TRUE(end != std::string::npos);
+    end += std::string("|STATUS_END").length();
+    unsigned char checksum = 0;
+    for (size_t i = start; i < end; ++i) checksum ^= (unsigned char)out[i];
+    char suffix[5];
+    snprintf(suffix, sizeof(suffix), "*%02X", checksum);
+    TEST_ASSERT_EQUAL_STRING(suffix, out.substr(end, 3).c_str());
+    TEST_ASSERT_TRUE(out[end + 3] == '\r' || out[end + 3] == '\n');
+}
+
+void test_legacy_status_is_checksummed_without_v2_opt_in(void) {
+    Wire.position_14 = 1940;
+    sendStatus();
+    TEST_ASSERT_FALSE(hostV2);
+    assert_checksummed_report(Serial1.getOutput());
+    TEST_ASSERT_TRUE(Serial1.outputContains("|1940|"));
+}
+
+void test_v2_status_keeps_same_checksum_format(void) {
+    hostV2 = true;
+    sendStatus();
+    assert_checksummed_report(Serial1.getOutput());
+}
+
+void test_l6_uses_checksummed_status_format(void) {
+    processCommand("L6");
+    assert_checksummed_report(Serial1.getOutput());
+    TEST_ASSERT_FALSE(Serial1.outputContains("A|1500|"));
+}
+
+// USB debug output is tee'd to the Pi as whole "LOG|<line>" frames on
+// their own lines, never spliced into a status frame
+void test_debug_lines_tee_to_serial1_as_log_frames(void) {
+    sendStatus();
+    std::string out = Serial1.getOutput();
+    size_t log_at = out.find("LOG|status: ");
+    TEST_ASSERT_TRUE(log_at != std::string::npos);
+    TEST_ASSERT_TRUE(out.find(" 14: 1200") != std::string::npos);
+    // The LOG| line is terminated before the status frame starts
+    size_t status_at = out.find("STATUS_START|S|");
+    TEST_ASSERT_TRUE(status_at != std::string::npos);
+    TEST_ASSERT_TRUE(out.find((char)10, log_at) < status_at);
+    // Nothing of the tee'd text lands inside the frame itself
+    size_t frame_end = out.find("|STATUS_END", status_at);
+    TEST_ASSERT_EQUAL(std::string::npos,
+                      out.substr(status_at, frame_end - status_at).find("LOG|"));
 }
 
 void test_status_sent_while_jerking(void) {
@@ -162,6 +216,10 @@ int main(int argc, char **argv) {
     UNITY_BEGIN();
 
     RUN_TEST(test_status_format);
+    RUN_TEST(test_legacy_status_is_checksummed_without_v2_opt_in);
+    RUN_TEST(test_v2_status_keeps_same_checksum_format);
+    RUN_TEST(test_l6_uses_checksummed_status_format);
+    RUN_TEST(test_debug_lines_tee_to_serial1_as_log_frames);
     RUN_TEST(test_status_sent_while_jerking);
     RUN_TEST(test_status_skipped_when_processing);
     RUN_TEST(test_q_acknowledges_status);

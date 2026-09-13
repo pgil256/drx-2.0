@@ -8,12 +8,12 @@ other controllers read them; this module owns the transitions.
 """
 import time
 import uuid
+from copy import deepcopy
 from datetime import datetime, timezone
 
 import RPi.GPIO as GPIO
-from PyQt5 import QtWidgets
 from PyQt5.QtCore import QTimer
-from PyQt5.QtWidgets import QApplication, QMessageBox
+from PyQt5.QtWidgets import QMessageBox
 
 from helpers import protocols
 from config.constants import BUTTON_STYLES, EMERGENCYSTOP
@@ -49,7 +49,7 @@ class ProtocolController:
         if state == "idle":
             start_button.setText("Start")
             start_button.setStyleSheet(BUTTON_STYLES["START"])
-            start_button.setEnabled(True)
+            start_button.setEnabled(window.reset_in_progress is not True)
             window.treatment_panel.set_idle()
         elif state == "starting":
             start_button.setText("Stop")
@@ -66,7 +66,7 @@ class ProtocolController:
             start_button.setText("Start")
             start_button.setStyleSheet(BUTTON_STYLES["START"])
             # A fault is not treatment-ready. Recovery reset is the only path
-            # back to idle, and the red banner remains visible until then.
+            # back to idle.
             start_button.setEnabled(False)
 
     def block_nav(self):
@@ -141,7 +141,7 @@ class ProtocolController:
                 return
             if window.protocol_state == "idle":
                 if not self.confirm_start():
-                    start_button.setEnabled(True)
+                    self.set_state(window.protocol_state)
                     return
                 # confirm_start ran a nested event loop: a firmware fault or
                 # a reset may have arrived while the dialog was up. Re-check
@@ -157,18 +157,31 @@ class ProtocolController:
                     self.set_state(window.protocol_state)
                     return
                 self.set_state("starting")
-                if not window.ensure_arduino_connection():
+                connected = window.ensure_arduino_connection()
+                # Reconnection also pumps Qt events. A fault, stop or reset
+                # received there invalidates the confirmed start request.
+                if (
+                    window.protocol_state != "starting"
+                    or window.reset_in_progress is True
+                ):
+                    if window.protocol_state == "starting":
+                        self.set_state("idle")
+                    window._show_timed_error(
+                        "Device state changed while connecting; treatment not started."
+                    )
+                    return
+                if not connected:
                     window._show_timed_error(
                         "Arduino connection is not ready. Check connections and try again."
                     )
                     self.set_state("idle")
                     return
                 if not self.start_protocol():
-                    self.set_state("idle")
+                    if window.protocol_state == "starting":
+                        self.set_state("idle")
                     return
-                # start_protocol pumps events; an immediate worker failure
-                # (e.g. HF1 send failed) can already have moved the machine
-                # back to idle. Don't flip it to "running" with no live worker.
+                # Only promote the start request that is still active; a
+                # completion or fault must retain its resulting state.
                 if window.protocol_state == "starting":
                     self.set_state("running")
             else:
@@ -178,17 +191,25 @@ class ProtocolController:
         except Exception as e:
             print(f"Error during protocol operation: {e}")
             window.logger.exception("Protocol start/stop transition failed")
-            window.worker = None
-            window.protocol_timer.stop()
-            window.protocol_start_time = None
-            window.protocol_stop_requested = False
-            self.set_state("idle")
-            window._show_timed_error(f"Could not start treatment: {e}")
+            if window.protocol_state in ("fault", "stopping"):
+                # A nested event may already have started fault/stop recovery.
+                # Keep both its state and its worker reference intact.
+                self.set_state(window.protocol_state)
+            else:
+                window.worker = None
+                window.protocol_timer.stop()
+                window.protocol_start_time = None
+                window.protocol_stop_requested = False
+                self.set_state("idle")
+            window._show_timed_error(f"Could not complete treatment operation: {e}")
 
 
     def start_protocol(self):
         """Start protocol execution."""
         window = self.window
+        if getattr(window, "_calibration_active", False) is True:
+            window._show_timed_error("Close actuator calibration before starting treatment.")
+            return False
         if not window.current_user:
             print("Access denied: User not logged in")
             window._show_timed_error("Please login to proceed")
@@ -218,16 +239,6 @@ class ProtocolController:
                 duration = 12  # Ensure we have a valid duration
 
             print(f"Protocol duration: {duration} minutes")
-            window.protocol_duration = duration * 60  # Convert to seconds
-            window.protocol_start_time = time.time()
-
-            # Update timer dialog if visible
-            if hasattr(window, "timer_dialog") and window.timer_dialog and window.timer_dialog.isVisible():
-                window.timer_dialog.initialize_protocol_time(
-                    window.protocol_start_time, window.protocol_duration
-                )
-                window.protocol_timer.start(1000)  # Update every second
-
             max_pressure = int(window.max_pressure_edit.value()) if window.max_pressure_edit else 50
             max_left_from_slider = int(window.max_left_edit.value()) if window.max_left_edit else 10
             max_right_from_slider = int(window.max_right_edit.value()) if window.max_right_edit else 10
@@ -241,6 +252,28 @@ class ProtocolController:
             # legacy UI). Only acts on flag-gated J<ms> firmware; otherwise
             # the worker falls back to bare J (see helpers.protocols).
             pulse_rate = getattr(window, "current_pulse_rate", None)
+
+            # Do not dispatch traction or start its timer if centering could
+            # not be queued (including failed calibration/conversion).
+            if not window.set_to_c_distance(0):
+                window.loading_spinner.hide()
+                window.logger.error("Treatment start aborted: lateral centering failed")
+                window._show_timed_error(
+                    "Could not center the lateral actuator; treatment not started."
+                )
+                self.set_state("fault")
+                window.shell.setup.set_reset_enabled(True)
+                return False
+
+            window.protocol_duration = duration * 60  # Convert to seconds
+            window.protocol_start_time = time.time()
+
+            # Update timer dialog if visible
+            if hasattr(window, "timer_dialog") and window.timer_dialog and window.timer_dialog.isVisible():
+                window.timer_dialog.initialize_protocol_time(
+                    window.protocol_start_time, window.protocol_duration
+                )
+                window.protocol_timer.start(1000)  # Update every second
 
             if window.ui.forward_button_protocol_image:
                 window.ui.forward_button_protocol_image.setEnabled(False)
@@ -270,8 +303,6 @@ class ProtocolController:
             window.ui.start_button.setText("Stop")
             window.ui.start_button.setStyleSheet(BUTTON_STYLES["STOP"])
 
-            window.set_to_c_distance(0)
-
             # Create and start protocol
             window.worker = protocols.Protocols(
                 window.config.a_factor,
@@ -288,9 +319,10 @@ class ProtocolController:
 
             # Connect signals
             window.worker.signals.finished.connect(self.protocol_completed)
+            window.worker.signals.progress.connect(self.update_status_label)
             # Safety recovery after a failed pulse phase (emitted by
             # protocols 2/3); was never connected to anything before
-            window.worker.signals.reset_needed.connect(window.reset_arduino)
+            window.worker.signals.reset_needed.connect(self._reset_after_failure)
 
             # Connect pressure dialog regardless of visibility
             # We'll connect it now so it's ready when the checkbox is checked
@@ -328,6 +360,10 @@ class ProtocolController:
                     print("MAIN APP: Connected arduino.status_emit directly to pressure_dialog.update_pressure")
 
             window.protocol_running = True
+            # Freeze the association before dispatch, and invalidate any lookup
+            # that could arrive after this treatment has already ended.
+            window._patient_lookup_id += 1
+            window._treatment_patient = deepcopy(window.cloud_patient)
             window.mid_protocol_warning_shown = False
 
             window.start_button.setEnabled(True)
@@ -336,18 +372,11 @@ class ProtocolController:
             # status_emit; the countdown via update_protocol_time
             window.treatment_panel.set_running(max_pressure, duration * 60)
 
-            # Start protocol execution
-            window.threadpool.start(window.worker)
-
-            # Start timers
-            window.protocol_timer.start()
-            QApplication.processEvents()
-
-            # Live phase text: the label used to read "Protocol Started"
-            # for the whole session because worker progress was never
-            # connected to anything
+            # Finish UI/signal setup before dispatch: a fast worker may emit
+            # progress or finish as soon as the thread pool starts it.
             window.ui.status_label.setText("Protocol Started")
-            window.worker.signals.progress.connect(self.update_status_label)
+            window.protocol_timer.start()
+            window.threadpool.start(window.worker)
             return True
 
         except ValueError as e:
@@ -367,8 +396,12 @@ class ProtocolController:
         window = self.window
         print("Stopping protocol")
         window.protocol_stop_requested = True
-        self.set_state("stopping")
+        # Cancel the producer before X clears queued work. Waiting until phase
+        # 2 allowed the worker to enqueue fresh motion after the stop command.
+        if window.worker:
+            window.worker.cancel()
         window.stop_actuators()
+        self.set_state("stopping")
         window.mid_protocol_warning_shown = False
         # Use QTimer to avoid blocking UI
         QTimer.singleShot(500, self._stop_phase2)
@@ -376,6 +409,8 @@ class ProtocolController:
     def _stop_phase2(self):
         """Phase 2 of stop protocol after 0.5 second delay."""
         window = self.window
+        if getattr(window, "_closing", False) is True:
+            return
         if window.worker:
             window.worker.stop()
         # Continue to phase 3 after another 0.5 seconds
@@ -394,6 +429,10 @@ class ProtocolController:
         has ever arrived (dev launcher / link never up), so there is nothing to
         wait for."""
         window = self.window
+        if getattr(window, "_closing", False) is True:
+            return
+        if getattr(window, "_physical_stop_active", False) is True:
+            return  # Physical stops require an explicit operator recovery.
         pressure = getattr(window, "last_measured_pressure", None)
         released = (
             pressure is None
@@ -416,6 +455,8 @@ class ProtocolController:
     def protocol_completed(self, success=True):
         """Handle protocol completion."""
         window = self.window
+        if getattr(window, "_closing", False) is True:
+            return
         print(f"Protocol completed; success={success}")
         window.protocol_timer.stop()
         # The UI pause anchor must not outlive the run (PAUSE was permanently
@@ -452,12 +493,13 @@ class ProtocolController:
             # Preserve an existing command/device fault. A later worker
             # completion must neither clear it nor stack another notice.
             self.set_state("fault")
-        elif success:
-            self.set_state("idle")
         elif user_stopped:
             # The staged stop still owes the patient a recovery reset. Keep
-            # Start/navigation gated until _on_reset_finished confirms it.
+            # Start/navigation gated until _on_reset_finished confirms it,
+            # even if a successful completion was queued just before STOP.
             self.set_state("stopping")
+        elif success:
+            self.set_state("idle")
         else:
             # Ordinary early endings return to ready without an operator
             # dialog. Keep the diagnostic in logs for later troubleshooting.
@@ -469,12 +511,14 @@ class ProtocolController:
 
     def _upload_treatment(self, success, user_stopped, safety_fault_active):
         window = self.window
-        cloud_patient = getattr(window, "cloud_patient", None)
+        cloud_patient = getattr(window, "_treatment_patient", None)
         cloud_client = getattr(window, "cloud_client", None)
         if not cloud_patient or not cloud_client or not cloud_client.enabled:
             return
         if safety_fault_active:
             outcome = "fault"
+        elif user_stopped:
+            outcome = "stopped"
         elif success:
             outcome = "completed"
         else:
@@ -533,6 +577,11 @@ class ProtocolController:
             window.protocol_timer.stop()
             window.protocol_start_time = None
 
+    def _reset_after_failure(self) -> None:
+        """Do not let a queued worker failure reset a physical emergency stop."""
+        if getattr(self.window, "_physical_stop_active", False) is not True:
+            self.window.reset_arduino()
+
 
     def emergency_stop_clicked(self, event):
         """Handle emergency stop button press."""
@@ -558,6 +607,8 @@ class ProtocolController:
             GPIO.output(EMERGENCYSTOP, GPIO.LOW)
         except Exception as e:
             print(f"Could not assert EMERGENCYSTOP GPIO: {e}")
+        if window.worker:
+            window.worker.cancel()
         # arduino.send never blocks or reconnects; 'X' jumps the tx queue
         # and stop_actuators alarms the operator if the link is down.
         window.stop_actuators()
@@ -575,6 +626,8 @@ class ProtocolController:
     def _emergency_stop_phase2(self):
         """Phase 2 of emergency stop after 1 second delay."""
         window = self.window
+        if getattr(window, "_closing", False) is True:
+            return
         if window.worker:
             window.worker.stop()
         # Continue to phase 3 after another second
@@ -584,6 +637,8 @@ class ProtocolController:
         """Phase 3: release the hardware stop line, then run the recovery
         reset (the reset sequence homes actuators, which needs the machine
         powered)."""
+        if getattr(self.window, "_closing", False) is True:
+            return
         try:
             GPIO.output(EMERGENCYSTOP, GPIO.HIGH)
         except Exception as e:

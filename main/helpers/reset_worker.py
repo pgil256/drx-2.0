@@ -84,6 +84,12 @@ class ResetWorker(QRunnable):
         wired to the Arduino RESET pin -- and only added ~8s of delay.)
         """
         for attempt in (1, 2):
+            if getattr(self.main_window, "_closing", False) is True:
+                return False
+            if getattr(self.main_window, "_physical_stop_active", False) is True:
+                debug("Reset cancelled by physical emergency stop",
+                      component="ResetWorker", level="WARNING")
+                return False
             debug(f"Attempting '{operation_name}' with command: {command}",
                   component="ResetWorker", attempt=attempt)
             # ``is True`` is intentional: unittest MagicMock fabricates truthy
@@ -141,6 +147,10 @@ class ResetWorker(QRunnable):
         success = True
         sequence_start = time.time()
         try:
+            if getattr(self.main_window, "_closing", False) is True:
+                raise RuntimeError("Reset cancelled by application shutdown")
+            if getattr(self.main_window, "_physical_stop_active", False) is True:
+                raise RuntimeError("Reset cancelled by physical emergency stop")
             # --- Step 1: Send 'Y' (Reset Command) ---
             step_start = time.time()
             debug("[STEP 1/6] Sending 'Y' (Reset Command)", component="ResetWorker", level="INFO")
@@ -238,6 +248,10 @@ class ResetWorker(QRunnable):
                 )
             debug_timing("[STEP 6/6] Calibration complete", start_time=step_start, component="ResetWorker")
             self.step_times.append(("Calibration", time.time() - step_start))
+
+            # The open-loop leg-length (FIT) axis is deliberately NOT homed
+            # here: the reset leaves it where it is. Operators home it on
+            # demand from the Setup page (reset_extra_button_clicked).
 
             # Log summary of all step times
             debug("="*60, component="ResetWorker", level="INFO")

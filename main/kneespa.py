@@ -86,6 +86,7 @@ from helpers.conversions import (
 )
 from helpers.angles import pos_c_to_angle
 from helpers.cloud_client import CloudClient
+from controllers.calibration_controller import CalibrationController
 
 try:
     from dotenv import load_dotenv as _load_dotenv
@@ -248,7 +249,7 @@ class _PhaseLabelAdapter:
 
 class _CloudBridge(QObject):
     """Carries cloud API results from worker threads back to the UI."""
-    lookup_done = pyqtSignal(object)
+    lookup_done = pyqtSignal(int, object)
 
 
 class _LegacyUi:
@@ -329,6 +330,7 @@ class KneeSpa(QMainWindow):
         # --- protocol / UI state (mirrors the legacy controller) ---
         self.protocol_value = "1"          # selected protocol (Treatment picker)
         self.protocol_running = False
+        self._closing = False
         self.protocol_start_time = None
         self.protocol_duration = 0
         self._paused_at = None             # wall-clock pause anchor for the UI timer
@@ -375,6 +377,7 @@ class KneeSpa(QMainWindow):
         self.controls_enable_timer = None  # Single pending-enable timer for all controls
         self.mid_protocol_warning_shown = False
         self.protocol_stop_requested = False
+        self._physical_stop_active = False
         self._prev_pressure = None                   #  for rollback
         self._prev_left   = None
         self._prev_right  = None
@@ -412,16 +415,23 @@ class KneeSpa(QMainWindow):
             speed_pct=100    # 2.5× normal
         )
 
-        # Always-visible treatment banner: live pressure, time remaining,
-        # and a permanent EMERGENCY STOP control while a protocol runs.
-        # Deliberately kept on top of the modern shell: the SafetyMonitor's
-        # fault banner must stay visible regardless of the active screen.
-        self.treatment_panel = TreatmentStatusPanel(parent=self)
+        # Top-of-window safety banner. It is withheld while a protocol is
+        # active (starting/running/stopping) and while the device sits in
+        # the fault state that follows one: the Protocols page (navigation
+        # is locked there during a run) shows phase/pressure/time inline
+        # with its own STOP, and safety events raise the acknowledged
+        # _show_safety_alert dialog. Outside a run (idle Setup-page jogs)
+        # device warnings still overlay the top of the shell.
+        self.treatment_panel = TreatmentStatusPanel(
+            parent=self, suppress_when=self._banner_suppressed
+        )
         self.treatment_panel.stop_requested.connect(self.panel_stop_requested)
         self.safety = SafetyMonitor(self)
         self.auth = AuthController(self)
         self.protocol = ProtocolController(self)
         self.connection = ConnectionManager(self)
+        self.calibration_controller = CalibrationController(self)
+        self._calibration_active = False
         # Protocol lifecycle state: idle / starting / running / stopping / fault
         self.protocol_state = "idle"
 
@@ -441,6 +451,8 @@ class KneeSpa(QMainWindow):
         self.current_user = None
         self.cloud_client = CloudClient()
         self.cloud_patient = None
+        self._treatment_patient = None
+        self._patient_lookup_id = 0
         self._cloud_bridge = _CloudBridge()
         self._cloud_bridge.lookup_done.connect(self._on_cloud_lookup_done)
 
@@ -513,6 +525,7 @@ class KneeSpa(QMainWindow):
         s.logout_requested.connect(self._on_logout)
         s.exit_requested.connect(self._on_exit_app)
         s.add_pin_submitted.connect(self._on_add_pin)
+        s.profile.calibration_requested.connect(self.calibration_controller.open)
 
         # Setup screen.
         s.setup.jog_requested.connect(self._on_setup_jog)
@@ -586,6 +599,14 @@ class KneeSpa(QMainWindow):
             w.setEnabled(False)
 
     def enable_actuator_controls(self):
+        if getattr(self, "_calibration_active", False) is True:
+            return
+        if (
+            self.reset_in_progress
+            or not self.initial_setup_complete
+            or self.protocol_state == "fault"
+        ):
+            return
         self.actuator_command_in_progress = False
         if self.protocol_running == False:
             print("Scheduling controls to enable with delay...") # Add for debugging
@@ -603,6 +624,16 @@ class KneeSpa(QMainWindow):
 
     def _apply_enable_actuator_controls(self):
         self.controls_enable_timer = None
+        if getattr(self, "_calibration_active", False) is True:
+            return
+        # The state may have changed during the 200 ms debounce window.
+        if (
+            self.reset_in_progress
+            or not self.initial_setup_complete
+            or self.protocol_running
+            or self.protocol_state == "fault"
+        ):
+            return
         for w in self.actuator_controls:
             w.setEnabled(True)
 
@@ -637,19 +668,30 @@ class KneeSpa(QMainWindow):
     def _on_protocol_selected(self, n):
         self.protocol_value = str(n)
 
-    def _on_patient_pin(self, pin):
+    def _on_patient_pin(self, pin: str) -> None:
+        if self.protocol_running:
+            return
+        self._patient_lookup_id += 1
+        request_id = self._patient_lookup_id
         if not self.cloud_client.enabled:
             self.shell.treatment.set_patient_error("Cloud not configured")
             return
         bridge = self._cloud_bridge
 
-        def _lookup():
+        def _lookup() -> None:
             result = self.cloud_client.lookup_pin(pin)
-            bridge.lookup_done.emit(result)
+            bridge.lookup_done.emit(request_id, result)
 
         threading.Thread(target=_lookup, daemon=True).start()
 
-    def _on_cloud_lookup_done(self, result):
+    def _on_cloud_lookup_done(self, request_id: int, result: object) -> None:
+        if request_id != self._patient_lookup_id:
+            return
+        if self.protocol_running:
+            # This guard includes errors: a failed lookup must not detach the
+            # patient from an active treatment or alter its displayed plan.
+            self.logger.warning("Ignoring patient lookup that resolved during a treatment")
+            return
         # External data: a non-object body (captive portal, proxy page) or a
         # null/garbage field must never raise out of this slot and leave the
         # patient half-applied.
@@ -663,12 +705,6 @@ class KneeSpa(QMainWindow):
                 self.shell.treatment.set_patient_error("Too many lookups")
             else:
                 self.shell.treatment.set_patient_error("Unknown PIN")
-            return
-        if self.protocol_running:
-            # A lookup that resolves after START must not re-map the live
-            # settings/protocol underneath the running worker
-            self.logger.warning("Ignoring patient lookup that resolved during a treatment")
-            self.shell.treatment.set_patient_error("Lookup ignored during treatment")
             return
         self.cloud_patient = result
         self.shell.treatment.set_patient(result.get("display_name", "Unknown"))
@@ -877,6 +913,12 @@ class KneeSpa(QMainWindow):
     def _on_setup_go(self, key):
         """Move an actuator to its row's current slider value (the legacy Go
         path), preserving the per-actuator unit conversions and clamps."""
+        if key in ("axial", "horizontal", "lateral") and not self.config.marks_valid:
+            self._warn_uncalibrated()
+            return False
+        if key == "pressure" and not self.config.scale_calibrated:
+            self._warn_uncalibrated()
+            return False
         if key == "leg_length":
             # FIT is open-loop: there is no absolute position sensor with
             # which a slider's Go target could be reached safely.
@@ -921,6 +963,9 @@ class KneeSpa(QMainWindow):
 
     def _apply_setup_pressure(self):
         """Setup pressure Go: clamp to [MIN_PRESSURE, PRESSURE_MAX] and send P."""
+        if not self.config.scale_calibrated:
+            self._warn_uncalibrated()
+            return False
         pressure = self.shell.setup.row_value("pressure")
         if pressure > PRESSURE_MAX:
             pressure = PRESSURE_MAX
@@ -960,10 +1005,10 @@ class KneeSpa(QMainWindow):
         """Mark As Default: persist the current Treatment Settings as protocol
         defaults (§15.4), clamped to constants."""
         vals = self.shell.treatment.settings_values()
-        mp = max(0, min(PRESSURE_MAX, vals.get("max_pressure", 50)))
+        mp = max(0, min(PRESSURE_MAX, vals.get("max_pressure", 40)))
         ml = max(0, min(abs(LATERAL_MAX_DEGREES), abs(vals.get("max_left", 10))))
         mr = max(0, min(abs(LATERAL_MAX_DEGREES), abs(vals.get("max_right", 10))))
-        pr = max(0, min(5, vals.get("pulse_rate", 2)))
+        pr = max(0, min(5, vals.get("pulse_rate", 1)))
         dur = self._clamp_minutes(vals.get("duration", DEFAULT_PROTOCOL_MINUTES))
         try:
             self.config.save_protocol_defaults(mp, ml, mr, pr, dur)
@@ -994,6 +1039,7 @@ class KneeSpa(QMainWindow):
         if self._block_nav_during_treatment():
             return
         print("Handling logout")
+        self._patient_lookup_id += 1
         self.current_user = None
         self.cloud_patient = None
         try:
@@ -1155,6 +1201,10 @@ class KneeSpa(QMainWindow):
     def panel_stop_requested(self):
         self.protocol.panel_stop_requested()
 
+    def _banner_suppressed(self):
+        """True whenever the protocol state machine is not idle."""
+        return getattr(self, "protocol_state", "idle") != "idle"
+
     def _show_safety_alert(self, message: str, warning: bool = False) -> None:
         """Persistent, acknowledged alert for safety events.
 
@@ -1202,12 +1252,43 @@ class KneeSpa(QMainWindow):
         """Clean up resources, including the video player and GPIO."""
         print("Cleaning up resources.")
 
+        self._closing = True
+        if getattr(self, "_calibration_active", False) is True:
+            self.calibration_controller.shutdown()
+        self.protocol_timer.stop()
+        firmware_stopped = getattr(self, "_physical_stop_active", False) is True
         if self.worker:
-            self.worker.stop()
+            try:
+                self.worker.cancel(firmware_stopped=firmware_stopped)
+            except Exception:
+                self.logger.exception("Could not cancel treatment worker during shutdown")
+
+        # Manual Setup motion has no treatment worker. Always discard pending
+        # motion and stop/release on the current transport before draining it.
+        # A physical stop already owns an autonomous firmware release, which
+        # must not be interrupted by X.
+        arduino = getattr(self, "arduino", None)
+        if arduino is not None:
+            if firmware_stopped:
+                arduino.cancel_pending_commands()
+            else:
+                for command in ("X", "P0", "HF0"):
+                    try:
+                        if not arduino.send(command):
+                            self.logger.error("Shutdown command %s was not queued", command)
+                    except Exception:
+                        self.logger.exception("Shutdown command %s failed", command)
+        try:
+            self._release_leg_gpio()
+        except Exception:
+            self.logger.exception("Could not release leg GPIO during shutdown")
 
         # Release the embedded VLC player, if any.
         if hasattr(self, "shell"):
-            self.shell.video_modal.cleanup()
+            try:
+                self.shell.video_modal.cleanup()
+            except Exception:
+                self.logger.exception("Could not release video player during shutdown")
 
         # Give queued X/P0/HF0 traffic a bounded opportunity to reach the
         # serial driver before closing it. The old immediate disconnect
@@ -1505,10 +1586,15 @@ class KneeSpa(QMainWindow):
         self.disable_actuator_controls()
         if not KneeSpa._send_motion_command(self, "FR", "leg-length reset"):
             return False
-        GPIO.output(EXTRAFORWARD, GPIO.LOW)
-        GPIO.output(EXTRABACKWARD, GPIO.HIGH)
+        self._start_leg_reset_gpio()
         QTimer.singleShot(6100, self._finish_leg_reset)
         return True
+
+    def _start_leg_reset_gpio(self) -> None:
+        """Bound the local homing drive even if the firmware never acknowledges."""
+        GPIO.output(EXTRAFORWARD, GPIO.LOW)
+        GPIO.output(EXTRABACKWARD, GPIO.HIGH)
+        QTimer.singleShot(6100, self._release_leg_gpio)
 
     def _finish_leg_reset(self):
         self._release_leg_gpio()

@@ -19,6 +19,9 @@ pytestmark = pytest.mark.unit
 
 def make_stub():
     stub = MagicMock()
+    stub._patient_lookup_id = 0
+    stub.config.marks_valid = True
+    stub.config.scale_calibrated = True
     stub.actuator_a = "12"
     stub.actuator_b = "13"
     stub.actuator_c = "14"
@@ -30,14 +33,14 @@ class TestCloudLookupResult:
     def test_non_dict_result_is_reported_as_unavailable(self):
         stub = make_stub()
         stub.protocol_running = False
-        KneeSpa._on_cloud_lookup_done(stub, ["not", "a", "patient"])
+        KneeSpa._on_cloud_lookup_done(stub, 0, ["not", "a", "patient"])
         stub.shell.treatment.set_patient_error.assert_called_once_with("Cloud unavailable")
         assert stub.cloud_patient is None
 
     def test_garbage_setting_is_skipped_not_raised(self):
         stub = make_stub()
         stub.protocol_running = False
-        KneeSpa._on_cloud_lookup_done(stub, {
+        KneeSpa._on_cloud_lookup_done(stub, 0, {
             "patient_id": 7, "display_name": "Jane D.",
             "settings": {"max_pressure_lb": "sixty", "duration_min": 15,
                          "max_left_deg": None, "protocol_number": "3"},
@@ -49,7 +52,7 @@ class TestCloudLookupResult:
     def test_lookup_resolving_mid_treatment_is_ignored(self):
         stub = make_stub()
         stub.protocol_running = True
-        KneeSpa._on_cloud_lookup_done(stub, {
+        KneeSpa._on_cloud_lookup_done(stub, 0, {
             "patient_id": 7, "display_name": "Jane D.",
             "settings": {"max_pressure_lb": 70},
         })

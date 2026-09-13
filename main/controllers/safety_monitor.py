@@ -216,12 +216,15 @@ class SafetyMonitor:
     def on_firmware_error(self, message):
         """Handle firmware faults and command rejections.
 
-        Safety notices are advisory and never change protocol/device state.
-        Parser/validation errors describe a command the firmware refused and
-        retain their separate command-failure handling.
+        Physical emergency stops cancel the host worker. Other safety notices
+        remain advisory; parser errors retain their command-failure handling.
         """
         window = self.window
         print(f"FIRMWARE ERROR: {message}")
+
+        if message in ("Stop button pressed", "Stop button engaged"):
+            self.on_physical_stop()
+            return
 
         if message == "BUSY":
             # A command was refused because a move is running; transient
@@ -267,6 +270,34 @@ class SafetyMonitor:
             return
 
         self._present_warning(message)
+
+    def on_physical_stop(self) -> None:
+        """Latch the physical stop on the host while firmware releases traction."""
+        window = self.window
+        window.logger.error("Physical emergency stop activated")
+        already_stopped = getattr(window, "_physical_stop_active", False) is True
+        window._physical_stop_active = True
+        window.protocol_stop_requested = True
+        window.initial_setup_complete = False
+        if window.worker:
+            window.worker.cancel(firmware_stopped=True)
+        if window.arduino:
+            window.arduino.cancel_pending_commands()
+        try:
+            window._release_leg_gpio()
+        except Exception:
+            window.logger.exception("Could not release leg GPIO after physical stop")
+        window._paused_at = None
+        window.protocol_timer.stop()
+        window.set_protocol_state("fault")
+        window.disable_actuator_controls()
+        window.shell.setup.set_reset_enabled(not window.reset_in_progress)
+        window.treatment_panel.set_fault("PHYSICAL EMERGENCY STOP")
+        if not already_stopped:
+            window._show_safety_alert(
+                "Physical emergency stop activated. Release the button and reset "
+                "the device before starting another treatment."
+            )
 
     def on_firmware_warning(self, message: str) -> None:
         """Handle advisory firmware notices without startup alert noise.

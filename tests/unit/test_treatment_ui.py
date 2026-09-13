@@ -54,6 +54,42 @@ class TestTreatmentStatusPanel:
         assert "rgb(196, 112, 0)" in panel.styleSheet()
         assert panel.dismiss_button.isVisible()
 
+    def test_suppressed_banner_never_shows_during_protocol(self, qtbot):
+        """With a protocol active the banner stays off-screen for every
+        mode, while its state keeps tracking so nothing is lost."""
+        state = {"protocol": "running"}
+        panel = TreatmentStatusPanel(
+            suppress_when=lambda: state["protocol"] != "idle"
+        )
+        qtbot.addWidget(panel)
+        panel.set_running(target_pressure=50, duration_s=720)
+        assert not panel.isVisible()
+        assert panel.phase_label.text() == "TREATMENT RUNNING"
+        panel.set_warning("Lateral position limit exceeded")
+        assert not panel.isVisible()
+        panel.set_stopping()
+        assert not panel.isVisible()
+        state["protocol"] = "fault"
+        panel.set_fault("Pressure limit exceeded")
+        assert not panel.isVisible()
+        assert "Pressure limit exceeded" in panel.phase_label.text()
+
+    def test_suppression_hides_a_banner_left_over_from_idle(self, qtbot):
+        """An idle-time advisory banner must not linger once a run starts."""
+        state = {"protocol": "idle"}
+        panel = TreatmentStatusPanel(
+            suppress_when=lambda: state["protocol"] != "idle"
+        )
+        qtbot.addWidget(panel)
+        panel.set_warning("Advisory only")
+        assert panel.isVisible()
+        state["protocol"] = "starting"
+        panel.set_running(target_pressure=40, duration_s=60)
+        assert not panel.isVisible()
+        state["protocol"] = "idle"
+        panel.set_warning("Advisory again")
+        assert panel.isVisible()
+
     def test_dismiss_idle_warning_hides_banner(self, qtbot):
         panel = TreatmentStatusPanel()
         qtbot.addWidget(panel)
@@ -127,6 +163,7 @@ class _StubWindow:
     def __init__(self, qtbot):
         self.protocol_state = "idle"
         self.protocol_running = False
+        self.reset_in_progress = False
         self.errors = []
         button = QPushButton("Start")
         qtbot.addWidget(button)
@@ -184,6 +221,12 @@ class TestProtocolStateMachine:
         h.set_protocol_state("stopping")
         assert not h.ui.start_button.isEnabled()
         assert h.protocol_running is True  # still owns the hardware
+
+    def test_idle_during_reset_keeps_start_disabled(self, qtbot):
+        h = StateMachineHarness(qtbot)
+        h.window.reset_in_progress = True
+        h.set_protocol_state("idle")
+        assert not h.ui.start_button.isEnabled()
 
     def test_fault_keeps_banner_and_requires_recovery(self, qtbot):
         h = StateMachineHarness(qtbot)

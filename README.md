@@ -129,10 +129,43 @@ The firmware still uses its watchdog and performs bounded traction release
 after an E-stop. The Pi surfaces warnings in the always-visible treatment
 banner without changing protocol state.
 
+Firmware diagnostics (everything the sketch prints on its USB debug
+serial, such as I2C position-read failures and per-frame actuator
+positions) are also sent to the Pi as `LOG|<line>` frames and logged at
+INFO as `Firmware: ...`, so device and host output interleave in one
+console/log. `LOG|` lines are informational only; nothing acts on them.
+
+A firmware parse rejection (`ERROR: Invalid I value`, `Checksum mismatch`,
+`Malformed frame`, ...) means the command never executed, so the Pi
+transport resends that command once before reporting a command fault. A
+corrupted byte on the UART therefore costs one retry instead of an
+emergency stop. Enabling protocol v2 (`KNEESPA_PROTOCOL_V2=1`) adds a
+checksum to every command so a corrupted digit that still parses is also
+caught and resent rather than executed.
+
 Protocol v2 (per-command sequence numbers + XOR checksums on commands
 and status frames) is built into the firmware and the Pi transport but
 disabled by default; enable with `KNEESPA_PROTOCOL_V2=1` after the
-hardware checkout. Legacy unframed traffic keeps working either way.
+hardware checkout. Legacy unframed commands keep working either way.
+
+Firmware `2026-09-10-FAILSAFE-7` always checksums position/pressure reports,
+even with protocol v2 disabled. `L6` now returns the same checksummed
+`STATUS_START|S|...|STATUS_END*XX` format as periodic status. The Pi rejects
+damaged reports before updating positions or evaluating limits; after the
+first valid checksummed report it also rejects missing checksum trailers
+and unchecked legacy `S|...` / `A|...` reports. Valid readings beyond the
+travel limits still produce the normal warnings.
+
+This addresses the September 10 log where firmware reported lateral **1940**
+but the Pi received **3940**, amid other garbled UART traffic. Deploy both
+the Pi parser update and FAILSAFE-7 firmware for protection with default
+settings. A Pi-only update with older firmware and v2 disabled still accepts
+legacy unchecked reports and cannot detect a digit changing into another
+valid digit. FAILSAFE-2 through FAILSAFE-6 already checksum periodic status
+when launched with `KNEESPA_PROTOCOL_V2=1` after hardware checkout; for example,
+from the project root: `KNEESPA_PROTOCOL_V2=1 python3 main/kneespa.py --debug --print-logs`.
+Checksums detect transmission damage; the underlying UART corruption and
+the separately logged stall near 1940 counts still need device diagnosis.
 
 Numeric pulse cadence (`J<ms>`) is enabled by default for the current
 firmware, including live Treatment-slider changes. Set

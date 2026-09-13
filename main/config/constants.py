@@ -114,6 +114,25 @@ LATERAL_MAX = 2400  # Maximum lateral position
 # came from a legacy convention and clamped/flagged legal -25 deg moves.
 HORIZONTAL_MIN = 0  # Minimum horizontal position (calibrated -25 deg mark)
 HORIZONTAL_MAX = 4500  # Maximum horizontal position (envelope ceiling)
+
+# Guided service calibration uses raw positions before an angle table exists.
+CALIBRATION_AXES = {
+    "horizontal": {
+        "label": "Horizontal", "table": "BMarks", "factor": "b_factor",
+        "prefix": "I13", "position_limits": (HORIZONTAL_MIN, HORIZONTAL_MAX),
+        "angle_limits": ACTUATORS["HORIZONTAL"]["LIMITS"], "angle_step": 5.0,
+    },
+    "lateral": {
+        "label": "Lateral", "table": "CMarks", "factor": "c_factor",
+        "prefix": "K", "position_limits": (LATERAL_MIN, LATERAL_MAX),
+        "angle_limits": ACTUATORS["LATERAL"]["LIMITS"], "angle_step": 2.5,
+    },
+}
+CALIBRATION_STATUS_MAX_AGE_S = 2.0
+CALIBRATION_MOVE_TIMEOUT_S = 15.0
+CALIBRATION_SETTLE_COUNTS = 8
+CALIBRATION_POSITION_TOLERANCE = 25  # firmware POSITION_DEADBAND
+CALIBRATION_DISTANCE_REFERENCE_INCHES = 6.0  # read_position() factor convention
 AXIAL_MIN_INCHES = ACTUATORS["AXIAL"]["LIMITS"][0]
 AXIAL_MAX_INCHES = ACTUATORS["AXIAL"]["LIMITS"][1]
 LATERAL_MIN_DEGREES = ACTUATORS["LATERAL"]["LIMITS"][0]
@@ -162,6 +181,28 @@ MAX_JERK_INTERVAL_MS = 5000  # slowest pulse the slider can request (0.2/sec)
 # 1000 / the default pulse rate (2/sec) so the UI's claim matches the device.
 # Paired with motor.ino's jerkInterval initializer (scripts/check_limits_sync.py).
 DEFAULT_JERK_INTERVAL_MS = 500
+
+# How long the host waits for a commanded pressure (initial build, each
+# ramp increment, and direct P moves) before failing the protocol. Sits
+# ABOVE the firmware's advisory PRESSURE_MOVE_TIMEOUT (motor.ino) so the
+# device's own diagnosis always arrives first. Raised from 35 s on
+# 2026-09-10: the axial actuator builds load slowly and real treatments
+# were being aborted mid-build.
+PRESSURE_BUILD_TIMEOUT_S = 90
+# After the host sees measured pressure within tolerance, the firmware is
+# usually still driving the last fraction of a pound to its exact target and
+# answers BUSY to anything axial (J, another P) until it emits DONE. Wait for
+# that DONE, bounded so a firmware that never acks cannot stall a treatment.
+PRESSURE_DONE_SETTLE_S = 15
+# How long the host waits for a commanded lateral (K) move before failing
+# the protocol. The firmware drives C at C_SPEED 800, which the bench unit
+# moves at ~72 counts/s (2026-09-10 log: 1458 -> 1798 in 4.7 s); with
+# ~47 counts/degree that is ~1.5 deg/s, so a 10 deg move takes ~6.5 s and
+# protocol 4's full -20 -> +20 swing ~26 s. The old hardcoded 5 s could
+# never cover a real move and aborted treatments mid-travel. The firmware
+# reports its own no-progress stall (POSITION_STALL_MS = 20 s), so this
+# only needs to be a backstop above the longest legitimate move.
+LATERAL_MOVE_TIMEOUT_S = 45
 
 # Protocol Default Settings
 PROTOCOL_DEFAULT_SETTINGS = {

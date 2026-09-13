@@ -44,12 +44,18 @@ class Configuration:
         self.calibration_warnings = []
 
         # Treatment Settings defaults persisted by Setup's "Mark As Default"
-        # (Phase 3.5 §15.4). Fallbacks match the legacy 50/10/10 + a 2/sec pulse.
-        self.default_max_pressure = 50.0
+        # (Phase 3.5 §15.4). Fallbacks: 40 lbs / 10° / 10° + a 2/sec pulse.
+        self.default_max_pressure = 40.0
         self.default_max_left = 10.0
         self.default_max_right = 10.0
         self.default_pulse_rate = 2.0
         self.default_duration = float(DEFAULT_PROTOCOL_MINUTES)
+        # True only once an operator has pressed "Mark As Default" (or a
+        # file written by that action was loaded). Until then the code
+        # defaults above apply and are NOT persisted: update_config() used
+        # to write them on every save, so a default changed in code never
+        # reached a device whose kneespa.cfg already carried the old value.
+        self.protocol_defaults_marked = False
 
         # Per-device id for support tickets (Phase 3.5 §15.5); generated once.
         self.device_id = ""
@@ -190,6 +196,13 @@ class Configuration:
         section = "ProtocolDefaults"
         if not self.config.has_section(section):
             return
+        if self.config.get(section, "marked", fallback="") != "1":
+            print(
+                "Ignoring [ProtocolDefaults] that was auto-written rather than "
+                "marked by an operator; using code defaults"
+            )
+            return
+        self.protocol_defaults_marked = True
         specs = {
             "max_pressure": "default_max_pressure",
             "max_left": "default_max_left",
@@ -239,6 +252,7 @@ class Configuration:
         self.default_pulse_rate = float(pulse_rate)
         if duration is not None:
             self.default_duration = float(duration)
+        self.protocol_defaults_marked = True
         self.update_config()
 
     def ensure_device_id(self):
@@ -367,13 +381,20 @@ class Configuration:
                 self.config.set(section, option, str(getattr(self, option)))
 
         # Persist the Phase-3.5 sections alongside the legacy Options.
-        self._set_section("ProtocolDefaults", {
-            "max_pressure": self.default_max_pressure,
-            "max_left": self.default_max_left,
-            "max_right": self.default_max_right,
-            "pulse_rate": self.default_pulse_rate,
-            "duration": self.default_duration,
-        })
+        # Protocol defaults are only written once an operator marked them;
+        # a stale auto-written section is dropped so the file cannot pin
+        # old code defaults.
+        if self.protocol_defaults_marked:
+            self._set_section("ProtocolDefaults", {
+                "marked": 1,
+                "max_pressure": self.default_max_pressure,
+                "max_left": self.default_max_left,
+                "max_right": self.default_max_right,
+                "pulse_rate": self.default_pulse_rate,
+                "duration": self.default_duration,
+            })
+        elif self.config.has_section("ProtocolDefaults"):
+            self.config.remove_section("ProtocolDefaults")
         self._set_section("Device", {"id": self.device_id})
 
         print("Config updated")

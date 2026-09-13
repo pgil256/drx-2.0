@@ -777,12 +777,14 @@ void test_v2_status_carries_checksum(void) {
     TEST_ASSERT_EQUAL((int)expected, (int)got);
 }
 
-void test_v1_status_has_no_checksum(void) {
+void test_v1_status_checksum_preserves_legacy_command_acks(void) {
     hostV2 = false;
     sendStatus();
     std::string out = Serial1.getOutput();
-    TEST_ASSERT_TRUE(out.find("STATUS_END") != std::string::npos);
-    TEST_ASSERT_TRUE(out.find('*') == std::string::npos);
+    TEST_ASSERT_TRUE(out.find("STATUS_END*") != std::string::npos);
+    processCommand("T");
+    TEST_ASSERT_TRUE(Serial1.outputContains("OK"));
+    TEST_ASSERT_FALSE(Serial1.outputContains("OK|"));
 }
 
 // --- FAILSAFE-6: STOP during a static hold / held-button behavior ---
@@ -959,20 +961,40 @@ void test_pulse_start_refused_during_axial_pressure_move(void) {
     TEST_ASSERT_TRUE(Serial1.outputContains("BUSY"));
 }
 
-void test_pulse_status_slot_rests_motor(void) {
-    keepAlive();
+static int countNonzeroSpeedWrites(uint8_t device) {
+    int n = 0;
+    for (int i = 0; i < Wire.commandCount; i++) {
+        if (Wire.commands[i].address == device && Wire.commands[i].dataLen == 3 &&
+            (Wire.commands[i].data[0] == 0x85 || Wire.commands[i].data[0] == 0x86) &&
+            (Wire.commands[i].data[1] != 0 || Wire.commands[i].data[2] != 0))
+            n++;
+    }
+    return n;
+}
+
+// Pulsing is continuous: every interval commands a stroke, alternating
+// direction, with no rest slot every N strokes (the old MAX_JERKS gap).
+void test_pulse_is_continuous_with_no_rest_slot(void) {
     jerking = true;
-    jerksCompleted = MAX_JERKS;
+    jerkDirection = 1;
+    jerksCompleted = 0;
     lastJerkTime = 0;
-    _millis_value = jerkInterval + 1;
-    keepAlive();
+    _millis_value = 0;
     Wire.reset();
 
-    loop();
+    const int strokes = 25;
+    for (int i = 1; i <= strokes; i++) {
+        _millis_value = (unsigned long)i * (jerkInterval + 1);
+        keepAlive();
+        loop();
+    }
 
     TEST_ASSERT_TRUE(jerking);
-    TEST_ASSERT_EQUAL(0, jerksCompleted);
-    TEST_ASSERT_EQUAL(1, countSpeedZeroWrites(12));
+    TEST_ASSERT_EQUAL(strokes, (int)jerksCompleted);
+    TEST_ASSERT_EQUAL(strokes, countNonzeroSpeedWrites(12));
+    TEST_ASSERT_EQUAL(0, countSpeedZeroWrites(12));
+    // Odd stroke count -> the next stroke is reverse
+    TEST_ASSERT_EQUAL(-1, jerkDirection);
 }
 
 // --- FAILSAFE-6: input validation ---
@@ -1110,7 +1132,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_js_leaves_in_flight_lateral_move_running);
     RUN_TEST(test_position_move_tracks_its_own_device_during_pressure_move);
     RUN_TEST(test_pulse_start_refused_during_axial_pressure_move);
-    RUN_TEST(test_pulse_status_slot_rests_motor);
+    RUN_TEST(test_pulse_is_continuous_with_no_rest_slot);
     RUN_TEST(test_l5_rejects_out_of_range_zero_marks);
     RUN_TEST(test_axial_floor_applied_before_clamp);
     RUN_TEST(test_l0_rejects_zero_or_garbage_factor);
@@ -1124,7 +1146,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_v2_corrupt_command_does_not_execute);
     RUN_TEST(test_v2_deferred_done_carries_seq);
     RUN_TEST(test_v2_status_carries_checksum);
-    RUN_TEST(test_v1_status_has_no_checksum);
+    RUN_TEST(test_v1_status_checksum_preserves_legacy_command_acks);
 
     return UNITY_END();
 }
