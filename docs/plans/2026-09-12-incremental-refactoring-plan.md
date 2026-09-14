@@ -3,7 +3,23 @@
 Created: 2026-09-12  
 Revised against critique: 2026-09-12  
 Audit and verification baseline: 2026-09-11  
-Status: proposed; no application refactoring has been performed
+Status: local implementation committed; final closeout validation in progress; F9 deferred
+
+## Closeout update — 2026-09-14
+
+F1–F8 are committed, including Gate W and the eight F2 firmware-local deletions.
+B1's default-save transaction, B2's deployment-state preservation, B3's lateral
+acknowledgement correlation, and the Windows UTF-8 configuration-read issue are
+also fixed in separate commits. B3 now uses a command-specific v2 handle; v1
+requires position telemetry because its unqualified DONE cannot identify a move.
+The firmware cleanup passed all 119 native tests and the Mega build, producing
+the same flash image as before deletion. No device deployment or flash occurred.
+
+The owner set aside F9's Pi/deployed-consumer follow-up. Its backport and ten PNG
+candidates remain in place; their deletion is deferred, not a local closeout
+blocker. The earlier implementation records below describe the state when each
+finding was implemented. This update supersedes their outstanding-commit, B1/B2/B3,
+encoding, and firmware-cleanup status; historical measurements remain intact.
 
 ## Objective and boundaries
 
@@ -110,6 +126,8 @@ For each candidate, additionally inspect dynamic imports, directory discovery, r
 
 `git worktree list --porcelain` confirmed two older checkouts at `b517d10`: `.claude/worktrees/sad-ritchie-346623` is clean, while `.claude/worktrees/setup-protocols-vlc-fixes-847050` has **19 uncommitted entries**. Both contain calls to `apply_continuous_pulse`. Before the Phase 5 deletion inventory is finalized, determine whether they are still operationally used; preserve or land unique work, then remove retired worktrees normally and prune stale metadata. Do not force-remove the dirty checkout. If a checkout remains active, record it as a compatibility consumer and defer affected deletions. `git worktree prune` alone does not remove existing checkouts. No worktrees were removed during this revision.
 
+**F8 implementation update (2026-09-14): compatibility API retirement is complete in the working tree.** The owner authorized retirement of both older worktrees and confirmed there are no external maintenance/calibration/service scripts using KneeSpa's Python code. After verifying a local archive of both checkouts and a named stash of all 19 uncommitted entries, both worktrees were removed normally, without force. The current-checkout consumer inventory supports deleting `Protocols.apply_continuous_pulse`, `Configuration.get_list`, and the six unused logging wrappers. The tested reset polling fallback and working v1/v2 completion paths remain. See the [verification record and deletion manifest](2026-09-14-f8-verification-record.md) for search scope, historical callers, recovery instructions, and test results. This supersedes the older-worktree disposition above; F9 and the Pi/deployment release checks remain separate.
+
 ## Regression coverage to establish before higher-risk changes
 
 `tests/unit/test_controller_wiring.py:1–8` explicitly documents unbound `KneeSpa` method calls against a MagicMock window. It already covers login delegation, Setup command mapping, treatment pause/resume/stop presentation calls, Cancel rollback through `_prev_settings` (`:454`), defaults clamping, telemetry forwarding to SafetyMonitor (`:521`), and phase/button adapters (`:535`). `test_protocol_controller.py` adds readiness, confirmation races, immediate worker failure/progress, reset/release, and completion outcomes. These are suitable foundations for the bounded deletions in Phases 1–2, with focused assertions for the touched paths.
@@ -126,6 +144,8 @@ They do not construct `KneeSpa`, call `_connect_shell`, check the actual widget 
 Extend relevant existing tests rather than creating a parallel test suite. Keep real serial/thread integration tests as a separate check on synchronization behavior.
 
 ### F1 decision: keep a thin runner, retire source-pattern snapshots
+
+**Implementation update (2026-09-14): F1 is complete.** See the [verification record](2026-09-14-f1-verification-record.md) for the 12-check coverage mapping, exact selected test node IDs, and validation results. This completes F1 only; the remaining phase work and B2 remain separate.
 
 `scripts/validate_fixes.py` remains a supported local command, but becomes a small subprocess runner using the current Python interpreter for `check_limits_sync.py` and an explicit selection of behavioral tests. It must propagate a failing child exit status. It no longer promises to run without test dependencies. Do not replace the stale pressure regex with a different regex or create a new source-snapshot suite.
 
@@ -210,6 +230,12 @@ Tasks:
 
 **Dependencies:** Phase 0 and the B2 file-preservation repair. No real-window fixture or firmware reflash dependency.
 
+**F2 implementation update (2026-09-14): the Python cleanup (1B) is complete in the working tree.** See the [verification record](2026-09-14-f2-verification-record.md) for the two-line deletion and focused test results. The eight firmware locals remain deferred to the scheduled firmware companion batch. This does not complete the remaining Phase 1 work or its prerequisites.
+
+**F3 implementation update (2026-09-14): the dead subscriptions (1C) and remaining treatment/authentication placeholders (Phase 2) are complete in the working tree.** See the [verification record](2026-09-14-f3-verification-record.md) for the consumer inventory and regression results. The late timer start, worker signal API, live telemetry, and modern login flow are preserved. F4, the committed-baseline/B2 prerequisites, and Gate W remain separate.
+
+**F4 implementation update (2026-09-14): Phase 1D, Gate W, and Phase 3 are complete in the working tree.** See the [verification record](2026-09-14-f4-verification-record.md) for the real-window transition coverage, presentation/proxy/phase migration, single-timer verification, and full Python gates. The obsolete fields and adapters are removed; live read timing, phase semantics, Cancel rollback, and stop/recovery behavior are preserved. The committed-baseline/B2 prerequisites and device verification remain separate.
+
 Tasks, in reviewable commit order:
 
 1. **1A — repair the gate:** implement the F1 thin-runner decision and coverage mapping, add only missing behavioral cases, and bound the identified pressure unit waits. Update CI to retain one full pytest run and remove source-snapshot assertions. Do not change production behavior to make the new tests pass; route discovered bugs separately.
@@ -280,6 +306,12 @@ Tasks:
 
 **Dependencies:** the committed baseline and Phase 1's verification repair, plus tests for the individual task. No dependency on Gate W or Phase 3. The following tasks are independent and can ship separately.
 
+**F5 implementation update (2026-09-14): test-support consolidation is complete in the working tree.** See the [verification record](2026-09-14-f5-verification-record.md) for the shared-builder inventory, explicit controller collaborators, removal of global filesystem/log-handler patches, and individual/combined/full-suite results. F1's bounded pressure waits and F4's Gate W coverage remain intact. SMTP, calibration persistence, and the committed-baseline/B2 prerequisites remain separate.
+
+**F6 implementation update (2026-09-14): SMTP consolidation is complete in the working tree.** See the [verification record](2026-09-14-f6-verification-record.md) for the offline message/transport contracts and focused/full Python results. Assistance and ticket message construction remain separate; one private window helper owns MIME headers, credentials, SMTP-over-SSL, diagnostics, and daemon-thread dispatch. Recipients, the 15-second timeout, and immediate ticket acknowledgement are preserved. Calibration persistence and the committed-baseline/B2 prerequisites remain separate.
+
+**F7 implementation update (2026-09-14): calibration persistence is complete in the working tree.** See the [verification record](2026-09-14-f7-verification-record.md) for publication timing, backup/failure behavior, compatibility coverage, and focused/full Python results. The atomic writer accepts an optional candidate parser; calibration saves publish it only after a successful write. Backups and caller-specific error contracts are preserved. B1, an observed pre-existing Windows read-encoding issue, and the committed-baseline/B2 prerequisites remain separate.
+
 Tasks:
 
 1. **SMTP:** add the offline message/transport contract tests, then extract the small shared send helper from F6. Preserve message builders, recipients, background execution, errors, and immediate UI acknowledgement.
@@ -293,6 +325,8 @@ Tasks:
 ### Phase 5 — remove only verified compatibility, dependency, and asset candidates
 
 **Dependencies:** consumer and supported Pi environment evidence. Inventory can start after Phase 0; complete Phase 2 before finalizing UI asset consumers. No dependency on Gate W.
+
+**F9 disposition update (2026-09-14): local inventory and proposed-package checks are complete; deletion is deferred at the owner's request.** See the [verification record and deferred-candidate manifest](2026-09-14-f9-verification-record.md). Neither local Python environment has the backport installed, and an isolated package without the ten PNGs passes fresh offscreen startup, all-screen rendering, and font/video discovery. Supported Pi interpreter/import and packaged/deployed-consumer evidence remain unresolved, so the dependency and assets are retained. The initial dry run reproduced B2; the subsequent B2 commit fixes both state-file exclusions and passes the real local rsync preservation gate.
 
 Tasks:
 
@@ -348,10 +382,9 @@ The scope excludes firmware edits, placeholder-field retirement, timer changes, 
 ## Context still required
 
 - Supported Raspberry Pi OS/Python versions and the deployed dependency set.
-- Whether external service or calibration scripts call repository-unused public helpers.
+- Packaged/deployed consumers for F9 dependency and asset candidates; the owner resolved F8's external API-consumer question on 2026-09-14.
 - Device-based timing, emergency-stop, reconnect, and native VLC/audio verification for later higher-risk phases.
 - The currently flashed firmware/build, the reported pending FAILSAFE-6 / continuous-pulse reflash, and verified deployment hosts. The critique reports stale default IPs; this revision does not establish replacements.
-- Disposition of the older worktree's 19 uncommitted entries before its retirement or any deletion dependent on its non-use.
 - Product decisions for B1. B2 is explicitly scheduled before Phase 1; B3 still needs reproduction.
 
 These gaps do not make Gate W a prerequisite for the Python cleanup. The cleanup's actual prerequisites are the committed baseline and the B2 file-preservation repair. Missing consumer, deployment, or hardware evidence blocks only the dependent deletion or device action.
