@@ -1,42 +1,18 @@
 # tests/unit/test_protocol_logic.py
-import pytest
 import time
-from unittest.mock import MagicMock, patch
+from unittest.mock import patch
 
-from config.config import Configuration
+import pytest
+
+from fixtures.protocol_clock import ProtocolClock
+from fixtures.protocols import make_protocol
 from helpers.conversions import lateral_degrees_to_position
 from helpers.protocols import (
     MAX_SAFE_PRESSURE,
     MIN_PRESSURE,
     PRESSURE_INCREMENT,
-    Protocols,
 )
-
-
-def make_protocol(**kwargs):
-    """Create a Protocols instance with mocked Arduino and sane defaults."""
-    defaults = dict(
-        a_factor=1900,
-        protocol="1",
-        max_pressure=50,
-        max_left=10.0,
-        max_right=10.0,
-        duration=1,  # 1 minute
-        use_pulse=False,
-        ser=MagicMock(),
-        config=None,
-    )
-    defaults.update(kwargs)
-
-    # Build config with defaults
-    if defaults["config"] is None:
-        config = Configuration()
-        config._set_default_c_marks()
-        config._set_default_a_marks()
-        config._set_default_b_marks()
-        defaults["config"] = config
-
-    return Protocols(**defaults)
+from main.config.constants import LATERAL_MOVE_TIMEOUT_S, PRESSURE_BUILD_TIMEOUT_S
 
 
 @pytest.mark.unit
@@ -68,6 +44,38 @@ class TestCheckDuration:
 @pytest.mark.unit
 class TestSetToCDistance:
     """Tests for C actuator position calculation and interpolation."""
+
+    def test_rejected_send_does_not_claim_arrival(self) -> None:
+        """Even cached arrival cannot make a rejected command succeed."""
+        p = make_protocol()
+        p.is_running = True
+        p.current_pos_c = int(p.config.CMarks["0.0"])
+        p.arduino.send.return_value = False
+        assert p.set_to_c_distance(0) is False
+        p.arduino.send.assert_called_once_with(f"K{p.current_pos_c}")
+        assert p.angle_set is False
+
+    def test_unverified_position_times_out(self, protocol_clock: ProtocolClock) -> None:
+        """Neither a stale DONE nor unchanged telemetry verifies a new move."""
+        p = make_protocol()
+        p.is_running = True
+        p.arduino.send.return_value = True
+        p._on_firmware_done()
+        assert p.set_to_c_distance(0) is False
+        assert p.angle_set is False
+        assert p.arduino.send.call_count == 1
+        assert LATERAL_MOVE_TIMEOUT_S <= protocol_clock.elapsed < LATERAL_MOVE_TIMEOUT_S + 1
+
+    def test_cancellation_interrupts_position_wait(self, protocol_clock: ProtocolClock) -> None:
+        """Cancellation ends the wait without claiming arrival or resending."""
+        p = make_protocol()
+        p.is_running = True
+        p.arduino.send.return_value = True
+        protocol_clock.on_sleep = p.cancel
+        assert p.set_to_c_distance(0) is False
+        assert p.angle_set is False
+        assert p.arduino.send.call_count == 1
+        assert protocol_clock.elapsed < LATERAL_MOVE_TIMEOUT_S
 
     def test_exact_mark_lookup(self):
         p = make_protocol()
@@ -178,6 +186,24 @@ class TestProtocolInit:
 @pytest.mark.unit
 class TestSetToPressure:
     """Tests for direct pressure setting."""
+
+    def test_rejected_send_returns_false(self) -> None:
+        """Pressure already at target does not excuse a rejected send."""
+        p = make_protocol()
+        p.is_running = True
+        p.current_pressure = 50
+        p.arduino.send.return_value = False
+        assert p.set_to_pressure(50) is False
+        p.arduino.send.assert_called_once_with("P50")
+
+    def test_unverified_pressure_times_out(self, protocol_clock: ProtocolClock) -> None:
+        """A successful enqueue alone does not verify measured pressure."""
+        p = make_protocol()
+        p.is_running = True
+        p.arduino.send.return_value = True
+        assert p.set_to_pressure(50) is False
+        p.arduino.send.assert_called_once_with("P50")
+        assert PRESSURE_BUILD_TIMEOUT_S <= protocol_clock.elapsed < PRESSURE_BUILD_TIMEOUT_S + 1
 
     def test_rejects_negative_pressure(self):
         p = make_protocol()

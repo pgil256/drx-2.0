@@ -17,9 +17,6 @@ MIN_PLAUSIBLE_SCALE_FACTOR = 1000.0
 
 
 class Configuration:
-    def get_list(option, sep=",", chars=None):
-        return [chunk.strip(chars) for chunk in option.split(sep)]
-
     def __init__(self, config_path: Optional[str] = None):
         self.flexion_position = 0
         self.a_factor = 1900

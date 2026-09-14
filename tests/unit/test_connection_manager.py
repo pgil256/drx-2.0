@@ -4,44 +4,7 @@ import pytest
 from unittest.mock import MagicMock
 
 from controllers.connection_manager import ConnectionManager
-
-
-class StubWindow:
-    def __init__(self):
-        self.arduino = MagicMock()
-        self.config = MagicMock()
-        self.config.AMarks = {"0.0": 160}
-        self.config.BMarks = {"0.0": 1900}
-        self.config.calibration = -28369.0
-        self.config.scale_calibrated = True
-        self.reset_in_progress = False
-        self.initial_setup_complete = False
-        self.loading_spinner = MagicMock()
-        self.shell = MagicMock()
-        self.start_button = MagicMock()
-        self.threadpool = MagicMock()
-        self.logger = MagicMock()
-        self.errors = []
-        self.reset_readings = 0
-        self.leg_resets = 0
-
-    def _show_timed_error(self, message):
-        self.errors.append(message)
-
-    def disable_actuator_controls(self):
-        pass
-
-    def reset_setup_readings(self):
-        self.reset_readings += 1
-
-    def reset_extra_button_clicked(self):
-        self.leg_resets += 1
-
-    def _release_leg_gpio(self):
-        pass
-
-    def enable_actuator_controls(self):
-        pass
+from fixtures.controllers import ConnectionWindow as StubWindow
 
 
 @pytest.fixture
@@ -79,7 +42,7 @@ class TestResetGating:
         cm._on_reset_finished(True)
         assert w.reset_in_progress is False
         assert w.initial_setup_complete is True
-        w.start_button.setEnabled.assert_called_with(True)
+        w.shell.treatment.set_busy.assert_called_with(False)
 
     def test_reset_finished_failure_keeps_start_disabled(self, manager):
         cm, w = manager
@@ -87,7 +50,7 @@ class TestResetGating:
         cm._on_reset_finished(False)
         assert w.reset_in_progress is False
         assert w.initial_setup_complete is False
-        w.start_button.setEnabled.assert_called_with(False)
+        w.shell.treatment.set_busy.assert_called_with(True)
         assert any("failed" in e.lower() for e in w.errors)
 
 

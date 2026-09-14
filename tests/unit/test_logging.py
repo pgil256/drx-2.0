@@ -13,6 +13,8 @@ device). Where the coordinator spec and the actual implementation disagree,
 the test documents the real behavior and notes the discrepancy in a comment.
 """
 import logging
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 
 import pytest
 
@@ -83,12 +85,17 @@ class TestHandlerGuard:
     dependency). The old hasHandlers() guard walked up to the root and
     silently skipped the rotating file logs in that case."""
 
-    def test_root_handler_does_not_suppress_file_handlers(self):
+    def test_root_handler_does_not_suppress_file_handlers(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        monkeypatch.setattr("helpers.logging.APP_BASE_DIR", str(tmp_path))
         app_logger = logging.getLogger(_LOGGER_NAME)
         root = logging.getLogger()
 
         saved_instance = LoggerSetup._instance
         saved_handlers = list(app_logger.handlers)
+        qt_logger = logging.getLogger("PyQt5")
+        saved_filters = list(qt_logger.filters)
         stray = logging.StreamHandler()
         try:
             # Simulate a fresh process where basicConfig ran first.
@@ -98,10 +105,13 @@ class TestHandlerGuard:
 
             setup = LoggerSetup()
 
-            assert setup.logger.handlers, (
-                "own-logger handlers were skipped because the root logger "
-                "had a handler"
-            )
+            handlers = [h for h in setup.logger.handlers if isinstance(h, RotatingFileHandler)]
+            assert len(handlers) == 3
+            setup.logger.error("test record reaches disk")
+            for handler in handlers:
+                handler.flush()
+            for filename in ("kneespa.log", "error.log", "debug.log"):
+                assert "test record reaches disk" in (tmp_path / "logs" / filename).read_text()
         finally:
             root.removeHandler(stray)
             for handler in list(app_logger.handlers):
@@ -110,6 +120,7 @@ class TestHandlerGuard:
                     handler.close()
             app_logger.handlers[:] = saved_handlers
             LoggerSetup._instance = saved_instance
+            qt_logger.filters[:] = saved_filters
 
 
 @pytest.mark.unit

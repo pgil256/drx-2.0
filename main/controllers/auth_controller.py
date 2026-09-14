@@ -81,34 +81,18 @@ class AuthController:
 
     # -- PIN entry ----------------------------------------------------
 
-    def append_digit(self, value):
-        """Append a PIN digit; the field's password echo mode masks it.
+    def append_digit(self, value: str) -> None:
+        """Append a digit to the PIN buffer."""
+        self.window.login_pin += value
 
-        Appending a literal '*' on top of echoMode=Password used to
-        double-mask the entry (each keypress displayed the mask of a
-        mask), and the displayed length was all an operator had.
-        """
-        window = self.window
-        if window.login_line_edit:
-            from PyQt5 import QtWidgets
-
-            window.login_line_edit.setEchoMode(QtWidgets.QLineEdit.Password)
-            window.login_line_edit.setText(window.login_line_edit.text() + value)
-            window.login_pin += value
-
-    def backspace_digit(self):
-        """Remove the last entered PIN digit (mis-keys used to force a
-        full re-entry via Clear)."""
+    def backspace_digit(self) -> None:
+        """Remove the last entered PIN digit."""
         window = self.window
         window.login_pin = window.login_pin[:-1]
-        if window.login_line_edit:
-            text = window.login_line_edit.text()
-            window.login_line_edit.setText(text[:-1])
 
-    def clear_pin(self):
-        """Clear the login input field."""
+    def clear_pin(self) -> None:
+        """Clear the PIN buffer."""
         window = self.window
-        window.login_line_edit.clear()
         window.login_pin = ""
 
     # -- login --------------------------------------------------------
@@ -149,7 +133,6 @@ class AuthController:
             window.current_user = matched_user
             window.login_pin = ""
             window.update_ui_after_login()
-            window.login_dialog.accept()
             self.clear_pin()
         else:
             print("Login failed: Invalid PIN")

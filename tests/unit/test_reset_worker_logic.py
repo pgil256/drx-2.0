@@ -22,49 +22,7 @@ import pytest
 
 from helpers.reset_worker import ResetWorker, ResetWorkerSignals
 from helpers.arduino import CommandHandle
-
-
-def make_main_window(use_event=True):
-    """Build a mocked main_window with the attributes ResetWorker inspects.
-
-    A real ``threading.Event`` is used for I2Cstatus_event so the event-based
-    code path in _wait_for_done exercises real wait/clear semantics. ``worker``
-    is set to None so the run() safety check treats no protocol as running.
-    """
-    mw = MagicMock()
-    mw.I2Cstatus = 0
-    if use_event:
-        mw.I2Cstatus_event = threading.Event()
-    else:
-        # Remove the attribute so hasattr(...) is False -> polling path.
-        del mw.I2Cstatus_event
-    mw.worker = None
-    return mw
-
-
-def make_config(scale_calibrated=True):
-    """Build a mocked config with the marks/calibration ResetWorker reads."""
-    config = MagicMock()
-    config.AMarks = {"0.0": 0, "0": 0}
-    # Step 4 homes actuator B to the calibrated -10 deg BMarks position (1140).
-    config.BMarks = {"0.0": 1900, "0": 1900, "-15": 760, "-10": 1140}
-    # run() reads CMarks["{:.1f}".format(0)] == CMarks["0.0"]
-    config.CMarks = {"0.0": 1450}
-    config.calibration = 1.0
-    config.scale_calibrated = scale_calibrated
-    return config
-
-
-def make_worker(arduino=None, config=None, main_window=None, use_event=True):
-    """Construct a ResetWorker with mocked collaborators."""
-    if arduino is None:
-        arduino = MagicMock()
-        arduino.send.return_value = True
-    if config is None:
-        config = make_config()
-    if main_window is None:
-        main_window = make_main_window(use_event=use_event)
-    return ResetWorker(arduino, config, main_window)
+from fixtures.reset import make_config, make_main_window, make_worker
 
 
 @pytest.mark.unit

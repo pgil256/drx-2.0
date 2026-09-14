@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import QApplication
 
 from helpers.arduino import Arduino
 from helpers.reset_worker import ResetWorker
-from config.constants import ARDUINO_SETTINGS, BUTTON_STYLES
+from config.constants import ARDUINO_SETTINGS
 
 
 class ConnectionManager:
@@ -235,7 +235,7 @@ class ConnectionManager:
         window.loading_spinner.show()
         window.disable_actuator_controls()
         # Disable start button during reset to prevent crashes
-        window.start_button.setEnabled(False)
+        window.protocol.set_busy(True)
         QApplication.processEvents() # Ensure spinner is visible
 
         # Create and configure the worker, passing 'self'
@@ -264,9 +264,6 @@ class ConnectionManager:
 
         if success:
             window.loading_spinner.hide() # Hide spinner when done
-            window.start_button.setText("Start")
-            window.start_button.setStyleSheet(BUTTON_STYLES["START"])
-            window.start_button.setEnabled(True)  # Re-enable start button
             window._show_timed_error(
                 "Arduino reset and actuators reinitialized."
             )
@@ -280,7 +277,6 @@ class ConnectionManager:
             window._release_leg_gpio()
             window.initial_setup_complete = False
             window.loading_spinner.hide()
-            window.start_button.setEnabled(False)
             if hasattr(window, "set_protocol_state"):
                 window.set_protocol_state("fault")
             window.shell.setup.set_reset_enabled(True)
@@ -300,7 +296,6 @@ class ConnectionManager:
         window.reset_in_progress = False
         window._release_leg_gpio()
         window.initial_setup_complete = False
-        window.start_button.setEnabled(False)
         if hasattr(window, "set_protocol_state"):
             window.set_protocol_state("fault")
         window.shell.setup.set_reset_enabled(True)

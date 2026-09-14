@@ -228,39 +228,6 @@ def debug(message: str, component: str = "", level: str = "DEBUG", **kwargs):
         print(f"[{timestamp}] [LOGGING ERROR] Failed to log: {e}")
 
 
-def debug_serial(message: str, data: str = None, **kwargs):
-    """
-    Specialized debug for serial communication.
-
-    Args:
-        message: Description of serial event
-        data: Raw serial data (will be safely formatted)
-        **kwargs: Additional context
-    """
-    if data is not None:
-        # Safely format serial data (handle non-printable chars)
-        safe_data = repr(data) if data else "EMPTY"
-        debug(f"SERIAL: {message} | Data: {safe_data}", component="Arduino", **kwargs)
-    else:
-        debug(f"SERIAL: {message}", component="Arduino", **kwargs)
-
-
-def debug_protocol(message: str, state: dict = None, **kwargs):
-    """
-    Specialized debug for protocol execution.
-
-    Args:
-        message: Protocol event description
-        state: Current protocol state dictionary
-        **kwargs: Additional context
-    """
-    if state:
-        state_str = ', '.join([f"{k}={v}" for k, v in state.items()])
-        debug(f"PROTOCOL: {message} | State: [{state_str}]", component="Protocol", **kwargs)
-    else:
-        debug(f"PROTOCOL: {message}", component="Protocol", **kwargs)
-
-
 def debug_safety(message: str, limits: dict = None, current: dict = None, **kwargs):
     """
     Specialized debug for safety-critical operations.
@@ -280,29 +247,6 @@ def debug_safety(message: str, limits: dict = None, current: dict = None, **kwar
         info_parts.append(f"Limits: {limits}")
 
     debug(' | '.join(info_parts), component="Safety", level=level, **kwargs)
-
-
-def debug_thread(message: str, thread_name: str = None, state: str = None, **kwargs):
-    """
-    Specialized debug for threading operations.
-
-    Args:
-        message: Thread event description
-        thread_name: Name of the thread
-        state: Thread state (STARTING, RUNNING, STOPPING, etc.)
-        **kwargs: Additional context
-    """
-    import threading
-    current = threading.current_thread().name
-
-    parts = [f"THREAD: {message}"]
-    if thread_name:
-        parts.append(f"Thread: {thread_name}")
-    if state:
-        parts.append(f"State: {state}")
-    parts.append(f"Current: {current}")
-
-    debug(' | '.join(parts), component="Threading", **kwargs)
 
 
 def debug_state_change(component: str, old_state: Any, new_state: Any, reason: str = ""):
@@ -340,44 +284,6 @@ def debug_timing(message: str, start_time: float = None, component: str = "", **
         debug(f"TIMING: {message}", component=component, **kwargs)
 
 
-def debug_gpio(message: str, pin: int = None, state: Any = None, **kwargs):
-    """
-    Debug GPIO operations.
-
-    Args:
-        message: GPIO event description
-        pin: GPIO pin number
-        state: Pin state (HIGH/LOW, 1/0, etc.)
-        **kwargs: Additional context
-    """
-    parts = [f"GPIO: {message}"]
-    if pin is not None:
-        parts.append(f"Pin: {pin}")
-    if state is not None:
-        parts.append(f"State: {state}")
-
-    debug(' | '.join(parts), component="GPIO", **kwargs)
-
-
-def debug_signal(message: str, signal_name: str = None, data: Any = None, **kwargs):
-    """
-    Debug PyQt signal emissions and connections.
-
-    Args:
-        message: Signal event description
-        signal_name: Name of the signal
-        data: Data being emitted
-        **kwargs: Additional context
-    """
-    parts = [f"SIGNAL: {message}"]
-    if signal_name:
-        parts.append(f"Signal: {signal_name}")
-    if data is not None:
-        parts.append(f"Data: {data}")
-
-    debug(' | '.join(parts), component="Qt", **kwargs)
-
-
 def debug_error(message: str, exception: Exception = None, component: str = "", **kwargs):
     """
     Log errors with full traceback.
@@ -397,25 +303,3 @@ def debug_error(message: str, exception: Exception = None, component: str = "", 
         full_msg = f"ERROR: {message}"
 
     debug(full_msg, component=component, level="ERROR", **kwargs)
-
-
-def debug_lock(message: str, lock_name: str = None, acquired: bool = None, wait_time: float = None, **kwargs):
-    """
-    Debug lock operations for thread safety analysis.
-
-    Args:
-        message: Lock event description
-        lock_name: Name/ID of the lock
-        acquired: Whether lock was successfully acquired
-        wait_time: Time spent waiting for lock
-        **kwargs: Additional context
-    """
-    parts = [f"LOCK: {message}"]
-    if lock_name:
-        parts.append(f"Lock: {lock_name}")
-    if acquired is not None:
-        parts.append(f"Acquired: {acquired}")
-    if wait_time is not None:
-        parts.append(f"Wait: {wait_time:.3f}s")
-
-    debug(' | '.join(parts), component="Threading", **kwargs)

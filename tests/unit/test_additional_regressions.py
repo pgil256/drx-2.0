@@ -10,9 +10,9 @@ from controllers.protocol_controller import ProtocolController
 from helpers.arduino import Arduino, CommandHandle
 from helpers.reset_worker import ResetWorker
 from kneespa import KneeSpa
-from tests.unit.test_protocol_controller import make_window
-from tests.unit.test_protocol_logic import make_protocol
-from tests.unit.test_reset_worker_logic import make_config
+from fixtures.controllers import make_window
+from fixtures.protocols import make_protocol
+from fixtures.reset import make_config
 
 
 pytestmark = pytest.mark.unit
@@ -77,7 +77,7 @@ def test_failed_centering_never_dispatches_or_starts_treatment_timer(
     window.threadpool.start.assert_not_called()
     window.protocol_timer.start.assert_not_called()
     assert window.protocol_state == "fault"
-    window.ui.start_button.setEnabled.assert_called_with(False)
+    window.shell.treatment.set_busy.assert_called_with(True)
 
 
 @pytest.mark.parametrize("protocol_v2", [False, True])
@@ -99,6 +99,8 @@ def test_reset_does_not_home_leg_length(protocol_v2: bool, qtbot: QtBot) -> None
 
     def send(command: str) -> bool:
         sent.append(command)
+        if command == "Y":
+            window.arduino.ready_event.set()  # Firmware boot banner after reset.
         window.I2Cstatus_event.set()
         return True
 

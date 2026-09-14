@@ -10,12 +10,8 @@
 #     is replaced by ui.app_shell.AppShell; the screens' pyqtSignals/setters are
 #     the seam between view and backend.
 #
-# The controllers still address the window through the legacy attribute contract
-# (window.ui.start_button, window.time_edit, window.timer_dialog, ...). That
-# contract is satisfied here by explicit adapters onto the modern widgets, and
-# by documented no-ops where the modern UI deliberately dropped a feature
-# (floating timer/pressure dialogs, protocol-image pager, show-timer/pressure
-# checkboxes). Controller logic itself is unchanged.
+# Treatment presentation is owned by ProtocolController and uses the modern
+# view setters directly. Window slots delegate lifecycle changes to it.
 import logging
 import traceback
 import sys
@@ -134,140 +130,9 @@ _JOG_SPEED = {
 }
 
 
-# ---------------------------------------------------------------------------
-# Legacy-contract adapters
-#
-# The controllers (controllers/*) were extracted against the legacy .ui-file
-# window and drive it through attributes like window.ui.start_button and
-# window.time_edit. These adapters satisfy that contract against the modern
-# AppShell so the controllers stay byte-identical.
-# ---------------------------------------------------------------------------
-class _NullWidget:
-    """Stand-in for legacy widgets the modern UI deliberately dropped.
-
-    Accepts every call the controllers make and does nothing:
-    - timer_dialog / pressure_dialog (countdown + live pressure now render
-      inline on the Treatment screen and the status banner),
-    - forward/backward protocol-image pager, show-timer / show-pressure /
-      use-pulse checkboxes, increase/decrease time labels (replaced by the
-      Settings sliders), and the legacy login dialog/PIN field (the modern
-      modal manages its own display and submits the whole PIN at once).
-    """
-
-    def setEnabled(self, *_): pass
-    def setChecked(self, *_): pass
-    def setText(self, *_): pass
-    def setStyleSheet(self, *_): pass
-    def setValue(self, *_): pass
-    def setEchoMode(self, *_): pass
-    def blockSignals(self, *_): pass
-    def isVisible(self): return False
-    def hide(self): pass
-    def show(self): pass
-    def clear(self): pass
-    def text(self): return ""
-    def value(self): return 0
-    def accept(self): pass
-    def initialize_protocol_time(self, *_): pass
-    def update_time(self, *_): pass
-    def update_pressure(self, *_): pass
-
-
-class _ValueProxy:
-    """Adapts the controllers' legacy ``.value()`` / ``.text()`` reads onto a
-    live getter (the modern Settings sliders / protocol picker)."""
-
-    def __init__(self, getter):
-        self._getter = getter
-
-    def value(self):
-        return self._getter()
-
-    def text(self):
-        return str(self._getter())
-
-    def setEnabled(self, *_): pass
-    def setValue(self, *_): pass
-    def blockSignals(self, *_): pass
-
-
-class _StartButtonAdapter:
-    """Maps the controllers' legacy Start/Stop-button drive onto the Treatment
-    screen's run-state API: setText("Stop"/"Start") -> running/idle visuals,
-    setEnabled -> busy lock. Styling belongs to the DS theme, so setStyleSheet
-    is a no-op."""
-
-    def __init__(self, window):
-        self._window = window
-
-    def setText(self, text):
-        running = str(text).strip().lower() == "stop"
-        try:
-            self._window.shell.treatment.set_run_state(running=running, paused=False)
-        except Exception:
-            pass
-
-    def setStyleSheet(self, *_):
-        pass
-
-    def setEnabled(self, enabled):
-        try:
-            self._window.shell.treatment.set_busy(not enabled)
-        except Exception:
-            pass
-
-
-class _PhaseLabelAdapter:
-    """Maps the controllers' free-text status-label writes onto the Treatment
-    screen's phase badge/stepper (the status banner still gets the full text
-    via treatment_panel.set_phase inside the controller)."""
-
-    def __init__(self, window):
-        self._window = window
-
-    def setText(self, text):
-        t = str(text).lower()
-        if "pulsing" in t:
-            phase = "pulsing"
-        elif "oscillat" in t:
-            phase = "oscillating"
-        elif "moving to" in t:
-            phase = "positioning"
-        elif "complete" in t:
-            phase = "complete"
-        elif "stopped" in t:
-            phase = "stopped"
-        elif "started" in t or "pressure" in t:
-            phase = "ramping"
-        else:
-            return  # untranslatable free text — leave the phase unchanged
-        try:
-            self._window.shell.treatment.set_phase(phase)
-        except Exception:
-            pass
-
-
 class _CloudBridge(QObject):
     """Carries cloud API results from worker threads back to the UI."""
     lookup_done = pyqtSignal(int, object)
-
-
-class _LegacyUi:
-    """Namespace for the ``window.ui.<name>`` attributes the controllers use."""
-
-    def __init__(self, window):
-        self.start_button = _StartButtonAdapter(window)
-        self.status_label = _PhaseLabelAdapter(window)
-        null = _NullWidget()
-        # Dropped in the modern UI (see _NullWidget docstring). The reset-
-        # arduino button's protocol-run lockout is covered by the Treatment
-        # screen's set_busy + the actuator_controls group gating.
-        self.forward_button_protocol_image = null
-        self.backward_button_protocol_image = null
-        self.show_timer_button = null
-        self.show_pressure_button = null
-        self.use_pulse_button = null
-        self.reset_arduino_main_button = null
 
 
 # Main Python class
@@ -343,7 +208,6 @@ class KneeSpa(QMainWindow):
         self.actuator_a = ACTUATORS["AXIAL"]["ID"]
         self.actuator_b = ACTUATORS["HORIZONTAL"]["ID"]
         self.actuator_c = ACTUATORS["LATERAL"]["ID"]
-        self.protocol_timer = QTimer()
 
         # Actuator position tracking (legacy setup_actuator_controls defaults).
         self.axial_flexion_position = 0
@@ -378,9 +242,6 @@ class KneeSpa(QMainWindow):
         self.mid_protocol_warning_shown = False
         self.protocol_stop_requested = False
         self._physical_stop_active = False
-        self._prev_pressure = None                   #  for rollback
-        self._prev_left   = None
-        self._prev_right  = None
         self.worker = None
 
         # --- build the modern view ---
@@ -455,29 +316,6 @@ class KneeSpa(QMainWindow):
         self._patient_lookup_id = 0
         self._cloud_bridge = _CloudBridge()
         self._cloud_bridge.lookup_done.connect(self._on_cloud_lookup_done)
-
-        # --- legacy attribute contract for the controllers ---
-        self.ui = _LegacyUi(self)
-        self.start_button = self.ui.start_button
-        # Dropped floating dialogs / legacy time controls (see _NullWidget).
-        self.timer_dialog = _NullWidget()
-        self.pressure_dialog = _NullWidget()
-        self.increase_time = _NullWidget()
-        self.decrease_time = _NullWidget()
-        self.login_line_edit = _NullWidget()
-        self.login_dialog = _NullWidget()
-        # Live reads the controllers make when starting/confirming a protocol.
-        self.protocol_number_field = _ValueProxy(lambda: self.protocol_value)
-        self.time_edit = _ValueProxy(self._duration_minutes)
-        self.max_pressure_edit = _ValueProxy(
-            lambda: self.shell.treatment.settings_values().get("max_pressure", 50)
-        )
-        self.max_left_edit = _ValueProxy(
-            lambda: self.shell.treatment.settings_values().get("max_left", 10)
-        )
-        self.max_right_edit = _ValueProxy(
-            lambda: self.shell.treatment.settings_values().get("max_right", 10)
-        )
 
         # Controls locked while the MCU is busy (jog/Go/Stop/Reset-Arduino) —
         # the same gating group the legacy `actuator_controls` list provided.
@@ -787,54 +625,16 @@ class KneeSpa(QMainWindow):
         self._seed_modern_run_inputs()
         self._cloud_treatment_start = datetime.now(timezone.utc).isoformat()
         self.protocol.start_or_stop()
-        if self.protocol_state == "running":
-            try:
-                self.shell.treatment.set_phase("ramping")
-            except Exception:
-                pass
 
     def _on_treatment_pause(self):
-        if self.worker and self.protocol_running and not self._paused_at:
-            self.worker.pause()
-            self._paused_at = time.time()
-            if self.protocol_timer.isActive():
-                self.protocol_timer.stop()
-            try:
-                self.shell.treatment.set_run_state(running=True, paused=True)
-                self.shell.treatment.set_phase("paused")
-            except Exception:
-                pass
+        self.protocol.pause()
 
     def _on_treatment_resume(self):
-        if self.worker and self.protocol_running and self._paused_at:
-            self.worker.resume()
-            # Shift the UI clock past the paused span so the countdown is correct.
-            if self.protocol_start_time is not None:
-                self.protocol_start_time += (time.time() - self._paused_at)
-            self._paused_at = None
-            self.protocol_timer.start(1000)
-            try:
-                self.shell.treatment.set_run_state(running=True, paused=False)
-                self.shell.treatment.set_phase(
-                    "pulsing" if self.current_use_pulse_setting else "holding"
-                )
-            except Exception:
-                pass
+        self.protocol.resume()
 
     def _on_estop(self):
-        """Emergency stop from the modern Setup/Treatment screens. Runs the
-        controllers' e-stop chain (X → worker stop → reset), then forces the
-        Treatment UI back to a stopped state; the protocol state machine
-        closes via the worker's finished(False) signal."""
-        self.emergency_stop_clicked(None)
-        self._paused_at = None
-        if self.protocol_timer.isActive():
-            self.protocol_timer.stop()
-        try:
-            self.shell.treatment.set_run_state(running=False, paused=False)
-            self.shell.treatment.set_phase("stopped")
-        except Exception:
-            pass
+        """Emergency stop from the modern Setup/Treatment screens."""
+        self.protocol.stop_from_view()
 
     def emergency_stop_clicked(self, event):
         self.protocol.emergency_stop_clicked(event)

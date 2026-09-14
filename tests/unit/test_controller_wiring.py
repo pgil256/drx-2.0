@@ -1,31 +1,35 @@
 """Unit tests for the modern view <-> backend wiring in kneespa.py.
 
 Like test_actuator_controls / test_conversions, these call ``KneeSpa`` methods
-UNBOUND against a MagicMock ``self`` so no Qt window / Arduino is constructed.
+UNBOUND against an explicit facade without constructing the hardware window;
+the login flow uses a real AppShell and AuthController. Gate W separately tests
+the actual constructor and control signals.
 They verify the seam between the AppShell view layer and the FAILSAFE
 controllers: login delegation, Setup jog/go/stop mapping (incl. the fixed
 lateral-stop routing), Treatment run-state, Mark-As-Default clamping, the
-support-ticket fallback, and the legacy-contract adapters.
+support-ticket fallback, and controller presentation.
 """
 
+from functools import partial
+from pathlib import Path
+import time
+from types import SimpleNamespace
+from typing import Optional
 from unittest.mock import MagicMock
 
 import pytest
+from PyQt5.QtCore import QObject
+from PyQt5.QtWidgets import QPushButton
+from pytestqt.qtbot import QtBot
 
-from kneespa import KneeSpa, _PhaseLabelAdapter, _StartButtonAdapter
+from controllers.auth_controller import AuthController
+from helpers.secure_auth import SecureAuthHelper
+from kneespa import KneeSpa
+from fixtures.controllers import make_stub
+from controllers.protocol_controller import ProtocolController
+from ui.app_shell import AppShell, PAGES
 
 pytestmark = pytest.mark.unit
-
-
-def make_stub():
-    stub = MagicMock()
-    stub._patient_lookup_id = 0
-    stub.config.marks_valid = True
-    stub.config.scale_calibrated = True
-    stub.actuator_a = "12"
-    stub.actuator_b = "13"
-    stub.actuator_c = "14"
-    return stub
 
 
 # ----- cloud patient lookup result (external data) -----
@@ -73,6 +77,52 @@ class TestStopGuards:
 
 # ----- auth (verification itself lives in controllers.auth_controller) -----
 class TestLogin:
+    @pytest.mark.parametrize("outcome", ["success", "invalid", "locked"])
+    def test_modal_submission_through_auth_preserves_login_gating(
+        self, qtbot: QtBot, tmp_path: Path, outcome: str
+    ) -> None:
+        """Real modal/auth flow works without legacy login fields or dialogs."""
+        shell = AppShell()
+        qtbot.addWidget(shell)
+        user = {"username": "Test clinician", "status": "user"}
+        stub = SimpleNamespace(
+            shell=shell,
+            current_user=None,
+            login_pin="",
+            users={SecureAuthHelper.hash_pin_secure("7531"): user},
+            _show_timed_error=MagicMock(),
+        )
+        stub._is_admin = partial(KneeSpa._is_admin, stub)
+        stub.update_ui_after_login = partial(KneeSpa.update_ui_after_login, stub)
+        stub.auth = AuthController(stub, state_path=str(tmp_path / "auth_state.json"))
+        if outcome == "locked":
+            stub.auth.lockout_until = time.time() + 60
+        shell.login_attempted.connect(partial(KneeSpa._on_login_attempt, stub))
+        shell.nav_rail.navigate.emit("protocols")
+        assert shell.stack.currentIndex() == PAGES.index("home")
+        assert not shell.login_modal.isHidden()
+
+        keypad = shell.login_modal._keypad
+        buttons = {button.text(): button for button in keypad.findChildren(QPushButton)}
+        for digit in ("0000" if outcome == "invalid" else "7531"):
+            buttons[digit].click()
+
+        assert stub.login_pin == ""
+        if outcome == "success":
+            assert stub.current_user == user
+            assert shell.login_modal.isHidden()
+            assert shell.stack.currentIndex() == PAGES.index("protocols")
+            assert shell.top_bar._name.text() == user["username"]
+            stub._show_timed_error.assert_not_called()
+        else:
+            assert stub.current_user is None
+            assert not shell.login_modal.isHidden()
+            assert keypad.value() == ""
+            assert shell.login_modal._error.text() == "Invalid PIN. Please try again."
+            stub._show_timed_error.assert_called_once()
+            shell.nav_rail.navigate.emit("setup")
+            assert shell.stack.currentIndex() == PAGES.index("home")
+
     def test_login_attempt_seeds_pin_and_delegates(self):
         """The modal submits the whole PIN; the window buffers it and hands
         off to AuthController (salted verify + lockout)."""
@@ -362,6 +412,7 @@ class TestTreatmentRunState:
         stub = make_stub()
         stub.protocol_running = True
         stub._paused_at = None
+        stub.protocol = ProtocolController(stub)
         KneeSpa._on_treatment_pause(stub)
         stub.worker.pause.assert_called_once()
         stub.shell.treatment.set_run_state.assert_called_with(running=True, paused=True)
@@ -371,6 +422,7 @@ class TestTreatmentRunState:
         stub.protocol_running = True
         stub._paused_at = 1000.0
         stub.protocol_start_time = 900.0
+        stub.protocol = ProtocolController(stub)
         KneeSpa._on_treatment_resume(stub)
         stub.worker.resume.assert_called_once()
         assert stub._paused_at is None
@@ -381,6 +433,7 @@ class TestTreatmentRunState:
         machine closes via the worker's finished(False), so the handler only
         forces the Treatment visuals to a stopped state."""
         stub = make_stub()
+        stub.protocol = ProtocolController(stub)
         KneeSpa._on_estop(stub)
         stub.emergency_stop_clicked.assert_called_once()
         assert stub._paused_at is None
@@ -498,14 +551,13 @@ class TestSupport:
         KneeSpa._on_issue_activated(stub, "Pressure not reaching target")
         assert stub._selected_issue == "Pressure not reaching target"
 
-    def test_submit_ticket_without_creds_is_handled(self):
+    @pytest.mark.parametrize("issue", [None, "", "Device won't start"])
+    def test_submit_ticket_uses_selected_issue_or_fallback(self, issue: Optional[str]) -> None:
         stub = make_stub()
-        stub.current_user = {"username": "Dr", "status": "admin"}
-        stub.config.ensure_device_id.return_value = "dev123"
-        # No SMTP creds in the test env -> the background send fails
-        # gracefully; the operator still gets the immediate acknowledgement.
-        KneeSpa.submit_ticket(stub, "Device won't start")
-        stub._show_timed_error.assert_called_once()
+        stub._selected_issue = issue
+        stub.submit_ticket = MagicMock()
+        KneeSpa._on_submit_ticket(stub)
+        stub.submit_ticket.assert_called_once_with(issue or "General support request")
 
     def test_assistance_reads_current_user(self):
         stub = make_stub()
@@ -518,6 +570,17 @@ class TestSupport:
 
 # ----- live telemetry (medical-device "telemetry updates live") -----
 class TestTelemetry:
+    def test_protocol_timer_keeps_one_second_interval_and_countdown_callback(self) -> None:
+        """Exercise timer configuration without constructing the hardware window."""
+        owner = QObject()
+        owner.update_protocol_time = MagicMock()
+        KneeSpa.setup_timers(owner)
+        assert owner.protocol_timer.parent() is owner
+        assert owner.protocol_timer.interval() == 1000
+        assert not owner.protocol_timer.isActive()
+        owner.protocol_timer.timeout.emit()
+        owner.update_protocol_time.assert_called_once_with()
+
     def test_status_emit_drives_live_status_and_safety(self):
         """Arduino status feeds the Treatment live readouts AND still reaches
         the SafetyMonitor (the safety path must never be starved by the UI)."""
@@ -531,8 +594,8 @@ class TestTelemetry:
         stub.safety.on_status.assert_called_once_with(500, 0, 150, 42)
 
 
-# ----- legacy-contract adapters -----
-class TestAdapters:
+# ----- controller presentation -----
+class TestPresentation:
     @pytest.mark.parametrize("text,phase", [
         ("Pulsing at target pressure", "pulsing"),
         ("Oscillating limb", "oscillating"),
@@ -541,34 +604,27 @@ class TestAdapters:
         ("Protocol stopped", "stopped"),
         ("Protocol Started", "ramping"),
     ])
-    def test_status_label_adapter_maps_to_phase(self, text, phase):
+    def test_status_maps_to_phase(self, text, phase):
         stub = make_stub()
-        _PhaseLabelAdapter(stub).setText(text)
+        ProtocolController(stub).update_status_label(text)
         stub.shell.treatment.set_phase.assert_called_with(phase)
+        stub.treatment_panel.set_phase.assert_called_once_with(text.upper())
 
-    def test_status_label_adapter_ignores_free_text(self):
+    def test_status_ignores_unknown_phase_but_keeps_banner_text(self):
         stub = make_stub()
-        _PhaseLabelAdapter(stub).setText("some unrelated message")
+        ProtocolController(stub).update_status_label("some unrelated message")
         stub.shell.treatment.set_phase.assert_not_called()
+        stub.treatment_panel.set_phase.assert_called_once_with("SOME UNRELATED MESSAGE")
 
-    def test_start_button_stop_text_means_running(self):
+    @pytest.mark.parametrize("state,running,busy", [
+        ("running", True, False), ("idle", False, False),
+        ("starting", True, True), ("fault", False, True),
+    ])
+    def test_state_drives_view_directly(self, state, running, busy):
         stub = make_stub()
-        _StartButtonAdapter(stub).setText("Stop")
+        stub.reset_in_progress = False
+        ProtocolController(stub).set_state(state)
         stub.shell.treatment.set_run_state.assert_called_once_with(
-            running=True, paused=False
+            running=running, paused=False
         )
-
-    def test_start_button_start_text_means_idle(self):
-        stub = make_stub()
-        _StartButtonAdapter(stub).setText("Start")
-        stub.shell.treatment.set_run_state.assert_called_once_with(
-            running=False, paused=False
-        )
-
-    def test_start_button_disabled_means_busy(self):
-        stub = make_stub()
-        adapter = _StartButtonAdapter(stub)
-        adapter.setEnabled(False)
-        stub.shell.treatment.set_busy.assert_called_once_with(True)
-        adapter.setEnabled(True)
-        stub.shell.treatment.set_busy.assert_called_with(False)
+        stub.shell.treatment.set_busy.assert_called_once_with(busy)

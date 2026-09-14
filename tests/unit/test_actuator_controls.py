@@ -15,7 +15,7 @@ no Qt window / Arduino is constructed and the tests run on Windows.
 from unittest.mock import MagicMock, patch
 
 import pytest
-from PyQt5.QtWidgets import QPushButton
+from fixtures.actuators import ControlsHarness
 
 import kneespa
 from kneespa import KneeSpa
@@ -41,37 +41,6 @@ ACTUATOR_C = ACTUATORS["LATERAL"]["ID"]      # "14" -- lateral flexion (deg)
 # ---------------------------------------------------------------------------
 # Control gating (base regression: the lateral double-click control lockup)
 # ---------------------------------------------------------------------------
-class ControlsHarness:
-    """Bare object exposing only the state the control-gating methods use.
-
-    Binds the real KneeSpa methods without constructing the full UI.
-    """
-
-    disable_actuator_controls = KneeSpa.disable_actuator_controls
-    enable_actuator_controls = KneeSpa.enable_actuator_controls
-    _apply_enable_actuator_controls = KneeSpa._apply_enable_actuator_controls
-    move_actuator = KneeSpa.move_actuator
-
-    def __init__(self, qtbot, n_buttons=3):
-        self.protocol_running = False
-        self.protocol_state = "idle"
-        self.reset_in_progress = False
-        self.initial_setup_complete = True
-        self.actuator_command_in_progress = False
-        self.controls_enable_timer = None
-        self.actuator_controls = []
-        for _ in range(n_buttons):
-            button = QPushButton()
-            qtbot.addWidget(button)
-            self.actuator_controls.append(button)
-
-    def all_enabled(self):
-        return all(w.isEnabled() for w in self.actuator_controls)
-
-    def all_disabled(self):
-        return all(not w.isEnabled() for w in self.actuator_controls)
-
-
 @pytest.mark.unit
 class TestActuatorControlGating:
     def test_disable_sets_flag_and_disables(self, qtbot):

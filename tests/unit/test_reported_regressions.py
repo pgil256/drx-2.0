@@ -12,9 +12,9 @@ from controllers.protocol_controller import ProtocolController
 from controllers.safety_monitor import SafetyMonitor
 from helpers.arduino import Arduino
 from kneespa import KneeSpa, _CloudBridge
-from tests.unit.test_actuator_controls import ControlsHarness
-from tests.unit.test_controller_wiring import make_stub
-from tests.unit.test_protocol_logic import make_protocol
+from fixtures.actuators import ControlsHarness
+from fixtures.controllers import make_stub
+from fixtures.protocols import make_protocol
 
 pytestmark = pytest.mark.unit
 
@@ -268,7 +268,7 @@ def test_logout_invalidates_pending_lookup(qtbot: QtBot) -> None:
 def test_start_captures_patient_and_invalidates_pending_lookup(
     monkeypatch: pytest.MonkeyPatch, qtbot: QtBot
 ) -> None:
-    from tests.unit.test_protocol_controller import make_window
+    from fixtures.controllers import make_window
     from helpers import protocols
 
     window = make_window()
@@ -338,7 +338,7 @@ def test_physical_stop_latches_fault_even_if_gpio_release_raises(qtbot: QtBot) -
 
 
 def test_physical_stop_prevents_reset_retry(monkeypatch: pytest.MonkeyPatch) -> None:
-    from tests.unit.test_reset_worker_logic import make_worker
+    from fixtures.reset import make_worker
 
     worker = make_worker()
     worker.main_window._physical_stop_active = False
@@ -354,7 +354,7 @@ def test_physical_stop_prevents_reset_retry(monkeypatch: pytest.MonkeyPatch) -> 
 
 
 def test_physical_stop_prevents_queued_reset_from_starting() -> None:
-    from tests.unit.test_reset_worker_logic import make_worker
+    from fixtures.reset import make_worker
 
     worker = make_worker()
     worker.main_window._physical_stop_active = True
@@ -391,7 +391,7 @@ def test_physical_stop_leaves_operator_reset_available(qtbot: QtBot) -> None:
 
 
 def test_failed_reset_leaves_operator_recovery_available(qtbot: QtBot) -> None:
-    from tests.unit.test_connection_manager import StubWindow
+    from fixtures.controllers import ConnectionWindow as StubWindow
 
     window = StubWindow()
     ConnectionManager(window)._on_reset_finished(False)

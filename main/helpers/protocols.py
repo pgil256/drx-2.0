@@ -652,7 +652,6 @@ class Protocols(QtCore.QRunnable):
                 return False
             target_pressure = min(float(self.max_pressure), float(MAX_SAFE_PRESSURE))
             print(f"Setting final pressure: {target_pressure} lbs")
-            final_attempt_start = time.time()
             if not self._send_pressure_command(target_pressure):
                 print(f"Failed to send final pressure command P{target_pressure}")
                 return False
@@ -660,7 +659,6 @@ class Protocols(QtCore.QRunnable):
             # Wait and verify with extended monitoring for final pressure
             retry_count = 0
             final_stabilized = False
-            max_final_wait_time = 15  # Longer wait for final pressure to stabilize
             
             while retry_count < max_retries and not final_stabilized:
                 if not self.is_running:
@@ -855,75 +853,6 @@ class Protocols(QtCore.QRunnable):
 
         except Exception as e:
             print(f"Error in set_to_c_distance: {e}")
-            return False
-
-    def apply_continuous_pulse(self) -> bool:
-        """
-        Apply continuous pulse sequence.
-        Checks self.use_pulse dynamically and stops pulsing if it becomes False.
-        """
-        if not self.is_running:
-            return True # Exit if protocol stopped externally
-
-        # This function is entered when the main protocol loop decides pulsing should happen.
-        # It needs to handle the case where self.use_pulse becomes False while running.
-        try:
-            # Check if pulsing is actually enabled *now*
-            if not self.use_pulse:
-                print(f"Protocol {self.protocol} ({time.time()}): apply_continuous_pulse called, but self.use_pulse is False. Skipping.")
-                return True # Not an error, just nothing to pulse.
-
-            print(f"Protocol {self.protocol} ({time.time()}): Starting continuous pulse sequence (self.use_pulse={self.use_pulse})...")
-            self.signals.progress.emit(">>Pulsing...")
-
-            if not self._start_pulse(): return False # Command to start pulsing
-            print(f"Protocol {self.protocol} ({time.time()}): Sent 'J' (start pulse) to Arduino.")
-            pulse_command_active_j = True # Flag to track if "J" was sent
-
-            last_keepalive_time = time.time()
-            keepalive_interval = 30  # seconds
-            check_interval = 0.2 # How often to check conditions in this loop
-
-            while self.is_running and self.use_pulse: # *** KEY: Check self.use_pulse in loop condition ***
-                current_time = time.time()
-
-                # Pause holds static: pause() already sent 'JS'; wait here, then
-                # re-arm the pulse on resume so the hold continues cleanly.
-                if self.is_paused:
-                    self._wait_while_paused()
-                    if not (self.is_running and self.use_pulse):
-                        break
-                    if not self._start_pulse():
-                        return False
-                    last_keepalive_time = time.time()
-                    continue
-
-                # Check overall protocol duration
-                if not self.check_duration():
-                    print(f"Protocol {self.protocol} ({time.time()}): Duration ended during pulse operation.")
-                    break # Exit loop if duration is over
-
-                # Send keepalive periodically
-                if current_time - last_keepalive_time > keepalive_interval:
-                    if self.arduino: self._send_command("T")
-                    last_keepalive_time = current_time
-
-                time.sleep(check_interval) # Main loop pause
-
-            # Loop exited. Reasons: not self.is_running OR self.use_pulse became False OR duration ended.
-            print(f"Protocol {self.protocol} ({time.time()}): Exiting apply_continuous_pulse loop. Conditions: is_running={self.is_running}, use_pulse={self.use_pulse}, elapsed_time={self.elapsed_time:.1f}/{self.duration}")
-
-            # Always send stop pulse command ('JS') if start command ('J') was sent, to ensure it stops.
-            if pulse_command_active_j and self.arduino:
-                if not self._send_pulse_stop(): print("Warning: Failed to send JS command")
-                print(f"Protocol {self.protocol} ({time.time()}): Sent 'JS' (stop pulse) to Arduino.")
-
-            return True
-
-        except Exception as e:
-            print(f"Error during pulse sequence: {e}")
-            # Try to send stop command on error too
-            self._send_pulse_stop()
             return False
 
     # ------------------------------------------------------------------

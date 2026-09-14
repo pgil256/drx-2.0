@@ -16,7 +16,7 @@ from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QMessageBox
 
 from helpers import protocols
-from config.constants import BUTTON_STYLES, EMERGENCYSTOP
+from config.constants import EMERGENCYSTOP
 
 
 class ProtocolController:
@@ -45,29 +45,38 @@ class ProtocolController:
         window.protocol_state = state
         window.protocol_running = state in ("starting", "running", "stopping")
 
-        start_button = window.ui.start_button
         if state == "idle":
-            start_button.setText("Start")
-            start_button.setStyleSheet(BUTTON_STYLES["START"])
-            start_button.setEnabled(window.reset_in_progress is not True)
+            self._set_run_state(False)
+            self.set_busy(window.reset_in_progress is True)
             window.treatment_panel.set_idle()
         elif state == "starting":
-            start_button.setText("Stop")
-            start_button.setStyleSheet(BUTTON_STYLES["STOP"])
-            start_button.setEnabled(False)
+            self._set_run_state(True)
+            self.set_busy(True)
         elif state == "running":
-            start_button.setText("Stop")
-            start_button.setStyleSheet(BUTTON_STYLES["STOP"])
-            start_button.setEnabled(True)
+            self._set_run_state(True)
+            self.set_busy(False)
         elif state == "stopping":
-            start_button.setEnabled(False)
+            self.set_busy(True)
             window.treatment_panel.set_stopping()
         elif state == "fault":
-            start_button.setText("Start")
-            start_button.setStyleSheet(BUTTON_STYLES["START"])
+            self._set_run_state(False)
             # A fault is not treatment-ready. Recovery reset is the only path
             # back to idle.
-            start_button.setEnabled(False)
+            self.set_busy(True)
+
+    def _set_run_state(self, running: bool) -> None:
+        """Present an unpaused lifecycle transition without delaying safety work."""
+        try:
+            self.window.shell.treatment.set_run_state(running=running, paused=False)
+        except Exception:
+            pass
+
+    def set_busy(self, busy: bool) -> None:
+        """Gate treatment controls during transitions and connection/reset work."""
+        try:
+            self.window.shell.treatment.set_busy(busy)
+        except Exception:
+            pass
 
     def block_nav(self):
         """Navigation away from the treatment screen is blocked while a
@@ -95,11 +104,11 @@ class ProtocolController:
         """
         window = self.window
         try:
-            protocol = window.protocol_number_field.text() if window.protocol_number_field else "?"
-            max_pressure = window.max_pressure_edit.value() if window.max_pressure_edit else "?"
-            max_left = window.max_left_edit.value() if window.max_left_edit else "?"
-            max_right = window.max_right_edit.value() if window.max_right_edit else "?"
-            duration = int(window.time_edit.value()) if window.time_edit else 12
+            protocol = str(window.protocol_value)
+            max_pressure = window.shell.treatment.settings_values().get("max_pressure", 50)
+            max_left = window.shell.treatment.settings_values().get("max_left", 10)
+            max_right = window.shell.treatment.settings_values().get("max_right", 10)
+            duration = int(window._duration_minutes())
             pulse = "on" if window.current_use_pulse_setting else "off"
         except Exception as e:
             print(f"Error reading protocol parameters for confirmation: {e}")
@@ -123,14 +132,22 @@ class ProtocolController:
         return reply == QMessageBox.Yes
 
 
-    def start_or_stop(self):
+    def start_or_stop(self) -> None:
+        """Toggle the lifecycle and finish the existing start-phase presentation."""
+        self._toggle_start_stop()
+        if self.window.protocol_state == "running":
+            try:
+                self.window.shell.treatment.set_phase("ramping")
+            except Exception:
+                pass
+
+    def _toggle_start_stop(self) -> None:
         """Start or stop the protocol with debouncing to prevent multiple rapid clicks."""
         window = self.window
         print("Toggling protocol start/stop")
 
-        start_button = window.ui.start_button
         # Prevent rapid clicking by disabling the button during operation
-        start_button.setEnabled(False)
+        self.set_busy(True)
 
         try:
             if window.protocol_state == "fault":
@@ -185,8 +202,7 @@ class ProtocolController:
                 if window.protocol_state == "starting":
                     self.set_state("running")
             else:
-                start_button.setText("Stop")
-                start_button.setStyleSheet(BUTTON_STYLES["STOP"])
+                self._set_run_state(True)
                 self.stop_protocol()
         except Exception as e:
             print(f"Error during protocol operation: {e}")
@@ -223,25 +239,26 @@ class ProtocolController:
 
         try:
             # Validate protocol number
-            protocol = window.protocol_number_field.text()
+            protocol = str(window.protocol_value)
             if protocol not in ["1", "2", "3", "4"]:
                 raise ValueError(f"Invalid protocol number: {protocol}")
 
-            # Get duration in minutes from time_edit
+            # Keep these live reads after confirmation and connection checks.
             duration = 12  # Default to 12 minutes
-            if hasattr(window, "time_edit") and window.time_edit is not None:
-                try:
-                    duration = int(window.time_edit.value())
-                except Exception as e:
-                    print(f"Error getting time value: {e}, using default 5 minutes")
+            try:
+                duration = int(window._duration_minutes())
+            except Exception as e:
+                print(f"Error getting time value: {e}, using default 5 minutes")
 
             if duration == 0:
                 duration = 12  # Ensure we have a valid duration
 
             print(f"Protocol duration: {duration} minutes")
-            max_pressure = int(window.max_pressure_edit.value()) if window.max_pressure_edit else 50
-            max_left_from_slider = int(window.max_left_edit.value()) if window.max_left_edit else 10
-            max_right_from_slider = int(window.max_right_edit.value()) if window.max_right_edit else 10
+            max_pressure = int(window.shell.treatment.settings_values().get("max_pressure", 50))
+            max_left_from_slider = int(window.shell.treatment.settings_values().get("max_left", 10))
+            max_right_from_slider = int(
+                window.shell.treatment.settings_values().get("max_right", 10)
+            )
 
             # The worker expects max_left to be negative
             max_left_for_worker = -abs(max_left_from_slider)
@@ -268,40 +285,9 @@ class ProtocolController:
             window.protocol_duration = duration * 60  # Convert to seconds
             window.protocol_start_time = time.time()
 
-            # Update timer dialog if visible
-            if hasattr(window, "timer_dialog") and window.timer_dialog and window.timer_dialog.isVisible():
-                window.timer_dialog.initialize_protocol_time(
-                    window.protocol_start_time, window.protocol_duration
-                )
-                window.protocol_timer.start(1000)  # Update every second
-
-            if window.ui.forward_button_protocol_image:
-                window.ui.forward_button_protocol_image.setEnabled(False)
-            else:
-                print("Warning: Could not find forward_button_protocol_image to disable it.")
-
-            if window.ui.backward_button_protocol_image:
-                window.ui.backward_button_protocol_image.setEnabled(False)
-            else:
-                print("Warning: Could not find backward_button_protocol_image to disable it.")
-
-            window.ui.reset_arduino_main_button.setEnabled(False)
-            window.increase_time.setEnabled(False)
-            window.decrease_time.setEnabled(False)
-
             window.mid_protocol_warning_shown = False
             window.protocol_stop_requested = False
-            # Seed rollback values before starting: the mid-protocol
-            # change dialog's Cancel path restores _prev_* -- they were
-            # never initialized, so the first Cancel raised TypeError and
-            # silently left the unconfirmed value applied
-            window._prev_pressure = max_pressure
-            window._prev_left = max_left_from_slider
-            window._prev_right = max_right_from_slider
-
-            # Update UI
-            window.ui.start_button.setText("Stop")
-            window.ui.start_button.setStyleSheet(BUTTON_STYLES["STOP"])
+            self._set_run_state(True)
 
             # Create and start protocol
             window.worker = protocols.Protocols(
@@ -324,41 +310,6 @@ class ProtocolController:
             # protocols 2/3); was never connected to anything before
             window.worker.signals.reset_needed.connect(self._reset_after_failure)
 
-            # Connect pressure dialog regardless of visibility
-            # We'll connect it now so it's ready when the checkbox is checked
-            if hasattr(window, "pressure_dialog") and window.pressure_dialog:
-                # Disconnect any existing connections to avoid duplicate signals
-                try:
-                    window.worker.signals.pressure_emit.disconnect(window.pressure_dialog.update_pressure)
-                except Exception:
-                    pass  # Ignore if not previously connected
-
-                # Connect the pressure signal to the dialog's update method
-                window.worker.signals.pressure_emit.connect(window.pressure_dialog.update_pressure)
-                print("MAIN APP: Connected worker.signals.pressure_emit to pressure_dialog.update_pressure")
-
-                # Also connect the Arduino's status directly as a backup connection
-                if hasattr(window, "arduino") and window.arduino and hasattr(window.arduino, "status_emit"):
-                    # Disconnect the slot from the PREVIOUS run: the old code
-                    # tried to disconnect the bound method but connected a
-                    # fresh lambda, so every treatment leaked one more slot
-                    # invoked on every status frame.
-                    previous = getattr(window, "_arduino_pressure_slot", None)
-                    if previous is not None:
-                        try:
-                            window.arduino.status_emit.disconnect(previous)
-                        except Exception:
-                            pass  # transport replaced since; nothing to undo
-
-                    # Create a direct connection from Arduino to pressure dialog
-                    slot = (
-                        lambda pos_a, pos_b, pos_c, pressure:
-                            window.pressure_dialog.update_pressure(pressure)
-                    )
-                    window._arduino_pressure_slot = slot
-                    window.arduino.status_emit.connect(slot)
-                    print("MAIN APP: Connected arduino.status_emit directly to pressure_dialog.update_pressure")
-
             window.protocol_running = True
             # Freeze the association before dispatch, and invalidate any lookup
             # that could arrive after this treatment has already ended.
@@ -366,7 +317,7 @@ class ProtocolController:
             window._treatment_patient = deepcopy(window.cloud_patient)
             window.mid_protocol_warning_shown = False
 
-            window.start_button.setEnabled(True)
+            self.set_busy(False)
 
             # Always-visible treatment banner: live values arrive via
             # status_emit; the countdown via update_protocol_time
@@ -374,7 +325,7 @@ class ProtocolController:
 
             # Finish UI/signal setup before dispatch: a fast worker may emit
             # progress or finish as soon as the thread pool starts it.
-            window.ui.status_label.setText("Protocol Started")
+            self._set_phase_from_text("Protocol Started")
             window.protocol_timer.start()
             window.threadpool.start(window.worker)
             return True
@@ -466,22 +417,8 @@ class ProtocolController:
         if window.worker:
             window.worker.stop()
 
-        # Update UI
-        window.ui.show_timer_button.setChecked(False)
-        window.ui.show_pressure_button.setChecked(False)
-        # window.ui.use_pulse_button.setChecked(False)
-        window.ui.use_pulse_button.setEnabled(True)
-        window.ui.forward_button_protocol_image.setEnabled(True)
-        window.ui.backward_button_protocol_image.setEnabled(True)
-        window.ui.reset_arduino_main_button.setEnabled(True)
-        window.increase_time.setEnabled(True)
-        window.decrease_time.setEnabled(True)
-
-        # (optional) be sure the dialogs disappear
-        window.timer_dialog.hide()
-        window.pressure_dialog.hide()
         try:
-            window.ui.status_label.setText(
+            self._set_phase_from_text(
                 "Protocol complete" if success else "Protocol stopped"
             )
         except Exception as e:
@@ -542,12 +479,16 @@ class ProtocolController:
             "planned_duration_s": window.protocol_duration,
             "actual_duration_s": actual_s,
             "settings_at_end": {
-                "max_pressure_lb": float(window.max_pressure_edit.value()),
+                "max_pressure_lb": float(
+                    window.shell.treatment.settings_values().get("max_pressure", 50)
+                ),
                 "pulse_rate_hz": float(
                     getattr(window, "current_pulse_rate", 0) or 0
                 ),
-                "max_left_deg": float(window.max_left_edit.value()),
-                "max_right_deg": float(window.max_right_edit.value()),
+                "max_left_deg": float(window.shell.treatment.settings_values().get("max_left", 10)),
+                "max_right_deg": float(
+                    window.shell.treatment.settings_values().get("max_right", 10)
+                ),
             },
             "started_at": started_at,
             "ended_at": datetime.now(timezone.utc).isoformat(),
@@ -569,9 +510,6 @@ class ProtocolController:
 
         # Always-visible banner countdown (not gated on any dialog)
         window.treatment_panel.update_remaining(remaining_time)
-
-        if window.timer_dialog.isVisible():
-            window.timer_dialog.update_time(remaining_time)
 
         if remaining_time == 0:
             window.protocol_timer.stop()
@@ -653,9 +591,73 @@ class ProtocolController:
         window = self.window
         clean = str(text).lstrip(">")
         try:
-            window.ui.status_label.setText(clean)
+            self._set_phase_from_text(clean)
         except Exception as e:
             print(f"Error updating status label: {e}")
         window.treatment_panel.set_phase(clean.upper())
 
+    def _set_phase_from_text(self, text: str) -> None:
+        """Map legacy progress text in precedence order; retain unknown phases."""
+        lowered = str(text).lower()
+        if "pulsing" in lowered:
+            phase = "pulsing"
+        elif "oscillat" in lowered:
+            phase = "oscillating"
+        elif "moving to" in lowered:
+            phase = "positioning"
+        elif "complete" in lowered:
+            phase = "complete"
+        elif "stopped" in lowered:
+            phase = "stopped"
+        elif "started" in lowered or "pressure" in lowered:
+            phase = "ramping"
+        else:
+            return
+        try:
+            self.window.shell.treatment.set_phase(phase)
+        except Exception:
+            pass
 
+    def pause(self) -> None:
+        """Pause the worker and countdown, then present the paused controls."""
+        window = self.window
+        if window.worker and window.protocol_running and not window._paused_at:
+            window.worker.pause()
+            window._paused_at = time.time()
+            if window.protocol_timer.isActive():
+                window.protocol_timer.stop()
+            try:
+                window.shell.treatment.set_run_state(running=True, paused=True)
+                window.shell.treatment.set_phase("paused")
+            except Exception:
+                pass
+
+    def resume(self) -> None:
+        """Resume the worker, excluding paused time from the UI countdown."""
+        window = self.window
+        if window.worker and window.protocol_running and window._paused_at:
+            window.worker.resume()
+            if window.protocol_start_time is not None:
+                window.protocol_start_time += time.time() - window._paused_at
+            window._paused_at = None
+            window.protocol_timer.start(1000)
+            try:
+                window.shell.treatment.set_run_state(running=True, paused=False)
+                window.shell.treatment.set_phase(
+                    "pulsing" if window.current_use_pulse_setting else "holding"
+                )
+            except Exception:
+                pass
+
+    def stop_from_view(self) -> None:
+        """Run the screen STOP chain, then present its stopped controls."""
+        window = self.window
+        window.emergency_stop_clicked(None)
+        window._paused_at = None
+        if window.protocol_timer.isActive():
+            window.protocol_timer.stop()
+        try:
+            window.shell.treatment.set_run_state(running=False, paused=False)
+            window.shell.treatment.set_phase("stopped")
+        except Exception:
+            pass

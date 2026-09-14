@@ -1,6 +1,9 @@
+import json
 import os
 import subprocess
 import sys
+from pathlib import Path
+from typing import Dict
 
 import pytest
 
@@ -11,6 +14,90 @@ from config.constants import (
     ACTUATORS, PROTOCOL_MAPPING, PROTOCOL_DEFAULT_SETTINGS,
     ARDUINO_SETTINGS,
 )
+from config import constants
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("nested", [False, True])
+def test_required_paths_must_exist_on_disk(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, nested: bool,
+) -> None:
+    """Missing shipped resources fail validation until actually created."""
+    resource = tmp_path / "ui" / "media" / "videos"
+    paths = {"VIDEOS": {"DEMO": str(resource)} if nested else str(resource)}
+    monkeypatch.setattr(constants, "UI_PATHS", paths)
+    with pytest.raises(FileNotFoundError, match="Required path not found"):
+        constants.validate_paths()
+
+    os.makedirs(resource)
+    constants.validate_paths()
+    assert resource.is_dir()
+
+
+def read_isolated_constants(overrides: Dict[str, str]) -> dict:
+    """Import constants in a child with synthetic settings, preserving parent imports."""
+    env = {key: value for key, value in os.environ.items() if not key.startswith("KNEESPA_")}
+    env.update(overrides)
+    env["KNEESPA_SKIP_PATH_VALIDATION"] = "1"
+    result = subprocess.run(
+        [sys.executable, "-c", "\n".join([
+            "import json, sys",
+            "sys.path.insert(0, 'main')",
+            "from config import constants as c",
+            "print(json.dumps({name: getattr(c, name) for name in "
+            "('APP_BASE_DIR', 'CONFIG_PATH', 'DATA_PATHS', 'UI_PATHS', 'EMAIL_CONFIG')}))",
+        ])],
+        cwd=Path(__file__).resolve().parents[2],
+        env=env,
+        check=True,
+        capture_output=True,
+        text=True,
+        timeout=10,
+    )
+    return json.loads(result.stdout)
+
+
+@pytest.mark.unit
+class TestEnvironmentOverrides:
+    """Configured paths and SMTP settings reach their runtime consumers."""
+
+    def test_base_directory_controls_default_paths(self, tmp_path: Path) -> None:
+        base = tmp_path / "device files"
+        values = read_isolated_constants({"KNEESPA_BASE_DIR": str(base)})
+        assert values["APP_BASE_DIR"] == str(base)
+        assert Path(values["CONFIG_PATH"]) == base / "config" / "kneespa.cfg"
+        assert {key: Path(value) for key, value in values["DATA_PATHS"].items()} == {
+            "USER_PINS": base / "data" / "user_pins.csv",
+            "AUTH_STATE": base / "data" / "auth_state.json",
+            "PENDING_UPLOADS": base / "data" / "pending_uploads.json",
+        }
+        assert Path(values["UI_PATHS"]["VIDEOS"]) == base / "ui" / "media" / "videos"
+
+    def test_explicit_config_path_overrides_base(self, tmp_path: Path) -> None:
+        custom = tmp_path / "custom config.cfg"
+        values = read_isolated_constants({
+            "KNEESPA_BASE_DIR": str(tmp_path / "base"),
+            "KNEESPA_CONFIG_PATH": str(custom),
+        })
+        assert values["CONFIG_PATH"] == str(custom)
+
+    def test_smtp_environment_overrides(self) -> None:
+        values = read_isolated_constants({
+            "KNEESPA_SMTP_USERNAME": "sender@example.invalid",
+            "KNEESPA_SMTP_PASSWORD": "synthetic-test-password",
+            "KNEESPA_ASSISTANCE_EMAIL": "help@example.invalid",
+            "KNEESPA_TICKET_EMAIL": "tickets@example.invalid",
+            "KNEESPA_SMTP_SERVER": "smtp.example.invalid",
+            "KNEESPA_SMTP_PORT": "2465",
+        })
+        assert values["EMAIL_CONFIG"] == {
+            "SENDER_EMAIL": "sender@example.invalid",
+            "SENDER_PASSWORD": "synthetic-test-password",
+            "RECEIVER_EMAIL": "help@example.invalid",
+            "TICKET_EMAIL": "tickets@example.invalid",
+            "SMTP_SERVER": "smtp.example.invalid",
+            "SMTP_PORT": 2465,
+        }
 
 
 @pytest.mark.unit

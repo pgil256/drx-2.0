@@ -5,32 +5,20 @@ exercise the pause/resume state machine, the clock-freeze in check_duration, and
 the firmware-gated J<ms> / bare-J pulse command — without running any protocol.
 """
 
+from functools import partial
 import time
-from unittest.mock import MagicMock
 
 import pytest
 
 import helpers.protocols as protocols_mod
-from helpers.protocols import Protocols
+from fixtures.protocol_clock import ProtocolClock
+from fixtures.protocols import make_protocol
+
+
+make_worker = partial(make_protocol, protocol="1", use_pulse=True, pulse_rate=2.0)
+
 
 pytestmark = pytest.mark.unit
-
-
-def make_worker(**kwargs):
-    defaults = dict(
-        a_factor=1900,
-        protocol="1",
-        max_pressure=50,
-        max_left=10.0,
-        max_right=10.0,
-        duration=1,        # 1 minute -> 60s
-        use_pulse=True,
-        ser=MagicMock(),
-        config=MagicMock(),
-        pulse_rate=2.0,
-    )
-    defaults.update(kwargs)
-    return Protocols(**defaults)
 
 
 def test_pause_noop_when_not_running():
@@ -101,6 +89,27 @@ def test_wait_while_paused_returns_when_unpaused():
     # Not paused -> returns immediately.
     w._wait_while_paused()  # should not hang
     assert True
+
+
+@pytest.mark.parametrize("command", ["P50", "K1500", "J"], ids=["pressure", "lateral", "pulse"])
+def test_cancelled_worker_rejects_commands_even_if_running_flag_is_reset(command: str) -> None:
+    """Cancellation permanently closes the send gate to late callbacks."""
+    w = make_worker()
+    w.cancel()
+    w.is_running = True
+    assert w._send_command(command) is False
+    w.arduino.send.assert_not_called()
+
+
+def test_cancellation_while_paused_aborts_ramp(protocol_clock: ProtocolClock) -> None:
+    """A paused worker can be cancelled without resuming or sending pressure."""
+    w = make_worker()
+    w.is_running = True
+    w.is_paused = True
+    protocol_clock.on_sleep = w.cancel
+    assert w.run_pressure_sequence(10, 50) is False
+    assert w.is_paused is False
+    w.arduino.send.assert_not_called()
 
 
 def test_start_pulse_bare_j_without_firmware_support(monkeypatch):

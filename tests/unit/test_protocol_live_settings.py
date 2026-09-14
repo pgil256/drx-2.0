@@ -1,33 +1,18 @@
 """Live Treatment-setting behavior for a running protocol."""
 
+from functools import partial
 from unittest.mock import MagicMock, call
 
 import pytest
 
 import helpers.protocols as protocols_mod
-from helpers.protocols import Protocols
+from fixtures.protocols import make_protocol
+
+
+make_worker = partial(make_protocol, protocol="2", use_pulse=True, pulse_rate=2.0)
 
 
 pytestmark = pytest.mark.unit
-
-
-def make_worker(**kwargs):
-    defaults = {
-        "a_factor": 1900,
-        "protocol": "2",
-        "max_pressure": 50,
-        "max_left": 10.0,
-        "max_right": 10.0,
-        "duration": 1,
-        "use_pulse": True,
-        "ser": MagicMock(),
-        "config": MagicMock(),
-        "pulse_rate": 2.0,
-    }
-    defaults.update(kwargs)
-    worker = Protocols(**defaults)
-    worker.arduino.send.return_value = True
-    return worker
 
 
 def test_zero_pulse_rate_stops_immediately():

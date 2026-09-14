@@ -2,53 +2,30 @@
 """Unit tests for Protocols pressure ramp, emergency stop, and cached state.
 
 These tests are Windows-runnable: the Arduino is a MagicMock (no pty/FakeArduino),
-methods are called directly (no real QThreadPool), and pressure ramps are driven by
-seeding the cached pressure state so the device-feedback loops terminate quickly.
+methods are called directly (no real QThreadPool), and pressure ramps use explicit
+acknowledgements and simulated time for feedback, timeout, and cancellation checks.
 """
+from functools import partial
 import threading
-import time
 from unittest.mock import MagicMock
 
 import pytest
 
+from fixtures.protocol_clock import ProtocolClock
+from fixtures.protocols import make_protocol as build_protocol
 from helpers.protocols import (
     Protocols,
     MAX_SAFE_PRESSURE,
     PRESSURE_INCREMENT,
 )
-from config.config import Configuration
+from main.config.constants import PRESSURE_BUILD_TIMEOUT_S
 
 
-def make_protocol(**kwargs):
-    """Create a Protocols instance with a mocked Arduino and sane defaults."""
-    defaults = dict(
-        a_factor=1900,
-        protocol="1",
-        max_pressure=50,
-        max_left=10.0,
-        max_right=10.0,
-        duration=1,  # 1 minute
-        use_pulse=False,
-        ser=MagicMock(),
-        config=None,
-    )
-    defaults.update(kwargs)
-
-    if defaults["config"] is None:
-        config = Configuration()
-        config._set_default_c_marks()
-        config._set_default_a_marks()
-        config._set_default_b_marks()
-        defaults["config"] = config
-
-    p = Protocols(**defaults)
-    # MagicMock.send returns a truthy Mock by default; make it an explicit bool
-    # so the "command failed" branches behave like the real Arduino (True = ok).
-    p.arduino.send = MagicMock(return_value=True)
-    return p
+make_protocol = partial(build_protocol, acknowledge=True)
 
 
 @pytest.mark.unit
+@pytest.mark.usefixtures("protocol_clock")
 class TestRunPressureSequence:
     """Tests for run_pressure_sequence ramp toward a target pressure."""
 
@@ -119,13 +96,74 @@ class TestRunPressureSequence:
         p.arduino.send = MagicMock(return_value=False)
         assert p.run_pressure_sequence(50, 50) is False
 
-    def test_aborts_when_status_never_reaches_target(self):
+    def test_aborts_when_status_never_reaches_target(self, protocol_clock: ProtocolClock) -> None:
         """If status never reports reaching pressure, the build times out -> False."""
         p = make_protocol()
         p.is_running = True
         p.current_pressure = 0  # never reaches target
         result = p.run_pressure_sequence(50, 50)
         assert result is False
+        p.arduino.send.assert_called_once_with("P50")
+        assert PRESSURE_BUILD_TIMEOUT_S <= protocol_clock.elapsed < PRESSURE_BUILD_TIMEOUT_S + 1
+
+    @pytest.mark.parametrize("rejected_send", [2, 3], ids=["increment", "final"])
+    def test_aborts_when_later_pressure_command_is_rejected(self, rejected_send: int) -> None:
+        """Rejected increments and final commands must not report success."""
+        p = make_protocol()
+        p.is_running = True
+        p.current_pressure = 50
+
+        def send(command: str) -> bool:
+            p._on_firmware_done()
+            return p.arduino.send.call_count != rejected_send
+
+        p.arduino.send.side_effect = send
+        assert p.run_pressure_sequence(40, 50) is False
+        assert p.arduino.send.call_count == rejected_send
+
+    def test_aborts_when_increment_never_stabilizes(self, protocol_clock: ProtocolClock) -> None:
+        """A verified initial pressure cannot stand in for the next increment."""
+        p = make_protocol()
+        p.is_running = True
+        p.current_pressure = 40
+        assert p.run_pressure_sequence(40, 50) is False
+        assert [c.args[0] for c in p.arduino.send.call_args_list] == ["P40", "P50"]
+        assert PRESSURE_BUILD_TIMEOUT_S <= protocol_clock.elapsed < PRESSURE_BUILD_TIMEOUT_S + 1
+
+    def test_aborts_after_final_pressure_retries_exhausted(self, protocol_clock: ProtocolClock) -> None:
+        """Final verification retains its bounded retries when pressure drops."""
+        p = make_protocol()
+        p.is_running = True
+        p.current_pressure = 50
+
+        def send(command: str) -> bool:
+            p._on_firmware_done()
+            if p.arduino.send.call_count > 1:
+                p.current_pressure = 0
+            return True
+
+        p.arduino.send.side_effect = send
+        assert p.run_pressure_sequence(50, 50) is False
+        assert [c.args[0] for c in p.arduino.send.call_args_list] == ["P50"] + ["P50.0"] * 5
+        assert 5 * PRESSURE_BUILD_TIMEOUT_S <= protocol_clock.elapsed
+        assert protocol_clock.elapsed < 5 * (PRESSURE_BUILD_TIMEOUT_S + 1)
+
+    @pytest.mark.parametrize("during_ack", [False, True], ids=["pressure", "ack"])
+    def test_cancellation_during_wait_aborts_without_escalating(
+        self, protocol_clock: ProtocolClock, during_ack: bool,
+    ) -> None:
+        """Cancellation interrupts both pressure feedback and DONE waits."""
+        p = make_protocol()
+        p.is_running = True
+        p.current_pressure = 40 if during_ack else 0
+        p.arduino.send.side_effect = None
+        p.arduino.send.return_value = True
+        protocol_clock.on_sleep = p.cancel
+
+        assert p.run_pressure_sequence(40, 50) is False
+        p.arduino.send.assert_called_once_with("P40")
+        assert p.is_running is False
+        assert protocol_clock.elapsed < PRESSURE_BUILD_TIMEOUT_S
 
     def test_aborts_immediately_when_not_running(self):
         """An emergency stop during the initial build aborts the sequence."""
@@ -277,18 +315,16 @@ class TestUpdateStatus:
         p.update_status(pos_a=5, pos_b=6, pos_c=7, pressure=8.0)
         handler.assert_called_once_with(5, 6, 7, 8.0)
 
-    def test_drives_pressure_loop_to_completion(self):
+    def test_drives_pressure_loop_to_completion(self, protocol_clock: ProtocolClock) -> None:
         """update_status feeding the target lets run_pressure_sequence finish True."""
         p = make_protocol()
         p.is_running = True
 
-        def feed():
-            # Give the build loop a moment, then report the device at target.
-            time.sleep(0.05)
+        def feed() -> None:
+            # Deliver feedback during the initial build's simulated wait.
             p.update_status(pos_a=0, pos_b=0, pos_c=0, pressure=50.0)
 
-        feeder = threading.Thread(target=feed)
-        feeder.start()
+        protocol_clock.on_sleep = feed
         result = p.run_pressure_sequence(50, 50)
-        feeder.join()
         assert result is True
+        assert protocol_clock.sleeps
