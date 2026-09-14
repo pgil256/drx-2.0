@@ -92,7 +92,7 @@ class Configuration:
             return
 
         try:
-            self.config.read(self.configFile)
+            self.config.read(self.configFile, encoding="utf-8")
 
             allSections = {
                 s: dict(self.config.items(s)) for s in self.config.sections()
