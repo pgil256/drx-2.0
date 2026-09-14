@@ -483,8 +483,11 @@ class Protocols(QtCore.QRunnable):
         return ok
 
     def _on_firmware_done(self):
-        """DONE from the device (any command); the pressure waits clear the
-        event right before sending P so a stale DONE cannot satisfy them."""
+        """Unqualified DONE used by the legacy pressure-settling wait.
+
+        Clearing this event removes already-received acknowledgements, but a
+        later DONE can belong to another command. It cannot prove lateral arrival.
+        """
         self._move_done.set()
 
     def _on_firmware_error(self, message):
@@ -775,16 +778,11 @@ class Protocols(QtCore.QRunnable):
     def set_to_c_distance(self, degrees: float) -> bool:
         """Set the C actuator position based on degrees.
 
-        Arrival is accepted from either source, whichever comes first:
-        the firmware's DONE ack for the K move (authoritative: its loop
-        stops the motor and acks once the encoder is inside
-        POSITION_DEADBAND of the target), or a status frame that reports
-        the lateral position within tolerance. Status frames alone were
-        not enough: they arrive at ~1 Hz, and on 2026-09-10 one was
-        garbled mid-move, after which the firmware held further status
-        for its 2 s ack timeout, so the host's view of the position froze
-        while the actuator was still travelling and the (then 5 s) wait
-        expired with the move only two-thirds complete.
+        Position telemetry within tolerance proves arrival in both protocols.
+        Protocol v2 also accepts DONE on this K command's own handle, allowing
+        completion when telemetry is stale. Legacy v1 DONE has no command
+        identity and may belong to an earlier pressure move, so it cannot prove
+        lateral arrival. Both paths retain the full lateral-move timeout.
         """
         position_tolerance = 25  # Acceptable position difference
         max_wait_time = LATERAL_MOVE_TIMEOUT_S
@@ -802,10 +800,16 @@ class Protocols(QtCore.QRunnable):
             self._wait_while_paused()
             if not self.is_running:
                 return False
-            # Arm the DONE tracker right before sending so a stale ack from
-            # an earlier command cannot satisfy this move.
-            self._move_done.clear()
-            if not self._send_command(f"K{position}"):
+            move_handle = None
+            with self._command_lock:
+                if self._stop_requested.is_set():
+                    return False
+                if getattr(self.arduino, "protocol_v2", False) is True:
+                    move_handle = self.arduino.send_tracked(f"K{position}")
+                    accepted = move_handle is not None
+                else:
+                    accepted = self._send_command(f"K{position}")
+            if not accepted:
                 print(f"Failed to send C actuator command K{position}")
                 return False
 
@@ -819,6 +823,16 @@ class Protocols(QtCore.QRunnable):
                     self._wait_while_paused()
                     wait_start = time.time()  # restart the window after a pause
                     continue
+                if move_handle is not None and move_handle.completed.is_set():
+                    if move_handle.result != "DONE":
+                        self.logger.error(
+                            "Lateral command K%s failed: %s (%s)",
+                            position, move_handle.result, move_handle.reason,
+                        )
+                        return False
+                    print("Firmware reported this lateral command DONE")
+                    self.angle_set = True
+                    break
                 current = self.current_pos_c
                 current_diff = abs(current - position)
                 if current != last_reported:
@@ -830,13 +844,6 @@ class Protocols(QtCore.QRunnable):
 
                 if current_diff <= position_tolerance:
                     print("Position reached within tolerance")
-                    self.angle_set = True
-                    break
-                if self._move_done.is_set():
-                    print(
-                        f"Firmware reported lateral move DONE "
-                        f"(last status position {current})"
-                    )
                     self.angle_set = True
                     break
                 time.sleep(0.1)  # Small sleep to prevent CPU hogging

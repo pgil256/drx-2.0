@@ -413,20 +413,24 @@ def test_late_connect_does_not_automatically_clear_physical_stop(
     reset.assert_not_called()
 
 
-def test_lateral_wait_accepts_firmware_done_when_status_is_stale() -> None:
+def test_lateral_wait_accepts_correlated_v2_done_when_status_is_stale() -> None:
     """2026-09-10: a garbled status frame froze the host's view of the
-    lateral position mid-move; the firmware's DONE ack must still complete
-    the wait instead of the host timing the move out."""
+    lateral position mid-move; a DONE tied to this command must still complete
+    the wait. An unqualified v1 DONE cannot establish command identity (B3)."""
+    from helpers.arduino import CommandHandle
+
     worker = make_protocol()
+    worker.arduino.protocol_v2 = True
     worker.is_running = True
     worker.current_pos_c = -1000  # never within tolerance of any mark
 
-    def ack_done(command: str) -> bool:
+    def ack_done(command: str) -> CommandHandle:
         assert command.startswith("K")
-        worker._on_firmware_done()
-        return True
+        handle = CommandHandle(command=command, sequence=1, result="DONE")
+        handle.completed.set()
+        return handle
 
-    worker.arduino.send.side_effect = ack_done
+    worker.arduino.send_tracked.side_effect = ack_done
 
     assert worker.set_to_c_distance(0) is True
     assert worker.angle_set is True
