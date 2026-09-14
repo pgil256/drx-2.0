@@ -1,8 +1,9 @@
 import configparser
+import copy
 import os
 import tempfile
 import uuid
-from typing import Optional
+from typing import Dict, Mapping, Optional
 
 from config.constants import (
     CONFIG_PATH,
@@ -219,12 +220,16 @@ class Configuration:
         if self.config.has_section("Device") and self.config.has_option("Device", "id"):
             self.device_id = self.config["Device"]["id"]
 
-    def _set_section(self, section, mapping):
+    def _set_section(
+        self, section: str, mapping: Mapping[str, object],
+        parser: Optional[configparser.ConfigParser] = None,
+    ) -> None:
         """Write a flat string-valued section, creating it if missing."""
-        if not self.config.has_section(section):
-            self.config.add_section(section)
+        parser = self.config if parser is None else parser
+        if not parser.has_section(section):
+            parser.add_section(section)
         for key, value in mapping.items():
-            self.config.set(section, key, str(value))
+            parser.set(section, key, str(value))
 
     def protocol_defaults(self):
         """Return the persisted Treatment Settings defaults as a dict."""
@@ -236,21 +241,33 @@ class Configuration:
             "duration": self.default_duration,
         }
 
-    def save_protocol_defaults(self, max_pressure, max_left, max_right, pulse_rate,
-                               duration=None):
+    def save_protocol_defaults(
+        self, max_pressure: float, max_left: float, max_right: float, pulse_rate: float,
+        duration: Optional[float] = None,
+    ) -> None:
         """Persist new Treatment Settings defaults (values should be pre-clamped).
 
         ``duration`` is optional for backward compatibility; when omitted the
         existing persisted duration is kept.
+
+        Write errors propagate without publishing any candidate values, so the
+        caller can report failure and the previous defaults remain available.
         """
-        self.default_max_pressure = float(max_pressure)
-        self.default_max_left = float(max_left)
-        self.default_max_right = float(max_right)
-        self.default_pulse_rate = float(pulse_rate)
-        if duration is not None:
-            self.default_duration = float(duration)
+        defaults = {
+            "max_pressure": float(max_pressure),
+            "max_left": float(max_left),
+            "max_right": float(max_right),
+            "pulse_rate": float(pulse_rate),
+            "duration": self.default_duration if duration is None else float(duration),
+        }
+        candidate = copy.deepcopy(self.config)
+        self._populate_config(candidate, defaults)
+        self._ensure_config_sections(candidate)
+        self._atomic_write(candidate)
+        self.config = candidate
+        for key, value in defaults.items():
+            setattr(self, f"default_{key}", value)
         self.protocol_defaults_marked = True
-        self.update_config()
 
     def ensure_device_id(self):
         """Return the persisted per-device id, generating + saving one if absent."""
@@ -306,20 +323,23 @@ class Configuration:
         else:
             self.scale_calibrated = True
 
-    def _ensure_config_sections(self):
+    def _ensure_config_sections(
+        self, parser: Optional[configparser.ConfigParser] = None,
+    ) -> None:
         """Ensure defaults are persisted for sections missing from the file."""
-        if not self.config.has_section("Options"):
-            self.config.add_section("Options")
+        parser = self.config if parser is None else parser
+        if not parser.has_section("Options"):
+            parser.add_section("Options")
         for section_name, marks in {
             "CMarks": self.CMarks,
             "AMarks": self.AMarks,
             "BMarks": self.BMarks,
         }.items():
-            if not self.config.has_section(section_name):
-                self.config.add_section(section_name)
+            if not parser.has_section(section_name):
+                parser.add_section(section_name)
             for key, value in marks.items():
-                if not self.config.has_option(section_name, key):
-                    self.config.set(section_name, key, str(value))
+                if not parser.has_option(section_name, key):
+                    parser.set(section_name, key, str(value))
 
     def _atomic_write(self, candidate: Optional[configparser.ConfigParser] = None) -> None:
         """Write the config file atomically (temp file + fsync + rename).
@@ -368,11 +388,13 @@ class Configuration:
         self.config["CMarks"] = {k: str(v) for k, v in self.CMarks.items()}
         self._atomic_write()
 
-    def update_config(self):
-        """Update the configuration file with current values."""
+    def _populate_config(
+        self, parser: configparser.ConfigParser, defaults: Optional[Dict[str, float]] = None,
+    ) -> None:
+        """Copy current values and optional new defaults into the selected parser."""
         section = "Options"
-        if not self.config.has_section(section):
-            self.config.add_section(section)
+        if not parser.has_section(section):
+            parser.add_section(section)
 
         # List of configuration options to update
         config_options = [
@@ -383,25 +405,24 @@ class Configuration:
         # Set each option in the config
         for option in config_options:
             if hasattr(self, option):
-                self.config.set(section, option, str(getattr(self, option)))
+                parser.set(section, option, str(getattr(self, option)))
 
         # Persist the Phase-3.5 sections alongside the legacy Options.
         # Protocol defaults are only written once an operator marked them;
         # a stale auto-written section is dropped so the file cannot pin
         # old code defaults.
-        if self.protocol_defaults_marked:
+        if defaults is not None or self.protocol_defaults_marked:
             self._set_section("ProtocolDefaults", {
                 "marked": 1,
-                "max_pressure": self.default_max_pressure,
-                "max_left": self.default_max_left,
-                "max_right": self.default_max_right,
-                "pulse_rate": self.default_pulse_rate,
-                "duration": self.default_duration,
-            })
-        elif self.config.has_section("ProtocolDefaults"):
-            self.config.remove_section("ProtocolDefaults")
-        self._set_section("Device", {"id": self.device_id})
+                **(self.protocol_defaults() if defaults is None else defaults),
+            }, parser)
+        elif parser.has_section("ProtocolDefaults"):
+            parser.remove_section("ProtocolDefaults")
+        self._set_section("Device", {"id": self.device_id}, parser)
 
+    def update_config(self):
+        """Update current values, retaining this caller's legacy error reporting."""
+        self._populate_config(self.config)
         print("Config updated")
         try:
             self._ensure_config_sections()

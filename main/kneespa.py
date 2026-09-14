@@ -819,6 +819,7 @@ class KneeSpa(QMainWindow):
             self._show_timed_error("Saved current settings as the default.")
         except Exception as e:
             print(f"Failed to save defaults: {e}")
+            self.logger.error("Failed to save defaults: %s", e)
             self._show_timed_error("Could not save defaults.")
 
     # ----- auth -----

@@ -348,12 +348,12 @@ class TestAtomicWrite:
         assert cfg_path.read_bytes() == original
         assert not list(tmp_path.glob(".kneespa_cfg_*"))
 
-    @pytest.mark.parametrize("caller", ["defaults", "update", "protocol_defaults"])
+    @pytest.mark.parametrize("caller", ["defaults", "update"])
     def test_callers_keep_their_write_error_contracts(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
         capsys: pytest.CaptureFixture[str], caller: str,
     ) -> None:
-        """Only initial defaults propagate errors; B1 remains a separate bug fix."""
+        """Initial defaults propagate errors; unrelated update_config keeps its contract."""
         cfg_path = tmp_path / "kneespa.cfg"
         config = Configuration(config_path=str(cfg_path))
         config.get_config()
@@ -368,16 +368,10 @@ class TestAtomicWrite:
             with pytest.raises(OSError, match="disk full"):
                 config._write_default_config()
         else:
-            if caller == "update":
-                config.b_factor = 3720
-                assert config.update_config() is None
-                assert config.b_factor == 3720
-                assert config.config["Options"]["b_factor"] == "3720"
-            else:
-                assert config.save_protocol_defaults(60, 15, 18, 3, 20) is None
-                assert config.protocol_defaults_marked is True
-                assert config.default_max_pressure == 60
-                assert config.config["ProtocolDefaults"]["max_pressure"] == "60.0"
+            config.b_factor = 3720
+            assert config.update_config() is None
+            assert config.b_factor == 3720
+            assert config.config["Options"]["b_factor"] == "3720"
             output = capsys.readouterr().out
             assert "disk full" in output
             assert f'Fatal error, could not write config file to "{cfg_path}"' in output
