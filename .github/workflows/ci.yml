@@ -33,6 +33,7 @@ jobs:
             libxkbcommon0 \
             libdbus-1-3 \
             libfontconfig1 \
+            rsync \
             xvfb
 
       - name: Install Python test dependencies

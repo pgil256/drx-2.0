@@ -101,9 +101,13 @@ with `--protocol-observe-seconds`.
 ## Deploying
 
 ```bash
-./rpi/sync_pis.sh    # stops the service, syncs main/ (excluding device-local
-                     # calibration/PINs/logs), restarts the service
+PI_HOSTS="<verified-device-host>" ./rpi/sync_pis.sh
+# Stops the service, syncs main/, and restarts after a successful sync.
+# Preserves device-local calibration, PINs, authentication state, pending uploads, and logs.
 ```
+
+`PI_HOSTS` is required; verify the current device addresses before deployment.
+The script does not fall back to the historical host list.
 
 ### Display diagnostics
 
