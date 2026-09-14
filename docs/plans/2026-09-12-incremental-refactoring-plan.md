@@ -3,7 +3,7 @@
 Created: 2026-09-12  
 Revised against critique: 2026-09-12  
 Audit and verification baseline: 2026-09-11  
-Status: local implementation committed; final closeout validation in progress; F9 deferred
+Status: local closeout complete; F9 deletion and device release verification deferred
 
 ## Closeout update — 2026-09-14
 
@@ -14,6 +14,13 @@ also fixed in separate commits. B3 now uses a command-specific v2 handle; v1
 requires position telemetry because its unqualified DONE cannot identify a move.
 The firmware cleanup passed all 119 native tests and the Mega build, producing
 the same flash image as before deletion. No device deployment or flash occurred.
+
+Final validation used a clean checkout of
+`d8deeefc7853388e0c069b6d7b3f8c8010a3e48b`: **962 Windows tests passed** with 46
+expected POSIX skips, **1,008 Linux tests passed**, and the behavioral runner
+passed 81 cases plus 11 limit checks. The clean-checkout native firmware tests
+and Mega build also passed. The [final closeout record](2026-09-14-refactoring-closeout.md)
+contains the commit inventory, commands, regression evidence, and firmware hash.
 
 The owner set aside F9's Pi/deployed-consumer follow-up. Its backport and ten PNG
 candidates remain in place; their deletion is deferred, not a local closeout
