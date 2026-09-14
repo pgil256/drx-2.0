@@ -95,8 +95,7 @@ class CalibrationDraft:
         self.validate()
         if not self.dirty:
             return None
-        previous = config.config
-        candidate = copy.deepcopy(previous)
+        candidate = copy.deepcopy(config.config)
         changed: Dict[str, object] = {}
         for axis, spec in CALIBRATION_AXES.items():
             if self.marks[axis] != self.original_marks[axis]:
@@ -112,12 +111,8 @@ class CalibrationDraft:
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
             backup = f"{config.configFile}.{stamp}.bak"
             shutil.copy2(config.configFile, backup)
+        config._atomic_write(candidate)
         config.config = candidate
-        try:
-            config._atomic_write()
-        except Exception:
-            config.config = previous
-            raise
         for attr, value in changed.items():
             setattr(config, attr, value)
         # Preserve existing calibration-confidence errors; editing B/C alone

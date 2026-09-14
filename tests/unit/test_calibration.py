@@ -1,6 +1,7 @@
 """Guided calibration: measured data, serial lifecycle, UI and atomic saving."""
 
 import configparser
+import os
 from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import MagicMock
@@ -87,6 +88,172 @@ def test_failed_save_preserves_live_config_and_original_file(config, monkeypatch
     assert config.BMarks["0"] == 1900
     assert Path(config.configFile).read_bytes() == original
     assert draft.dirty
+
+
+@pytest.mark.parametrize("fail_write", [False, True])
+def test_save_publishes_only_after_atomic_replace(
+    config: Configuration, monkeypatch: pytest.MonkeyPatch, fail_write: bool,
+) -> None:
+    """Readers see the original parser and calibration throughout the disk write."""
+    path = Path(config.configFile)
+    original = path.read_bytes()
+    live = config.config
+    marks = config.BMarks
+    draft = CalibrationDraft(config)
+    draft.record("horizontal", 0, 1910)
+    draft.factors["horizontal"] = 3720
+    replace = os.replace
+    replacements = []
+
+    def assert_unpublished() -> None:
+        assert config.config is live
+        assert config.BMarks is marks
+        assert config.BMarks["0"] == 1900
+        assert config.b_factor == 1900
+        assert live["Options"]["b_factor"] == "1900"
+        assert draft.dirty
+        assert draft.original_marks["horizontal"]["0.0"] == 1900
+        assert draft.original_factors["horizontal"] == 1900
+
+    def inspect_replace(source: str, destination: str) -> None:
+        assert_unpublished()
+        assert path.read_bytes() == original
+        backups = list(path.parent.glob("device.cfg.*.bak"))
+        assert len(backups) == 1
+        assert backups[0].read_bytes() == original
+        pending = configparser.ConfigParser()
+        pending.read(source, encoding="utf-8")
+        assert pending["BMarks"]["0.0"] == "1910"
+        assert "0" not in pending["BMarks"]
+        assert pending["Options"]["b_factor"] == "3720"
+        replacements.append(destination)
+        if fail_write:
+            raise OSError("disk full")
+        replace(source, destination)
+        assert_unpublished()
+
+    monkeypatch.setattr("config.config.os.replace", inspect_replace)
+    if fail_write:
+        with pytest.raises(OSError, match="disk full"):
+            draft.save(config)
+        assert_unpublished()
+        assert path.read_bytes() == original
+    else:
+        backup = draft.save(config)
+        assert Path(backup).read_bytes() == original
+        assert config.config is not live
+        assert config.BMarks["0.0"] == 1910
+        assert config.b_factor == 3720
+        assert config.config["Options"]["b_factor"] == "3720"
+        assert live["Options"]["b_factor"] == "1900"
+        assert not draft.dirty
+        assert draft.original_marks == draft.marks
+        assert draft.original_factors == draft.factors
+    assert replacements == [config.configFile]
+    assert not list(path.parent.glob(".kneespa_cfg_*"))
+
+
+@pytest.mark.parametrize("defaults", ["missing", "unmarked", "marked", "malformed"])
+def test_factor_save_preserves_legacy_keys_defaults_and_unknown_values(
+    config: Configuration, defaults: str,
+) -> None:
+    """Calibration saves preserve even ignored or malformed unrelated settings."""
+    config.config["Unrelated"] = {"note": "Measured on service bench", "flag": None}
+    config.config["Device"] = {"id": "test-device", "service_note": "keep"}
+    config.config["Options"]["legacy_option"] = "keep"
+    if defaults != "missing":
+        config.config["ProtocolDefaults"] = {"max_pressure": "60", "pulse_rate": "3"}
+        if defaults != "unmarked":
+            config.config["ProtocolDefaults"]["marked"] = "1"
+        if defaults == "malformed":
+            config.config["ProtocolDefaults"]["max_pressure"] = "garbage"
+    config._atomic_write()
+    config.get_config()
+    previous_defaults = config.protocol_defaults()
+    previous_marked = config.protocol_defaults_marked
+    sections = {name: dict(config.config[name]) for name in config.config.sections()}
+    original = Path(config.configFile).read_bytes()
+    draft = CalibrationDraft(config)
+    draft.factors["horizontal"] = 3720
+    draft.factors["lateral"] = 3800
+
+    backup = draft.save(config)
+
+    assert Path(backup).read_bytes() == original
+    sections["Options"].update(b_factor="3720", c_factor="3800")
+    loaded = Configuration(config.configFile)
+    loaded.get_config()
+    assert {name: dict(loaded.config[name]) for name in loaded.config.sections()} == sections
+    assert loaded.BMarks["0"] == 1900
+    assert "0.0" not in loaded.BMarks
+    assert loaded.CMarks["0.0"] == 1688
+    assert "0" not in loaded.CMarks
+    assert loaded.AMarks == config.AMarks
+    assert loaded.calibration == -28369
+    assert (loaded.b_factor, loaded.c_factor) == (3720, 3800)
+    assert loaded.protocol_defaults() == previous_defaults
+    assert loaded.protocol_defaults_marked == previous_marked
+    assert loaded.device_id == "test-device"
+
+
+def test_unchanged_draft_does_not_write_or_create_backup(
+    config: Configuration, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Saving an unchanged draft remains a no-op."""
+    path = Path(config.configFile)
+    original = path.read_bytes()
+    live = config.config
+    writer = MagicMock(side_effect=AssertionError("unchanged draft attempted a write"))
+    monkeypatch.setattr(config, "_atomic_write", writer)
+
+    assert CalibrationDraft(config).save(config) is None
+
+    writer.assert_not_called()
+    assert config.config is live
+    assert path.read_bytes() == original
+    assert not list(path.parent.glob("*.bak"))
+
+
+def test_save_without_existing_file_does_not_create_backup(config: Configuration) -> None:
+    """A valid in-memory configuration can be saved when there is no prior file."""
+    path = Path(config.configFile)
+    path.unlink()
+    draft = CalibrationDraft(config)
+    draft.factors["horizontal"] = 3720
+
+    assert draft.save(config) is None
+
+    loaded = Configuration(config.configFile)
+    loaded.get_config()
+    assert loaded.b_factor == 3720
+    assert config.b_factor == 3720
+    assert not draft.dirty
+    assert not list(path.parent.glob("*.bak"))
+
+
+def test_failed_backup_prevents_write_and_retains_draft(
+    config: Configuration, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Backup errors propagate before any attempt to persist the candidate."""
+    path = Path(config.configFile)
+    original = path.read_bytes()
+    live = config.config
+    draft = CalibrationDraft(config)
+    draft.factors["horizontal"] = 3720
+    writer = MagicMock(side_effect=AssertionError("write attempted after failed backup"))
+    monkeypatch.setattr(config, "_atomic_write", writer)
+    monkeypatch.setattr(
+        "helpers.calibration.shutil.copy2", MagicMock(side_effect=OSError("backup denied")),
+    )
+
+    with pytest.raises(OSError, match="backup denied"):
+        draft.save(config)
+
+    writer.assert_not_called()
+    assert config.config is live
+    assert config.b_factor == 1900
+    assert draft.dirty
+    assert path.read_bytes() == original
 
 
 @pytest.mark.parametrize("change", ["missing_endpoint", "out_of_order", "out_of_range"])

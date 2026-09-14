@@ -324,13 +324,21 @@ class Configuration:
                 if not self.config.has_option(section_name, key):
                     self.config.set(section_name, key, str(value))
 
-    def _atomic_write(self):
+    def _atomic_write(self, candidate: Optional[configparser.ConfigParser] = None) -> None:
         """Write the config file atomically (temp file + fsync + rename).
 
         The calibration file used to be rewritten in place; a power cut
         mid-write -- routine on a kiosk Pi -- corrupted it, and the next
         boot silently ran on generated default geometry.
+
+        Args:
+            candidate: Parser to persist, or the live parser when omitted.
+                This method does not publish the candidate to live state.
+
+        Raises:
+            Exception: Write errors propagate to the caller after temp-file cleanup.
         """
+        parser = self.config if candidate is None else candidate
         directory = os.path.dirname(os.path.abspath(self.configFile)) or "."
         os.makedirs(directory, exist_ok=True)
         fd, tmp_path = tempfile.mkstemp(
@@ -338,7 +346,7 @@ class Configuration:
         )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
-                self.config.write(tmp_file)
+                parser.write(tmp_file)
                 tmp_file.flush()
                 os.fsync(tmp_file.fileno())
             os.replace(tmp_path, self.configFile)

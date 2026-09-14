@@ -2,6 +2,9 @@
 import pytest
 import os
 import configparser
+import copy
+from pathlib import Path
+from typing import TextIO, Tuple
 from unittest.mock import patch
 
 from config.config import Configuration
@@ -103,6 +106,32 @@ class TestConfigurationMissingFile:
     def test_creates_file(self, config_with_missing_file):
         config, cfg_path = config_with_missing_file
         assert cfg_path.exists()
+
+    def test_missing_file_persists_complete_defaults(
+        self, config_with_missing_file: Tuple[Configuration, Path],
+    ) -> None:
+        """Fresh defaults include usable geometry on disk and survive reloading."""
+        config, cfg_path = config_with_missing_file
+        reloaded = Configuration(config_path=str(cfg_path))
+        reloaded.get_config()
+        for name, count, first, last in (
+            ("AMarks", 5, (0, 0), (4, 1900)),
+            ("BMarks", 7, (-25, 0), (5, 2280)),
+            ("CMarks", 17, (-20, 500), (20, 2400)),
+        ):
+            marks = getattr(config, name)
+            assert getattr(reloaded, name) == marks
+            points = sorted((float(key), int(value)) for key, value in marks.items())
+            assert len(points) == count
+            assert points[0] == first
+            assert points[-1] == last
+            assert all(left[1] < right[1] for left, right in zip(points, points[1:]))
+        assert reloaded.protocol_defaults() == config.protocol_defaults()
+        assert reloaded.flexion_position == 0
+        assert (reloaded.a_factor, reloaded.b_factor, reloaded.c_factor) == (1900, 1900, 1900)
+        assert reloaded.calibration == 1.0
+        assert config.calibrated is False
+        assert reloaded.calibrated is False
 
     def test_has_default_flexion(self, config_with_missing_file):
         config, _ = config_with_missing_file
@@ -250,6 +279,111 @@ class TestAtomicWrite:
         config2 = Configuration(config_path=str(cfg_path))
         config2.get_config()
         assert config2.a_factor == 2222
+
+    @pytest.mark.parametrize("parser_source", ["omitted", "none", "candidate", "empty"])
+    def test_writes_selected_parser_without_publishing(
+        self, tmp_path: Path, parser_source: str,
+    ) -> None:
+        """The writer persists its input without replacing the live parser."""
+        cfg_path = tmp_path / "nested" / "kneespa.cfg"
+        config = Configuration(config_path=str(cfg_path))
+        config.config["Options"] = {"b_factor": "1900"}
+        live = config.config
+        candidate = configparser.ConfigParser(allow_no_value=True)
+        if parser_source == "candidate":
+            candidate["DEFAULT"] = {"service": "bench"}
+            candidate["Custom"] = {"note": "Measured café", "flag": None}
+
+        if parser_source == "omitted":
+            config._atomic_write()
+        elif parser_source == "none":
+            config._atomic_write(None)
+        else:
+            config._atomic_write(candidate)
+
+        written = configparser.ConfigParser(allow_no_value=True)
+        written.read(cfg_path, encoding="utf-8")
+        expected = live if parser_source in ("omitted", "none") else candidate
+        assert dict(written) == dict(expected)
+        assert config.config is live
+        assert dict(live["Options"]) == {"b_factor": "1900"}
+        assert not list(cfg_path.parent.glob(".kneespa_cfg_*"))
+
+    @pytest.mark.parametrize("use_candidate", [False, True])
+    @pytest.mark.parametrize("failure", ["serialize", "fsync", "replace"])
+    def test_failed_write_preserves_file_and_cleans_temp_file(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        use_candidate: bool, failure: str,
+    ) -> None:
+        """Partial writes and failed replacements leave the last saved file intact."""
+        cfg_path = tmp_path / "kneespa.cfg"
+        config = Configuration(config_path=str(cfg_path))
+        config.get_config()
+        original = cfg_path.read_bytes()
+        live = config.config
+        candidate = copy.deepcopy(live)
+        candidate.set("Options", "b_factor", "3720")
+
+        def fail(*args: object) -> None:
+            raise OSError("disk full")
+
+        def fail_serialization(parser: configparser.ConfigParser, target: TextIO) -> None:
+            target.write("[Options]\nb_factor =")
+            fail()
+
+        if failure == "serialize":
+            monkeypatch.setattr(configparser.ConfigParser, "write", fail_serialization)
+        else:
+            monkeypatch.setattr(f"config.config.os.{failure}", fail)
+
+        with pytest.raises(OSError, match="disk full"):
+            if use_candidate:
+                config._atomic_write(candidate)
+            else:
+                config._atomic_write()
+
+        assert config.config is live
+        assert live["Options"]["b_factor"] == "1900"
+        assert candidate["Options"]["b_factor"] == "3720"
+        assert cfg_path.read_bytes() == original
+        assert not list(tmp_path.glob(".kneespa_cfg_*"))
+
+    @pytest.mark.parametrize("caller", ["defaults", "update", "protocol_defaults"])
+    def test_callers_keep_their_write_error_contracts(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture[str], caller: str,
+    ) -> None:
+        """Only initial defaults propagate errors; B1 remains a separate bug fix."""
+        cfg_path = tmp_path / "kneespa.cfg"
+        config = Configuration(config_path=str(cfg_path))
+        config.get_config()
+        original = cfg_path.read_bytes()
+
+        def fail_replace(*args: object) -> None:
+            raise OSError("disk full")
+
+        monkeypatch.setattr("config.config.os.replace", fail_replace)
+        capsys.readouterr()
+        if caller == "defaults":
+            with pytest.raises(OSError, match="disk full"):
+                config._write_default_config()
+        else:
+            if caller == "update":
+                config.b_factor = 3720
+                assert config.update_config() is None
+                assert config.b_factor == 3720
+                assert config.config["Options"]["b_factor"] == "3720"
+            else:
+                assert config.save_protocol_defaults(60, 15, 18, 3, 20) is None
+                assert config.protocol_defaults_marked is True
+                assert config.default_max_pressure == 60
+                assert config.config["ProtocolDefaults"]["max_pressure"] == "60.0"
+            output = capsys.readouterr().out
+            assert "disk full" in output
+            assert f'Fatal error, could not write config file to "{cfg_path}"' in output
+
+        assert cfg_path.read_bytes() == original
+        assert not list(tmp_path.glob(".kneespa_cfg_*"))
 
 
 @pytest.mark.unit
