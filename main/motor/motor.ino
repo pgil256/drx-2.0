@@ -703,15 +703,7 @@ void processCommand(String cmd) {
   uint16_t localPosition = 0;
   float inches = 0.0;
   int stage = 0;
-  int speedFactor = 0;
   uint16_t localDesiredPosition = 0;
-  int weight = 0;
-  float calibration = 0;
-  int limit = 0;
-  int movement = 0;
-  uint16_t positionA = 0;
-  uint16_t positionB = 0;
-  uint16_t positionC = 0;
   float localPressure = 0;
 
   // Handle different command types
