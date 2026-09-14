@@ -1110,51 +1110,35 @@ class KneeSpa(QMainWindow):
             self.username = self.user_email = self.user_status = ""
         self.email_admin()
 
-    def email_admin(self):
+    def email_admin(self) -> None:
         """Send the assistance-request email from a worker thread.
 
         Blocking SMTP-over-SSL used to run on the UI thread, freezing the
         kiosk up to the TCP timeout whenever the network was down -- and
         the operator never learned whether help was actually summoned.
         """
-        sender_email = EMAIL_CONFIG["SENDER_EMAIL"]
-        sender_password = EMAIL_CONFIG["SENDER_PASSWORD"]
         receiver_email = EMAIL_CONFIG["RECEIVER_EMAIL"]
-        smtp_server = EMAIL_CONFIG["SMTP_SERVER"]
-        smtp_port = EMAIL_CONFIG["SMTP_PORT"]
 
         subject = "Assistance Request"
-        body = f"User {self.username} with email {self.user_email} and status {self.user_status} is requesting assistance."
+        body = (
+            f"User {self.username} with email {self.user_email} and status "
+            f"{self.user_status} is requesting assistance."
+        )
         print(body)
 
-        message = MIMEText(body)
-        message["Subject"] = subject
-        message["From"] = sender_email
-        message["To"] = receiver_email
+        self._send_support_email(
+            subject=subject,
+            body=body,
+            receiver_email=receiver_email,
+            success_message="Assistance request email sent successfully.",
+            failure_prefix="Failed to send assistance email",
+        )
 
-        def _send():
-            try:
-                if not sender_email or not sender_password or not receiver_email:
-                    raise RuntimeError("SMTP credentials are not configured")
-                with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15) as server:
-                    server.login(sender_email, sender_password)
-                    server.sendmail(sender_email, receiver_email, message.as_string())
-                print("Assistance request email sent successfully.")
-            except Exception as e:
-                print(f"Failed to send assistance email: {e}")
-                self.logger.error(f"Failed to send assistance email: {e}")
-
-        threading.Thread(target=_send, daemon=True).start()
-
-    def submit_ticket(self, issue_text):
+    def submit_ticket(self, issue_text: str) -> None:
         """Submit a support ticket (§15.5) — SMTP to the TICKET_EMAIL, tagged
         with the persisted per-device id. Sent from a worker thread like
         email_admin (blocking SMTP froze the kiosk on a down network)."""
-        sender_email = EMAIL_CONFIG["SENDER_EMAIL"]
-        sender_password = EMAIL_CONFIG["SENDER_PASSWORD"]
         receiver_email = EMAIL_CONFIG["TICKET_EMAIL"]
-        smtp_server = EMAIL_CONFIG["SMTP_SERVER"]
-        smtp_port = EMAIL_CONFIG["SMTP_PORT"]
 
         try:
             device_id = self.config.ensure_device_id()
@@ -1170,25 +1154,43 @@ class KneeSpa(QMainWindow):
             f"User: {user} ({status})\n\n"
             f"Issue:\n{issue_text}"
         )
+        self._send_support_email(
+            subject=subject,
+            body=body,
+            receiver_email=receiver_email,
+            success_message="Support ticket sent successfully.",
+            failure_prefix="Failed to send ticket",
+        )
+        self._show_timed_error("Support ticket is being sent.")
+
+    def _send_support_email(
+        self, *, subject: str, body: str, receiver_email: str,
+        success_message: str, failure_prefix: str,
+    ) -> None:
+        """Build MIME headers and send on a daemon thread, logging SMTP failures."""
+        sender_email = EMAIL_CONFIG["SENDER_EMAIL"]
+        sender_password = EMAIL_CONFIG["SENDER_PASSWORD"]
+        smtp_server = EMAIL_CONFIG["SMTP_SERVER"]
+        smtp_port = EMAIL_CONFIG["SMTP_PORT"]
+
         message = MIMEText(body)
         message["Subject"] = subject
         message["From"] = sender_email
         message["To"] = receiver_email
 
-        def _send():
+        def _send() -> None:
             try:
                 if not sender_email or not sender_password or not receiver_email:
                     raise RuntimeError("SMTP credentials are not configured")
                 with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15) as server:
                     server.login(sender_email, sender_password)
                     server.sendmail(sender_email, receiver_email, message.as_string())
-                print("Support ticket sent successfully.")
+                print(success_message)
             except Exception as e:
-                print(f"Failed to send ticket: {e}")
-                self.logger.error(f"Failed to send ticket: {e}")
+                print(f"{failure_prefix}: {e}")
+                self.logger.error(f"{failure_prefix}: {e}")
 
         threading.Thread(target=_send, daemon=True).start()
-        self._show_timed_error("Support ticket is being sent.")
 
     # ----- protocol state / navigation gating -----
     def set_protocol_state(self, state):
