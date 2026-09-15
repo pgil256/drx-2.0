@@ -521,7 +521,9 @@ class TestSettings:
         KneeSpa._on_mark_default(stub)
         # 95->80 (PRESSURE_MAX), 25->20 (lateral), 18 ok, 7->5 (pulse max),
         # 99->30 (PROTOCOL_MINUTES_MAX)
-        stub.config.save_protocol_defaults.assert_called_once_with(80, 20, 18, 5, 30)
+        stub.config.save_protocol_defaults.assert_called_once_with(
+            80, 20, 18, 5, 30, motor_speeds=stub.shell.treatment.settings_values()
+        )
 
 
 class TestDuration:

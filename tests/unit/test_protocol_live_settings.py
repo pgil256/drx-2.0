@@ -141,16 +141,20 @@ def test_overpressure_during_hold_routes_through_worker_revision():
     assert worker._pressure_revision == before + 1
 
 
-def test_overpressure_while_paused_backs_off_directly():
+@pytest.mark.parametrize("offset, corrects", [(2, False), (2.01, True), (10, True)])
+def test_overpressure_while_paused_backs_off_directly(offset, corrects):
     worker = make_worker()
     worker.is_running = True
     worker._live_phase = True
     worker.is_paused = True
     worker.arduino.reset_mock()
 
-    worker.update_status(0, 0, 0, worker.max_pressure + 10)
+    worker.update_status(0, 0, 0, worker.max_pressure + offset)
 
-    worker.arduino.send.assert_called_once_with(f"P{float(worker.max_pressure)}")
+    if corrects:
+        worker.arduino.send.assert_called_once_with(f"P{float(worker.max_pressure)}")
+    else:
+        worker.arduino.send.assert_not_called()
 
 
 def test_positive_live_pulse_change_reprograms_active_cadence(monkeypatch):

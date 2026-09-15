@@ -39,7 +39,6 @@ from PyQt5.QtWidgets import (
 )
 
 from config.constants import (
-    APP_BASE_DIR,
     WINDOW_TITLE,
     DEGREES,
     ACTUATORS,
@@ -92,7 +91,7 @@ try:
 except ImportError:
     pass
 
-from helpers.logging import setup_logger
+from helpers.logging import LoggerSetup, read_recent_log_lines, setup_logger
 
 # Modern view layer — the composition root for chrome + screens + modals.
 from ui.app_shell import AppShell
@@ -230,6 +229,10 @@ class KneeSpa(QMainWindow):
         self.I2Cstatus_event = threading.Event()  # Thread-safe event for synchronization
         self.config = Configuration(config_path=config_path)
         self.config.get_config()
+        self.logger.info(
+            "Device number: %s; configuration: %s",
+            self.config.device_number, self.config.configFile,
+        )
         if not self.config.calibrated:
             # Surface after the window is up; a corrupt config used to
             # degrade silently to generated default geometry
@@ -371,6 +374,7 @@ class KneeSpa(QMainWindow):
         s.setup.stop_requested.connect(self._on_setup_stop)
         s.setup.mark_default_requested.connect(self._on_mark_default)
         s.setup.reset_arduino_requested.connect(self.reset_arduino)
+        s.setup.calibration_requested.connect(self.calibration_controller.open)
         s.setup.emergency_stop_requested.connect(self._on_estop)
 
         # Treatment screen.
@@ -811,7 +815,7 @@ class KneeSpa(QMainWindow):
         pr = max(0, min(5, vals.get("pulse_rate", 1)))
         dur = self._clamp_minutes(vals.get("duration", DEFAULT_PROTOCOL_MINUTES))
         try:
-            self.config.save_protocol_defaults(mp, ml, mr, pr, dur)
+            self.config.save_protocol_defaults(mp, ml, mr, pr, dur, motor_speeds=vals)
             self.shell.treatment.set_settings(
                 {"max_pressure": mp, "max_left": ml, "max_right": mr,
                  "pulse_rate": pr, "duration": dur}
@@ -1635,17 +1639,15 @@ class KneeSpa(QMainWindow):
             raise
 
 
-def _print_recent_logs(lines=200):
+def _print_recent_logs(lines: int = 200) -> None:
     """Print recent application logs for debug runs."""
-    log_dir = os.path.join(APP_BASE_DIR, "logs")
-    for filename in ("kneespa.log", "error.log", "debug.log"):
-        path = os.path.join(log_dir, filename)
+    log_setup = LoggerSetup()
+    for path in (log_setup.main_log_file, log_setup.serial_log_file):
         if not os.path.exists(path):
             continue
         print(f"\n--- {path} ---")
         try:
-            with open(path, "r", encoding="utf-8", errors="replace") as log_file:
-                content = log_file.readlines()[-lines:]
+            content = read_recent_log_lines(path, lines)
             print("".join(content))
         except Exception as e:
             print(f"Could not print {path}: {e}")
@@ -1655,15 +1657,16 @@ def _sync_logs(destination):
     """Copy application logs to a destination directory."""
     if not destination:
         return
-    log_dir = os.path.join(APP_BASE_DIR, "logs")
+    log_dir = LoggerSetup().log_dir
     os.makedirs(destination, exist_ok=True)
     if not os.path.isdir(log_dir):
         print(f"Log directory does not exist: {log_dir}")
         return
     for name in os.listdir(log_dir):
         source = os.path.join(log_dir, name)
-        if os.path.isfile(source):
-            shutil.copy2(source, os.path.join(destination, name))
+        target = os.path.join(destination, name)
+        if os.path.isfile(source) and os.path.abspath(source) != os.path.abspath(target):
+            shutil.copy2(source, target)
     print(f"Logs synced to {destination}")
 
 
@@ -1716,32 +1719,40 @@ def main():
         help="Print recent application logs after the app exits",
     )
     args = parser.parse_args()
-
-    print(f"Application started at {datetime.now()}")
-    print(f"Debug mode: {'enabled' if args.debug else 'disabled'}")
-
-    app = QApplication(sys.argv)
-    app.setStyle("Fusion")
-
-    # Apply the modern theme foundation (bundled fonts + global QSS).
-    # Guarded so a theme/stylesheet problem can never stop the device launching.
+    log_setup = LoggerSetup()
+    log_setup.start_console_capture()
     try:
-        from ui.theme import apply_theme
-        theme_info = apply_theme(app)
-        print(f"Theme applied: {theme_info}")
-    except Exception as theme_err:
-        print(f"Theme not applied, continuing with default style: {theme_err}")
+        print(f"Application started at {datetime.now()}")
+        print(f"Debug mode: {'enabled' if args.debug else 'disabled'}")
 
-    window = KneeSpa(debug_mode=args.debug, config_path=args.config)
-    window.show()
+        app = QApplication(sys.argv)
+        app.setStyle("Fusion")
 
-    app.exec_()
+        # A theme/stylesheet problem must never stop the device launching.
+        try:
+            from ui.theme import apply_theme
+            theme_info = apply_theme(app)
+            print(f"Theme applied: {theme_info}")
+        except Exception as theme_err:
+            print(f"Theme not applied, continuing with default style: {theme_err}")
+
+        window = KneeSpa(debug_mode=args.debug, config_path=args.config)
+        window.show()
+
+        app.exec_()
+        log_setup.logger.info("Application exited")
+    except Exception:
+        log_setup.logger.exception("Application failed")
+        raise
+    finally:
+        log_setup.stop_console_capture()
 
     if args.print_logs:
         _print_recent_logs()
     if args.sync_logs:
         _sync_logs(args.sync_logs)
 
+    logging.shutdown()
     os._exit(0)
 
 

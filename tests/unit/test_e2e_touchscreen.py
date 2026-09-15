@@ -75,7 +75,7 @@ def test_redacted_click_does_not_log_pin_coordinates() -> None:
     driver.log.write.assert_called_once_with("TOUCH", "PIN digit 1/4 at [redacted]")
 
 
-def test_serial_trace_is_opt_in_and_timestamped(
+def test_additional_e2e_serial_trace_is_timestamped(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     main_dir = Path(__file__).resolve().parents[2] / "main"

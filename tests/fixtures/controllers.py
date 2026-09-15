@@ -42,7 +42,7 @@ def make_worker_double() -> MagicMock:
     worker.is_paused = False
     worker.signals = SimpleNamespace(**{
         name: MagicMock(spec_set=["connect", "disconnect", "emit"])
-        for name in ("finished", "progress", "reset_needed")
+        for name in ("finished", "progress", "reset_needed", "motor_speed_failed")
     })
     return worker
 

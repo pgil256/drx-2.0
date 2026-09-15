@@ -55,6 +55,12 @@
 #define PRESSURE_SPEED     800
 #define BC_SPEED           800
 #define C_SPEED            800
+#define TREATMENT_SPEED_MAX 1600
+#define MOTOR_SPEED_MIN_PERCENT 50
+#define MOTOR_SPEED_MAX_PERCENT 100
+int axialSpeed = PRESSURE_SPEED;
+int lateralSpeed = C_SPEED;
+int pulseSpeed = TREATMENT_SPEED_MAX;
 #define MIN_JERK_INTERVAL  100   // fastest host-settable pulse cadence (ms)
 #define MAX_JERK_INTERVAL  5000  // slowest host-settable pulse cadence (ms)
 #define FIT_SLOW_DELAY     (0.5 * 1000)
@@ -63,6 +69,8 @@
 #define MIN_PRESSURE_LBS   0
 #define MAX_PRESSURE_LBS   80     // maximum accepted treatment target
 #define PRESSURE_WARNING_LBS 100  // warning-only measured-pressure threshold
+#define PRESSURE_TARGET_TOLERANCE_LBS 2  // control goal around the target
+#define PRESSURE_OVERSHOOT_ALLOWANCE_LBS 10  // accepted excess after settling
 #define AXIAL_MIN_POS      0
 #define AXIAL_MAX_POS      4600
 // The calibrated -25 deg horizontal mark (BMarks) sits at position 0; the old
@@ -472,6 +480,9 @@ void emergencyStop() {
   bRunning = false;
   jerking = false;
   jerksCompleted = 0; // Reset jerk counter
+  axialSpeed = PRESSURE_SPEED;
+  lateralSpeed = C_SPEED;
+  pulseSpeed = TREATMENT_SPEED_MAX;
 }
 
 // Emergency stop, then autonomously back the axial actuator off until
@@ -680,6 +691,18 @@ uint16_t clampPositionTarget(uint8_t deviceNumber, uint16_t target) {
 }
 
 // Process a fully received command
+int positionMoveSpeed(uint8_t device) {
+  if (device == 12) return axialSpeed;
+  if (device == 14) return lateralSpeed;
+  return BC_SPEED;
+}
+
+// Zero-pressure release always uses the proven fixed output, independently
+// of the treatment speed selection (as does the autonomous E-stop release).
+int pressureMoveSpeed() {
+  return desiredPressure <= 0 ? PRESSURE_SPEED : axialSpeed;
+}
+
 void processCommand(String cmd) {
   if (cmd.length() == 0) return;
 
@@ -708,6 +731,48 @@ void processCommand(String cmd) {
 
   // Handle different command types
   switch (commandType) {
+    case 'V': {
+      // Atomic V<axial%>,<lateral%>,<pulse%>. Configuration alone must never
+      // start a motor or change the speed of an in-flight centering move.
+      int values[3] = {0, 0, 0};
+      int field = 0;
+      bool hasDigit = false;
+      bool valid = true;
+      for (unsigned int i = 1; i < cmd.length(); ++i) {
+        char c = cmd[i];
+        if (c >= '0' && c <= '9') {
+          values[field] = values[field] * 10 + (c - '0');
+          hasDigit = true;
+          if (values[field] > MOTOR_SPEED_MAX_PERCENT) { valid = false; break; }
+        } else if (c == ',' && hasDigit && field < 2) {
+          ++field;
+          hasDigit = false;
+        } else { valid = false; break; }
+      }
+      if (!hasDigit || field != 2) valid = false;
+      for (int i = 0; i < 3; ++i) {
+        if (values[i] < MOTOR_SPEED_MIN_PERCENT) valid = false;
+      }
+      if (!valid) { emitCmdError("Invalid V speeds"); return; }
+      if (measurePressure || jerking || releasingPressure ||
+          (bRunning && runningDevice == 12)) {
+        emitAck("BUSY", currentCmdSeq);
+        return;
+      }
+      axialSpeed = TREATMENT_SPEED_MAX * (long)values[0] / 100;
+      lateralSpeed = TREATMENT_SPEED_MAX * (long)values[1] / 100;
+      pulseSpeed = TREATMENT_SPEED_MAX * (long)values[2] / 100;
+      if (currentCmdSeq >= 0) {
+        emitAck("OK", currentCmdSeq);
+      } else {
+        // Dedicated legacy ack: never masquerade as a motion DONE or T OK.
+        Serial1.print("SPEED|");
+        Serial1.print(values[0]); Serial1.print("|");
+        Serial1.print(values[1]); Serial1.print("|");
+        Serial1.println(values[2]);
+      }
+      break;
+    }
     // Test command
     case 'T':
         Dbg.println("Test command received");
@@ -777,11 +842,16 @@ void processCommand(String cmd) {
       if (pressure >= desiredPressure)
         pressureDirection = -1;  // move back
 
-      // Already at/below the target with nowhere to go -- the common
-      // case is the host's post-protocol "P0" release arriving when no
-      // load was ever applied. Starting a backward move here would only
-      // trip the axial-at-zero guard and fault the host over a no-op.
-      if (pressureDirection < 0 && pressure <= desiredPressure) {
+      // Do not move when already within the control band. A P0 release
+      // still seeks zero; the treatment tolerance must not retain load.
+      if ((desiredPressure > 0 &&
+           abs(pressure - desiredPressure) <= PRESSURE_TARGET_TOLERANCE_LBS) ||
+          pressure == desiredPressure) {
+        if (measurePressure)
+          setMotorSpeed(0);
+        measurePressure = false;
+        pressureDirection = 0;
+        activeCmdSeq = -1;
         Dbg.println("Pressure already at target; nothing to move");
         sendStatus();
         emitAck("DONE", currentCmdSeq);
@@ -797,7 +867,7 @@ void processCommand(String cmd) {
       axialTravelWarningIssued = false;
       pressureTimeoutWarningIssued = false;
       pressureProgressWarningIssued = false;
-      setMotorSpeed(PRESSURE_SPEED * pressureDirection);
+      setMotorSpeed(pressureMoveSpeed() * pressureDirection);
       measurePressure = true;
       activeCmdSeq = currentCmdSeq;
       break;
@@ -897,7 +967,7 @@ void processCommand(String cmd) {
       position = localPosition;
       desiredPosition = localDesiredPosition;
 
-      setMotorSpeed(forward * C_SPEED);
+      setMotorSpeed(forward * positionMoveSpeed(smcDeviceNumber));
 
       Dbg.print(AZERO);
       Dbg.print(" ");
@@ -962,7 +1032,7 @@ void processCommand(String cmd) {
       desiredPosition = localDesiredPosition;
       position = localPosition;
 
-      setMotorSpeed(forward * C_SPEED);
+      setMotorSpeed(forward * positionMoveSpeed(smcDeviceNumber));
 
       Dbg.print(forward);
       Dbg.print(" ");
@@ -1058,7 +1128,7 @@ void processCommand(String cmd) {
       }
       forward = (desiredPosition > position) ? 1 : -1;
 
-      setMotorSpeed(forward * BC_SPEED); // Start motor immediately
+      setMotorSpeed(forward * positionMoveSpeed(smcDeviceNumber));
       activeCmdSeq = currentCmdSeq;
       loopLastPosition = localPosition;
       loopStallStart = millis();
@@ -1500,7 +1570,7 @@ void loop() {
       lastJerkTime = millis();
 
       smcDeviceNumber = 12;
-      setMotorSpeed(1600 * jerkDirection);  // Reduced from 3200 to prevent pressure relief
+      setMotorSpeed(pulseSpeed * jerkDirection);
       jerkDirection = -jerkDirection;
       jerksCompleted++;
 
@@ -1508,7 +1578,7 @@ void loop() {
       Dbg.print("DEBUG: Jerk #");
       Dbg.print(jerksCompleted);
       Dbg.print(" Speed: ");
-      Dbg.print(1600 * jerkDirection);
+      Dbg.print(pulseSpeed * jerkDirection);
       Dbg.print(" Direction: ");
       Dbg.println(jerkDirection == 1 ? "Forward" : "Backward");
     }
@@ -1639,7 +1709,16 @@ void loop() {
     // Time bound on the whole move
     if (measurePressure &&
         millis() - pressureMoveStart > PRESSURE_MOVE_TIMEOUT) {
-      if (!pressureTimeoutWarningIssued) {
+      // First try to settle within +/-2 lb. If that takes the full move
+      // window, an excess of up to 10 lb is acceptable without a timeout
+      // warning. Never use this allowance for a P0 release or underpressure.
+      if (desiredPressure > 0 &&
+          pressure >= desiredPressure - PRESSURE_TARGET_TOLERANCE_LBS &&
+          pressure <= desiredPressure + PRESSURE_OVERSHOOT_ALLOWANCE_LBS) {
+        setMotorSpeed(0);
+        measurePressure = false;
+        pressureDirection = 0;
+      } else if (!pressureTimeoutWarningIssued) {
         emitSafetyWarning("Pressure move timeout");
         pressureTimeoutWarningIssued = true;
       }
@@ -1670,20 +1749,23 @@ void loop() {
       Dbg.print(" pressure: ");
       Dbg.println(pressure);
 
-      // Check if target pressure reached with hysteresis
-      bool pressureReached = false;
-      if (pressureDirection > 0) {
-        if (pressure >= desiredPressure) {
-          pressureReached = true;
-        }
-      } else if (pressure <= desiredPressure) {
-        pressureReached = true;
-      }
+      // Seek the control band from either direction, correcting a sample
+      // that skips past it instead of declaring any overshoot complete.
+      bool pressureReached = desiredPressure > 0
+          ? abs(pressure - desiredPressure) <= PRESSURE_TARGET_TOLERANCE_LBS
+          : pressure <= desiredPressure;
 
       if (pressureReached) {
         setMotorSpeed(0);
         measurePressure = false;
         pressureDirection = 0;
+      } else {
+        int nextDirection = pressure < desiredPressure ? 1 : -1;
+        if (nextDirection != pressureDirection) {
+          setMotorSpeed(0);
+          pressureDirection = nextDirection;
+          setMotorSpeed(pressureMoveSpeed() * pressureDirection);
+        }
       }
     }
 

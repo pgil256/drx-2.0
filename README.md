@@ -12,7 +12,9 @@ load cell (treatment pressure, up to 80 lbs).
 |---|---|
 | `main/kneespa.py` | Application entry point + UI controller |
 | `main/helpers/` | Serial transport (`arduino.py`), protocol engine (`protocols.py`), reset sequence, auth, conversions |
-| `main/config/` | Constants, runtime calibration config (`kneespa.cfg`) |
+| `main/config/` | Python configuration loader and code constants |
+| `config/` | Persistent device calibration (`kneespa.cfg`), template, and presets |
+| `logs/` | Timestamped Python app and Arduino serial logs for each run |
 | `main/motor/` | Arduino Mega firmware (`motor.ino`) + native unit tests |
 | `main/ui/` | Qt Designer `.ui` files, dialogs, widgets (incl. the treatment status banner) |
 | `tools/calibrate.py` | CLI calibration tool (jog, marks, load-cell tare + known-weight factor) |
@@ -29,11 +31,46 @@ python main/kneespa.py --debug --print-logs
 
 ## User provisioning & runtime secrets
 
-`main/config/kneespa.cfg` (per-device calibration) and
+`config/kneespa.cfg` (per-device calibration, beside `main/`) and
 `main/data/user_pins.csv` (login credentials) are runtime state and are
 **not tracked in git** — the repo ships `*.example` templates. On first
 run the app generates a default (uncalibrated) config and seeds an empty
 users file; with zero users provisioned nobody can log in.
+
+Replacing `main/` preserves the sibling `config/` and `logs/` folders. If the
+new config is absent but `main/config/kneespa.cfg` still exists, the app copies
+that legacy file to `config/kneespa.cfg` on first load, leaving the source intact.
+For a manual upgrade, move your existing config out before replacing `main/`.
+`--config PATH` and `KNEESPA_CONFIG_PATH` still select a custom config.
+
+Set the device number in `config/kneespa.cfg`:
+
+```ini
+[Device]
+number = 1
+```
+
+Valid numbers are **1, 2, and 3**, with **1** used when missing or invalid.
+Keep the existing `id` entry; it is the separate unique id used for support.
+
+Every application process creates a matching pair of logs in `logs/`:
+`python_YYYYMMDD-HHMMSS-microseconds_PID.log` and
+`arduino_YYYYMMDD-HHMMSS-microseconds_PID.log`. The Python log includes debug,
+error, printed output, and Python stderr. The serial log timestamps sent (`TX`)
+and received (`RX`) lines, including firmware diagnostics, using the app's
+existing connection. Both files are created even if the Arduino cannot connect.
+Each file rotates at 20 MiB into ascending numbered segments (`.log.1`, `.log.2`,
+and so on); `.log` always contains the newest output. Individual log records stay
+intact, so a single oversized record can exceed that target. A shared 1 GiB budget
+covers both kinds of run logs and their segments across launches. Cleanup removes
+the oldest closed files at startup, on rotation, and at most once per minute while
+logging. Active base files are protected, including those owned by other running
+processes; the budget can temporarily be exceeded between checks or if files
+cannot be removed. Unrelated files and subdirectories are left alone.
+`--print-logs` prints the last 200 lines of each current-run log, including preceding
+segments when needed, without loading entire files into memory. `--sync-logs DIR`
+copies logs and numbered segments from this folder after exit.
+`KNEESPA_SERIAL_TRACE_FILE` can still request an additional serial copy for E2E runs.
 
 Provision users one of two ways:
 

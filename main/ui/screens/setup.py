@@ -13,6 +13,7 @@ Signals:
     value_changed(str, float)      — a row's slider value changed
     mark_default_requested
     reset_arduino_requested
+    calibration_requested
     emergency_stop_requested
 """
 
@@ -196,6 +197,7 @@ class SetupScreen(QWidget):
     value_changed = pyqtSignal(str, float)
     mark_default_requested = pyqtSignal()
     reset_arduino_requested = pyqtSignal()
+    calibration_requested = pyqtSignal()
     emergency_stop_requested = pyqtSignal()
 
     def __init__(self, parent=None):
@@ -222,8 +224,18 @@ class SetupScreen(QWidget):
     # ----- left: Manual Actuator Control -----
     def _control_card(self):
         self._arduino_badge = DSBadge("Arduino connected", tone="success", dot=True)
-        card = DSCard("Manual Actuator Control", header_right=self._arduino_badge,
-                      padded=False)
+        header_actions = QWidget()
+        header_layout = QHBoxLayout(header_actions)
+        header_layout.setContentsMargins(0, 0, 0, 0)
+        header_layout.setSpacing(12)
+        header_layout.addWidget(self._arduino_badge)
+        self._calibration = DSButton("Calibrate Actuators", variant="secondary", size="sm")
+        self._calibration.setToolTip(
+            "Calibrate horizontal and lateral angle marks and distance factors"
+        )
+        self._calibration.clicked.connect(self.calibration_requested)
+        header_layout.addWidget(self._calibration)
+        card = DSCard("Manual Actuator Control", header_right=header_actions, padded=False)
         host = QWidget()
         vlay = QVBoxLayout(host)
         vlay.setContentsMargins(20, 8, 20, 20)

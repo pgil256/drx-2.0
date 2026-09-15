@@ -1,6 +1,8 @@
 # Actuator calibration panel
 
-Log in, tap the profile avatar, and choose **Calibrate Actuators**. The panel
+Log in, open **Setup**, and tap **Calibrate Actuators** at the top of the Manual
+Actuator Control card. You can also tap the profile avatar and choose
+**Calibrate Actuators**. The panel
 uses the application's existing Arduino connection. Finish other movement,
 treatment, and reset operations before opening it. Perform calibration with
 the device unloaded and measure angles with a physical gauge or reference.

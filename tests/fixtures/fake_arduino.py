@@ -280,6 +280,28 @@ class FakeArduino:
         if cmd_type == 'T':
             self._ack("OK", self._current_seq)
 
+        elif cmd_type == 'V':
+            from helpers.motor_speed import motor_speed_values
+            try:
+                parts = cmd[1:].split(",")
+                if len(parts) != 3 or not all(p.isascii() and p.isdigit() for p in parts):
+                    raise ValueError("Invalid speeds")
+                values = motor_speed_values(dict(zip(
+                    ("axial_speed", "lateral_speed", "pulse_speed"), map(int, parts)
+                )))
+            except ValueError:
+                self._write(f"ERR|{seq}|Invalid V speeds\n" if seq is not None
+                            else "ERROR: Invalid V speeds\n")
+                return
+            if self.measure_pressure or self.jerking or self._target_position_a is not None:
+                self._ack("BUSY", seq)
+                return
+            self.motor_speeds = values
+            if seq is not None:
+                self._ack("OK", seq)
+            else:
+                self._write("SPEED|" + "|".join(str(v) for v in values.values()) + "\n")
+
         elif cmd_type == 'Q':
             self.status_acknowledged = True
 

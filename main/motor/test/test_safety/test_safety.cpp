@@ -34,6 +34,7 @@ void setUp(void) {
     statusAcknowledged = true;
     highFrequencyStatus = false;
     pressure = 0;
+    desiredPressure = 0;
     signedPressure = 0;
     pressureSampleIndex = 0;
     pressureSampleCount = 0;
@@ -687,6 +688,133 @@ void test_release_at_zero_with_load_ends_without_fault(void) {
     TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
 }
 
+// --- Pressure control goal and accepted overshoot ---
+
+static void setMeasuredPressure(float value) {
+    pressure = value;
+    scale._raw = value;
+    pressureSampleCount = 3;
+    pressureSamples[0] = pressureSamples[1] = pressureSamples[2] = value;
+}
+
+void test_pressure_command_in_control_band_completes_without_motion(void) {
+    for (float measured : {48.0f, 50.0f, 52.0f}) {
+        setUp();
+        setMeasuredPressure(measured);
+        processCommand("P50");
+        TEST_ASSERT_FALSE(measurePressure);
+        TEST_ASSERT_EQUAL(0, pressureDirection);
+        TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
+        TEST_ASSERT_FALSE(Serial1.outputContains("WARNING:"));
+        TEST_ASSERT_FALSE(Serial1.outputContains("ERROR:"));
+    }
+}
+
+void test_pressure_command_outside_control_band_starts_correction(void) {
+    for (float measured : {47.9f, 52.1f, 60.0f}) {
+        setUp();
+        setMeasuredPressure(measured);
+        processCommand("P50");
+        TEST_ASSERT_TRUE(measurePressure);
+        TEST_ASSERT_EQUAL(measured < 50 ? 1 : -1, pressureDirection);
+        TEST_ASSERT_FALSE(Serial1.outputContains("DONE"));
+        TEST_ASSERT_FALSE(Serial1.outputContains("ERROR:"));
+    }
+}
+
+void test_pressure_move_stops_at_either_control_boundary(void) {
+    for (float measured : {48.0f, 52.0f}) {
+        setUp();
+        setMeasuredPressure(measured < 50 ? 40 : 60);
+        processCommand("P50");
+        setMeasuredPressure(measured);
+        keepAlive();
+        loop();
+        TEST_ASSERT_FALSE(measurePressure);
+        TEST_ASSERT_EQUAL(0, pressureDirection);
+        TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
+    }
+}
+
+void test_pressure_skipping_control_band_reverses_and_settles(void) {
+    for (float overshoot : {40.0f, 60.0f}) {
+        setUp();
+        setMeasuredPressure(overshoot < 50 ? 60 : 40);
+        processCommand("P50");
+        setMeasuredPressure(overshoot);
+        keepAlive();
+        loop();
+        TEST_ASSERT_TRUE(measurePressure);
+        TEST_ASSERT_EQUAL(overshoot < 50 ? 1 : -1, pressureDirection);
+        TEST_ASSERT_FALSE(Serial1.outputContains("DONE"));
+        TEST_ASSERT_FALSE(Serial1.outputContains("ERROR:"));
+
+        setMeasuredPressure(50);
+        loop();
+        TEST_ASSERT_FALSE(measurePressure);
+        TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
+    }
+}
+
+void test_pressure_settling_timeout_accepts_up_to_ten_over(void) {
+    for (float measured : {52.1f, 60.0f}) {
+        setUp();
+        setMeasuredPressure(measured);
+        processCommand("P50");
+        _millis_value = pressureMoveStart + PRESSURE_MOVE_TIMEOUT + 1;
+        keepAlive();
+        loop();
+        TEST_ASSERT_FALSE(measurePressure);
+        TEST_ASSERT_EQUAL(0, pressureDirection);
+        TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
+        TEST_ASSERT_FALSE(Serial1.outputContains("WARNING:"));
+        TEST_ASSERT_FALSE(Serial1.outputContains("ERROR:"));
+    }
+}
+
+void test_pressure_settling_timeout_outside_allowance_warns_and_keeps_correcting(void) {
+    for (float measured : {47.9f, 60.1f}) {
+        setUp();
+        setMeasuredPressure(measured);
+        processCommand("P50");
+        _millis_value = pressureMoveStart + PRESSURE_MOVE_TIMEOUT + 1;
+        keepAlive();
+        loop();
+        TEST_ASSERT_TRUE(measurePressure);
+        TEST_ASSERT_TRUE(Serial1.outputContains("WARNING: Pressure move timeout"));
+        TEST_ASSERT_FALSE(Serial1.outputContains("DONE"));
+    }
+}
+
+void test_p0_release_does_not_use_treatment_tolerance_or_overshoot_allowance(void) {
+    setMeasuredPressure(1);
+    processCommand("P0");
+    TEST_ASSERT_TRUE(measurePressure);
+    TEST_ASSERT_EQUAL(-1, pressureDirection);
+    _millis_value = pressureMoveStart + PRESSURE_MOVE_TIMEOUT + 1;
+    keepAlive();
+    loop();
+    TEST_ASSERT_TRUE(measurePressure);
+    TEST_ASSERT_FALSE(Serial1.outputContains("DONE"));
+
+    setMeasuredPressure(0);
+    loop();
+    TEST_ASSERT_FALSE(measurePressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
+}
+
+void test_pressure_retarget_into_control_band_stops_previous_move(void) {
+    setMeasuredPressure(40);
+    processCommand("P50");
+    TEST_ASSERT_TRUE(measurePressure);
+    currentCmdSeq = 17;
+    processCommand("P41");
+    TEST_ASSERT_FALSE(measurePressure);
+    TEST_ASSERT_EQUAL(0, pressureDirection);
+    TEST_ASSERT_EQUAL(-1, activeCmdSeq);
+    TEST_ASSERT_TRUE(Serial1.outputContains("DONE|17"));
+}
+
 // --- Protocol v2 framing (loop-driven) ---
 
 static String v2Frame(int seq, const char *cmd) {
@@ -1122,6 +1250,14 @@ int main(int argc, char **argv) {
     RUN_TEST(test_p0_with_no_load_completes_done_without_error);
     RUN_TEST(test_release_reaching_zero_with_target_met_completes_done);
     RUN_TEST(test_release_at_zero_with_load_ends_without_fault);
+    RUN_TEST(test_pressure_command_in_control_band_completes_without_motion);
+    RUN_TEST(test_pressure_command_outside_control_band_starts_correction);
+    RUN_TEST(test_pressure_move_stops_at_either_control_boundary);
+    RUN_TEST(test_pressure_skipping_control_band_reverses_and_settles);
+    RUN_TEST(test_pressure_settling_timeout_accepts_up_to_ten_over);
+    RUN_TEST(test_pressure_settling_timeout_outside_allowance_warns_and_keeps_correcting);
+    RUN_TEST(test_p0_release_does_not_use_treatment_tolerance_or_overshoot_allowance);
+    RUN_TEST(test_pressure_retarget_into_control_band_stops_previous_move);
 
     RUN_TEST(test_stop_pin_honored_during_static_hold);
     RUN_TEST(test_stop_pin_idle_without_load_is_inert);

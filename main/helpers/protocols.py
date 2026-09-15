@@ -4,7 +4,8 @@ import threading
 import logging
 from helpers.logging import setup_logger
 from helpers.conversions import lateral_degrees_to_position
-from typing import Optional, Tuple
+from helpers.motor_speed import motor_speed_command, motor_speed_values
+from typing import Mapping, Optional, Tuple
 
 from PyQt5 import QtCore, QtGui, QtWidgets, uic
 from PyQt5.QtCore import QUrl, Qt, QObject
@@ -23,6 +24,14 @@ from config.constants import (
     MIN_JERK_INTERVAL_MS,
     MAX_JERK_INTERVAL_MS,
 )
+try:
+    from main.config.constants import (
+        MOTOR_SPEED_ACK_TIMEOUT_S, PRESSURE_TARGET_TOLERANCE, PRESSURE_OVERSHOOT_ALLOWANCE,
+    )
+except ModuleNotFoundError:  # Direct entry point: python main/kneespa.py
+    from config.constants import (
+        MOTOR_SPEED_ACK_TIMEOUT_S, PRESSURE_TARGET_TOLERANCE, PRESSURE_OVERSHOOT_ALLOWANCE,
+    )
 
 # Constants
 DEGREES0 = PROTOCOL_DEFAULT_SETTINGS["DEGREES0"]          # Center/neutral position
@@ -43,6 +52,7 @@ class WorkerSignals(QObject):
     pressure_emit = QtCore.pyqtSignal(float)
     status_emit = QtCore.pyqtSignal(int, int, int, float)
     reset_needed = QtCore.pyqtSignal()
+    motor_speed_failed = QtCore.pyqtSignal(str)
 
 class Protocols(QtCore.QRunnable):
     """Main protocol handler for KneeSpa treatment sequences."""
@@ -59,6 +69,7 @@ class Protocols(QtCore.QRunnable):
         ser=None,
         config=None,
         pulse_rate=None,
+        motor_speeds: Optional[Mapping[str, float]] = None,
     ):
         """Initialize protocol handler.
 
@@ -85,6 +96,7 @@ class Protocols(QtCore.QRunnable):
         self.duration = duration * 60      # Convert to seconds
         self.use_pulse = use_pulse
         self.pulse_rate = pulse_rate       # pulses/sec, or None for bare-J
+        self.motor_speeds = None if motor_speeds is None else motor_speed_values(motor_speeds)
 
         # State tracking
         self.is_running = False
@@ -207,7 +219,7 @@ class Protocols(QtCore.QRunnable):
             max_p = float(self.max_pressure)
             if (
                 self.is_running
-                and float(pressure) > max_p + 3
+                and float(pressure) > max_p + PRESSURE_TARGET_TOLERANCE
                 and time.time() - self._last_overpressure_correction > 3.0
             ):
                 self._last_overpressure_correction = time.time()
@@ -499,10 +511,22 @@ class Protocols(QtCore.QRunnable):
         self._move_done.clear()
         return self._send_command(f"P{target}")
 
+    def _pressure_within_target(self, target: float, allow_overshoot: bool = False) -> bool:
+        """Check the control goal, or the wider band after settling times out.
+
+        Overshoot allowance never widens the low side or a full-release target.
+        """
+        if target <= 0:
+            return self.current_pressure <= target
+        upper_margin = (
+            PRESSURE_OVERSHOOT_ALLOWANCE if allow_overshoot else PRESSURE_TARGET_TOLERANCE
+        )
+        return target - PRESSURE_TARGET_TOLERANCE <= self.current_pressure <= target + upper_margin
+
     def _wait_pressure_move_done(self) -> bool:
         """After measured pressure is within tolerance, hold until the firmware
-        finishes the move (DONE). Its P handler keeps driving to the exact
-        target and answers BUSY to J/P meanwhile; on 2026-09-10 the host sent
+        finishes the move (DONE). Older firmware keeps driving to the exact
+        target and answers BUSY to J meanwhile; on 2026-09-10 the host sent
         J at 8.06 lb of a 10 lb target, the firmware refused it, and the
         treatment sat holding with no pulse. Bounded by PRESSURE_DONE_SETTLE_S;
         returns False only if the run was cancelled while waiting."""
@@ -553,7 +577,6 @@ class Protocols(QtCore.QRunnable):
                 return False
 
             current_command = starting_pressure
-            pressure_tolerance = 3  # Acceptable pressure difference in lbs
             # Backstop above the firmware's advisory move timeout; firmware
             # ERRORs flip is_running and exit early -- see set_to_pressure
             max_wait_time = PRESSURE_BUILD_TIMEOUT_S
@@ -580,7 +603,7 @@ class Protocols(QtCore.QRunnable):
                     self._wait_while_paused()
                     wait_start = time.time()  # restart the window after a pause
                     continue
-                if self.current_pressure >= current_command - pressure_tolerance:
+                if self._pressure_within_target(current_command):
                     break
                 # Avoid excessive status printing
                 current_time = time.time()
@@ -589,11 +612,14 @@ class Protocols(QtCore.QRunnable):
                     print(f"Initial pressure build - Target: {current_command}, Current: {self.current_pressure}")
                 time.sleep(1)  # Longer sleep to reduce polling
             else:
-                print(
-                    "Initial pressure did not reach target within timeout: "
-                    f"target={current_command}, current={self.current_pressure}"
-                )
-                return False
+                if not self.is_running or not self._pressure_within_target(
+                    current_command, allow_overshoot=True
+                ):
+                    print(
+                        "Initial pressure did not reach target within timeout: "
+                        f"target={current_command}, current={self.current_pressure}"
+                    )
+                    return False
             if not self._wait_pressure_move_done():
                 return False
 
@@ -633,15 +659,18 @@ class Protocols(QtCore.QRunnable):
                         increment_start = time.time()  # restart the window after a pause
                         continue
                     # Check if this increment is stable before moving to next
-                    if abs(self.current_pressure - current_command) <= pressure_tolerance:
+                    if self._pressure_within_target(current_command):
                         print(f"Pressure increment stabilized at {self.current_pressure} lbs")
                         increment_stable = True
                         break
                     time.sleep(0.2)
 
                 if not increment_stable:
-                    print(f"Pressure increment {current_command} not stabilized")
-                    return False
+                    if not self.is_running or not self._pressure_within_target(
+                        current_command, allow_overshoot=True
+                    ):
+                        print(f"Pressure increment {current_command} not stabilized")
+                        return False
                 if not self._wait_pressure_move_done():
                     return False
 
@@ -687,14 +716,18 @@ class Protocols(QtCore.QRunnable):
                         last_check_time = current_time
                         print(f"Pressure check - Target: {target_pressure}, Current: {self.current_pressure}, Difference: {final_diff} lbs")
                     
-                    if final_diff <= pressure_tolerance:
+                    if self._pressure_within_target(target_pressure):
                         print(f"Pressure within tolerance! Achieved {self.current_pressure} lbs")
                         final_stabilized = True
                         break
                     
                     time.sleep(0.2)  # Longer sleep to reduce polling
                 
-                if final_stabilized:
+                if not self.is_running:
+                    return False
+                if final_stabilized or self._pressure_within_target(
+                    target_pressure, allow_overshoot=True
+                ):
                     break
                 else:
                     retry_count += 1
@@ -719,7 +752,6 @@ class Protocols(QtCore.QRunnable):
 
     def set_to_pressure(self, target_pressure: float) -> bool:
         """Set axial pressure directly."""
-        pressure_tolerance = 2  # Acceptable pressure difference in lbs
         # Backstop only: the firmware owns pressure-move failure detection
         # (advisory PRESSURE_MOVE_TIMEOUT warning) and its ERROR flips
         # is_running, exiting the wait loop early with the specific fault
@@ -756,17 +788,19 @@ class Protocols(QtCore.QRunnable):
                         self._wait_while_paused()
                         wait_start = time.time()  # restart the window after a pause
                         continue
-                    diff = abs(target_pressure - self.current_pressure)
-                    if diff <= pressure_tolerance:
+                    if self._pressure_within_target(target_pressure):
                         print(f"Pressure stabilized at {self.current_pressure} lbs")
                         break
                     time.sleep(0.1)  # Small sleep to prevent CPU hogging
                 else:
-                    print(
-                        "Pressure did not stabilize within timeout: "
-                        f"target={target_pressure}, current={self.current_pressure}"
-                    )
-                    return False
+                    if not self.is_running or not self._pressure_within_target(
+                        target_pressure, allow_overshoot=True
+                    ):
+                        print(
+                            "Pressure did not stabilize within timeout: "
+                            f"target={target_pressure}, current={self.current_pressure}"
+                        )
+                        return False
                 if not self._wait_pressure_move_done():
                     return False
 
@@ -1108,6 +1142,24 @@ class Protocols(QtCore.QRunnable):
             return
         self._release(center_first=True)
 
+    def _configure_motor_speeds(self) -> bool:
+        """Require firmware acceptance before dispatching treatment motion."""
+        if self.motor_speeds is None:
+            return True  # Legacy callers that do not expose speed controls.
+        command = motor_speed_command(self.motor_speeds)
+        with self._command_lock:
+            if self._stop_requested.is_set():
+                return False
+            handle = self.arduino.send_tracked(command)
+        if handle is None:
+            return False
+        deadline = time.monotonic() + MOTOR_SPEED_ACK_TIMEOUT_S
+        while not handle.completed.is_set():
+            if self._stop_requested.is_set() or time.monotonic() >= deadline:
+                return False
+            handle.completed.wait(0.05)
+        return handle.result == "OK"
+
     def run(self):
         """Execute the selected protocol."""
         try:
@@ -1116,6 +1168,15 @@ class Protocols(QtCore.QRunnable):
                 cancelled = self._stop_requested.is_set()
                 self.is_running = not cancelled
             if cancelled:
+                self.signals.finished.emit(False)
+                return
+            if not self._configure_motor_speeds():
+                if not self._stop_requested.is_set():
+                    self.logger.error("Treatment blocked: firmware did not accept motor speeds")
+                    self.signals.motor_speed_failed.emit(
+                        "Motor speed setup failed. Check the connection and update motor firmware."
+                    )
+                self.is_running = False
                 self.signals.finished.emit(False)
                 return
             self.start_time = time.time()

@@ -77,9 +77,13 @@ class TestRunPressureSequence:
         """Ramping from start to a higher target sends increasing P-commands."""
         p = make_protocol()
         p.is_running = True
-        # Seed at the highest value so each increment's stabilization check passes
-        # immediately (abs(current - command) <= tolerance is satisfied).
-        p.current_pressure = 50
+
+        def send(command: str) -> bool:
+            p.current_pressure = float(command[1:])
+            p._on_firmware_done()
+            return True
+
+        p.arduino.send.side_effect = send
         start = 50 - PRESSURE_INCREMENT  # one increment below target
         result = p.run_pressure_sequence(start, 50)
         assert result is True
@@ -172,6 +176,60 @@ class TestRunPressureSequence:
         p.current_pressure = 0
         result = p.run_pressure_sequence(50, 50)
         assert result is False
+
+
+@pytest.mark.unit
+class TestPressureTolerance:
+    @pytest.mark.parametrize("stage", ["initial", "increment", "final", "direct"])
+    @pytest.mark.parametrize(
+        "offset, expected, waits_for_settling",
+        [(-2.01, False, True), (-2, True, False), (0, True, False),
+         (2, True, False), (2.01, True, True), (10, True, True), (10.01, False, True)],
+    )
+    def test_control_goal_and_overshoot_allowance(
+        self, protocol_clock: ProtocolClock, stage: str, offset: float,
+        expected: bool, waits_for_settling: bool,
+    ) -> None:
+        """Every pressure wait aims for +/-2, then permits at most +10 lbs."""
+        p = make_protocol()
+        p.is_running = True
+
+        def send(command: str) -> bool:
+            target = float(command[1:])
+            command_index = p.arduino.send.call_count
+            apply_offset = (
+                stage == "direct"
+                or (stage == "initial" and command_index == 1)
+                or (stage == "increment" and command_index == 2)
+                or (stage == "final" and command_index >= 2)
+            )
+            p.current_pressure = target + (offset if apply_offset else 0)
+            p._on_firmware_done()
+            return True
+
+        p.arduino.send.side_effect = send
+        if stage == "direct":
+            result = p.set_to_pressure(50)
+        else:
+            result = p.run_pressure_sequence(40 if stage == "increment" else 50, 50)
+
+        assert result is expected
+        assert (protocol_clock.elapsed >= PRESSURE_BUILD_TIMEOUT_S) is waits_for_settling
+        assert all(float(c.args[0][1:]) <= 50 for c in p.arduino.send.call_args_list)
+
+    def test_waits_for_correction_into_control_band(self, protocol_clock: ProtocolClock) -> None:
+        """A +3 lb reading is not accepted immediately as the control goal."""
+        p = make_protocol()
+        p.is_running = True
+        p.current_pressure = 53
+
+        def settle() -> None:
+            p.current_pressure = 52
+
+        protocol_clock.on_sleep = settle
+        assert p.set_to_pressure(50) is True
+        assert 0 < protocol_clock.elapsed < PRESSURE_BUILD_TIMEOUT_S
+        assert p.current_pressure == 52
 
 
 @pytest.mark.unit

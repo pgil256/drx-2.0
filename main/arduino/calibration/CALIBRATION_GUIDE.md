@@ -195,7 +195,7 @@ c_factor = 94
 ### 6. Update kneespa.cfg
 
 1. Copy the exported sections
-2. Open `main/config/kneespa.cfg`
+2. Open `config/kneespa.cfg` in the folder beside `main/`
 3. Replace the corresponding sections
 4. Save the file
 

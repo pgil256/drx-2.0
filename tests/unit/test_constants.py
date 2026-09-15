@@ -45,7 +45,8 @@ def read_isolated_constants(overrides: Dict[str, str]) -> dict:
             "sys.path.insert(0, 'main')",
             "from config import constants as c",
             "print(json.dumps({name: getattr(c, name) for name in "
-            "('APP_BASE_DIR', 'CONFIG_PATH', 'DATA_PATHS', 'UI_PATHS', 'EMAIL_CONFIG')}))",
+            "('APP_BASE_DIR', 'CONFIG_PATH', 'LOG_DIR', 'DATA_PATHS', 'UI_PATHS', "
+            "'EMAIL_CONFIG')}))",
         ])],
         cwd=Path(__file__).resolve().parents[2],
         env=env,
@@ -65,7 +66,8 @@ class TestEnvironmentOverrides:
         base = tmp_path / "device files"
         values = read_isolated_constants({"KNEESPA_BASE_DIR": str(base)})
         assert values["APP_BASE_DIR"] == str(base)
-        assert Path(values["CONFIG_PATH"]) == base / "config" / "kneespa.cfg"
+        assert Path(values["CONFIG_PATH"]) == base.parent / "config" / "kneespa.cfg"
+        assert Path(values["LOG_DIR"]) == base.parent / "logs"
         assert {key: Path(value) for key, value in values["DATA_PATHS"].items()} == {
             "USER_PINS": base / "data" / "user_pins.csv",
             "AUTH_STATE": base / "data" / "auth_state.json",

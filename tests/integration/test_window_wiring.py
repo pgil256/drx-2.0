@@ -13,6 +13,7 @@ from unittest.mock import MagicMock
 import pytest
 from PyQt5.QtCore import QEvent, QEventLoop, QTimer
 from PyQt5.QtWidgets import QApplication, QMessageBox
+from pytestqt.qtbot import QtBot
 
 import kneespa
 from config.config import Configuration
@@ -25,6 +26,18 @@ from ui.screens.content import PHASES
 
 pytestmark = pytest.mark.integration
 _QT_SINGLE_SHOT = QTimer.singleShot
+
+
+def test_motor_speed_settings_reach_worker(window_run: SimpleNamespace) -> None:
+    run = window_run
+    speeds = {"axial_speed": 75, "lateral_speed": 90, "pulse_speed": 60}
+    run.view.set_settings(speeds)
+    start(run)
+    worker, _args, kwargs = run.workers[-1]
+    assert all(kwargs["motor_speeds"][key] == value for key, value in speeds.items())
+    assert all(not run.view._settings[key].isEnabled() for key in speeds)
+    worker.signals.motor_speed_failed.emit("Motor speed setup failed")
+    run.notices.assert_called_with("Motor speed setup failed")
 
 
 def nested_event(callback: Callable[[], None]) -> None:
@@ -143,6 +156,57 @@ def window_run(themed_app: QApplication, tmp_path: Path,
     QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
     pending.clear()
     smtp.assert_not_called()
+
+
+@pytest.mark.parametrize("page", ["setup", "profile"])
+def test_calibration_button_opens_shared_session(
+    window_run: SimpleNamespace, page: str, qtbot: QtBot,
+) -> None:
+    """Both visible entry points open the real controller without requesting motion."""
+    w = window_run.window
+    w.shell.navigate(page)
+    button = getattr(w.shell, page)._calibration
+    assert button.isVisible()
+    assert button.isEnabled()
+    window_run.arduino.send.reset_mock()
+
+    button.click()
+
+    controller = w.calibration_controller
+    assert controller.dialog.isVisible()
+    assert w._calibration_active
+    assert not controller.dialog.capture_button.isEnabled()
+    window_run.arduino.send.assert_called_once_with("HF1")
+    assert not w.shell.setup._rows["horizontal"].motion_buttons[0].isEnabled()
+
+    controller.dialog.close_button.click()
+
+    assert controller.dialog is None
+    assert not w._calibration_active
+    qtbot.waitUntil(w.shell.setup._rows["horizontal"].motion_buttons[0].isEnabled)
+
+
+@pytest.mark.parametrize("page", ["setup", "profile"])
+@pytest.mark.parametrize("busy_flag", [
+    "protocol_running", "reset_in_progress", "actuator_command_in_progress",
+])
+def test_calibration_entry_refuses_busy_device(
+    window_run: SimpleNamespace, page: str, busy_flag: str,
+) -> None:
+    """Exposing calibration preserves the controller's existing device ownership guards."""
+    w = window_run.window
+    w.shell.navigate(page)
+    setattr(w, busy_flag, True)
+    window_run.arduino.send.reset_mock()
+    try:
+        getattr(w.shell, page)._calibration.click()
+
+        assert w.calibration_controller.dialog is None
+        assert not w._calibration_active
+        window_run.notices.assert_called_once()
+        window_run.arduino.send.assert_not_called()
+    finally:
+        setattr(w, busy_flag, False)
 
 
 def phase(run: SimpleNamespace) -> str:

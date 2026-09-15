@@ -72,7 +72,6 @@ class ProfileScreen(QWidget):
         vlay.addSpacing(16)
         self._calibration = DSButton("Calibrate Actuators", variant="secondary", full_width=True)
         self._calibration.clicked.connect(self.calibration_requested)
-        self._calibration.hide()  # Temporarily hidden until calibration is released.
         vlay.addWidget(self._calibration)
         self._add_pin = DSButton("Add PIN", variant="secondary", full_width=True)
         self._add_pin.clicked.connect(self.add_pin_requested)

@@ -79,6 +79,7 @@ package-lock.json
 # Runtime secrets / per-device state — never commit (templates are tracked
 # as *.example; see README "User provisioning")
 main/config/kneespa.cfg
+config/kneespa.cfg
 main/data/user_pins.csv
 main/data/auth_state.json
 cloud.env
@@ -132,4 +133,5 @@ main/motor/.native-build/
 
 # Local backup copies of the two files above (calibration + user PIN table)
 main/config/kneespa-backup*.cfg
+config/kneespa-backup*.cfg
 main/data/user_pins-backup*.csv

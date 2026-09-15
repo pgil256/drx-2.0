@@ -1,12 +1,19 @@
 # Template for the runtime configuration (config/kneespa.cfg).
 #
 # The real kneespa.cfg is per-device runtime state (calibration marks,
-# load-cell scale factor, device id) and is NOT tracked in git. The
+# load-cell scale factor, device number/id) and is NOT tracked in git. The
 # application generates one automatically on first run and flags the
 # device UNCALIBRATED until a real calibration is saved from the Setup
-# screen. Set KNEESPA_CONFIG_PATH to store it outside the checkout.
+# screen. This folder is beside main/ and survives replacing main/.
+# Set KNEESPA_CONFIG_PATH to store it outside the checkout.
 #
 # The values below are the factory fallbacks, shown for reference only.
+
+[Device]
+# Set this device's number to 1, 2, or 3. Missing/invalid numbers default to 1.
+number = 1
+# A separate unique support id is generated automatically.
+id =
 
 [Options]
 flexion_position = 0
@@ -32,5 +39,5 @@ calibration = 1.0
 5 = 2280
 
 [CMarks]
-# Generated per-device by calibration; see config.py _set_default_c_marks
+# Generated per-device by calibration; see main/config/config.py _set_default_c_marks
 # for the uncalibrated fallback shape.

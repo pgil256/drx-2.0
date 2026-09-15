@@ -225,6 +225,7 @@ class TestStartProtocolGates:
         worker_cls.assert_called_once_with(
             1900, "2", 50, -10, 10, 12, True,
             ser=w.arduino, config=w.config, pulse_rate=2.5,
+            motor_speeds=w.shell.treatment.settings_values(),
         )
         w.threadpool.start.assert_called_once_with(worker_cls.return_value)
         # Banner shows the run: max pressure + duration in seconds.
@@ -295,6 +296,7 @@ class TestTreatmentWiring:
             call.construct(
                 1900, "2", 50, -10, 10, 12, True,
                 ser=w.arduino, config=w.config, pulse_rate=2.5,
+                motor_speeds=w.shell.treatment.settings_values(),
             ),
             call.finished(pc.protocol_completed),
             call.progress(pc.update_status_label),

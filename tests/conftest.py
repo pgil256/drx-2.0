@@ -37,7 +37,9 @@ def pytest_configure(config: pytest.Config) -> None:
     config.add_cleanup(stack.close)
     log_base = stack.enter_context(TemporaryDirectory(prefix="kneespa-test-logs-"))
     app_logger = logging.getLogger(constants.APP_NAME)
+    serial_logger = logging.getLogger(f"{constants.APP_NAME}.serial")
     saved_handlers = list(app_logger.handlers)
+    saved_serial_handlers = list(serial_logger.handlers)
     saved_filters = list(logging.getLogger("PyQt5").filters)
     saved_level = app_logger.level
 
@@ -47,17 +49,21 @@ def pytest_configure(config: pytest.Config) -> None:
                 app_logger.removeHandler(handler)
                 handler.close()
         app_logger.setLevel(saved_level)
+        for handler in list(serial_logger.handlers):
+            if handler not in saved_serial_handlers:
+                serial_logger.removeHandler(handler)
+                handler.close()
         logging.getLogger("PyQt5").filters[:] = saved_filters
 
     # Close file handles before TemporaryDirectory removes the log directory.
     stack.callback(restore_logging)
     with pytest.MonkeyPatch.context() as patch:
-        patch.setattr(constants, "APP_BASE_DIR", log_base)
+        patch.setattr(constants, "LOG_DIR", log_base)
         from helpers import logging as app_logging
 
-    # logging imports APP_BASE_DIR by value; leave only its local copy isolated
+    # logging imports LOG_DIR by value; leave only its local copy isolated
     # for the session, including tests that reconstruct the logger singleton.
-    stack.callback(setattr, app_logging, "APP_BASE_DIR", constants.APP_BASE_DIR)
+    stack.callback(setattr, app_logging, "LOG_DIR", constants.LOG_DIR)
 
 
 # --- Integration fixtures ---

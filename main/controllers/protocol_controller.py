@@ -301,11 +301,13 @@ class ProtocolController:
                 ser=window.arduino,
                 config=window.config,
                 pulse_rate=pulse_rate,
+                motor_speeds=window.shell.treatment.settings_values(),
             )
 
             # Connect signals
             window.worker.signals.finished.connect(self.protocol_completed)
             window.worker.signals.progress.connect(self.update_status_label)
+            window.worker.signals.motor_speed_failed.connect(window._show_timed_error)
             # Safety recovery after a failed pulse phase (emitted by
             # protocols 2/3); was never connected to anything before
             window.worker.signals.reset_needed.connect(self._reset_after_failure)

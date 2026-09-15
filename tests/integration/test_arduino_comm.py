@@ -53,6 +53,19 @@ class TestArduinoConnection:
 class TestArduinoSend:
     """Tests for sending commands to Arduino."""
 
+    @pytest.mark.parametrize("protocol_v2", [False, True])
+    def test_motor_speed_configuration_round_trip(self, connected_pair, protocol_v2):
+        arduino, fake = connected_pair
+        arduino.protocol_v2 = protocol_v2
+        handle = arduino.send_tracked("V75,90,60")
+        assert handle is not None
+        assert handle.completed.wait(3)
+        assert handle.result == "OK"
+        assert fake.motor_speeds == {
+            "axial_speed": 75, "lateral_speed": 90, "pulse_speed": 60,
+        }
+        assert not fake.b_running and not fake.measure_pressure and not fake.jerking
+
     def test_send_pressure_command(self, connected_pair):
         arduino, fake = connected_pair
         result = arduino.send("P50")

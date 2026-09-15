@@ -1,13 +1,18 @@
 import configparser
 import copy
 import os
+import shutil
 import tempfile
 import uuid
 from typing import Dict, Mapping, Optional
 
+from helpers.motor_speed import motor_speed_values
+
 from config.constants import (
     CONFIG_PATH,
+    DEFAULT_CONFIG_PATH,
     DEFAULT_PROTOCOL_MINUTES,
+    LEGACY_CONFIG_PATH,
 )
 
 # A real HX711 scale factor for this hardware is in the tens of
@@ -48,6 +53,8 @@ class Configuration:
         self.default_max_right = 10.0
         self.default_pulse_rate = 2.0
         self.default_duration = float(DEFAULT_PROTOCOL_MINUTES)
+        for key, value in motor_speed_values().items():
+            setattr(self, f"default_{key}", value)
         # True only once an operator has pressed "Mark As Default" (or a
         # file written by that action was loaded). Until then the code
         # defaults above apply and are NOT persisted: update_config() used
@@ -57,6 +64,7 @@ class Configuration:
 
         # Per-device id for support tickets (Phase 3.5 §15.5); generated once.
         self.device_id = ""
+        self.device_number = 1
 
     @property
     def calibrated(self) -> bool:
@@ -80,6 +88,7 @@ class Configuration:
         self.marks_valid = False
         self.scale_calibrated = False
         # Load configuration
+        self._migrate_legacy_config()
 
         if not os.path.exists(self.configFile):
             self._set_default_c_marks()
@@ -214,11 +223,57 @@ class Configuration:
                     setattr(self, attr, float(self.config[section][key]))
                 except (ValueError, TypeError) as e:
                     print(f"Error parsing ProtocolDefaults.{key}: {e}, using default")
+        for key in motor_speed_values():
+            try:
+                values = motor_speed_values({key: self.config.getfloat(
+                    section, key, fallback=getattr(self, f"default_{key}")
+                )})
+                setattr(self, f"default_{key}", values[key])
+            except (ValueError, TypeError):
+                print(f"Invalid ProtocolDefaults.{key}; using default motor speed")
 
-    def _load_device(self):
-        """Load the persisted per-device id, if present."""
+    def _migrate_legacy_config(self) -> None:
+        """Copy legacy calibration once, without overwriting an existing config.
+
+        Custom config paths keep their existing behavior. Copy failures propagate
+        instead of silently replacing real calibration with generated defaults.
+        """
+        if (
+            os.path.abspath(self.configFile) != os.path.abspath(DEFAULT_CONFIG_PATH)
+            or os.path.exists(self.configFile)
+            or not os.path.isfile(LEGACY_CONFIG_PATH)
+        ):
+            return
+        os.makedirs(os.path.dirname(os.path.abspath(self.configFile)), exist_ok=True)
+        with open(LEGACY_CONFIG_PATH, "rb") as source:
+            try:
+                destination = open(self.configFile, "xb")
+            except FileExistsError:
+                return
+            try:
+                with destination:
+                    shutil.copyfileobj(source, destination)
+                    destination.flush()
+                    os.fsync(destination.fileno())
+            except Exception:
+                os.unlink(self.configFile)
+                raise
+        print(f"Copied legacy configuration from {LEGACY_CONFIG_PATH} to {self.configFile}")
+
+    def _load_device(self) -> None:
+        """Load the device identity and a device number from 1 through 3."""
         if self.config.has_section("Device") and self.config.has_option("Device", "id"):
             self.device_id = self.config["Device"]["id"]
+        raw_number = self.config.get("Device", "number", fallback="1")
+        try:
+            number = int(raw_number)
+            if number not in (1, 2, 3):
+                raise ValueError("must be 1, 2, or 3")
+        except (ValueError, TypeError):
+            print(f"Invalid Device.number {raw_number!r}; using default 1")
+            number = 1
+        self.device_number = number
+        self._set_section("Device", {"number": number})
 
     def _set_section(
         self, section: str, mapping: Mapping[str, object],
@@ -239,11 +294,13 @@ class Configuration:
             "max_right": self.default_max_right,
             "pulse_rate": self.default_pulse_rate,
             "duration": self.default_duration,
+            **{key: getattr(self, f"default_{key}") for key in motor_speed_values()},
         }
 
     def save_protocol_defaults(
         self, max_pressure: float, max_left: float, max_right: float, pulse_rate: float,
         duration: Optional[float] = None,
+        motor_speeds: Optional[Mapping[str, float]] = None,
     ) -> None:
         """Persist new Treatment Settings defaults (values should be pre-clamped).
 
@@ -259,6 +316,7 @@ class Configuration:
             "max_right": float(max_right),
             "pulse_rate": float(pulse_rate),
             "duration": self.default_duration if duration is None else float(duration),
+            **motor_speed_values(self.protocol_defaults() if motor_speeds is None else motor_speeds),
         }
         candidate = copy.deepcopy(self.config)
         self._populate_config(candidate, defaults)
@@ -386,6 +444,7 @@ class Configuration:
         self.config["AMarks"] = {k: str(v) for k, v in self.AMarks.items()}
         self.config["BMarks"] = {k: str(v) for k, v in self.BMarks.items()}
         self.config["CMarks"] = {k: str(v) for k, v in self.CMarks.items()}
+        self._set_section("Device", {"id": self.device_id, "number": self.device_number})
         self._atomic_write()
 
     def _populate_config(
@@ -418,7 +477,9 @@ class Configuration:
             }, parser)
         elif parser.has_section("ProtocolDefaults"):
             parser.remove_section("ProtocolDefaults")
-        self._set_section("Device", {"id": self.device_id}, parser)
+        self._set_section("Device", {
+            "id": self.device_id, "number": self.device_number,
+        }, parser)
 
     def update_config(self):
         """Update current values, retaining this caller's legacy error reporting."""

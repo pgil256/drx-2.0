@@ -18,7 +18,7 @@ Signals:
     protocol_selected(int)
     patient_pin_submitted(str)
     start_requested / resume_requested / pause_requested / estop_requested
-    setting_changed(str, float) — key: duration|max_pressure|max_left|max_right|pulse_rate
+    setting_changed(str, float) — treatment settings and axial/lateral/pulse_speed
 """
 
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -27,15 +27,21 @@ from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
-from config.constants import (
-    DEFAULT_PROTOCOL_MINUTES,
-    PROTOCOL_MINUTES_MAX,
-    PROTOCOL_MINUTES_MIN,
-)
+try:
+    from main.config.constants import (
+        DEFAULT_PROTOCOL_MINUTES, PROTOCOL_MINUTES_MAX, PROTOCOL_MINUTES_MIN,
+        MOTOR_SPEED_DEFAULTS, MOTOR_SPEED_MAX, MOTOR_SPEED_MIN, MOTOR_SPEED_STEP,
+    )
+except ModuleNotFoundError:
+    from config.constants import (
+        DEFAULT_PROTOCOL_MINUTES, PROTOCOL_MINUTES_MAX, PROTOCOL_MINUTES_MIN,
+        MOTOR_SPEED_DEFAULTS, MOTOR_SPEED_MAX, MOTOR_SPEED_MIN, MOTOR_SPEED_STEP,
+    )
 from ui.theme import pause_icon, play_icon
 from ui.widgets.common import eyebrow
 from ui.widgets.ds import (
@@ -179,6 +185,21 @@ class TreatmentScreen(QWidget):
         card = DSCard(padded=True)
         body = card.body_layout
         card.add_widget(eyebrow("Settings"))
+        tabs = QHBoxLayout()
+        self._settings_pages = QStackedWidget()
+        self._settings_tabs = []
+        for index, title in enumerate(("Treatment", "Motor Speed")):
+            button = DSButton(title, variant="primary" if index == 0 else "secondary",
+                              size="sm", full_width=True)
+            button.clicked.connect(lambda _checked, i=index: self._select_settings_page(i))
+            self._settings_tabs.append(button)
+            tabs.addWidget(button)
+        body.addLayout(tabs)
+        body.addWidget(self._settings_pages, 1)
+        treatment_page = QWidget()
+        body = QVBoxLayout(treatment_page)
+        body.setContentsMargins(0, 0, 0, 0)
+        self._settings_pages.addWidget(treatment_page)
         self._settings = {}
         for key, label, val, lo, hi, step, unit in SETTING_SPECS:
             body.addStretch(1)  # even vertical distribution
@@ -188,7 +209,46 @@ class TreatmentScreen(QWidget):
             self._settings[key] = s
             body.addWidget(s)
         body.addStretch(1)
+        self._settings_pages.addWidget(self._speed_settings_page())
         return card
+
+    def _select_settings_page(self, index: int) -> None:
+        """Switch settings without hiding treatment status or stop controls."""
+        self._settings_pages.setCurrentIndex(index)
+        for i, button in enumerate(self._settings_tabs):
+            button.set_variant("primary" if i == index else "secondary")
+
+    def _speed_settings_page(self) -> QWidget:
+        """Three independent sliders with explicit output limits and values."""
+        page = QWidget()
+        body = QVBoxLayout(page)
+        body.setContentsMargins(0, 8, 0, 0)
+        note = QLabel("Set before starting treatment.")
+        note.setWordWrap(True)
+        note.setFont(sans_font(size="--text-sm"))
+        body.addWidget(note)
+        for key, label in (("axial_speed", "Axial movement"),
+                           ("lateral_speed", "Lateral movement"),
+                           ("pulse_speed", "Pulsation movement")):
+            body.addStretch(1)
+            title = QLabel(label)
+            title.setFont(sans_font(size="--text-base", weight=600))
+            body.addWidget(title)
+            slider = DSSlider(value=MOTOR_SPEED_DEFAULTS[key], minimum=MOTOR_SPEED_MIN,
+                              maximum=MOTOR_SPEED_MAX, step=MOTOR_SPEED_STEP, unit="%")
+            slider._slider.setMinimumHeight(40)
+            slider._slider.setAccessibleName(label + " speed")
+            slider._slider.setTracking(False)
+            slider.valueChanged.connect(lambda v, k=key: self.setting_changed.emit(k, v))
+            self._settings[key] = slider
+            body.addWidget(slider)
+        body.addStretch(1)
+        limits = QLabel(
+            f"Min {MOTOR_SPEED_MIN}%  ·  Max {MOTOR_SPEED_MAX}% of treatment output"
+        )
+        limits.setFont(sans_font(size="--text-sm"))
+        body.addWidget(limits)
+        return page
 
     # ----- build: live status -----
     def _status_card(self):
@@ -309,6 +369,8 @@ class TreatmentScreen(QWidget):
         # link (a lookup re-applies settings + protocol) and the duration.
         self._keypad.setEnabled(not running)
         self._settings["duration"].setEnabled(not running)
+        for key in MOTOR_SPEED_DEFAULTS:
+            self._settings[key].setEnabled(not running and not self._busy)
 
     def set_busy(self, busy):
         """Lock START/PAUSE while the device is mid-reset / reconnecting."""
@@ -338,7 +400,7 @@ class TreatmentScreen(QWidget):
 
     # ----- settings get/set (controller + Mark-As-Default) -----
     def settings_values(self):
-        """Current Settings values: duration/max_pressure/max_left/max_right/pulse_rate."""
+        """Current treatment settings, including the three motor output percentages."""
         return {key: s.value() for key, s in self._settings.items()}
 
     def set_settings(self, values):

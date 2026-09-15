@@ -13,7 +13,6 @@ device). Where the coordinator spec and the actual implementation disagree,
 the test documents the real behavior and notes the discrepancy in a comment.
 """
 import logging
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
 
 import pytest
@@ -83,17 +82,19 @@ class TestHandlerGuard:
     """LoggerSetup must attach its file handlers even when the ROOT logger
     already has handlers (e.g. a stray logging.basicConfig() in a
     dependency). The old hasHandlers() guard walked up to the root and
-    silently skipped the rotating file logs in that case."""
+    silently skipped the file logs in that case."""
 
     def test_root_handler_does_not_suppress_file_handlers(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
     ) -> None:
-        monkeypatch.setattr("helpers.logging.APP_BASE_DIR", str(tmp_path))
+        monkeypatch.setattr("helpers.logging.LOG_DIR", str(tmp_path))
         app_logger = logging.getLogger(_LOGGER_NAME)
+        serial_logger = logging.getLogger(f"{_LOGGER_NAME}.serial")
         root = logging.getLogger()
 
         saved_instance = LoggerSetup._instance
         saved_handlers = list(app_logger.handlers)
+        saved_serial_handlers = list(serial_logger.handlers)
         qt_logger = logging.getLogger("PyQt5")
         saved_filters = list(qt_logger.filters)
         stray = logging.StreamHandler()
@@ -101,17 +102,20 @@ class TestHandlerGuard:
             # Simulate a fresh process where basicConfig ran first.
             LoggerSetup._instance = None
             app_logger.handlers.clear()
+            serial_logger.handlers.clear()
             root.addHandler(stray)
 
             setup = LoggerSetup()
 
-            handlers = [h for h in setup.logger.handlers if isinstance(h, RotatingFileHandler)]
-            assert len(handlers) == 3
+            handlers = [h for h in setup.logger.handlers if isinstance(h, logging.FileHandler)]
+            assert len(handlers) == 1
             setup.logger.error("test record reaches disk")
+            setup.trace_serial("RX", "test serial record reaches disk")
             for handler in handlers:
                 handler.flush()
-            for filename in ("kneespa.log", "error.log", "debug.log"):
-                assert "test record reaches disk" in (tmp_path / "logs" / filename).read_text()
+            assert "test record reaches disk" in Path(setup.main_log_file).read_text()
+            assert "test serial record reaches disk" in Path(setup.serial_log_file).read_text()
+            assert len(list(tmp_path.glob("*.log"))) == 2
         finally:
             root.removeHandler(stray)
             for handler in list(app_logger.handlers):
@@ -119,6 +123,11 @@ class TestHandlerGuard:
                     app_logger.removeHandler(handler)
                     handler.close()
             app_logger.handlers[:] = saved_handlers
+            for handler in list(serial_logger.handlers):
+                if handler not in saved_serial_handlers:
+                    serial_logger.removeHandler(handler)
+                    handler.close()
+            serial_logger.handlers[:] = saved_serial_handlers
             LoggerSetup._instance = saved_instance
             qt_logger.filters[:] = saved_filters
 

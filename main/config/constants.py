@@ -16,11 +16,16 @@ APP_BASE_DIR = os.path.abspath(
         os.path.join(os.path.dirname(__file__), os.pardir),
     )
 )
+PROJECT_DIR = os.path.dirname(APP_BASE_DIR)
 
 # Logging Configuration
 LOG_FILE = "kneespa_app.log"
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 LOG_LEVEL = "DEBUG"
+LOG_DIR = os.path.join(PROJECT_DIR, "logs")
+LOG_MAX_FILE_BYTES = 20 * 1024 * 1024
+LOG_TOTAL_BUDGET_BYTES = 1024 * 1024 * 1024
+LOG_CLEANUP_INTERVAL_S = 60
 
 # UI Constants
 WINDOW_TITLE = "KneeSpa Control Interface"
@@ -60,10 +65,12 @@ EXTRAFORWARD = 27
 EXTRABACKWARD = 22
 EXTRAENABLE = 17
 
-# Path of config file
+# Persistent device configuration lives beside main/, so code updates preserve it.
+DEFAULT_CONFIG_PATH = os.path.join(PROJECT_DIR, "config", "kneespa.cfg")
+LEGACY_CONFIG_PATH = os.path.join(APP_BASE_DIR, "config", "kneespa.cfg")
 CONFIG_PATH = os.environ.get(
     "KNEESPA_CONFIG_PATH",
-    os.path.join(APP_BASE_DIR, "config/kneespa.cfg"),
+    DEFAULT_CONFIG_PATH,
 )
 
 # Actuator Configuration
@@ -104,6 +111,8 @@ ACTUATORS = {
 MIN_PRESSURE = 10  # Minimum pressure in lbs
 PRESSURE_MAX = 80  # Maximum treatment setpoint in lbs
 PRESSURE_WARNING_MAX = 100  # Warning-only measured-pressure threshold
+PRESSURE_TARGET_TOLERANCE = 2  # Control goal: within +/- this many lbs
+PRESSURE_OVERSHOOT_ALLOWANCE = 10  # Acceptable excess after trying to settle
 AXIAL_MAX = 4600  # Maximum axial position
 LATERAL_MIN = 500  # Minimum lateral position
 LATERAL_MAX = 2400  # Maximum lateral position
@@ -182,17 +191,30 @@ MAX_JERK_INTERVAL_MS = 5000  # slowest pulse the slider can request (0.2/sec)
 # Paired with motor.ino's jerkInterval initializer (scripts/check_limits_sync.py).
 DEFAULT_JERK_INTERVAL_MS = 500
 
+# Motor output as a percentage of the 1600-unit treatment ceiling, not a
+# calibrated travel velocity. Keep the proven 800-unit breakaway floor and
+# the existing 1600-unit pulse ceiling. Defaults preserve existing motion.
+MOTOR_SPEED_MIN = 50
+MOTOR_SPEED_MAX = 100
+MOTOR_SPEED_STEP = 5
+MOTOR_SPEED_DEFAULTS = {
+    "axial_speed": 50,
+    "lateral_speed": 50,
+    "pulse_speed": 100,
+}
+MOTOR_SPEED_ACK_TIMEOUT_S = 6.0
+
 # How long the host waits for a commanded pressure (initial build, each
-# ramp increment, and direct P moves) before failing the protocol. Sits
+# ramp increment, and direct P moves) before accepting the overshoot allowance
+# or failing if still outside it. Sits
 # ABOVE the firmware's advisory PRESSURE_MOVE_TIMEOUT (motor.ino) so the
 # device's own diagnosis always arrives first. Raised from 35 s on
 # 2026-09-10: the axial actuator builds load slowly and real treatments
 # were being aborted mid-build.
 PRESSURE_BUILD_TIMEOUT_S = 90
-# After the host sees measured pressure within tolerance, the firmware is
-# usually still driving the last fraction of a pound to its exact target and
-# answers BUSY to anything axial (J, another P) until it emits DONE. Wait for
-# that DONE, bounded so a firmware that never acks cannot stall a treatment.
+# After the host sees measured pressure within tolerance, wait for firmware
+# DONE before pulsing. Older firmware may still drive to the exact target
+# and reject J with BUSY. Bound the wait so missing ACKs cannot stall treatment.
 PRESSURE_DONE_SETTLE_S = 15
 # How long the host waits for a commanded lateral (K) move before failing
 # the protocol. The firmware drives C at C_SPEED 800, which the bench unit

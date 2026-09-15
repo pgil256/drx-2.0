@@ -11,7 +11,7 @@ from typing import Optional
 import serial
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot
 
-from helpers.logging import setup_logger
+from helpers.logging import LoggerSetup, setup_logger
 from config.constants import ARDUINO_SETTINGS
 
 
@@ -145,10 +145,9 @@ class Arduino(QObject):
         # v1 "ERROR: Invalid X value" be matched to the command it rejected
         self._recent_writes = deque(maxlen=16)
         self.link_retries = 0  # parse rejections answered with a resend
-        # The physical-touch E2E harness can opt into a raw serial transcript
-        # without opening /dev/serial0 a second time (which would steal bytes
-        # from this single-owner transport). Normal application runs leave the
-        # variable unset and pay no file-I/O cost.
+        # Every run records traffic using this single-owner transport. The E2E
+        # harness can additionally request a copy without opening a second port.
+        self._log_setup = LoggerSetup()
         self._serial_trace_path = os.environ.get(
             "KNEESPA_SERIAL_TRACE_FILE", ""
         ).strip()
@@ -156,11 +155,12 @@ class Arduino(QObject):
         self._serial_trace_disabled = False
 
     def _trace_serial(self, direction: str, data: str) -> None:
-        """Append one timestamped raw TX/RX line when tracing is enabled.
+        """Record TX/RX for this run and optionally copy it to the E2E trace.
 
         Trace failures are deliberately non-fatal: diagnostics must never
         interfere with serial safety or motion control.
         """
+        self._log_setup.trace_serial(direction, data)
         if not self._serial_trace_path or self._serial_trace_disabled:
             return
         safe_data = str(data).replace("\r", "\\r").replace("\n", "\\n")
@@ -397,11 +397,11 @@ class Arduino(QObject):
                 self._service_tx_queue()
 
                 if self.serial_com.in_waiting > 0:
-                    data = (
-                        self.serial_com.readline().decode(errors="replace").strip()
-                    )
+                    raw_data = self.serial_com.readline().decode(errors="replace")
+                    if raw_data:
+                        self._trace_serial("RX", raw_data.rstrip("\r\n"))
+                    data = raw_data.strip()
                     if data:
-                        self._trace_serial("RX", data)
                         last_rx = time.time()
                         probe_sent_at = None
                         self.handle_com(data)
@@ -626,7 +626,19 @@ class Arduino(QObject):
             # Handle regular messages
             tokens = data.split("|")
 
-            if tokens[0] == "BUSY":
+            if tokens[0] == "SPEED":
+                # Legacy speed settings use their own exact-value echo, so a
+                # centering DONE or keepalive OK cannot confirm configuration.
+                if self.protocol_v2 or not re.fullmatch(r"SPEED\|[0-9]+\|[0-9]+\|[0-9]+", data):
+                    return
+                command = "V" + ",".join(tokens[1:])
+                with self._lock:
+                    for _written_at, handle in reversed(self._recent_writes):
+                        if handle.command == command and not handle.completed.is_set():
+                            handle.result = "OK"
+                            handle.completed.set()
+                            break
+            elif tokens[0] == "BUSY":
                 # v1: bare BUSY; v2: BUSY|<seq>
                 self.logger.warning("Firmware dropped a command: %s", data)
                 if len(tokens) >= 2:

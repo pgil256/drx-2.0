@@ -1,6 +1,7 @@
 """Exercise CLI routing with application, window, exit, and logging boundaries faked."""
 
 import sys
+from pathlib import Path
 from types import SimpleNamespace
 from typing import List, Optional
 from unittest.mock import MagicMock
@@ -52,6 +53,7 @@ def test_main_routes_options(
     monkeypatch.setattr(kneespa, "_print_recent_logs", printer)
     monkeypatch.setattr(kneespa, "_sync_logs", sync)
     monkeypatch.setattr(kneespa, "os", SimpleNamespace(_exit=exit_process))
+    monkeypatch.setattr(kneespa.logging, "shutdown", MagicMock())
 
     kneespa.main()
 
@@ -71,3 +73,49 @@ def test_main_routes_options(
     assert events == ["event-loop"] + (["print"] if print_logs else []) + (
         ["sync"] if sync_logs else []
     ) + ["exit"]
+
+
+def test_print_and_sync_use_run_logs(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture,
+) -> None:
+    """The existing CLI helpers follow the new file names and sibling directory."""
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    paths = [log_dir / "python_timestamp.log", log_dir / "arduino_timestamp.log"]
+    for path in paths:
+        path.write_text(f"older output\nlatest {path.stem}\n", encoding="utf-8")
+        Path(f"{path}.1").write_text("preceding segment\n", encoding="utf-8")
+    monkeypatch.setattr(kneespa, "LoggerSetup", lambda: SimpleNamespace(
+        log_dir=str(log_dir), main_log_file=str(paths[0]), serial_log_file=str(paths[1]),
+    ))
+    kneespa._print_recent_logs(lines=1)
+    printed = capsys.readouterr().out
+    assert "older output" not in printed
+    assert "latest python_timestamp" in printed
+    assert "latest arduino_timestamp" in printed
+    kneespa._print_recent_logs(lines=3)
+    assert capsys.readouterr().out.count("preceding segment") == 2
+    destination = tmp_path / "copies"
+    kneespa._sync_logs(str(destination))
+    for path in paths:
+        assert (destination / path.name).read_bytes() == path.read_bytes()
+        assert (destination / f"{path.name}.1").read_bytes() == Path(f"{path}.1").read_bytes()
+    kneespa._sync_logs(str(log_dir))  # Syncing to the logs folder itself is harmless.
+
+
+def test_startup_failure_logged_and_console_restored(
+    monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    """A startup exception reaches the app log without leaving stdout wrapped."""
+    monkeypatch.setattr(sys, "argv", ["kneespa.py"])
+    monkeypatch.setattr(kneespa, "QApplication", MagicMock())
+    monkeypatch.setattr(kneespa, "KneeSpa", MagicMock(side_effect=RuntimeError("startup failed")))
+    monkeypatch.setattr(kneespa, "_install_excepthook", MagicMock())
+    monkeypatch.setattr(ui.theme, "apply_theme", MagicMock())
+    stdout, stderr = sys.stdout, sys.stderr
+    with pytest.raises(RuntimeError, match="startup failed"):
+        kneespa.main()
+    assert sys.stdout is stdout
+    assert sys.stderr is stderr
+    assert "Application failed" in caplog.text
+    assert "startup failed" in caplog.text

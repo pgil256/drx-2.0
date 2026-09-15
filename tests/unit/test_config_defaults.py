@@ -28,6 +28,9 @@ def test_protocol_defaults_fallbacks(tmp_path):
         "max_right": 10.0,
         "pulse_rate": 2.0,
         "duration": 12.0,
+        "axial_speed": 50,
+        "lateral_speed": 50,
+        "pulse_speed": 100,
     }
 
 
