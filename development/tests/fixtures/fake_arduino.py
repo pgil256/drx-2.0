@@ -36,6 +36,7 @@ from typing import Optional, List
 
 try:
     import pty
+    import tty
     PTY_AVAILABLE = True
 except (ImportError, ModuleNotFoundError):
     pty = None
@@ -115,6 +116,9 @@ class FakeArduino:
         if not PTY_AVAILABLE:
             raise RuntimeError("FakeArduino requires POSIX pty/termios support")
         self._master_fd, self._slave_fd = pty.openpty()
+        # Configure the serial endpoint before the worker can write replies.
+        # Changing terminal modes while reading can flush queued response bytes.
+        tty.setraw(self._slave_fd)
         self._slave_path = os.ttyname(self._slave_fd)
         self._running = True
         self._thread = threading.Thread(target=self._run_loop, daemon=True)

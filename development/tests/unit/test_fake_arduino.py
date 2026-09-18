@@ -31,8 +31,6 @@ def wait_until(predicate, timeout=2.0, interval=0.02):
 def read_output(fake, duration=0.5):
     """Collect everything the fake wrote to the serial side for `duration`."""
     import select as _select
-    import tty as _tty
-    _tty.setraw(fake._slave_fd)
     data = b""
     deadline = time.time() + duration
     while time.time() < deadline:
@@ -74,6 +72,20 @@ class TestFakeArduinoBasic:
             send_cmd(fake, b"P50\n")
             assert fake.wait_for_command("P", timeout=2.0)
             assert fake.get_last_command("P") == "P50"
+        finally:
+            fake.stop()
+
+    def test_read_preserves_already_queued_reply(self):
+        """A fast command reply must survive starting a later read."""
+        import select
+
+        fake = FakeArduino()
+        fake.start()
+        try:
+            send_cmd(fake, b"T\n")
+            ready, _, _ = select.select([fake._slave_fd], [], [], 2.0)
+            assert ready, "test reply did not arrive"
+            assert "OK" in read_output(fake, duration=0.1)
         finally:
             fake.stop()
 
