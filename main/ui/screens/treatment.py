@@ -1,10 +1,10 @@
 """TreatmentScreen — run a treatment (Protocols page).
 
-Everything on one 1366×768 screen, no modals::
+Treatment controls on one 1366×768 screen; patient PIN entry uses a modal::
 
     ┌ [1][2][3][4] │ selected protocol title + one-line description ─┐
     ├ PATIENT ───────┬ SETTINGS ──────────────────┬ LIVE STATUS ──────┤
-    │ compact keypad │ ‹ value › steppers ×5      │ time · lbs · °    │
+    │ identity / PIN │ ‹ value › steppers ×5      │ time · lbs · °    │
     ├────────────────┴────────────────────────────┴───────────────────┤
     │ [ ▶ START ]           [ ❚❚ PAUSE ]           [ STOP/RESET ]     │
     └─────────────────────────────────────────────────────────────────┘
@@ -16,7 +16,7 @@ View + signal surface only; the controller drives the setters below.
 
 Signals:
     protocol_selected(int)
-    patient_pin_submitted(str)
+    patient_change_requested / cloud_retry_requested
     start_requested / resume_requested / pause_requested / estop_requested
     setting_changed(str, float) — treatment settings and axial/lateral/pulse_speed
 """
@@ -48,7 +48,6 @@ from ui.widgets.ds import (
     DSBadge,
     DSButton,
     DSCard,
-    DSKeypad,
     DSProtocolButton,
     DSSlider,
     DSStatReadout,
@@ -81,7 +80,8 @@ def _mmss(seconds):
 
 class TreatmentScreen(QWidget):
     protocol_selected = pyqtSignal(int)
-    patient_pin_submitted = pyqtSignal(str)
+    patient_change_requested = pyqtSignal()
+    cloud_retry_requested = pyqtSignal()
     start_requested = pyqtSignal()
     resume_requested = pyqtSignal()
     pause_requested = pyqtSignal()
@@ -96,6 +96,7 @@ class TreatmentScreen(QWidget):
         self._running = False
         self._paused = False
         self._busy = False  # locked while the device is mid-reset / reconnecting
+        self._patient_pending = False
         self._selected = 1
         self._progress_fraction = 0.0
 
@@ -167,15 +168,25 @@ class TreatmentScreen(QWidget):
         body = card.body_layout
         card.add_widget(eyebrow("Patient"))
         body.addStretch(1)
-        self._keypad = DSKeypad(length=4, label=None, compact=True)
-        self._keypad.submitted.connect(self._on_pin)
-        body.addWidget(self._keypad, 0, Qt.AlignHCenter)
-        body.addSpacing(14)
         self._patient_label = QLabel(NO_PATIENT)
+        self._patient_label.setTextFormat(Qt.PlainText)
         self._patient_label.setAlignment(Qt.AlignCenter)
         self._patient_label.setWordWrap(True)
         self._patient_label.setFont(sans_font(size="--text-sm", weight=600))
         body.addWidget(self._patient_label)
+        self._patient_button = DSButton("Enter / change patient PIN", variant="secondary",
+                                        full_width=True)
+        self._patient_button.clicked.connect(self.patient_change_requested)
+        body.addWidget(self._patient_button)
+        self._cloud_status = QLabel("Cloud not configured")
+        self._cloud_status.setTextFormat(Qt.PlainText)
+        self._cloud_status.setWordWrap(True)
+        self._cloud_status.setAlignment(Qt.AlignCenter)
+        self._cloud_status.setFont(sans_font(size="--text-xs"))
+        body.addWidget(self._cloud_status)
+        self._retry_button = DSButton("Retry uploads", variant="secondary", size="sm")
+        self._retry_button.clicked.connect(self.cloud_retry_requested)
+        body.addWidget(self._retry_button)
         body.addStretch(1)
         self._set_patient_status(NO_PATIENT, "--gray-600")
         return card
@@ -265,14 +276,15 @@ class TreatmentScreen(QWidget):
         # Readouts reserve the width of their widest value ("12:00", "80 lbs",
         # "-20°") so the row doesn't re-flow every time the digit count changes.
         body.addStretch(2)
-        self._time_stat = DSStatReadout("0:30", label="Time Left", tone="default", size="lg")
+        self._time_stat = DSStatReadout(_mmss(DEFAULT_PROTOCOL_MINUTES * 60),
+                                       label="Time Left", tone="default", size="lg")
         self._time_stat.setMinimumWidth(180)
         body.addWidget(self._time_stat, 0, Qt.AlignHCenter)
         body.addStretch(2)
 
         pair = QHBoxLayout()
         pair.setContentsMargins(0, 0, 0, 0)
-        self._pressure_stat = DSStatReadout("0", unit="lbs", label="Pressure",
+        self._pressure_stat = DSStatReadout("--", unit="lbs", label="Waiting for pressure",
                                             tone="success", size="md")
         self._angle_stat = DSStatReadout("0°", label="Lateral Angle", tone="cyan", size="md")
         for stat in (self._pressure_stat, self._angle_stat):
@@ -338,10 +350,6 @@ class TreatmentScreen(QWidget):
         else:
             self.start_requested.emit()
 
-    def _on_pin(self, pin):
-        self._set_patient_status("Looking up…", "--gray-600")
-        self.patient_pin_submitted.emit(pin)
-
     def _update_protocol_copy(self):
         proto = PROTOCOLS[self._selected - 1]
         self._title.setText(proto["title"])
@@ -361,13 +369,15 @@ class TreatmentScreen(QWidget):
         self._running = running
         self._paused = paused
         self._start_btn.setText("RESUME" if paused else "START")
-        self._start_btn.setEnabled((not running or paused) and not self._busy)
+        self._start_btn.setEnabled(
+            (not running or paused) and not self._busy and not self._patient_pending
+        )
         self._pause_btn.setEnabled((running and not paused) and not self._busy)
         for tile in self._proto_buttons.values():
             tile.setEnabled(not running)
         # Pre-run inputs lock during an active run (incl. paused): the patient
         # link (a lookup re-applies settings + protocol) and the duration.
-        self._keypad.setEnabled(not running)
+        self._patient_button.setEnabled(not running)
         self._settings["duration"].setEnabled(not running)
         for key in MOTOR_SPEED_DEFAULTS:
             self._settings[key].setEnabled(not running and not self._busy)
@@ -391,9 +401,21 @@ class TreatmentScreen(QWidget):
         self._time_stat.set_tone(tone)
 
     def set_pressure(self, lbs):
+        import math
+        try:
+            lbs = float(lbs)
+            if not math.isfinite(lbs):
+                raise ValueError("Nonfinite pressure")
+        except (TypeError, ValueError):
+            self._pressure_stat.set_value("--", "lbs")
+            self._pressure_stat.set_label("Waiting for pressure")
+            return
         tone = "danger" if lbs >= 70 else "warning" if lbs >= 50 else "success"
-        self._pressure_stat.set_value(str(int(round(lbs))), "lbs")
+        self._pressure_stat.set_value(f"{lbs:.1f}", "lbs")
         self._pressure_stat.set_tone(tone)
+
+    def set_pressure_state(self, caption: str) -> None:
+        self._pressure_stat.set_label(caption)
 
     def set_angle(self, degrees):
         self._angle_stat.set_value(f"{int(round(degrees))}°")
@@ -409,6 +431,8 @@ class TreatmentScreen(QWidget):
             s = self._settings.get(key)
             if s is not None:
                 s.set_value(value)
+        if not self._running:
+            self.set_progress(0, self.settings_values()["duration"] * 60)
 
     def selected_protocol(self):
         """The currently selected protocol number (1-4)."""
@@ -430,12 +454,17 @@ class TreatmentScreen(QWidget):
 
     def set_patient(self, name):
         self._set_patient_status(name, "--green-600")
-        self._keypad.set_value("")
 
     def set_patient_error(self, msg):
         self._set_patient_status(msg, "--red-500")
-        self._keypad.set_value("")
 
-    def clear_patient(self):
+    def clear_patient(self) -> None:
         self._set_patient_status(NO_PATIENT, "--gray-600")
-        self._keypad.set_value("")
+
+    def set_patient_pending(self, pending: bool) -> None:
+        """Prevent a start while an identity/plan is still being resolved."""
+        self._patient_pending = pending
+        self.set_run_state(self._running, self._paused)
+
+    def set_cloud_status(self, message: str) -> None:
+        self._cloud_status.setText(message)

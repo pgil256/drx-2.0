@@ -9,7 +9,7 @@
 #include <string>
 #include <queue>
 
-#define MAX_OUTPUT_SIZE 4096
+#define MAX_OUTPUT_SIZE 524288
 
 class MockSerial {
 public:
@@ -63,6 +63,15 @@ public:
         char buf[32];
         snprintf(buf, sizeof(buf), "%.1f", val);
         return print(buf);
+    }
+    size_t print(float val, int precision) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%.*f", precision, (double)val);
+        return print(buf);
+    }
+    size_t println(float val, int precision) {
+        size_t n = print(val, precision);
+        return n + print("\n");
     }
 
     size_t println(const char* s) {

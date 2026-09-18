@@ -15,6 +15,9 @@ class ProtocolClock:
         """Return a nonzero simulated wall-clock timestamp."""
         return 1000.0 + self.elapsed
 
+    def monotonic(self) -> float:
+        return self.time()
+
     def sleep(self, seconds: float) -> None:
         """Advance time and deliver optional device feedback or cancellation."""
         self.sleeps.append(seconds)

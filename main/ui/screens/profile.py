@@ -28,6 +28,7 @@ class ProfileScreen(QWidget):
     calibration_requested = pyqtSignal()
     logout_requested = pyqtSignal()
     exit_requested = pyqtSignal()
+    restart_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -86,7 +87,12 @@ class ProfileScreen(QWidget):
         vlay.addSpacing(10)
         self._exit = DSButton("Exit App", variant="ghost", full_width=True)
         self._exit.clicked.connect(self.exit_requested)
-        vlay.addWidget(self._exit)
+        self._restart = DSButton("Restart App", variant="secondary", full_width=True)
+        self._restart.clicked.connect(self.restart_requested)
+        actions = QHBoxLayout()
+        actions.addWidget(self._restart)
+        actions.addWidget(self._exit)
+        vlay.addLayout(actions)
 
         card.add_widget(host)
         return card

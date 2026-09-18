@@ -5,7 +5,8 @@ Creates a virtual serial port pair. The Arduino class connects to one end,
 and FakeArduino reads/writes the other. Simulates command responses,
 gradual position movement, and pressure changes.
 
-Behavior mirrors main/motor/motor.ino:
+Serial/movement test double for main/motor/motor.ino. Safety-control behavior
+is verified by the native sketch tests; this accelerated double is not a force model.
 - Completed position moves and pressure ramps emit "DONE".
 - Commands are processed at most once per MIN_COMMAND_INTERVAL (200 ms);
   'Q' acks and 'X' (emergency stop) bypass the limiter.
@@ -97,6 +98,9 @@ class FakeArduino:
         self._target_position_c: Optional[int] = None
         self._target_pressure: Optional[float] = None
         self._pressure_warning_issued = False
+        self._factor = 1.0
+        self._a_zero = 0
+        self._motion_kind = "I"
 
         # Track commands received (for assertions)
         self.commands_received: List[str] = []
@@ -220,6 +224,7 @@ class FakeArduino:
         time.sleep(self.boot_delay)
         self._write("\n")
         self._write("Ready to Go\n")
+        self._write("FIRMWARE|test|DRX-HX711-NB2\n")
 
     @staticmethod
     def _xor(payload: str) -> int:
@@ -279,6 +284,7 @@ class FakeArduino:
 
         if cmd_type == 'T':
             self._ack("OK", self._current_seq)
+            self._write("FIRMWARE|test|DRX-HX711-NB2\n")
 
         elif cmd_type == 'V':
             from helpers.motor_speed import motor_speed_values
@@ -322,20 +328,21 @@ class FakeArduino:
             if self.b_running:
                 self._ack("BUSY", self._current_seq)
                 return
-            target = float(cmd[1:]) if len(cmd) > 1 else 0
+            target = float(cmd[1:].split("|")[0]) if len(cmd) > 1 else 0
             self._target_pressure = target
             self.measure_pressure = True
             self._active_seq = self._current_seq
             self._send_status()
 
         elif cmd_type == 'I':
+            self._motion_kind = "I"
             if self.b_running:
                 self._ack("BUSY", self._current_seq)
                 return
             actuator_id = cmd[1:3]
             position = int(cmd[3:]) if len(cmd) > 3 else 0
             if actuator_id == "12":
-                self._target_position_a = position
+                self._target_position_a = max(self._a_zero, position)
             elif actuator_id == "13":
                 self._target_position_b = position
             elif actuator_id == "14":
@@ -344,6 +351,7 @@ class FakeArduino:
             self.b_running = True
 
         elif cmd_type == 'K':
+            self._motion_kind = "K"
             if self.b_running:
                 self._ack("BUSY", self._current_seq)
                 return
@@ -353,6 +361,7 @@ class FakeArduino:
             self.b_running = True
 
         elif cmd_type == 'A':
+            self._motion_kind = "A"
             if self.b_running:
                 self._ack("BUSY", self._current_seq)
                 return
@@ -361,7 +370,7 @@ class FakeArduino:
             fullinch = {"12": 430, "13": 620, "14": 1880}.get(actuator_id, 430)
             position = int(fullinch * inches)
             if actuator_id == "12":
-                self._target_position_a = position
+                self._target_position_a = max(self._a_zero, position)
             elif actuator_id == "13":
                 self._target_position_b = position
             elif actuator_id == "14":
@@ -431,7 +440,16 @@ class FakeArduino:
 
         elif cmd_type == 'L':
             stage = cmd[1] if len(cmd) > 1 else '0'
-            if stage == '4':
+            if stage == '0':
+                self._factor = float(cmd[2:])
+                self._write(f"CALIBRATION|SET|{self._factor}\n")
+                self._ack("DONE", self._current_seq)
+            elif stage == '1':
+                self._write("CALIBRATION|TARE|STARTED\n")
+                self.pressure = 0
+                self._write(f"CALIBRATION|TARE|OK|0|{self._factor}\n")
+                self._ack("DONE", self._current_seq)
+            elif stage == '4':
                 self._write(f"weight|{self.pressure}\n")
             elif stage == '5':
                 if len(cmd) > 2 and cmd[2] == '|':
@@ -442,6 +460,7 @@ class FakeArduino:
                     # Legacy fixed-width parse (truncates 4-digit values)
                     a_zero = int(cmd[2:5]) if cmd[2:5].strip() else 0
                     b_zero = int(cmd[5:9]) if cmd[5:9].strip() else 0
+                self._a_zero = a_zero
                 self._write(f"ZEROS|{a_zero}|{b_zero}\n")
                 self._ack("DONE", self._current_seq)
             elif stage == '6':
@@ -484,6 +503,7 @@ class FakeArduino:
                     self.b_running = False
                 # Firmware: sendStatus() then "DONE" on completion
                 self._send_status()
+                self._write(f"MOTION_DONE|{self._motion_kind}|{target}|{target}\n")
                 self._ack("DONE", self._active_seq)
                 self._active_seq = None
             elif current < target:
@@ -512,6 +532,7 @@ class FakeArduino:
             self.measure_pressure = False
             # Firmware: sendStatus() then "DONE" when pressure reached
             self._send_status()
+            self._write(f"MOTION_DONE|P|{self.pressure:.2f}|{self.pressure:.2f}\n")
             self._ack("DONE", self._active_seq)
             self._active_seq = None
         elif diff > 0:

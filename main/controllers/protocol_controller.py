@@ -7,16 +7,23 @@ protocol_running, worker, timers) stay on the window: many widgets and
 other controllers read them; this module owns the transitions.
 """
 import time
-import uuid
 from copy import deepcopy
 from datetime import datetime, timezone
+from functools import partial
+from typing import Dict, Optional
 
 import RPi.GPIO as GPIO
 from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QMessageBox
 
 from helpers import protocols
-from config.constants import EMERGENCYSTOP
+from helpers.cloud_contract import end_settings
+from helpers.treatment_session import TreatmentSession
+
+try:
+    from main.config.constants import DATA_PATHS, EMERGENCYSTOP
+except ModuleNotFoundError:
+    from config.constants import DATA_PATHS, EMERGENCYSTOP
 
 
 class ProtocolController:
@@ -31,6 +38,8 @@ class ProtocolController:
 
     def __init__(self, window):
         self.window = window
+        self._session: Optional[TreatmentSession] = None
+        self._prepared = False
 
     def set_state(self, state):
         """Single source of truth for the protocol lifecycle.
@@ -41,6 +50,9 @@ class ProtocolController:
         running, or vice versa).
         """
         window = self.window
+        if state == "fault":
+            self.latch_session_outcome("fault")
+            self.finalize_session()
         print(f"Protocol state: {window.protocol_state} -> {state}")
         window.protocol_state = state
         window.protocol_running = state in ("starting", "running", "stopping")
@@ -114,12 +126,19 @@ class ProtocolController:
             print(f"Error reading protocol parameters for confirmation: {e}")
             return False
 
+        patient = getattr(window, "cloud_patient", None)
+        if patient:
+            name = (patient.get("display_name") or patient.get("external_ref")
+                    or patient["patient_id"])
+            patient_summary = f"Patient: {name}"
+        else:
+            patient_summary = "No cloud patient linked. This treatment will not upload."
         summary = (
             f"Protocol {protocol}\n"
             f"Max pressure: {max_pressure} lbs\n"
             f"Lateral range: {max_left}° left / {max_right}° right\n"
             f"Duration: {duration} min\n"
-            f"Pulse: {pulse}\n\n"
+            f"Pulse: {pulse}\n\n{patient_summary}\n\n"
             "Confirm the patient is positioned and start treatment?"
         )
         reply = QMessageBox.question(
@@ -223,6 +242,11 @@ class ProtocolController:
     def start_protocol(self):
         """Start protocol execution."""
         window = self.window
+        if getattr(window, "_patient_lookup_pending", False) is True:
+            window._show_timed_error(
+                "Wait for patient lookup or choose treatment without a patient."
+            )
+            return False
         if getattr(window, "_calibration_active", False) is True:
             window._show_timed_error("Close actuator calibration before starting treatment.")
             return False
@@ -270,20 +294,11 @@ class ProtocolController:
             # the worker falls back to bare J (see helpers.protocols).
             pulse_rate = getattr(window, "current_pulse_rate", None)
 
-            # Do not dispatch traction or start its timer if centering could
-            # not be queued (including failed calibration/conversion).
-            if not window.set_to_c_distance(0):
-                window.loading_spinner.hide()
-                window.logger.error("Treatment start aborted: lateral centering failed")
-                window._show_timed_error(
-                    "Could not center the lateral actuator; treatment not started."
-                )
-                self.set_state("fault")
-                window.shell.setup.set_reset_enabled(True)
-                return False
-
+            # Preparation belongs to the cancellable worker. Its typed centering
+            # and baseline replies precede both pressure and the treatment clock.
+            self._prepared = False
             window.protocol_duration = duration * 60  # Convert to seconds
-            window.protocol_start_time = time.time()
+            window.protocol_start_time = None
 
             window.mid_protocol_warning_shown = False
             window.protocol_stop_requested = False
@@ -304,22 +319,31 @@ class ProtocolController:
                 motor_speeds=window.shell.treatment.settings_values(),
             )
 
-            # Connect signals
-            window.worker.signals.finished.connect(self.protocol_completed)
-            window.worker.signals.progress.connect(self.update_status_label)
+            patient = deepcopy(window.cloud_patient)
+            session = TreatmentSession(
+                patient_id=str(patient["patient_id"]) if patient else None,
+                protocol_number=int(protocol), planned_duration_s=duration * 60,
+            )
+            # Bind callbacks to this session; queued signals from a retired
+            # worker must never finish/reset or relabel a newer treatment.
+            window.worker.signals.finished.connect(
+                partial(self.protocol_completed, session=session)
+            )
+            window.worker.signals.progress.connect(partial(self._session_progress, session=session))
             window.worker.signals.motor_speed_failed.connect(window._show_timed_error)
-            # Safety recovery after a failed pulse phase (emitted by
-            # protocols 2/3); was never connected to anything before
-            window.worker.signals.reset_needed.connect(self._reset_after_failure)
-
+            window.worker.signals.prepared.connect(partial(self._on_prepared, session=session))
+            window.worker.signals.operation_failed.connect(
+                partial(self._on_operation_failed, session=session)
+            )
+            window.worker.signals.baseline_changed.connect(window.on_baseline_changed)
             window.protocol_running = True
             # Freeze the association before dispatch, and invalidate any lookup
             # that could arrive after this treatment has already ended.
             window._patient_lookup_id += 1
-            window._treatment_patient = deepcopy(window.cloud_patient)
+            window._treatment_patient = patient
             window.mid_protocol_warning_shown = False
 
-            self.set_busy(False)
+            self.set_state("starting")
 
             # Always-visible treatment banner: live values arrive via
             # status_emit; the countdown via update_protocol_time
@@ -327,9 +351,19 @@ class ProtocolController:
 
             # Finish UI/signal setup before dispatch: a fast worker may emit
             # progress or finish as soon as the thread pool starts it.
-            self._set_phase_from_text("Protocol Started")
-            window.protocol_timer.start()
-            window.threadpool.start(window.worker)
+            self._set_phase_from_text("Preparing treatment")
+            window.shell.treatment.set_progress(0, duration * 60)
+            self._session = session
+            try:
+                window.threadpool.start(window.worker)
+            except Exception:
+                self._session = None  # Dispatch failed: no treatment was started.
+                window._treatment_patient = None
+                window.protocol_timer.stop()
+                window.protocol_start_time = None
+                window.protocol_running = False
+                window.worker = None
+                raise
             return True
 
         except ValueError as e:
@@ -344,16 +378,68 @@ class ProtocolController:
             return False
 
 
+    def _on_prepared(self, wall_time: float, clock_time: float,
+                     session: TreatmentSession) -> None:
+        window = self.window
+        if (session is not self._session or session.finalized or window._closing
+                or window.protocol_stop_requested or window.protocol_state == "fault"):
+            return
+        self._prepared = True
+        session.started_at = datetime.fromtimestamp(wall_time, timezone.utc)
+        session.started_clock = clock_time
+        window.protocol_start_time = wall_time
+        self.set_state("running")
+        window.protocol_timer.start()
+
+    def _on_operation_failed(self, reason: str, session: TreatmentSession) -> None:
+        if session is not self._session or self.window._closing:
+            return
+        if self.window.reset_in_progress:
+            return  # A late result from cancelled treatment cannot cancel explicit recovery.
+        if (self.window.protocol_state == "fault"
+                and self.window._no_automatic_recovery):
+            return  # The firmware fault already owns the operator-facing result.
+        self.window.safety.on_controller_fault({"reason": reason})
+
+    def stop_without_recovery(self, reason: str, fault: bool = False) -> None:
+        """Stop outputs and cancel producers without any automatic movement."""
+        window = self.window
+        window._no_automatic_recovery = True
+        window.protocol_stop_requested = True
+        self.latch_session_outcome("fault" if fault else "stopped")
+        arduino = window.arduino
+        if arduino is not None:
+            arduino.send("X")
+        window.connection.cancel_reset()
+        if window.worker:
+            # The explicit stop here owns output cleanup; stop() must not issue P0.
+            window.worker.cancel(firmware_stopped=True)
+        if arduino is not None:
+            arduino.send("X")
+            arduino.send("HF1")
+            arduino.baseline_valid = False
+        window._release_leg_gpio()
+        window.protocol_timer.stop()
+        window.initial_setup_complete = False
+        self.set_state("fault")
+        window.shell.setup.set_reset_enabled(not window.reset_in_progress)
+        window.on_baseline_changed(False)
+        if fault:
+            window.treatment_panel.set_fault(reason)
+        self.finalize_session()
+
     def stop_protocol(self):
         """Stop protocol sequence."""
         window = self.window
         print("Stopping protocol")
         window.protocol_stop_requested = True
+        self.latch_session_outcome("stopped")
         # Cancel the producer before X clears queued work. Waiting until phase
         # 2 allowed the worker to enqueue fresh motion after the stop command.
         if window.worker:
             window.worker.cancel()
         window.stop_actuators()
+        self.finalize_session()
         self.set_state("stopping")
         window.mid_protocol_warning_shown = False
         # Use QTimer to avoid blocking UI
@@ -362,6 +448,8 @@ class ProtocolController:
     def _stop_phase2(self):
         """Phase 2 of stop protocol after 0.5 second delay."""
         window = self.window
+        if getattr(window, "_no_automatic_recovery", False) is True:
+            return
         if getattr(window, "_closing", False) is True:
             return
         if window.worker:
@@ -382,6 +470,8 @@ class ProtocolController:
         has ever arrived (dev launcher / link never up), so there is nothing to
         wait for."""
         window = self.window
+        if getattr(window, "_no_automatic_recovery", False) is True:
+            return
         if getattr(window, "_closing", False) is True:
             return
         if getattr(window, "_physical_stop_active", False) is True:
@@ -405,19 +495,34 @@ class ProtocolController:
         )
 
 
-    def protocol_completed(self, success=True):
+    def protocol_completed(self, success=True, session: Optional[TreatmentSession] = None):
         """Handle protocol completion."""
         window = self.window
         if getattr(window, "_closing", False) is True:
             return
+        if session is not None and session is not self._session:
+            return
+        if self._session is not None:
+            # A fault/stop may already have finalized the cloud record. That
+            # must not suppress this worker's pressure-release cleanup.
+            if self._session.completion_handled:
+                return
+            self._session.completion_handled = True
         print(f"Protocol completed; success={success}")
+        user_stopped = bool(getattr(window, "protocol_stop_requested", False))
+        safety_fault_active = getattr(window, "protocol_state", "") == "fault"
+        outcome = self._completion_outcome(success, user_stopped, safety_fault_active)
+        self.latch_session_outcome(outcome)
+        captured_settings = self._capture_end_settings()
         window.protocol_timer.stop()
         # The UI pause anchor must not outlive the run (PAUSE was permanently
         # inert after a run that ended while paused)
         window._paused_at = None
 
-        if window.worker:
-            window.worker.stop()
+        self.finalize_session(captured_settings)
+
+        if window.reset_in_progress:
+            return  # The explicit recovery now owns controls/readiness.
 
         try:
             self._set_phase_from_text(
@@ -425,8 +530,6 @@ class ProtocolController:
             )
         except Exception as e:
             print(f"Error updating status label: {e}")
-        user_stopped = bool(getattr(window, "protocol_stop_requested", False))
-        safety_fault_active = getattr(window, "protocol_state", "") == "fault"
         window.mid_protocol_warning_shown = False
         if safety_fault_active:
             # Preserve an existing command/device fault. A later worker
@@ -440,66 +543,67 @@ class ProtocolController:
         elif success:
             self.set_state("idle")
         else:
-            # Ordinary early endings return to ready without an operator
-            # dialog. Keep the diagnostic in logs for later troubleshooting.
-            self.set_state("idle")
-            window.logger.warning("Treatment ended early; returning to idle")
+            self.set_state("fault")
+            window.initial_setup_complete = False
+            window.shell.setup.set_reset_enabled(True)
         if not user_stopped:
             window.protocol_stop_requested = False
-        self._upload_treatment(success, user_stopped, safety_fault_active)
 
     def _upload_treatment(self, success, user_stopped, safety_fault_active):
-        window = self.window
-        cloud_patient = getattr(window, "_treatment_patient", None)
-        cloud_client = getattr(window, "cloud_client", None)
-        if not cloud_patient or not cloud_client or not cloud_client.enabled:
-            return
-        if safety_fault_active:
-            outcome = "fault"
-        elif user_stopped:
-            outcome = "stopped"
-        elif success:
-            outcome = "completed"
-        else:
-            outcome = "stopped"
-        if window.protocol_start_time:
-            actual_s = int(time.time() - window.protocol_start_time)
-        else:
-            actual_s = window.protocol_duration
-        from config.constants import APP_VERSION, DATA_PATHS
+        self.latch_session_outcome(
+            self._completion_outcome(success, user_stopped, safety_fault_active)
+        )
+        self.finalize_session()
 
-        started_at = getattr(
-            window, "_cloud_treatment_start",
-            datetime.now(timezone.utc).isoformat(),
-        )
-        record = {
-            "schema_version": 1,
-            "client_record_id": str(uuid.uuid4()),
-            "patient_id": str(cloud_patient["patient_id"]),
-            "protocol_number": int(window.protocol_value),
-            "outcome": outcome,
-            "planned_duration_s": window.protocol_duration,
-            "actual_duration_s": actual_s,
-            "settings_at_end": {
-                "max_pressure_lb": float(
-                    window.shell.treatment.settings_values().get("max_pressure", 50)
-                ),
-                "pulse_rate_hz": float(
-                    getattr(window, "current_pulse_rate", 0) or 0
-                ),
-                "max_left_deg": float(window.shell.treatment.settings_values().get("max_left", 10)),
-                "max_right_deg": float(
-                    window.shell.treatment.settings_values().get("max_right", 10)
-                ),
-            },
-            "started_at": started_at,
-            "ended_at": datetime.now(timezone.utc).isoformat(),
-            "app_version": APP_VERSION,
-            "fw_version": None,
-        }
-        cloud_client.post_treatment_async(
-            record, pending_path=DATA_PATHS.get("PENDING_UPLOADS")
-        )
+    @staticmethod
+    def _completion_outcome(success: bool, user_stopped: bool, safety_fault_active: bool) -> str:
+        if safety_fault_active:
+            return "fault"
+        if user_stopped:
+            return "stopped"
+        return "completed" if success else "fault"
+
+    def latch_session_outcome(self, outcome: str) -> None:
+        """Latch only in-memory timing/reason before any cancel/reset cleanup."""
+        if self._session is not None:
+            if not self._prepared:
+                self._session.actual_duration_s = 0
+            self._session.latch(outcome)
+
+    def _capture_end_settings(self) -> Optional[Dict[str, float]]:
+        try:
+            return end_settings(self.window.shell.treatment.settings_values())
+        except Exception:
+            self.window.logger.exception("Could not snapshot ending treatment settings")
+            return None
+
+    def finalize_session(self, settings: Optional[Dict[str, float]] = None) -> None:
+        """Capture once, then delegate all disk/network work to the cloud executor."""
+        session = self._session
+        if session is None or session.finalized or session.outcome is None:
+            return
+        window = self.window
+        try:
+            if settings is None:
+                settings = end_settings(window.shell.treatment.settings_values())
+            record = session.finish(settings)
+            client = getattr(window, "cloud_client", None)
+            if record is not None and client is not None:
+                client.post_treatment_async(record, pending_path=DATA_PATHS["PENDING_UPLOADS"])
+        except Exception:
+            # Recording must never interrupt motion/stop handling. Keep the
+            # session context for diagnosis and show the failed save explicitly.
+            window.logger.exception("Could not capture treatment record")
+            try:
+                window.shell.treatment.set_cloud_status(
+                    "Treatment record needs attention; contact support"
+                )
+            except Exception:
+                window.logger.error("Could not display the treatment recording failure")
+
+    def _session_progress(self, text: str, session: TreatmentSession) -> None:
+        if session is self._session and not session.finalized:
+            self.update_status_label(text)
 
     def update_protocol_time(self):
         """Update the protocol timer display."""
@@ -517,13 +621,25 @@ class ProtocolController:
             window.protocol_timer.stop()
             window.protocol_start_time = None
 
-    def _reset_after_failure(self) -> None:
+    def _reset_after_failure(self, session: Optional[TreatmentSession] = None) -> None:
         """Do not let a queued worker failure reset a physical emergency stop."""
+        if getattr(self.window, "_no_automatic_recovery", False) is True:
+            return
+        if session is not None:
+            if session is not self._session or session.reset_requested:
+                return
+            # Workers emit finished(False) BEFORE reset_needed. Completing the
+            # record must not swallow that recovery request for the same run.
+            if session.finalized and session.outcome != "fault":
+                return
+            session.reset_requested = True
+        self.latch_session_outcome("fault")
+        self.finalize_session()
         if getattr(self.window, "_physical_stop_active", False) is not True:
             self.window.reset_arduino()
 
 
-    def emergency_stop_clicked(self, event):
+    def emergency_stop_clicked(self, event, outcome: str = "fault"):
         """Handle emergency stop button press."""
         window = self.window
         print("Emergency stop triggered")
@@ -531,6 +647,7 @@ class ProtocolController:
         # arrive. Command rejections from the follow-up pressure-release
         # cleanup must not be mislabeled as a new physical device fault.
         window.protocol_stop_requested = True
+        self.latch_session_outcome(outcome)
         # The banner's EMERGENCY STOP reaches here directly (not via the
         # Treatment screen's _on_estop), so clear the UI pause anchor here
         # too -- it used to survive an e-stop taken while paused, after
@@ -552,6 +669,7 @@ class ProtocolController:
         # arduino.send never blocks or reconnects; 'X' jumps the tx queue
         # and stop_actuators alarms the operator if the link is down.
         window.stop_actuators()
+        self.finalize_session()
         # UI state changes come after both independent stop mechanisms so a
         # broken widget can never delay either safety action. The raw stop
         # flag above is already sufficient to classify an immediate reply.
@@ -566,6 +684,8 @@ class ProtocolController:
     def _emergency_stop_phase2(self):
         """Phase 2 of emergency stop after 1 second delay."""
         window = self.window
+        if getattr(window, "_no_automatic_recovery", False) is True:
+            return
         if getattr(window, "_closing", False) is True:
             return
         if window.worker:
@@ -577,6 +697,8 @@ class ProtocolController:
         """Phase 3: release the hardware stop line, then run the recovery
         reset (the reset sequence homes actuators, which needs the machine
         powered)."""
+        if getattr(self.window, "_no_automatic_recovery", False) is True:
+            return
         if getattr(self.window, "_closing", False) is True:
             return
         try:
@@ -625,6 +747,8 @@ class ProtocolController:
         window = self.window
         if window.worker and window.protocol_running and not window._paused_at:
             window.worker.pause()
+            if self._session is not None:
+                self._session.pause()
             window._paused_at = time.time()
             if window.protocol_timer.isActive():
                 window.protocol_timer.stop()
@@ -639,6 +763,8 @@ class ProtocolController:
         window = self.window
         if window.worker and window.protocol_running and window._paused_at:
             window.worker.resume()
+            if self._session is not None:
+                self._session.resume()
             if window.protocol_start_time is not None:
                 window.protocol_start_time += time.time() - window._paused_at
             window._paused_at = None
@@ -654,7 +780,7 @@ class ProtocolController:
     def stop_from_view(self) -> None:
         """Run the screen STOP chain, then present its stopped controls."""
         window = self.window
-        window.emergency_stop_clicked(None)
+        self.emergency_stop_clicked(None, outcome="stopped")
         window._paused_at = None
         if window.protocol_timer.isActive():
             window.protocol_timer.stop()

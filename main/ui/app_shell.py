@@ -18,7 +18,7 @@ from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import QHBoxLayout, QStackedWidget, QVBoxLayout, QWidget
 
 from ui.chrome import NavRail, TopBar
-from ui.modals import AddPinModal, LoginModal, VideoModal
+from ui.modals import AddPinModal, LoginModal, PatientModal, VideoModal
 from ui.screens import (
     HelpScreen,
     HomeScreen,
@@ -74,6 +74,7 @@ class AppShell(QWidget):
 
         # Modal overlays (children, not laid out — sized to the shell on show).
         self.login_modal = LoginModal(self)
+        self.patient_modal = PatientModal(self)
         self.video_modal = VideoModal(self)
         self.add_pin_modal = AddPinModal(self)
 
@@ -163,6 +164,7 @@ class AppShell(QWidget):
         self.add_pin_modal.show_error(message)
 
     def logout(self):
+        self.patient_modal.close_overlay()
         self.set_user(None)
         self._go("home")
 
@@ -170,5 +172,6 @@ class AppShell(QWidget):
     def resizeEvent(self, event):
         super().resizeEvent(event)
         self.login_modal.update_geometry()
+        self.patient_modal.update_geometry()
         self.video_modal.update_geometry()
         self.add_pin_modal.update_geometry()

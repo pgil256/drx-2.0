@@ -1,5 +1,8 @@
 # tests/unit/test_connection_manager.py
 """Tests for the extracted Arduino connection lifecycle."""
+import threading
+from types import SimpleNamespace
+
 import pytest
 from unittest.mock import MagicMock
 
@@ -15,6 +18,60 @@ def manager(qtbot):
 
 @pytest.mark.unit
 class TestResetGating:
+    def test_reset_waits_for_cancelled_treatment_cleanup(self, manager, monkeypatch):
+        cm, w = manager
+        w.worker = SimpleNamespace(is_running=False, completed=threading.Event())
+        w._no_automatic_recovery = True
+        w._physical_stop_active = True
+        scheduled = []
+        monkeypatch.setattr(
+            "controllers.connection_manager.QTimer.singleShot",
+            lambda ms, callback: scheduled.append(callback),
+        )
+
+        cm.reset_arduino()
+
+        w.threadpool.start.assert_not_called()
+        assert not w.reset_in_progress
+        assert w._no_automatic_recovery and w._physical_stop_active
+        assert len(scheduled) == 1
+
+        w.worker.completed.set()
+        scheduled.pop()()
+
+        w.threadpool.start.assert_called_once()
+        assert w.reset_in_progress
+        assert not w._no_automatic_recovery and not w._physical_stop_active
+        cm._on_reset_finished(True, cm.reset_worker)
+        assert w.initial_setup_complete and not w.reset_in_progress
+
+    def test_reset_refuses_running_treatment(self, manager):
+        cm, w = manager
+        w.worker = SimpleNamespace(is_running=True, completed=threading.Event())
+
+        cm.reset_arduino()
+
+        w.threadpool.start.assert_not_called()
+        assert not w.reset_in_progress
+        assert w.errors == ["Stop treatment before resetting Arduino."]
+
+    def test_deferred_reset_cannot_start_after_close(self, manager, monkeypatch):
+        cm, w = manager
+        w.worker = SimpleNamespace(is_running=False, completed=threading.Event())
+        scheduled = []
+        monkeypatch.setattr(
+            "controllers.connection_manager.QTimer.singleShot",
+            lambda ms, callback: scheduled.append(callback),
+        )
+        cm.reset_arduino()
+        w.worker.completed.set()
+        w._closing = True
+
+        scheduled.pop()()
+
+        w.threadpool.start.assert_not_called()
+        assert not w.reset_in_progress
+
     def test_overlapping_reset_ignored(self, manager):
         cm, w = manager
         w.reset_in_progress = True
@@ -174,12 +231,14 @@ class TestEnsureConnection:
             return True
         monkeypatch.setattr(cm, "setup_arduino", fake_setup)
 
-        assert cm.ensure_arduino_connection() is True
+        assert cm.ensure_arduino_connection() is False
 
         old_arduino.disconnect.assert_called_once()
         assert w.gpio_reset
         sent = [c.args[0] for c in w.arduino.send.call_args_list]
-        assert sent == ["L5|160|1900", "L0-28369.0"]
+        assert sent == []
+        assert w.reset_in_progress
+        w.threadpool.start.assert_called_once()
 
     def test_no_arduino_object_reconnects(self, manager, monkeypatch):
         cm, w = manager
@@ -192,7 +251,7 @@ class TestEnsureConnection:
             return True
 
         monkeypatch.setattr(cm, "setup_arduino", fake_setup)
-        assert cm.ensure_arduino_connection() is True
+        assert cm.ensure_arduino_connection() is False
 
     def test_failed_reconnect_returns_false_and_alerts(self, manager, monkeypatch):
         """A start must NOT proceed on a dead link; the operator is told."""

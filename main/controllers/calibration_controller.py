@@ -196,7 +196,10 @@ class CalibrationController:
         if not low <= target <= high:
             self.dialog.show_message(f"Move exceeds the {low}–{high} count travel limits.", True)
             return
-        self.handle = self.arduino.send_tracked(f"{spec['prefix']}{target}")
+        # Service jogs need exact raw positioning; K now has a 100-count
+        # treatment tolerance, larger than a 50-count calibration jog.
+        prefix = "I14" if self.dialog.current_axis() == "lateral" else spec["prefix"]
+        self.handle = self.arduino.send_tracked(f"{prefix}{target}")
         if self.handle is None:
             self.dialog.show_message("Movement could not be sent. Check the connection.", True)
             return

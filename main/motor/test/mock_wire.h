@@ -7,7 +7,7 @@
 #include <stdint.h>
 #include <string.h>
 
-#define MAX_WIRE_COMMANDS 100
+#define MAX_WIRE_COMMANDS 20000
 #define MAX_WIRE_DATA 64
 
 struct WireCommand {
@@ -39,6 +39,9 @@ public:
     void begin(uint8_t) {}
     void begin(int) {}
     void setWireTimeout(uint32_t, bool) {}
+    bool timeoutFlag = false;
+    void clearWireTimeoutFlag() { timeoutFlag = false; }
+    bool getWireTimeoutFlag() { return timeoutFlag; }
 
     void beginTransmission(uint8_t address) {
         _currentAddress = address;

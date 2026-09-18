@@ -91,6 +91,13 @@ from helpers.secure_auth import SecureAuthHelper; \
 print(SecureAuthHelper.hash_pin_secure(input('PIN: ')))"
 ```
 
+## Cloud patient settings and treatment records
+
+DRx connects to the KneeSpa cloud Device API for patient PIN lookup, treatment
+settings, and session history. Operator PIN login remains local. See
+[Cloud integration](docs/cloud-integration.md) for provisioning, supported
+settings, upload status, offline behavior, and verification instructions.
+
 ## Testing
 
 ```bash

@@ -255,10 +255,15 @@ class SafetyMonitor:
             # Outside a stop, a rejected command still matters: halt the
             # treatment state machine, but identify it as a command failure
             # rather than a device safety trip.
+            protocol = getattr(window, "protocol", None)
+            if protocol is not None:
+                protocol.latch_session_outcome("fault")
             window.stop_actuators()
+            window._no_automatic_recovery = True
+            window.initial_setup_complete = False
             if window.protocol_running and window.worker:
                 try:
-                    window.worker.is_running = False
+                    window.worker.cancel()
                 except Exception as e:
                     print(f"Error flagging worker stop: {e}")
             fault = f"COMMAND REJECTED: {message}"
@@ -274,8 +279,13 @@ class SafetyMonitor:
     def on_physical_stop(self) -> None:
         """Latch the physical stop on the host while firmware releases traction."""
         window = self.window
+        window._no_automatic_recovery = True
+        window.connection.cancel_reset()
         window.logger.error("Physical emergency stop activated")
         already_stopped = getattr(window, "_physical_stop_active", False) is True
+        protocol = getattr(window, "protocol", None)
+        if protocol is not None:
+            protocol.latch_session_outcome("fault")
         window._physical_stop_active = True
         window.protocol_stop_requested = True
         window.initial_setup_complete = False
@@ -322,6 +332,26 @@ class SafetyMonitor:
             return
 
         self._present_warning(message)
+
+    def on_controller_fault(self, result: dict) -> None:
+        """Latched firmware faults stop work without scheduling a reset/home."""
+        if self.window._closing:
+            return
+        reason = result["reason"]
+        self.window.logger.error("Controller fault: %s", reason)
+        self.window._measurement_fault = reason
+        self.window.protocol.stop_without_recovery(reason, fault=True)
+        self.window._show_safety_alert("CONTROLLER FAULT: " + reason)
+
+    def on_command_rejected(self, result: dict) -> None:
+        """Reject the active operation promptly without an automatic homing retry."""
+        window = self.window
+        reason = "{}: {}".format(result["command"], result["reason"])
+        if window.protocol_stop_requested or window._closing:
+            window.logger.warning("Command rejected during cleanup: %s", reason)
+            return
+        window.protocol.stop_without_recovery(reason)
+        window._show_timed_error("Controller rejected command: " + reason)
 
     def on_pressure_released(self):
         """Firmware completed its autonomous post-fault pressure release."""

@@ -39,6 +39,26 @@ void setUp(void) {
     pressureSampleIndex = 0;
     pressureSampleCount = 0;
     pressureDirection = 0;
+    pressureSampleValid = true;
+    pressureCalibrated = true;
+    pressureGuardActive = false;
+    pressureFault = false;
+    pressureDonePending = false;
+    pressureCeiling = 100;
+    protocolPressureLimit = 0;
+    lastPressureSample = pressureMoveStarted = 0;
+    lastPressurePoll = maxPressurePollGap = lastPressureReadUs = 0;
+    pressurePollStarted = false;
+    pressureProgressActive = pressureProgressNotified = false;
+    tareActive = false;
+    tareCount = 0;
+    tareStarted = tareFirstSample = 0;
+    tareSum = 0;
+    pulseMotorSpeed = 0;
+    positionTolerance = 0;
+    axialSpeed = PRESSURE_SPEED;
+    lateralSpeed = C_SPEED;
+    pulseSpeed = TREATMENT_SPEED_MAX;
     pressureWarningIssued = false;
     heartbeatWarningIssued = false;
     scaleWarningIssued = false;
@@ -244,41 +264,26 @@ void test_treatment_pressure_does_not_raise_warning(void) {
     TEST_ASSERT_FALSE(Serial1.outputContains("WARNING: Pressure"));
 }
 
-void test_pressure_warning_does_not_stop_position_move(void) {
+void test_absolute_pressure_limit_stops_position_move(void) {
     bRunning = true;
-    desiredPosition = 4000;
-    forward = 1;
-    smcDeviceNumber = 12;
-    Wire.position_12 = 800;
-    loopLastPosition = 800;
-    loopStallStart = _millis_value;
-    keepAlive();
-    scale._raw = PRESSURE_WARNING_LBS + 10;
-
+    scale._raw = 101;
     loop();
-
-    TEST_ASSERT_TRUE(bRunning);
-    TEST_ASSERT_FALSE(releasingPressure);
-    TEST_ASSERT_TRUE(Serial1.outputContains(
-        "WARNING: Pressure warning threshold exceeded"));
+    TEST_ASSERT_FALSE(bRunning);
+    TEST_ASSERT_TRUE(pressureFault);
+    TEST_ASSERT_TRUE(Serial1.outputContains("FAULT|PRESSURE_LIMIT"));
 }
 
-void test_pressure_warning_is_emitted_once_per_excursion(void) {
-    jerking = true;
-    keepAlive();
-    scale._raw = PRESSURE_WARNING_LBS + 10;
-
+void test_pressure_fault_latches_across_x_and_new_motion(void) {
+    scale._raw = 101;
     loop();
-    keepAlive();
+    Serial1.reset();
     loop();
-
-    TEST_ASSERT_TRUE(jerking);
-    TEST_ASSERT_FALSE(releasingPressure);
-    std::string output = Serial1.getOutput();
-    std::string warning = "WARNING: Pressure warning threshold exceeded";
-    size_t first = output.find(warning);
-    TEST_ASSERT_TRUE(first != std::string::npos);
-    TEST_ASSERT_TRUE(output.find(warning, first + 1) == std::string::npos);
+    processCommand("X");
+    processCommand("P20");
+    TEST_ASSERT_TRUE(pressureFault);
+    TEST_ASSERT_FALSE(measurePressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("FAULT_LATCHED"));
+    TEST_ASSERT_FALSE(Serial1.outputContains("FAULT|"));
 }
 
 void test_heartbeat_loss_warns_without_stopping(void) {
@@ -477,22 +482,13 @@ void test_pressure_move_timeout_warns_without_stopping(void) {
 }
 
 // Owner policy: warnings never stop a pressure move -- only an E-stop does.
-void test_axial_travel_warning_does_not_stop_pressure_move(void) {
-    keepAlive();
-    measurePressure = true;
-    pressureDirection = 1;
-    pressure = 20;
-    desiredPressure = 50;
-    pressureMoveStart = _millis_value;
-    smcDeviceNumber = 12;
-    Wire.position_12 = AXIAL_MAX_POS;
-
+void test_invalid_feedback_stops_pressure_move(void) {
+    processCommand("P50");
+    Wire.position_12 = 65535;
     loop();
-
-    TEST_ASSERT_TRUE(measurePressure);
-    TEST_ASSERT_FALSE(releasingPressure);
-    TEST_ASSERT_TRUE(Serial1.outputContains(
-        "WARNING: Axial travel limit during pressure move"));
+    TEST_ASSERT_TRUE(pressureFault);
+    TEST_ASSERT_FALSE(measurePressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("POSITION_FEEDBACK_INVALID"));
 }
 
 void test_pressure_progress_fault_is_disabled(void) {
@@ -635,7 +631,8 @@ void test_p0_with_no_load_completes_done_without_error(void) {
     bool motorDriven = false;
     for (int i = 0; i < Wire.commandCount; i++) {
         if (Wire.commands[i].address == 12 && Wire.commands[i].dataLen >= 1 &&
-            (Wire.commands[i].data[0] == 0x85 || Wire.commands[i].data[0] == 0x86)) {
+            (Wire.commands[i].data[0] == 0x85 || Wire.commands[i].data[0] == 0x86) &&
+            (Wire.commands[i].data[1] || Wire.commands[i].data[2])) {
             motorDriven = true;
         }
     }
@@ -666,47 +663,33 @@ void test_release_reaching_zero_with_target_met_completes_done(void) {
 // Reaching the travel floor before the requested pressure no longer raises
 // a device safety fault. The move ends cleanly and reports DONE while the
 // firmware continues to enforce the axial travel floor.
-void test_release_at_zero_with_load_ends_without_fault(void) {
-    keepAlive();
-    AZERO = 0;
+void test_release_at_home_with_load_cannot_report_success(void) {
+    scale._raw = 20;
+    Wire.position_12 = 1000;
+    processCommand("P0");
     Wire.position_12 = 10;
-    measurePressure = true;
-    pressureDirection = -1;
-    desiredPressure = 0;
-    scale._raw = 20;         // 20 lbs still applied
-    pressure = 20;
-    pressureSampleCount = 3;
-    pressureSamples[0] = pressureSamples[1] = pressureSamples[2] = 20;
-    pressureMoveStart = _millis_value;
-    pressureProgressTime = _millis_value;
-    pressureProgressValue = 20;
-
     loop();
-
     TEST_ASSERT_FALSE(measurePressure);
-    TEST_ASSERT_FALSE(Serial1.outputContains("ERROR: Axial at zero"));
-    TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
+    TEST_ASSERT_TRUE(pressureFault);
+    TEST_ASSERT_TRUE(Serial1.outputContains("AXIAL_HOME_BEFORE_PRESSURE_TARGET"));
+    TEST_ASSERT_FALSE(Serial1.outputContains("MOTION_DONE"));
 }
 
 // --- Pressure control goal and accepted overshoot ---
 
 static void setMeasuredPressure(float value) {
     pressure = value;
-    scale._raw = value;
+    scale._scale = 100.0;
+    scale.setRawForUnits(value);
     pressureSampleCount = 3;
     pressureSamples[0] = pressureSamples[1] = pressureSamples[2] = value;
 }
 
-void test_pressure_command_in_control_band_completes_without_motion(void) {
-    for (float measured : {48.0f, 50.0f, 52.0f}) {
-        setUp();
-        setMeasuredPressure(measured);
-        processCommand("P50");
+void test_pressure_at_or_above_target_in_band_completes(void) {
+    for (float measured : {50.0f, 52.0f}) {
+        setUp(); setMeasuredPressure(measured); processCommand("P50");
         TEST_ASSERT_FALSE(measurePressure);
-        TEST_ASSERT_EQUAL(0, pressureDirection);
-        TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
-        TEST_ASSERT_FALSE(Serial1.outputContains("WARNING:"));
-        TEST_ASSERT_FALSE(Serial1.outputContains("ERROR:"));
+        TEST_ASSERT_TRUE(Serial1.outputContains("MOTION_DONE|P|50"));
     }
 }
 
@@ -722,97 +705,63 @@ void test_pressure_command_outside_control_band_starts_correction(void) {
     }
 }
 
-void test_pressure_move_stops_at_either_control_boundary(void) {
-    for (float measured : {48.0f, 52.0f}) {
-        setUp();
-        setMeasuredPressure(measured < 50 ? 40 : 60);
-        processCommand("P50");
-        setMeasuredPressure(measured);
-        keepAlive();
-        loop();
-        TEST_ASSERT_FALSE(measurePressure);
-        TEST_ASSERT_EQUAL(0, pressureDirection);
-        TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
-    }
+void test_increase_reaches_exact_target_before_completion(void) {
+    setMeasuredPressure(40); processCommand("P50");
+    setMeasuredPressure(48); loop();
+    TEST_ASSERT_TRUE(measurePressure);
+    TEST_ASSERT_FALSE(Serial1.outputContains("MOTION_DONE"));
+    setMeasuredPressure(50); loop();
+    TEST_ASSERT_FALSE(measurePressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("MOTION_DONE|P|50"));
 }
 
-void test_pressure_skipping_control_band_reverses_and_settles(void) {
+void test_first_sample_crossing_stops_without_reversal(void) {
     for (float overshoot : {40.0f, 60.0f}) {
-        setUp();
-        setMeasuredPressure(overshoot < 50 ? 60 : 40);
-        processCommand("P50");
-        setMeasuredPressure(overshoot);
-        keepAlive();
-        loop();
-        TEST_ASSERT_TRUE(measurePressure);
-        TEST_ASSERT_EQUAL(overshoot < 50 ? 1 : -1, pressureDirection);
-        TEST_ASSERT_FALSE(Serial1.outputContains("DONE"));
-        TEST_ASSERT_FALSE(Serial1.outputContains("ERROR:"));
-
-        setMeasuredPressure(50);
-        loop();
-        TEST_ASSERT_FALSE(measurePressure);
-        TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
-    }
-}
-
-void test_pressure_settling_timeout_accepts_up_to_ten_over(void) {
-    for (float measured : {52.1f, 60.0f}) {
-        setUp();
-        setMeasuredPressure(measured);
-        processCommand("P50");
-        _millis_value = pressureMoveStart + PRESSURE_MOVE_TIMEOUT + 1;
-        keepAlive();
-        loop();
+        setUp(); setMeasuredPressure(overshoot < 50 ? 60 : 40);
+        processCommand("P50"); setMeasuredPressure(overshoot); loop();
         TEST_ASSERT_FALSE(measurePressure);
         TEST_ASSERT_EQUAL(0, pressureDirection);
-        TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
-        TEST_ASSERT_FALSE(Serial1.outputContains("WARNING:"));
-        TEST_ASSERT_FALSE(Serial1.outputContains("ERROR:"));
+        TEST_ASSERT_TRUE(Serial1.outputContains("MOTION_DONE|P|50"));
     }
 }
 
-void test_pressure_settling_timeout_outside_allowance_warns_and_keeps_correcting(void) {
-    for (float measured : {47.9f, 60.1f}) {
-        setUp();
-        setMeasuredPressure(measured);
-        processCommand("P50");
-        _millis_value = pressureMoveStart + PRESSURE_MOVE_TIMEOUT + 1;
-        keepAlive();
-        loop();
-        TEST_ASSERT_TRUE(measurePressure);
-        TEST_ASSERT_TRUE(Serial1.outputContains("WARNING: Pressure move timeout"));
-        TEST_ASSERT_FALSE(Serial1.outputContains("DONE"));
+void test_advisory_precedes_90_second_latched_deadline(void) {
+    setMeasuredPressure(20); processCommand("P50");
+    for (unsigned long t=100; t<=90000; t+=100) {
+        _millis_value = t; keepAlive(); loop();
+        if (t == 81000) {
+            TEST_ASSERT_TRUE(measurePressure);
+            TEST_ASSERT_TRUE(Serial1.outputContains("WARNING: Pressure move timeout"));
+        }
     }
-}
-
-void test_p0_release_does_not_use_treatment_tolerance_or_overshoot_allowance(void) {
-    setMeasuredPressure(1);
-    processCommand("P0");
-    TEST_ASSERT_TRUE(measurePressure);
-    TEST_ASSERT_EQUAL(-1, pressureDirection);
-    _millis_value = pressureMoveStart + PRESSURE_MOVE_TIMEOUT + 1;
-    keepAlive();
-    loop();
-    TEST_ASSERT_TRUE(measurePressure);
-    TEST_ASSERT_FALSE(Serial1.outputContains("DONE"));
-
-    setMeasuredPressure(0);
-    loop();
+    TEST_ASSERT_TRUE(pressureFault);
     TEST_ASSERT_FALSE(measurePressure);
-    TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
+    TEST_ASSERT_TRUE(Serial1.outputContains("FAULT|PRESSURE_MOVE_TIMEOUT"));
+    TEST_ASSERT_FALSE(Serial1.outputContains("MOTION_DONE"));
 }
 
-void test_pressure_retarget_into_control_band_stops_previous_move(void) {
-    setMeasuredPressure(40);
-    processCommand("P50");
+void test_relative_limit_uses_selected_target_and_is_strict(void) {
+    setMeasuredPressure(20); processCommand("P20|50");
+    setMeasuredPressure(60); loop(); TEST_ASSERT_FALSE(pressureFault);
+    setMeasuredPressure(61); loop(); TEST_ASSERT_TRUE(pressureFault);
+    TEST_ASSERT_TRUE(Serial1.outputContains("FAULT|PRESSURE_LIMIT"));
+}
+
+void test_p0_completes_at_two_pounds(void) {
+    setMeasuredPressure(3); processCommand("P0");
     TEST_ASSERT_TRUE(measurePressure);
-    currentCmdSeq = 17;
+    setMeasuredPressure(2); loop();
+    TEST_ASSERT_FALSE(measurePressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("MOTION_DONE|P|0"));
+}
+
+void test_retarget_below_target_still_requires_actual_target(void) {
+    setMeasuredPressure(40); processCommand("P50");
     processCommand("P41");
+    TEST_ASSERT_TRUE(measurePressure);
+    setMeasuredPressure(41); loop();
     TEST_ASSERT_FALSE(measurePressure);
-    TEST_ASSERT_EQUAL(0, pressureDirection);
-    TEST_ASSERT_EQUAL(-1, activeCmdSeq);
-    TEST_ASSERT_TRUE(Serial1.outputContains("DONE|17"));
+    TEST_ASSERT_TRUE(Serial1.outputContains("MOTION_DONE|P|41"));
 }
 
 // --- Protocol v2 framing (loop-driven) ---
@@ -1002,6 +951,7 @@ void test_motion_commands_refused_while_stop_engaged(void) {
 void test_pressure_release_allowed_while_stop_engaged(void) {
     STOP = false;
     pressure = 30;
+    scale._raw = 30;
     Wire.position_12 = 2000;
 
     processCommand("P0");
@@ -1081,7 +1031,7 @@ void test_position_move_tracks_its_own_device_during_pressure_move(void) {
 }
 
 void test_pulse_start_refused_during_axial_pressure_move(void) {
-    measurePressure = true;
+    processCommand("P50");
 
     processCommand("J");
 
@@ -1102,27 +1052,17 @@ static int countNonzeroSpeedWrites(uint8_t device) {
 
 // Pulsing is continuous: every interval commands a stroke, alternating
 // direction, with no rest slot every N strokes (the old MAX_JERKS gap).
-void test_pulse_is_continuous_with_no_rest_slot(void) {
-    jerking = true;
-    jerkDirection = 1;
-    jerksCompleted = 0;
-    lastJerkTime = 0;
-    _millis_value = 0;
-    Wire.reset();
-
-    const int strokes = 25;
-    for (int i = 1; i <= strokes; i++) {
-        _millis_value = (unsigned long)i * (jerkInterval + 1);
-        keepAlive();
+void test_three_minute_adjustable_pulsing_with_recovery(void) {
+    setMeasuredPressure(40); processCommand("P40"); processCommand("J200");
+    for (unsigned long t=100; t<=180000; t+=100) {
+        _millis_value=t; keepAlive();
+        setMeasuredPressure(jerkDirection < 0 ? 38 : 40);
         loop();
+        TEST_ASSERT_TRUE(jerking);
+        TEST_ASSERT_FALSE(pressureFault);
     }
-
-    TEST_ASSERT_TRUE(jerking);
-    TEST_ASSERT_EQUAL(strokes, (int)jerksCompleted);
-    TEST_ASSERT_EQUAL(strokes, countNonzeroSpeedWrites(12));
-    TEST_ASSERT_EQUAL(0, countSpeedZeroWrites(12));
-    // Odd stroke count -> the next stroke is reverse
-    TEST_ASSERT_EQUAL(-1, jerkDirection);
+    TEST_ASSERT_EQUAL(200, jerkInterval);
+    TEST_ASSERT_TRUE(countNonzeroSpeedWrites(12) > 20);
 }
 
 // --- FAILSAFE-6: input validation ---
@@ -1166,7 +1106,7 @@ void test_l0_rejects_zero_or_garbage_factor(void) {
     scale._scale = 1.0;
 
     processCommand("L0abc");
-    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Invalid L0 factor"));
+    TEST_ASSERT_TRUE(Serial1.outputContains("COMMAND_REJECTED|L0|INVALID_FACTOR"));
     TEST_ASSERT_EQUAL_FLOAT(1.0, scale._scale);
 
     processCommand("L00");
@@ -1228,8 +1168,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_stop_pin_honored_during_jerking);
     RUN_TEST(test_stop_pin_honored_during_fit_motion);
     RUN_TEST(test_treatment_pressure_does_not_raise_warning);
-    RUN_TEST(test_pressure_warning_does_not_stop_position_move);
-    RUN_TEST(test_pressure_warning_is_emitted_once_per_excursion);
+    RUN_TEST(test_absolute_pressure_limit_stops_position_move);
+    RUN_TEST(test_pressure_fault_latches_across_x_and_new_motion);
     RUN_TEST(test_heartbeat_loss_warns_without_stopping);
     RUN_TEST(test_heartbeat_loss_does_not_stop_fit_motion);
     RUN_TEST(test_heartbeat_not_tripped_when_idle);
@@ -1242,22 +1182,22 @@ int main(int argc, char **argv) {
     RUN_TEST(test_x_bypasses_rate_limiter);
     RUN_TEST(test_commands_not_merged_under_rate_limit);
     RUN_TEST(test_pressure_move_timeout_warns_without_stopping);
-    RUN_TEST(test_axial_travel_warning_does_not_stop_pressure_move);
+    RUN_TEST(test_invalid_feedback_stops_pressure_move);
     RUN_TEST(test_pressure_progress_fault_is_disabled);
     RUN_TEST(test_axial_home_within_deadband_not_stalled);
     RUN_TEST(test_genuine_stall_warns_after_sustained_interval_without_stopping);
     RUN_TEST(test_position_progress_restarts_stall_timer);
     RUN_TEST(test_p0_with_no_load_completes_done_without_error);
     RUN_TEST(test_release_reaching_zero_with_target_met_completes_done);
-    RUN_TEST(test_release_at_zero_with_load_ends_without_fault);
-    RUN_TEST(test_pressure_command_in_control_band_completes_without_motion);
+    RUN_TEST(test_release_at_home_with_load_cannot_report_success);
+    RUN_TEST(test_pressure_at_or_above_target_in_band_completes);
     RUN_TEST(test_pressure_command_outside_control_band_starts_correction);
-    RUN_TEST(test_pressure_move_stops_at_either_control_boundary);
-    RUN_TEST(test_pressure_skipping_control_band_reverses_and_settles);
-    RUN_TEST(test_pressure_settling_timeout_accepts_up_to_ten_over);
-    RUN_TEST(test_pressure_settling_timeout_outside_allowance_warns_and_keeps_correcting);
-    RUN_TEST(test_p0_release_does_not_use_treatment_tolerance_or_overshoot_allowance);
-    RUN_TEST(test_pressure_retarget_into_control_band_stops_previous_move);
+    RUN_TEST(test_increase_reaches_exact_target_before_completion);
+    RUN_TEST(test_first_sample_crossing_stops_without_reversal);
+    RUN_TEST(test_advisory_precedes_90_second_latched_deadline);
+    RUN_TEST(test_relative_limit_uses_selected_target_and_is_strict);
+    RUN_TEST(test_p0_completes_at_two_pounds);
+    RUN_TEST(test_retarget_below_target_still_requires_actual_target);
 
     RUN_TEST(test_stop_pin_honored_during_static_hold);
     RUN_TEST(test_stop_pin_idle_without_load_is_inert);
@@ -1268,7 +1208,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_js_leaves_in_flight_lateral_move_running);
     RUN_TEST(test_position_move_tracks_its_own_device_during_pressure_move);
     RUN_TEST(test_pulse_start_refused_during_axial_pressure_move);
-    RUN_TEST(test_pulse_is_continuous_with_no_rest_slot);
+    RUN_TEST(test_three_minute_adjustable_pulsing_with_recovery);
     RUN_TEST(test_l5_rejects_out_of_range_zero_marks);
     RUN_TEST(test_axial_floor_applied_before_clamp);
     RUN_TEST(test_l0_rejects_zero_or_garbage_factor);

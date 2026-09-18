@@ -12,6 +12,7 @@ import serial
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot
 
 from helpers.logging import LoggerSetup, setup_logger
+from helpers.firmware_protocol import HX711_PROTOCOL_DRIVER, parse_diagnostic_frame
 from config.constants import ARDUINO_SETTINGS
 
 
@@ -39,6 +40,7 @@ class CommandHandle:
     result: Optional[str] = None
     reason: str = ""
     retries: int = 0  # link-level resends after a parse rejection
+    generation: int = 0
 
 
 # Firmware rejections that mean "I could not parse what arrived", i.e. the
@@ -101,6 +103,13 @@ class Arduino(QObject):
     warning_emit = pyqtSignal(str)  # Firmware WARNING: advisory notices
     released_emit = pyqtSignal()  # Firmware finished an autonomous pressure release
     zeros_emit = pyqtSignal(int, int)  # Firmware echo of applied AZERO/BZERO
+    motion_done = pyqtSignal(str, float, float)
+    calibration_result = pyqtSignal(dict)
+    firmware_identity = pyqtSignal(dict)
+    sensor_diagnostics = pyqtSignal(dict)
+    pressure_warning = pyqtSignal(dict)
+    command_rejected = pyqtSignal(dict)
+    fault_emit = pyqtSignal(dict)
 
     # The firmware processes at most one command per 200 ms
     # (MIN_COMMAND_INTERVAL); X and Q bypass its limiter
@@ -118,6 +127,7 @@ class Arduino(QObject):
         self._lock = threading.RLock()  # guards queues + connection state
         self._queue_condition = threading.Condition(self._lock)
         self._running = False
+        self._connect_cancel = threading.Event()
         self.ARDUINO_PORT = ARDUINO_SETTINGS["ARDUINO_PORT"]
         self.ok_event = threading.Event()
         self.ready_event = threading.Event()  # set on firmware "Ready to Go"
@@ -144,6 +154,10 @@ class Arduino(QObject):
         # (written_at, handle) for the last few writes, newest last: lets a
         # v1 "ERROR: Invalid X value" be matched to the command it rejected
         self._recent_writes = deque(maxlen=16)
+        self._write_generation = 0
+        self.firmware_driver = None
+        self.firmware_version = None
+        self.baseline_valid = False
         self.link_retries = 0  # parse rejections answered with a resend
         # Every run records traffic using this single-owner transport. The E2E
         # harness can additionally request a copy without opening a second port.
@@ -197,6 +211,7 @@ class Arduino(QObject):
             io_thread.join(timeout=3.0)
         with self._lock:
             self._fail_pending("DISCONNECTED", "Serial connection closed")
+            self._invalidate_identity()
             if self.serial_com:
                 self.logger.info("Closing serial connection")
                 try:
@@ -218,14 +233,20 @@ class Arduino(QObject):
             return False
 
         for attempt in range(1, tries + 1):
+            if self._connect_cancel.is_set():
+                return False
             self.ok_event.clear()
             handle = self.send_tracked("T", priority=True)
             if handle is None:
                 return False
-            if self.protocol_v2:
-                verified = handle.completed.wait(timeout_s) and handle.result == "OK"
-            else:
-                verified = self.ok_event.wait(timeout_s)
+            event = handle.completed if self.protocol_v2 else self.ok_event
+            deadline = time.monotonic() + timeout_s
+            while not event.wait(0.05):
+                if self._connect_cancel.is_set() or time.monotonic() >= deadline:
+                    break
+            if self._connect_cancel.is_set():
+                return False
+            verified = event.is_set() and (not self.protocol_v2 or handle.result == "OK")
             if verified:
                 self.logger.debug("Connection verified on attempt %d", attempt)
                 return True
@@ -240,6 +261,8 @@ class Arduino(QObject):
         """
         last_error = ""
         for attempt in range(1, max_retries + 1):
+            if self._connect_cancel.is_set():
+                return False
             self.logger.info(
                 "Connection attempt %d/%d to %s", attempt, max_retries, self.ARDUINO_PORT
             )
@@ -247,7 +270,7 @@ class Arduino(QObject):
             if not os.path.exists(self.ARDUINO_PORT):
                 last_error = f"Port {self.ARDUINO_PORT} not found"
                 self.logger.error(last_error)
-                time.sleep(retry_delay)
+                self._connect_cancel.wait(retry_delay)
                 continue
 
             try:
@@ -259,7 +282,8 @@ class Arduino(QObject):
                     self.ARDUINO_PORT, 115200, timeout=1, write_timeout=1
                 )
                 # Boot grace: USB-serial Arduinos auto-reset on open
-                time.sleep(2)
+                if self._connect_cancel.wait(2):
+                    return False
 
                 self._start_io_thread()
 
@@ -278,7 +302,7 @@ class Arduino(QObject):
                 self.logger.exception("Connection attempt to %s failed", self.ARDUINO_PORT)
                 self.disconnect()
 
-            time.sleep(retry_delay)
+            self._connect_cancel.wait(retry_delay)
 
         self.logger.error(
             "Failed to establish Arduino connection after %d attempts", max_retries
@@ -334,10 +358,16 @@ class Arduino(QObject):
     def _write_queued(self, command: str, handle: CommandHandle) -> None:
         """Write a dequeued command while making drain state observable."""
         try:
+            with self._lock:
+                if handle.generation != self._write_generation:
+                    handle.result = "CANCELLED"
+                    handle.completed.set()
+                    return
             self._write_now(command)
             handle.written.set()
             with self._lock:
-                self._recent_writes.append((time.time(), handle))
+                if handle.generation == self._write_generation:
+                    self._recent_writes.append((time.time(), handle))
         except Exception:
             with self._lock:
                 self._pending_v2.pop(handle.sequence, None)
@@ -438,6 +468,7 @@ class Arduino(QObject):
         self.logger.info("I/O loop exited")
 
     def _handle_link_lost(self):
+        self._invalidate_identity()
         self.connected = False
         self.connection_ready_event.clear()
         with self._lock:
@@ -469,7 +500,19 @@ class Arduino(QObject):
             handle.result = result
             handle.reason = reason
             handle.completed.set()
+        for _, handle in self._recent_writes:
+            if not handle.completed.is_set():
+                handle.result = result
+                handle.reason = reason
+                handle.completed.set()
         self._pending_v2.clear()
+        self._recent_writes.clear()
+        self._write_generation += 1
+
+    def _invalidate_identity(self) -> None:
+        """A reboot/disconnect removes authority to send live calibration."""
+        self.firmware_driver = self.firmware_version = None
+        self.baseline_valid = False
 
     def _requeue_front(self, wire: str, handle: CommandHandle) -> None:
         """Resend ahead of anything queued later, at the normal pacing."""
@@ -577,7 +620,8 @@ class Arduino(QObject):
             return
         pos_a, pos_b, pos_c = (int(token) for token in tokens[1:4])
         pressure = float(tokens[4])
-        if not math.isfinite(pressure):
+        if (not math.isfinite(pressure) or pressure < 0
+                or any(not 0 <= pos <= 4095 for pos in (pos_a, pos_b, pos_c))):
             self.logger.warning("Rejected non-finite status pressure: %s", data)
             return
 
@@ -596,6 +640,22 @@ class Arduino(QObject):
     def handle_com(self, data):
         """Handles incoming serial messages."""
         try:
+            typed = parse_diagnostic_frame(data)
+            if typed is not None:
+                signal, result = typed
+                if signal == "firmware_identity":
+                    self.firmware_driver = result["driver"]
+                    self.firmware_version = result["version"]
+                elif signal == "fault_emit":
+                    self.baseline_valid = False
+                elif signal == "calibration_result" and result["operation"] == "tare":
+                    # Only the worker's STARTED/OK/DONE transaction grants authority.
+                    self.baseline_valid = False
+                if signal == "motion_done":
+                    self.motion_done.emit(result["kind"], result["target"], result["actual"])
+                else:
+                    getattr(self, signal).emit(result)
+                return
             # Diagnostic text must never be interpreted as telemetry, even
             # when it quotes a status frame.
             if data.startswith("LOG|"):
@@ -666,7 +726,9 @@ class Arduino(QObject):
                 self.error_emit.emit(reason)
             elif tokens[0] == "DONE":
                 # v1: bare DONE; v2: DONE|<seq>
-                if len(tokens) >= 2:
+                if len(tokens) not in (1, 2):
+                    return
+                if len(tokens) == 2:
                     try:
                         self.last_done_seq = int(tokens[1])
                     except ValueError:
@@ -674,16 +736,22 @@ class Arduino(QObject):
                     if not self._resolve_v2_ack(self.last_done_seq, "DONE"):
                         return
                 self.done_emit.emit()
-            elif tokens[0] == "ZEROS" and len(tokens) >= 3:
+            elif (tokens[0] == "ZEROS" and len(tokens) == 3
+                  and all(re.fullmatch(r"[0-9]+", t) and 0 <= int(t) <= 4095
+                          for t in tokens[1:])):
                 self.zeros_emit.emit(int(tokens[1]), int(tokens[2]))
-            elif tokens[0] == "P" and len(tokens) >= 2:
+            elif (tokens[0] == "P" and len(tokens) == 2
+                  and re.fullmatch(r"[0-9]+", tokens[1]) and 0 <= int(tokens[1]) <= 4095):
                 self.position_emit.emit(int(tokens[1]), 0, "", 0)
-            elif tokens[0] == "PR" and len(tokens) >= 2:
+            elif (tokens[0] == "PR" and len(tokens) == 2
+                  and math.isfinite(float(tokens[1])) and float(tokens[1]) >= 0):
                 self.pressure_emit.emit(tokens[1])
-            elif tokens[0] == "Ready to Go" or "Ready to Go" in data:
+            elif data == "Ready to Go":
+                self._invalidate_identity()
                 self.ready_event.set()
                 self.ready_to_go_emit.emit()
-            elif tokens[0] == "weight" and len(tokens) >= 2:
+            elif (tokens[0] == "weight" and len(tokens) == 2
+                  and math.isfinite(float(tokens[1])) and float(tokens[1]) >= 0):
                 self.display_weight_emit.emit(tokens[1])
             elif (
                 tokens[0] == "Test command received" or "Test command received" in data
@@ -735,6 +803,9 @@ class Arduino(QObject):
         is_emergency = command.startswith("X")
         handle = CommandHandle(command=command)
         with self._queue_condition:
+            if command.startswith(("L0", "L1")) and self.firmware_driver != HX711_PROTOCOL_DRIVER:
+                self.logger.error("Calibration blocked: compatible NB2 firmware not confirmed")
+                return None
             # Evaluate connectivity under the same lock link-loss uses to
             # clear the queues, so a stop cannot be reported as queued and
             # then silently dropped by a concurrent _handle_link_lost
@@ -750,7 +821,13 @@ class Arduino(QObject):
                 # X stops the device, but it does not latch out later commands.
                 # Discard old work atomically so it cannot restart motion after
                 # the stop. New cleanup commands (P0/HF0) may still be queued.
-                self._discard_queued("CANCELLED", "Superseded by emergency stop")
+                self._fail_pending("CANCELLED", "Superseded by emergency stop")
+            if command == "Y":
+                self._invalidate_identity()
+                self.ready_event.clear()
+            if command.startswith(("L0", "L1")):
+                self.baseline_valid = False
+            handle.generation = self._write_generation
             if self.protocol_v2:
                 self._seq = (self._seq + 1) % 1000000
                 handle.sequence = self._seq

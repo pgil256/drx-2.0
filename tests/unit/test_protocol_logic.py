@@ -78,7 +78,7 @@ class TestSetToCDistance:
         assert protocol_clock.elapsed < LATERAL_MOVE_TIMEOUT_S
 
     def test_exact_mark_lookup(self):
-        p = make_protocol()
+        p = make_protocol(acknowledge=True)
         p.is_running = True
         expected_position = int(p.config.CMarks["0.0"])
         p.current_pos_c = expected_position  # Already at target to avoid timeout
@@ -88,7 +88,7 @@ class TestSetToCDistance:
         p.arduino.send.assert_called_with(f"K{expected_position}")
 
     def test_negative_degree(self):
-        p = make_protocol()
+        p = make_protocol(acknowledge=True)
         p.is_running = True
         expected_position = int(p.config.CMarks["-20.0"])
         p.current_pos_c = expected_position  # At target
@@ -98,7 +98,7 @@ class TestSetToCDistance:
         p.arduino.send.assert_called_with(f"K{expected_position}")
 
     def test_positive_degree(self):
-        p = make_protocol()
+        p = make_protocol(acknowledge=True)
         p.is_running = True
         expected_position = int(p.config.CMarks["17.5"])
         p.current_pos_c = expected_position  # At target
@@ -109,7 +109,7 @@ class TestSetToCDistance:
 
     def test_interpolation_between_marks(self):
         """Degrees between marks should interpolate position linearly."""
-        p = make_protocol()
+        p = make_protocol(acknowledge=True)
         p.is_running = True
         expected_position, _ = lateral_degrees_to_position(
             p.config.CMarks, -18.75
@@ -125,7 +125,7 @@ class TestSetToCDistance:
         assert position == expected_position
 
     def test_clamps_below_minus_20(self):
-        p = make_protocol()
+        p = make_protocol(acknowledge=True)
         p.is_running = True
         expected_position = int(p.config.CMarks["-20.0"])
         p.current_pos_c = expected_position
@@ -136,7 +136,7 @@ class TestSetToCDistance:
 
     def test_clamps_above_max_mark(self):
         """Values above 20 clamp to 20.0."""
-        p = make_protocol()
+        p = make_protocol(acknowledge=True)
         p.is_running = True
         expected_position = int(p.config.CMarks["20.0"])
         p.current_pos_c = expected_position
@@ -150,7 +150,7 @@ class TestSetToCDistance:
         from a hand-edited config) both float to the same degree value but
         miss the exact "{:.1f}" lookup, producing a zero-width interpolation
         bracket. Must use the first mark, not raise ZeroDivisionError."""
-        p = make_protocol()
+        p = make_protocol(acknowledge=True)
         p.config.CMarks = {"-20": "500", "-20.00": "505", "20.0": "2400"}
         p.is_running = True
         p.current_pos_c = 500  # Already at target to avoid timeout
@@ -194,7 +194,7 @@ class TestSetToPressure:
         p.current_pressure = 50
         p.arduino.send.return_value = False
         assert p.set_to_pressure(50) is False
-        p.arduino.send.assert_called_once_with("P50")
+        p.arduino.send.assert_called_once_with("P50|50")
 
     def test_unverified_pressure_times_out(self, protocol_clock: ProtocolClock) -> None:
         """A successful enqueue alone does not verify measured pressure."""
@@ -202,7 +202,7 @@ class TestSetToPressure:
         p.is_running = True
         p.arduino.send.return_value = True
         assert p.set_to_pressure(50) is False
-        p.arduino.send.assert_called_once_with("P50")
+        p.arduino.send.assert_called_once_with("P50|50")
         assert PRESSURE_BUILD_TIMEOUT_S <= protocol_clock.elapsed < PRESSURE_BUILD_TIMEOUT_S + 1
 
     def test_rejects_negative_pressure(self):
@@ -224,14 +224,14 @@ class TestSetToPressure:
         assert result is False
 
     def test_sends_pressure_command(self):
-        p = make_protocol()
+        p = make_protocol(acknowledge=True)
         p.is_running = True
         p.current_pressure = 50  # Already at target
         # The device acks the move; the worker waits for that DONE
         p.arduino.send.side_effect = lambda cmd: (p._on_firmware_done(), True)[1]
         result = p.set_to_pressure(50)
         assert result is True
-        p.arduino.send.assert_called_with("P50")
+        p.arduino.send.assert_called_with("P50|50")
 
 
 @pytest.mark.unit

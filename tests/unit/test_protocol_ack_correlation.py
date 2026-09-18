@@ -58,6 +58,7 @@ def test_v2_waits_for_its_own_done_even_when_telemetry_is_stale(
         if len(protocol_clock.sleeps) == 1:
             arduino.handle_com(f"DONE|{previous.sequence}")
         elif len(protocol_clock.sleeps) == 2:
+            arduino.handle_com("MOTION_DONE|K|1688|1688")
             arduino.handle_com(f"DONE|{current.sequence}")
 
     protocol_clock.on_sleep = receive
@@ -88,14 +89,14 @@ def test_v2_rejection_cannot_be_overridden_by_unrelated_done(
 
 
 @pytest.mark.parametrize("v2", [False, True])
-def test_position_feedback_still_proves_arrival_without_done(
+def test_position_feedback_cannot_prove_stopped_motor_without_done(
     link: Tuple[Protocols, Arduino], protocol_clock: ProtocolClock, v2: bool,
 ) -> None:
     worker, arduino = link
     arduino.protocol_v2 = v2
     report = "STATUS_START|S|0|0|1688|20|STATUS_END"
     protocol_clock.on_sleep = lambda: arduino.handle_com(f"{report}*{xor_checksum(report):02X}")
-    assert worker.set_to_c_distance(0) is True
+    assert worker.set_to_c_distance(0) is False
     assert worker.current_pos_c == 1688
 
 
@@ -125,6 +126,7 @@ def test_v2_parse_retry_keeps_the_same_handle_and_ignores_old_sequence(
         elif len(protocol_clock.sleeps) == 2:
             arduino.handle_com(f"DONE|{sequences[0]}")
         elif len(protocol_clock.sleeps) == 3:
+            arduino.handle_com("MOTION_DONE|K|1688|1688")
             arduino.handle_com(f"DONE|{sequences[1]}")
 
     protocol_clock.on_sleep = receive

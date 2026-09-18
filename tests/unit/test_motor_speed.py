@@ -62,6 +62,7 @@ def test_worker_requires_speed_acceptance(result, accepted):
     handle = CommandHandle("V75,50,100")
     handle.result = result
     handle.completed.set()
+    worker.arduino.send_tracked.side_effect = None
     worker.arduino.send_tracked.return_value = handle
     assert worker._configure_motor_speeds() is accepted
     worker.arduino.send_tracked.assert_called_once_with("V75,50,100")
@@ -71,15 +72,17 @@ def test_missing_firmware_ack_prevents_treatment(monkeypatch):
     monkeypatch.setattr("helpers.protocols.MOTOR_SPEED_ACK_TIMEOUT_S", 0)
     worker = make_protocol(motor_speeds={})
     worker.arduino.send_tracked.return_value = CommandHandle("V50,50,100")
+    worker.set_to_c_distance = Mock(return_value=True)
+    monkeypatch.setattr("helpers.controller_operations.ControllerOperations.baseline", Mock())
     worker.protocol_1 = Mock()
     finished, errors = [], []
     worker.signals.finished.connect(finished.append)
-    worker.signals.motor_speed_failed.connect(errors.append)
+    worker.signals.operation_failed.connect(errors.append)
     worker.run()
     assert finished == [False]
-    assert "firmware" in errors[0]
+    assert "motor speeds" in errors[0]
     worker.protocol_1.assert_not_called()
-    worker.arduino.send.assert_not_called()
+    assert all(not c.args[0].startswith("P") for c in worker.arduino.send.call_args_list)
 
 
 def test_stop_interrupts_speed_wait():

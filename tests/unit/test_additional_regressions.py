@@ -63,79 +63,37 @@ def test_stop_cancels_new_motion_before_delayed_cleanup(
     assert not any(command.startswith(b"K") for command in writes)
 
 
-def test_failed_centering_never_dispatches_or_starts_treatment_timer(
-    monkeypatch: pytest.MonkeyPatch, qtbot: QtBot
-) -> None:
+def test_dispatch_preparation_does_not_start_treatment_clock(monkeypatch, qtbot):
     window = make_window("starting")
-    window.set_to_c_distance.return_value = False
     worker_cls = MagicMock()
     monkeypatch.setattr("controllers.protocol_controller.protocols.Protocols", worker_cls)
-
-    assert ProtocolController(window).start_protocol() is False
-
-    worker_cls.assert_not_called()
-    window.threadpool.start.assert_not_called()
+    controller = ProtocolController(window)
+    assert controller.start_protocol()
+    window.threadpool.start.assert_called_once_with(window.worker)
     window.protocol_timer.start.assert_not_called()
-    assert window.protocol_state == "fault"
-    window.shell.treatment.set_busy.assert_called_with(True)
+    assert window.protocol_state == "starting"
+    controller._on_prepared(1000, 2000, controller._session)
+    assert window.protocol_start_time == 1000
+    window.protocol_timer.start.assert_called_once()
 
 
 @pytest.mark.parametrize("protocol_v2", [False, True])
-def test_reset_does_not_home_leg_length(protocol_v2: bool, qtbot: QtBot) -> None:
-    """The reset sequence ends at calibration: it neither sends FR nor
-    drives the leg-length GPIO, and readiness follows the L0 ack."""
+def test_reset_does_not_home_leg_length(protocol_v2, qtbot, protocol_clock):
+    from fixtures.nb2 import NB2Controller
     window = make_window()
     window.config = make_config()
     window.worker = None
-    window._physical_stop_active = False
-    window._closing = False
-    window.initial_setup_complete = False
-    window.I2Cstatus_event = threading.Event()
-    window.arduino.protocol_v2 = protocol_v2
+    window.arduino = NB2Controller(protocol_v2)
     manager = ConnectionManager(window)
-    sent = []
-    finished = []
-    threads = []
-
-    def send(command: str) -> bool:
-        sent.append(command)
-        if command == "Y":
-            window.arduino.ready_event.set()  # Firmware boot banner after reset.
-        window.I2Cstatus_event.set()
-        return True
-
-    def send_tracked(command: str) -> CommandHandle:
-        sent.append(command)
-        handle = CommandHandle(command)
-        handle.result = "DONE"
-        handle.completed.set()
-        return handle
-
-    def start(worker: ResetWorker) -> None:
-        worker.signals.finished.connect(finished.append)
-        thread = threading.Thread(target=worker.run, daemon=True)
-        threads.append(thread)
-        thread.start()
-
-    window.arduino.send.side_effect = send
-    window.arduino.send_tracked.side_effect = send_tracked
-    window.threadpool.start.side_effect = start
+    window.threadpool.start.side_effect = lambda worker: worker.run()
     manager.reset_arduino()
-    try:
-        qtbot.waitUntil(lambda: bool(finished), timeout=5000)
-    finally:
-        for thread in threads:
-            thread.join(timeout=2)
-
-    assert finished == [True]
-    assert not any(c.startswith("F") for c in sent)
-    assert sent[-1].startswith("L0")
-    assert window.reset_in_progress is False
-    assert window.initial_setup_complete is True
+    assert window.initial_setup_complete
+    assert not window.reset_in_progress
+    assert window.arduino.commands[-1] == "L1|BASELINE"
+    assert not any(c.startswith("F") for c in window.arduino.commands)
     window._start_leg_reset_gpio.assert_not_called()
     window._finish_leg_reset.assert_not_called()
     window.reset_extra_button_clicked.assert_not_called()
-    window.enable_actuator_controls.assert_called_once()
 
 
 @pytest.mark.parametrize("physical_stop", [False, True])
@@ -155,17 +113,15 @@ def test_shutdown_discards_manual_motion_before_draining(
     window.connection = ConnectionManager(window)
     queued_motion = arduino.send_tracked("P50")
 
-    def drain_and_disconnect(drain_timeout: float) -> bool:
-        assert window._closing is True
-        if window.worker:
-            assert window.worker._send_command("K1800") is False
-        for _ in range(3):
-            arduino._last_tx = 0
-            arduino._service_tx_queue()
-        return True
-
-    arduino.disconnect = drain_and_disconnect
     KneeSpa.cleanup(window)
+    assert window._closing
+    if window.worker:
+        assert not window.worker._send_command("K1800")
+    for _ in range(3):
+        arduino._last_tx = 0
+        arduino._service_tx_queue()
+    window._cloud_close_thread.join(timeout=1)
+    assert KneeSpa.cleanup(window)
 
     writes = [c.args[0] for c in serial.write.call_args_list]
     assert writes == ([] if physical_stop else [b"X\n", b"P0\n", b"HF0\n"])

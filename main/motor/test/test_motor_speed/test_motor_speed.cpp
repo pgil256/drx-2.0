@@ -16,6 +16,14 @@ void delay(unsigned long ms) { _millis_value += ms; }
 void setUp(void) {
     emergencyStop();
     Serial.reset(); Serial1.reset(); Wire.reset();
+    pressureCalibrated = true; pressureFault = false;
+    pressureGuardActive = false; pressureSampleValid = true;
+    pressureDonePending = false; pressurePollStarted = false;
+    tareActive = false; lastPressureSample = lastPressurePoll = 0;
+    pulseMotorSpeed = 0;
+    axialSpeed = PRESSURE_SPEED; lateralSpeed = C_SPEED; pulseSpeed = TREATMENT_SPEED_MAX;
+    scale._ready = true; scale._scale = 1; scale._offset = 0; scale._raw = 0;
+    STOP = true; _pin_levels[STOP_PIN] = HIGH;
     _millis_value = 0;
     releasingPressure = false;
     STOP = true; stopWasPressed = false;
@@ -92,11 +100,14 @@ void test_position_and_pressure_use_independent_speeds(void) {
 
 void test_pulse_output_changes_without_changing_cadence(void) {
     processCommand("V75,90,60");
+    scale._raw = 40; processCommand("P40");
     processCommand("J500");
+    scale._raw = 38;
     _millis_value = 500;
     loop();
     TEST_ASSERT_EQUAL(960, lastSpeed(12));
     TEST_ASSERT_EQUAL(500, jerkInterval);
+    scale._raw = 40;
     _millis_value = 1000;
     loop();
     TEST_ASSERT_EQUAL(-960, lastSpeed(12));
@@ -104,7 +115,7 @@ void test_pulse_output_changes_without_changing_cadence(void) {
 
 void test_release_and_stop_keep_fixed_behavior(void) {
     processCommand("V100,100,50");
-    pressure = 40;
+    pressure = 40; scale._raw = 40;
     processCommand("P0");
     TEST_ASSERT_EQUAL(-800, lastSpeed(12));
     processCommand("X");

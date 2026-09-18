@@ -183,10 +183,11 @@ def test_ramp_stops_escalating_when_paused_mid_ramp():
     t.start()
     time.sleep(0.5)
 
-    # No escalated pressure (> the initial 10 lbs) may be sent while paused.
-    escalated = [c for c in sends if c.startswith("P") and float(c[1:]) > 10]
-    assert escalated == [], f"pressure escalated while paused: {sends}"
-
-    w.is_paused = False
-    w.is_running = False
-    t.join(timeout=2)
+    try:
+        # The initial 10-lb waypoint was already completed by the preamble.
+        # Only its next waypoint may be sent before the pause.
+        assert sends == ["P20|80"]
+    finally:
+        w.cancel()
+        t.join(timeout=2)
+    assert not t.is_alive()

@@ -40,7 +40,8 @@ def test_main_routes_options(
     app = MagicMock(spec=["setStyle", "exec_"])
     app.exec_.side_effect = lambda: events.append("event-loop")
     app_cls = MagicMock(return_value=app)
-    window = MagicMock(spec=["show"])
+    window = MagicMock(spec=["show", "restart_requested"])
+    window.restart_requested = False
     window_cls = MagicMock(return_value=window)
     printer = MagicMock(side_effect=lambda: events.append("print"))
     sync = MagicMock(side_effect=lambda path: events.append("sync"))
@@ -69,10 +70,10 @@ def test_main_routes_options(
         sync.assert_called_once_with(sync_logs)
     else:
         sync.assert_not_called()
-    exit_process.assert_called_once_with(0)
+    exit_process.assert_not_called()
     assert events == ["event-loop"] + (["print"] if print_logs else []) + (
         ["sync"] if sync_logs else []
-    ) + ["exit"]
+    )
 
 
 def test_print_and_sync_use_run_logs(

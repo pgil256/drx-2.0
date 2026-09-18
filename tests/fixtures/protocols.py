@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 from config.config import Configuration
 from helpers.protocols import Protocols
+from helpers.arduino import Arduino, CommandHandle
 
 
 def make_arduino() -> MagicMock:
@@ -14,8 +15,13 @@ def make_arduino() -> MagicMock:
         "send", "send_tracked", "cancel_pending_commands", "disconnect",
         "verify_connection", "is_connected", "connected", "protocol_v2", "ready_event",
         "done_emit", "error_emit", "status_emit", "pressure_emit",
+        "motion_done", "calibration_result", "zeros_emit", "ready_to_go_emit",
+        "command_rejected", "fault_emit", "connection_lost", "firmware_driver",
+        "baseline_valid", "_signal_owner",
     ])
     arduino.protocol_v2 = False
+    arduino.firmware_driver = "DRX-HX711-NB2"
+    arduino.baseline_valid = True
     arduino.connected = True
     arduino.ready_event = threading.Event()
     arduino.ready_event.set()
@@ -23,8 +29,17 @@ def make_arduino() -> MagicMock:
     arduino.verify_connection.return_value = True
     arduino.is_connected.return_value = True
     arduino.disconnect.return_value = True
-    for name in ("done_emit", "error_emit", "status_emit", "pressure_emit"):
-        setattr(arduino, name, MagicMock(spec_set=["connect", "disconnect", "emit"]))
+    signal_owner = Arduino()
+    arduino._signal_owner = signal_owner
+    for name in ("done_emit", "error_emit", "status_emit", "pressure_emit", "motion_done",
+                 "calibration_result", "zeros_emit", "ready_to_go_emit", "command_rejected",
+                 "fault_emit", "connection_lost"):
+        signal = MagicMock(spec_set=["connect", "disconnect", "emit"])
+        for method in ("connect", "disconnect", "emit"):
+            getattr(signal, method).side_effect = getattr(getattr(signal_owner, name), method)
+        setattr(arduino, name, signal)
+    arduino.send_tracked.side_effect = lambda cmd: (CommandHandle(cmd)
+                                                  if arduino.send(cmd) else None)
     return arduino
 
 
@@ -49,9 +64,17 @@ def make_protocol(*, acknowledge: bool = False, **kwargs: Any) -> Protocols:
         defaults["ser"] = make_arduino()
     worker = Protocols(**defaults)
     if acknowledge:
-        def send(command: str) -> bool:
-            worker._on_firmware_done()
-            return True
+        def send(command: str) -> object:
+            if not worker.arduino.send(command):
+                return None
+            if command.startswith("P"):
+                target = float(command[1:].split("|")[0])
+                worker.arduino.motion_done.emit("P", target, target)
+            elif command.startswith("K"):
+                target = float(command[1:])
+                worker.arduino.motion_done.emit("K", target, target)
+            worker.arduino.done_emit.emit()
+            return CommandHandle(command)
 
-        worker.arduino.send.side_effect = send
+        worker.arduino.send_tracked.side_effect = send
     return worker

@@ -49,6 +49,24 @@ def controller(qtbot):
     return ProtocolController(window), window
 
 
+@pytest.mark.parametrize("recovering", [False, True])
+def test_late_treatment_failure_cannot_cancel_operator_reset(controller, recovering):
+    pc, window = controller
+    session = object()
+    pc._session = session
+    window.safety = MagicMock(spec_set=SafetyMonitor)
+    window.reset_in_progress = recovering
+
+    pc._on_operation_failed("Pressure sensor timeout", session)
+
+    if recovering:
+        window.safety.on_controller_fault.assert_not_called()
+    else:
+        window.safety.on_controller_fault.assert_called_once_with(
+            {"reason": "Pressure sensor timeout"}
+        )
+
+
 # ----- set_state: single source of truth -----
 class TestSetState:
     @pytest.mark.parametrize("state,running", [
@@ -224,14 +242,14 @@ class TestStartProtocolGates:
 
         worker_cls.assert_called_once_with(
             1900, "2", 50, -10, 10, 12, True,
-            ser=w.arduino, config=w.config, pulse_rate=2.5,
+            ser=w.arduino, config=w.config, pulse_rate=2.4,
             motor_speeds=w.shell.treatment.settings_values(),
         )
         w.threadpool.start.assert_called_once_with(worker_cls.return_value)
         # Banner shows the run: max pressure + duration in seconds.
         w.treatment_panel.set_running.assert_called_once_with(50, 720)
 
-    def test_worker_failure_signal_wired_to_reset(self, controller, monkeypatch):
+    def test_worker_failure_signal_wired_to_fault(self, controller, monkeypatch):
         """protocols 2/3 emit reset_needed after a failed pulse phase; it
         must be connected (it used to go nowhere)."""
         pc, w = controller
@@ -239,12 +257,13 @@ class TestStartProtocolGates:
         monkeypatch.setattr(protocols_module, "Protocols", worker_cls)
         pc.start_protocol()
         worker = worker_cls.return_value
-        worker.signals.reset_needed.connect.assert_called_once_with(
-            pc._reset_after_failure
-        )
-        worker.signals.finished.connect.assert_called_once_with(
-            pc.protocol_completed
-        )
+        failure = worker.signals.operation_failed.connect.call_args.args[0]
+        finished = worker.signals.finished.connect.call_args.args[0]
+        assert failure.func == pc._on_operation_failed
+        worker.signals.reset_needed.connect.assert_not_called()
+        assert finished.func == pc.protocol_completed
+        assert failure.keywords["session"] is pc._session
+        assert finished.keywords["session"] is pc._session
 
 
 class TestTreatmentWiring:
@@ -263,49 +282,19 @@ class TestTreatmentWiring:
         w._show_timed_error.assert_called_once_with("Protocol Error: worker setup failed")
 
     @pytest.mark.parametrize("legacy_dialogs", [False, True])
-    def test_timer_starts_once_after_setup_and_before_dispatch(
-        self, controller: tuple, monkeypatch: pytest.MonkeyPatch, legacy_dialogs: bool
-    ) -> None:
-        """A hidden legacy dialog must never cause an early timer start."""
+    def test_timer_waits_for_prepared_signal(self, controller, monkeypatch, legacy_dialogs):
         pc, w = controller
         if legacy_dialogs:
             w.timer_dialog = _RetiredDialog()
-            assert w.timer_dialog.isVisible() is False
-
-        events = MagicMock()
-        worker_cls = MagicMock(return_value=make_worker_double())
-        worker = worker_cls.return_value
-        monkeypatch.setattr(protocols_module, "Protocols", worker_cls)
-        for name, method in (
-            ("center", w.set_to_c_distance),
-            ("construct", worker_cls),
-            ("finished", worker.signals.finished.connect),
-            ("progress", worker.signals.progress.connect),
-            ("reset_needed", worker.signals.reset_needed.connect),
-            ("banner", w.treatment_panel.set_running),
-            ("status", w.shell.treatment.set_phase),
-            ("timer", w.protocol_timer.start),
-            ("dispatch", w.threadpool.start),
-        ):
-            events.attach_mock(method, name)
-
-        assert pc.start_protocol() is True
-
-        assert events.mock_calls == [
-            call.center(0),
-            call.construct(
-                1900, "2", 50, -10, 10, 12, True,
-                ser=w.arduino, config=w.config, pulse_rate=2.5,
-                motor_speeds=w.shell.treatment.settings_values(),
-            ),
-            call.finished(pc.protocol_completed),
-            call.progress(pc.update_status_label),
-            call.reset_needed(pc._reset_after_failure),
-            call.banner(50, 720),
-            call.status("ramping"),
-            call.timer(),
-            call.dispatch(worker),
-        ]
+        worker = make_worker_double()
+        monkeypatch.setattr(protocols_module, "Protocols", lambda *a, **kw: worker)
+        assert pc.start_protocol()
+        w.protocol_timer.start.assert_not_called()
+        w.threadpool.start.assert_called_once_with(worker)
+        prepared = worker.signals.prepared.connect.call_args.args[0]
+        prepared(1000, 2000)
+        w.protocol_timer.start.assert_called_once()
+        assert w.protocol_start_time == 1000
 
     def test_repeated_starts_preserve_only_active_pressure_receivers(
         self, controller: tuple, monkeypatch: pytest.MonkeyPatch, qtbot: QtBot
@@ -622,23 +611,23 @@ class TestCompletionOutcomes:
         w._show_timed_error.assert_not_called()
         w._show_safety_alert.assert_not_called()
 
-    def test_worker_failure_logs_and_returns_to_idle(self, controller):
+    def test_worker_failure_remains_faulted(self, controller):
         pc, w = controller
         w.protocol_state = "running"
         pc.protocol_completed(False)
-        assert w.protocol_state == "idle"
-        w.treatment_panel.set_idle.assert_called_once()
+        assert w.protocol_state == "fault"
+        w.treatment_panel.set_idle.assert_not_called()
         w._show_timed_error.assert_not_called()
         w._show_safety_alert.assert_not_called()
-        w.logger.warning.assert_called_once_with(
-            "Treatment ended early; returning to idle"
-        )
+        assert not w.initial_setup_complete
 
     @pytest.mark.parametrize("success", [False, True])
     def test_user_stop_stays_gated_until_reset_without_fault_alert(self, controller, success):
         pc, w = controller
         w.protocol_state = "stopping"
         w.protocol_stop_requested = True
+        from helpers.treatment_session import TreatmentSession
+        pc._session = TreatmentSession("test-patient", 2, 720)
         pc.protocol_completed(success)
         assert w.protocol_state == "stopping"
         assert w.protocol_stop_requested is True

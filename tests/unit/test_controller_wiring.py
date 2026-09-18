@@ -38,10 +38,10 @@ class TestCloudLookupResult:
         stub = make_stub()
         stub.protocol_running = False
         KneeSpa._on_cloud_lookup_done(stub, 0, ["not", "a", "patient"])
-        stub.shell.treatment.set_patient_error.assert_called_once_with("Cloud unavailable")
+        assert "Cloud unavailable" in stub.shell.treatment.set_patient_error.call_args.args[0]
         assert stub.cloud_patient is None
 
-    def test_garbage_setting_is_skipped_not_raised(self):
+    def test_garbage_setting_rejects_entire_patient_plan(self):
         stub = make_stub()
         stub.protocol_running = False
         KneeSpa._on_cloud_lookup_done(stub, 0, {
@@ -49,9 +49,10 @@ class TestCloudLookupResult:
             "settings": {"max_pressure_lb": "sixty", "duration_min": 15,
                          "max_left_deg": None, "protocol_number": "3"},
         })
-        stub.shell.treatment.set_patient.assert_called_once_with("Jane D.")
-        stub.shell.treatment.set_settings.assert_called_once_with({"duration": 15})
-        stub.shell.treatment.select_protocol.assert_called_once_with(3)
+        stub.shell.treatment.set_patient.assert_not_called()
+        stub.shell.treatment.set_settings.assert_not_called()
+        stub.shell.treatment.select_protocol.assert_not_called()
+        assert stub.cloud_patient is None
 
     def test_lookup_resolving_mid_treatment_is_ignored(self):
         stub = make_stub()
@@ -91,6 +92,7 @@ class TestLogin:
             login_pin="",
             users={SecureAuthHelper.hash_pin_secure("7531"): user},
             _show_timed_error=MagicMock(),
+            _show_patient_modal=MagicMock(),
         )
         stub._is_admin = partial(KneeSpa._is_admin, stub)
         stub.update_ui_after_login = partial(KneeSpa.update_ui_after_login, stub)
@@ -435,7 +437,7 @@ class TestTreatmentRunState:
         stub = make_stub()
         stub.protocol = ProtocolController(stub)
         KneeSpa._on_estop(stub)
-        stub.emergency_stop_clicked.assert_called_once()
+        stub.stop_actuators.assert_called_once()
         assert stub._paused_at is None
         stub.shell.treatment.set_run_state.assert_called_with(running=False, paused=False)
         stub.shell.treatment.set_phase.assert_called_with("stopped")

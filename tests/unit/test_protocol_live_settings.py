@@ -97,36 +97,27 @@ def test_sync_live_pulse_keeps_retrying_until_firmware_accepts():
     assert (ok, active) == (True, True)
 
 
-def test_set_to_pressure_waits_for_firmware_done():
-    import threading
-    import time as _time
+def test_set_to_pressure_waits_for_typed_reply_and_done(protocol_clock):
     worker = make_worker()
     worker.is_running = True
-    worker.current_pressure = 50  # already within tolerance
-
-    def send(cmd):
-        threading.Timer(0.3, worker._on_firmware_done).start()
-        return True
-    worker.arduino.send.side_effect = send
-
-    t0 = _time.time()
-    assert worker.set_to_pressure(50) is True
-    assert _time.time() - t0 >= 0.25
+    def receive():
+        worker.arduino.motion_done.emit("P", 50, 50)
+        if protocol_clock.elapsed >= 0.3:
+            worker.arduino.done_emit.emit()
+    protocol_clock.on_sleep = receive
+    assert worker.set_to_pressure(50)
+    assert protocol_clock.elapsed >= 0.3
 
 
-def test_set_to_pressure_proceeds_if_done_never_arrives(monkeypatch):
-    import time as _time
-    monkeypatch.setattr(protocols_mod, "PRESSURE_DONE_SETTLE_S", 0.2)
+def test_set_to_pressure_fails_if_done_never_arrives(protocol_clock):
     worker = make_worker()
     worker.is_running = True
-    worker.current_pressure = 50
-
-    t0 = _time.time()
-    assert worker.set_to_pressure(50) is True
-    assert 0.15 <= _time.time() - t0 < 2.0
+    protocol_clock.on_sleep = lambda: worker.arduino.motion_done.emit("P", 50, 50)
+    assert not worker.set_to_pressure(50)
+    assert protocol_clock.elapsed >= 95
 
 
-def test_overpressure_during_hold_routes_through_worker_revision():
+def test_status_callback_never_queues_extra_pressure_corrections():
     """The GUI-thread status slot must not send P itself while the worker's
     hold loop owns the axial SMC (it stops pulsing first, then applies)."""
     worker = make_worker()
@@ -138,23 +129,15 @@ def test_overpressure_during_hold_routes_through_worker_revision():
     worker.update_status(0, 0, 0, worker.max_pressure + 10)
 
     worker.arduino.send.assert_not_called()
-    assert worker._pressure_revision == before + 1
+    assert worker._pressure_revision == before
 
 
-@pytest.mark.parametrize("offset, corrects", [(2, False), (2.01, True), (10, True)])
-def test_overpressure_while_paused_backs_off_directly(offset, corrects):
+@pytest.mark.parametrize("offset", [2, 2.01, 10, 11])
+def test_paused_status_callback_never_starts_motion(offset):
     worker = make_worker()
-    worker.is_running = True
-    worker._live_phase = True
-    worker.is_paused = True
-    worker.arduino.reset_mock()
-
+    worker.is_running = worker.is_paused = True
     worker.update_status(0, 0, 0, worker.max_pressure + offset)
-
-    if corrects:
-        worker.arduino.send.assert_called_once_with(f"P{float(worker.max_pressure)}")
-    else:
-        worker.arduino.send.assert_not_called()
+    worker.arduino.send.assert_not_called()
 
 
 def test_positive_live_pulse_change_reprograms_active_cadence(monkeypatch):
@@ -168,7 +151,7 @@ def test_positive_live_pulse_change_reprograms_active_cadence(monkeypatch):
 
     assert ok
     assert pulse_active
-    worker.arduino.send.assert_called_once_with("J250")
+    assert worker.arduino.send.call_args_list == [call("JS"), call("J250")]
 
 
 @pytest.mark.parametrize(

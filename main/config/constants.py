@@ -211,7 +211,7 @@ MOTOR_SPEED_ACK_TIMEOUT_S = 6.0
 # device's own diagnosis always arrives first. Raised from 35 s on
 # 2026-09-10: the axial actuator builds load slowly and real treatments
 # were being aborted mid-build.
-PRESSURE_BUILD_TIMEOUT_S = 90
+PRESSURE_BUILD_TIMEOUT_S = 95
 # After the host sees measured pressure within tolerance, wait for firmware
 # DONE before pulsing. Older firmware may still drive to the exact target
 # and reject J with BUSY. Bound the wait so missing ACKs cannot stall treatment.

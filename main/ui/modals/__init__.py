@@ -8,6 +8,7 @@ overlays centered over the app shell.
 
 from .add_pin_modal import AddPinModal
 from .login_modal import LoginModal
+from .patient_modal import PatientModal
 from .video_modal import VideoModal
 
-__all__ = ["LoginModal", "VideoModal", "AddPinModal"]
+__all__ = ["LoginModal", "PatientModal", "VideoModal", "AddPinModal"]

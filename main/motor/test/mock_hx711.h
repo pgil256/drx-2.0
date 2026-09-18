@@ -6,6 +6,7 @@
 
 class HX711 {
 public:
+    enum Result { NOT_READY, SAMPLE, INVALID };
     float _units = 0.0;
     float _scale = 1.0;
     float _offset = 0.0;
@@ -28,7 +29,15 @@ public:
 
     float get_scale() { return _scale; }
 
-    float get_offset() { return _offset; }
+    long get_offset() { return (long)_offset; }
+    void set_offset(long value) { _offset = value; }
+    float units(long raw) { return (raw - _offset) / _scale; }
+    Result read_if_ready(long &raw, unsigned long &elapsed) {
+        elapsed = 0;
+        if (!_ready) return NOT_READY;
+        raw = _raw;
+        return raw == -8388608L || raw == 8388607L ? INVALID : SAMPLE;
+    }
 
     float get_units(int times = 1) { return _units; }
 
@@ -41,6 +50,7 @@ public:
         _raw = (long)(units * _scale + _offset);
     }
 };
+using Hx711Sampler = HX711;
 
 #endif // UNIT_TEST
 #endif // MOCK_HX711_H

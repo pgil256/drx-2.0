@@ -326,7 +326,7 @@ class TestFirmwareEvents:
 
         sm.on_firmware_error("Invalid P value")
 
-        assert w.worker.is_running is False
+        w.worker.cancel.assert_called_once()
         assert w.stops == 1
         assert w.states == ["fault"]
         assert w.treatment_panel.faults == [

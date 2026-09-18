@@ -3,6 +3,9 @@ import time
 import threading
 import logging
 from helpers.logging import setup_logger
+from helpers.controller_operations import (
+    ControllerOperations, OperationCancelled, OperationRejected,
+)
 from helpers.conversions import lateral_degrees_to_position
 from helpers.motor_speed import motor_speed_command, motor_speed_values
 from typing import Mapping, Optional, Tuple
@@ -18,7 +21,6 @@ from config.constants import (
     LATERAL_MAX_DEGREES,
     PROTOCOL_DEFAULT_SETTINGS,
     PRESSURE_BUILD_TIMEOUT_S,
-    PRESSURE_DONE_SETTLE_S,
     LATERAL_MOVE_TIMEOUT_S,
     PULSE_RATE_FIRMWARE_SUPPORT,
     MIN_JERK_INTERVAL_MS,
@@ -45,6 +47,9 @@ ANGLE_INCREMENT = PROTOCOL_DEFAULT_SETTINGS["ANGLE_INCREMENT"]        # Standard
 class WorkerSignals(QObject):
     """Defines the signals available from a running worker thread."""
     finished = QtCore.pyqtSignal(bool)
+    prepared = QtCore.pyqtSignal(float, float)
+    baseline_changed = QtCore.pyqtSignal(bool)
+    operation_failed = QtCore.pyqtSignal(str)
     stopped = QtCore.pyqtSignal(bool)
     error = QtCore.pyqtSignal(tuple)
     result = QtCore.pyqtSignal(object)
@@ -108,6 +113,11 @@ class Protocols(QtCore.QRunnable):
         self._command_lock = threading.RLock()
         self._stop_requested = threading.Event()
         self._firmware_stopped = False
+        self.completed = threading.Event()
+        self._operations = None
+        self._run_success = False
+        self._failure_reason = ""
+        self._terminal_failure = threading.Event()
         self._current_pressure = 0.0
         self._current_pos_c = 0
         self.target_pos_c = None
@@ -141,6 +151,10 @@ class Protocols(QtCore.QRunnable):
         self._pulse_retry_after = 0.0
 
         # Connect signals if arduino is provided
+        if ser is not None:
+            ser.fault_emit.connect(self._on_controller_fault, Qt.DirectConnection)
+            ser.command_rejected.connect(self._on_command_rejected, Qt.DirectConnection)
+            ser.connection_lost.connect(self._on_link_lost, Qt.DirectConnection)
         if ser is not None and hasattr(ser, "done_emit"):
             try:
                 ser.done_emit.disconnect(self._on_firmware_done)
@@ -186,6 +200,20 @@ class Protocols(QtCore.QRunnable):
             self._pulse_active = False
         self._disconnect_status()
 
+    def _on_controller_fault(self, result: dict) -> None:
+        self._failure_reason = "Controller fault: " + result["reason"]
+        self._terminal_failure.set()
+        self.cancel(firmware_stopped=True)
+
+    def _on_command_rejected(self, result: dict) -> None:
+        self._failure_reason = "{}: {}".format(result["command"], result["reason"])
+        self._terminal_failure.set()
+        self.cancel()
+        self.arduino.send("X")
+
+    def _on_link_lost(self) -> None:
+        self._on_controller_fault({"reason": "DISCONNECTED"})
+
     @property
     def current_pressure(self) -> float:
         with self._state_lock:
@@ -211,36 +239,6 @@ class Protocols(QtCore.QRunnable):
         # Store values with explicit type conversion
         self.current_pressure = float(pressure)
         self.current_pos_c = int(pos_c)
-
-        # Honor a lowered setpoint in ANY phase: if the operator reduced
-        # max_pressure mid-protocol and the applied load exceeds it,
-        # actively command a back-off (rate-limited to avoid spamming)
-        try:
-            max_p = float(self.max_pressure)
-            if (
-                self.is_running
-                and float(pressure) > max_p + PRESSURE_TARGET_TOLERANCE
-                and time.time() - self._last_overpressure_correction > 3.0
-            ):
-                self._last_overpressure_correction = time.time()
-                print(
-                    f"Applied pressure {pressure} exceeds setpoint {max_p}; "
-                    "commanding back-off"
-                )
-                if self._live_phase and not self.is_paused:
-                    # Route through the worker: its hold loop stops pulsing
-                    # first (JS), applies the target, then re-arms. A direct
-                    # P from this GUI-thread slot raced the pulse handler for
-                    # the axial SMC.
-                    with self._live_settings_lock:
-                        self._pressure_revision += 1
-                elif self.is_paused:
-                    # Held static: nothing else is driving the axial SMC
-                    self._send_command(f"P{max_p}")
-                # During the ramp the worker's own pressure sequence is in
-                # control of the axial SMC; leave it alone.
-        except Exception as e:
-            print(f"Setpoint check error: {e}")
 
         # Emit separate pressure signal for dialogs and UI updates
         self.signals.pressure_emit.emit(float(pressure))
@@ -371,7 +369,7 @@ class Protocols(QtCore.QRunnable):
     def _apply_live_pressure_target(self, target: float) -> bool:
         """Apply a live pressure target without bypassing the ramp limit."""
         current = float(self.current_pressure)
-        if abs(target - current) <= 2:
+        if target == current:
             return True
         if target < current:
             return self.set_to_pressure(target)
@@ -397,6 +395,9 @@ class Protocols(QtCore.QRunnable):
             return True, False
 
         if not pulse_active or revision != self._applied_pulse_revision:
+            if pulse_active and revision != self._applied_pulse_revision:
+                if not self._send_pulse_stop():
+                    return False, pulse_active
             if not self._start_pulse():
                 return False, pulse_active
             pulse_active = self._pulse_active  # False while firmware is busy
@@ -506,43 +507,6 @@ class Protocols(QtCore.QRunnable):
         if message == "BUSY":
             self._busy_seen.set()
 
-    def _send_pressure_command(self, target) -> bool:
-        """Send P<target> with the DONE tracker armed for this move."""
-        self._move_done.clear()
-        return self._send_command(f"P{target}")
-
-    def _pressure_within_target(self, target: float, allow_overshoot: bool = False) -> bool:
-        """Check the control goal, or the wider band after settling times out.
-
-        Overshoot allowance never widens the low side or a full-release target.
-        """
-        if target <= 0:
-            return self.current_pressure <= target
-        upper_margin = (
-            PRESSURE_OVERSHOOT_ALLOWANCE if allow_overshoot else PRESSURE_TARGET_TOLERANCE
-        )
-        return target - PRESSURE_TARGET_TOLERANCE <= self.current_pressure <= target + upper_margin
-
-    def _wait_pressure_move_done(self) -> bool:
-        """After measured pressure is within tolerance, hold until the firmware
-        finishes the move (DONE). Older firmware keeps driving to the exact
-        target and answers BUSY to J meanwhile; on 2026-09-10 the host sent
-        J at 8.06 lb of a 10 lb target, the firmware refused it, and the
-        treatment sat holding with no pulse. Bounded by PRESSURE_DONE_SETTLE_S;
-        returns False only if the run was cancelled while waiting."""
-        deadline = time.time() + PRESSURE_DONE_SETTLE_S
-        while not self._move_done.is_set():
-            if not self.is_running:
-                return False
-            if time.time() >= deadline:
-                print(
-                    "Firmware did not report the pressure move DONE within "
-                    f"{PRESSURE_DONE_SETTLE_S}s; continuing"
-                )
-                break
-            time.sleep(0.05)
-        return True
-
     def _disconnect_status(self):
         """Detach from the Arduino signals once this run is over.
 
@@ -555,6 +519,9 @@ class Protocols(QtCore.QRunnable):
         for signal_name, slot in (
             ("done_emit", self._on_firmware_done),
             ("error_emit", self._on_firmware_error),
+            ("fault_emit", self._on_controller_fault),
+            ("command_rejected", self._on_command_rejected),
+            ("connection_lost", self._on_link_lost),
         ):
             sig = getattr(ser, signal_name, None)
             if sig is None:
@@ -570,330 +537,78 @@ class Protocols(QtCore.QRunnable):
         except (TypeError, RuntimeError):
             pass  # already disconnected / signal gone
 
-    def run_pressure_sequence(self, starting_pressure: float, target_pressure: float) -> bool:
-            """Run a sequence of pressure increases from start to target."""
-            if target_pressure < 0 or target_pressure > MAX_SAFE_PRESSURE:
-                print(f"Error: Pressure {target_pressure} outside safe range (0-{MAX_SAFE_PRESSURE})")
-                return False
+    def _check_cancelled(self) -> None:
+        if self._stop_requested.is_set() or not self.is_running:
+            raise OperationCancelled("Treatment cancelled")
 
-            current_command = starting_pressure
-            # Backstop above the firmware's advisory move timeout; firmware
-            # ERRORs flip is_running and exit early -- see set_to_pressure
-            max_wait_time = PRESSURE_BUILD_TIMEOUT_S
-            max_retries = 5    # Increased max retries
-            check_interval = 0.5  # Time between pressure checks in seconds
-            last_check_time = 0  # Track when we last printed a status update
-            
-            # Initial pressure command — hold before issuing it if paused.
-            self._wait_while_paused()
-            if not self.is_running:
-                return False
-            print(f"Increasing pressure to: {current_command} lbs")
-            if not self._send_pressure_command(current_command):
-                print(f"Failed to send pressure command P{current_command}")
-                return False
+    def _send_tracked(self, command: str) -> object:
+        with self._command_lock:
+            self._check_cancelled()
+            return self.arduino.send_tracked(command)
 
-            # Wait for initial pressure to build with less frequent status checks
-            wait_start = time.time()
-            while time.time() - wait_start < max_wait_time:
-                if not self.is_running:
-                    print("Emergency stop during initial pressure build")
-                    return False
-                if self.is_paused:
-                    self._wait_while_paused()
-                    wait_start = time.time()  # restart the window after a pause
-                    continue
-                if self._pressure_within_target(current_command):
-                    break
-                # Avoid excessive status printing
-                current_time = time.time()
-                if current_time - last_check_time >= check_interval:
-                    last_check_time = current_time
-                    print(f"Initial pressure build - Target: {current_command}, Current: {self.current_pressure}")
-                time.sleep(1)  # Longer sleep to reduce polling
-            else:
-                if not self.is_running or not self._pressure_within_target(
-                    current_command, allow_overshoot=True
-                ):
-                    print(
-                        "Initial pressure did not reach target within timeout: "
-                        f"target={current_command}, current={self.current_pressure}"
-                    )
-                    return False
-            if not self._wait_pressure_move_done():
-                return False
-
-            # Step through pressure increments with reduced monitoring.
-            # The target re-reads self.max_pressure each step so an
-            # operator's mid-protocol setpoint change takes effect during
-            # the ramp instead of being silently ignored.
-            while True:
-                if not self.is_running:
-                    print("Emergency stop during pressure ramp")
-                    return False
-                # Pause must HOLD: never escalate pressure while paused.
-                self._wait_while_paused()
-                if not self.is_running:
-                    return False
-                target_pressure = min(float(self.max_pressure), float(MAX_SAFE_PRESSURE))
-                if current_command >= (target_pressure - PRESSURE_INCREMENT / 2):
-                    break
-                current_command += PRESSURE_INCREMENT
-                # Clamp to target to prevent floating-point overshoot
-                current_command = min(current_command, target_pressure)
-                print(f"Increasing pressure to: {current_command} lbs")
-                if not self._send_pressure_command(current_command):
-                    print(f"Failed to send pressure command P{current_command}")
-                    return False
-
-                # Wait for current increment to stabilize before next increment
-                increment_start = time.time()
-                increment_stable = False
-
-                while time.time() - increment_start < max_wait_time:
-                    if not self.is_running:
-                        print("Emergency stop during pressure stabilization")
-                        return False
-                    if self.is_paused:
-                        self._wait_while_paused()
-                        increment_start = time.time()  # restart the window after a pause
-                        continue
-                    # Check if this increment is stable before moving to next
-                    if self._pressure_within_target(current_command):
-                        print(f"Pressure increment stabilized at {self.current_pressure} lbs")
-                        increment_stable = True
-                        break
-                    time.sleep(0.2)
-
-                if not increment_stable:
-                    if not self.is_running or not self._pressure_within_target(
-                        current_command, allow_overshoot=True
-                    ):
-                        print(f"Pressure increment {current_command} not stabilized")
-                        return False
-                if not self._wait_pressure_move_done():
-                    return False
-
-                # Small delay between increments
-                time.sleep(2.0)
-
-            # Send final pressure command (re-read the live setpoint) — hold
-            # before issuing it if paused.
-            self._wait_while_paused()
-            if not self.is_running:
-                return False
-            target_pressure = min(float(self.max_pressure), float(MAX_SAFE_PRESSURE))
-            print(f"Setting final pressure: {target_pressure} lbs")
-            if not self._send_pressure_command(target_pressure):
-                print(f"Failed to send final pressure command P{target_pressure}")
-                return False
-            
-            # Wait and verify with extended monitoring for final pressure
-            retry_count = 0
-            final_stabilized = False
-            
-            while retry_count < max_retries and not final_stabilized:
-                if not self.is_running:
-                    print("Emergency stop during final pressure verification")
-                    return False
-                wait_start = time.time()
-                last_check_time = 0
-
-                # Give pressure time to stabilize
-                while time.time() - wait_start < max_wait_time:
-                    if not self.is_running:
-                        print("Emergency stop during final pressure wait")
-                        return False
-                    if self.is_paused:
-                        self._wait_while_paused()
-                        wait_start = time.time()  # restart the window after a pause
-                        continue
-                    final_diff = abs(target_pressure - self.current_pressure)
-                    
-                    # Only print status updates periodically
-                    current_time = time.time()
-                    if current_time - last_check_time >= check_interval:
-                        last_check_time = current_time
-                        print(f"Pressure check - Target: {target_pressure}, Current: {self.current_pressure}, Difference: {final_diff} lbs")
-                    
-                    if self._pressure_within_target(target_pressure):
-                        print(f"Pressure within tolerance! Achieved {self.current_pressure} lbs")
-                        final_stabilized = True
-                        break
-                    
-                    time.sleep(0.2)  # Longer sleep to reduce polling
-                
-                if not self.is_running:
-                    return False
-                if final_stabilized or self._pressure_within_target(
-                    target_pressure, allow_overshoot=True
-                ):
-                    break
-                else:
-                    retry_count += 1
-                    if retry_count < max_retries:
-                        print(f"Retrying final pressure command (attempt {retry_count + 1}/{max_retries})")
-                        if not self._send_pressure_command(target_pressure):
-                            print(f"Failed retrying final pressure command P{target_pressure}")
-                            return False
-                    else:
-                        print(f"Final pressure of {self.current_pressure} lbs not reaching target {target_pressure} lbs")
-                        return False
-            
-            if not self._wait_pressure_move_done():
-                return False
-            # Give one final moment to stabilize before continuing
-            time.sleep(3)
-            
-            # Leave high-frequency updates on for next command
-            # We'll turn them off after the lateral position is set
-            print(f"Pressure sequence complete. Final pressure: {self.current_pressure} lbs")
+    def _perform(self, command: str, expected: tuple, timeout: float) -> bool:
+        operations = self._operations
+        temporary = operations is None
+        if temporary:
+            operations = ControllerOperations(self.arduino, self._send_tracked, self._check_cancelled)
+        try:
+            operations.perform(command, expected, timeout)
             return True
+        except OperationCancelled:
+            return False
+        except Exception as exc:
+            self._failure_reason = str(exc)
+            self.logger.error("Controller operation failed: %s", exc)
+            return False
+        finally:
+            if temporary:
+                operations.close()
+
+    def run_pressure_sequence(self, starting_pressure: float, target_pressure: float) -> bool:
+        """Send each new waypoint once and require proof that its motor stopped."""
+        if not (0 <= starting_pressure <= MAX_SAFE_PRESSURE
+                and 0 <= target_pressure <= MAX_SAFE_PRESSURE):
+            return False
+        command = float(starting_pressure)  # _preamble already completed this waypoint.
+        while self.is_running:
+            self._wait_while_paused()
+            target_pressure = min(float(self.max_pressure), float(MAX_SAFE_PRESSURE))
+            if command == target_pressure:
+                return True
+            command = min(target_pressure, command + PRESSURE_INCREMENT)
+            if not self.set_to_pressure(command):
+                return False
+        return False
 
     def set_to_pressure(self, target_pressure: float) -> bool:
-        """Set axial pressure directly."""
-        # Backstop only: the firmware owns pressure-move failure detection
-        # (advisory PRESSURE_MOVE_TIMEOUT warning) and its ERROR flips
-        # is_running, exiting the wait loop early with the specific fault
-        # reason. This window must sit ABOVE the firmware bound -- at the
-        # old 5s it raced the firmware's stall check and won, aborting with
-        # a generic timeout before the diagnosis arrived.
-        max_wait_time = PRESSURE_BUILD_TIMEOUT_S
-        
-        try:
-            if not self.is_running:
-                print("Cannot set pressure - protocol not running")
-                return False
-            if target_pressure < 0 or target_pressure > MAX_SAFE_PRESSURE:
-                print(f"Error: Pressure {target_pressure} outside safe range (0-{MAX_SAFE_PRESSURE})")
-                return False
-
-            # Hold before issuing the pressure command if paused.
-            self._wait_while_paused()
-            if not self.is_running:
-                return False
-            print(f"Setting pressure to: {target_pressure} lbs")
-            if not self._send_pressure_command(target_pressure):
-                print(f"Failed to send pressure command P{target_pressure}")
-                return False
-
-            # Wait for pressure to reach target with live monitoring
-            if target_pressure > 0:  # Only wait if we're increasing pressure
-                wait_start = time.time()
-                while time.time() - wait_start < max_wait_time:
-                    if not self.is_running:
-                        print("Emergency stop during pressure stabilization")
-                        return False
-                    if self.is_paused:
-                        self._wait_while_paused()
-                        wait_start = time.time()  # restart the window after a pause
-                        continue
-                    if self._pressure_within_target(target_pressure):
-                        print(f"Pressure stabilized at {self.current_pressure} lbs")
-                        break
-                    time.sleep(0.1)  # Small sleep to prevent CPU hogging
-                else:
-                    if not self.is_running or not self._pressure_within_target(
-                        target_pressure, allow_overshoot=True
-                    ):
-                        print(
-                            "Pressure did not stabilize within timeout: "
-                            f"target={target_pressure}, current={self.current_pressure}"
-                        )
-                        return False
-                if not self._wait_pressure_move_done():
-                    return False
-
-            return True
-        except Exception as e:
-            print(f"Error setting pressure: {e}")
+        """Wait for a typed P completion and its ack, never just nearby telemetry."""
+        self._wait_while_paused()
+        if not self.is_running or not 0 <= target_pressure <= MAX_SAFE_PRESSURE:
             return False
+        selected = max(float(target_pressure), float(self.max_pressure)) if target_pressure else 0
+        low = (float(target_pressure) if target_pressure > self.current_pressure
+               else max(0, float(target_pressure) - PRESSURE_TARGET_TOLERANCE))
+        high = min(100, selected + PRESSURE_OVERSHOOT_ALLOWANCE) if target_pressure else 2
+        return self._perform(
+            f"P{target_pressure:g}|{selected:g}",
+            ("motion", "P", float(target_pressure), low, high), PRESSURE_BUILD_TIMEOUT_S,
+        )
 
     def set_to_c_distance(self, degrees: float) -> bool:
-        """Set the C actuator position based on degrees.
-
-        Position telemetry within tolerance proves arrival in both protocols.
-        Protocol v2 also accepts DONE on this K command's own handle, allowing
-        completion when telemetry is stale. Legacy v1 DONE has no command
-        identity and may belong to an earlier pressure move, so it cannot prove
-        lateral arrival. Both paths retain the full lateral-move timeout.
-        """
-        position_tolerance = 25  # Acceptable position difference
-        max_wait_time = LATERAL_MOVE_TIMEOUT_S
-
+        """Serialize lateral arrival before any subsequent pressure/pulse command."""
+        self._wait_while_paused()
+        if not self.is_running:
+            return False
         try:
-            print(f"Setting C actuator to {degrees} degrees")
-            position, degrees = lateral_degrees_to_position(
-                self.config.CMarks, degrees
-            )
-
-            # Send command and ensure high-frequency status updates for position monitoring
-            self.angle_set = False
+            position, degrees = lateral_degrees_to_position(self.config.CMarks, degrees)
             self.target_pos_c = position
-            # Hold before issuing the lateral move if paused.
-            self._wait_while_paused()
-            if not self.is_running:
-                return False
-            move_handle = None
-            with self._command_lock:
-                if self._stop_requested.is_set():
-                    return False
-                if getattr(self.arduino, "protocol_v2", False) is True:
-                    move_handle = self.arduino.send_tracked(f"K{position}")
-                    accepted = move_handle is not None
-                else:
-                    accepted = self._send_command(f"K{position}")
-            if not accepted:
-                print(f"Failed to send C actuator command K{position}")
-                return False
-
-            # Wait for position to be reached with live monitoring
-            wait_start = time.time()
-            last_reported = None
-            while time.time() - wait_start < max_wait_time:
-                if not self.is_running:
-                    return False
-                if self.is_paused:
-                    self._wait_while_paused()
-                    wait_start = time.time()  # restart the window after a pause
-                    continue
-                if move_handle is not None and move_handle.completed.is_set():
-                    if move_handle.result != "DONE":
-                        self.logger.error(
-                            "Lateral command K%s failed: %s (%s)",
-                            position, move_handle.result, move_handle.reason,
-                        )
-                        return False
-                    print("Firmware reported this lateral command DONE")
-                    self.angle_set = True
-                    break
-                current = self.current_pos_c
-                current_diff = abs(current - position)
-                if current != last_reported:
-                    last_reported = current
-                    print(
-                        f"Position check - Target: {position}, "
-                        f"Current: {current}, Difference: {current_diff}"
-                    )
-
-                if current_diff <= position_tolerance:
-                    print("Position reached within tolerance")
-                    self.angle_set = True
-                    break
-                time.sleep(0.1)  # Small sleep to prevent CPU hogging
-
-            if not self.angle_set:
-                print(
-                    "Warning: Angle position not verified within "
-                    f"{max_wait_time}s (target {position}, "
-                    f"last status {self.current_pos_c})"
-                )
-                return False
-
-            return True
-
-        except Exception as e:
-            print(f"Error in set_to_c_distance: {e}")
+            self.angle_set = self._perform(
+                f"K{position}", ("motion", "K", position, max(0, position - 100),
+                                min(4095, position + 100)), LATERAL_MOVE_TIMEOUT_S,
+            )
+            return self.angle_set
+        except (TypeError, ValueError) as exc:
+            self._failure_reason = str(exc)
             return False
 
     # ------------------------------------------------------------------
@@ -906,13 +621,12 @@ class Protocols(QtCore.QRunnable):
     # leaving the UI stuck on "Stop").
     # ------------------------------------------------------------------
 
-    def _fail(self, reason: str, reset_needed: bool = False):
-        """Common failure exit: log, optionally request recovery, emit."""
-        print(f"Protocol {self.protocol} failed: {reason}")
+    def _fail(self, reason: str, reset_needed: bool = False) -> bool:
+        """Defer the terminal signal until all worker cleanup has finished."""
+        self._failure_reason = self._failure_reason or reason
+        self.logger.error("Protocol %s failed: %s", self.protocol, self._failure_reason)
         self.is_running = False
-        self.signals.finished.emit(False)
-        if reset_needed and not self._stop_requested.is_set():
-            self.signals.reset_needed.emit()
+        self._run_success = False
         return False
 
     def _initial_pressure(self) -> float:
@@ -979,7 +693,6 @@ class Protocols(QtCore.QRunnable):
             self._live_phase = False
             if pulse_active and self.arduino and not self._send_pulse_stop():
                 self.logger.error("Could not stop pulse while leaving hold phase")
-                self.signals.reset_needed.emit()
                 pulse_stop_failed = True
         if pulse_stop_failed:
             return self._fail("could not send final JS")
@@ -994,8 +707,20 @@ class Protocols(QtCore.QRunnable):
         if not self.set_to_pressure(0):
             return self._fail("could not release pressure")
         print(f"Protocol {self.protocol} complete")
+        self.signals.progress.emit("Retracting and zeroing resting pressure")
+        self.signals.baseline_changed.emit(False)
+        try:
+            self._operations.baseline(self.config, retract=True)
+            with self._command_lock:
+                self._check_cancelled()
+                self.arduino.baseline_valid = True
+                self._run_success = True
+                self.signals.baseline_changed.emit(True)
+        except OperationCancelled:
+            return False
+        except Exception as exc:
+            return self._fail(str(exc))
         self.signals.progress.emit("Protocol complete")
-        self.signals.finished.emit(True)
         return True
 
     def _run_standard_protocol(
@@ -1135,7 +860,6 @@ class Protocols(QtCore.QRunnable):
             self._active_lateral_side = None
             if pulse_active and self.arduino and not self._send_pulse_stop():
                 self.logger.error("Could not stop pulse while leaving protocol 4")
-                self.signals.reset_needed.emit()
                 pulse_stop_failed = True
         if pulse_stop_failed:
             self._fail("could not stop final pulsing")
@@ -1160,60 +884,55 @@ class Protocols(QtCore.QRunnable):
             handle.completed.wait(0.05)
         return handle.result == "OK"
 
-    def run(self):
-        """Execute the selected protocol."""
+    def run(self) -> None:
+        """Prepare, run, retract/zero on success, then publish one terminal result."""
         try:
-            print("Starting protocol execution...")
             with self._command_lock:
-                cancelled = self._stop_requested.is_set()
-                self.is_running = not cancelled
-            if cancelled:
-                self.signals.finished.emit(False)
-                return
+                self.is_running = not self._stop_requested.is_set()
+            self._check_cancelled()
+            self._operations = ControllerOperations(
+                self.arduino, self._send_tracked, self._check_cancelled,
+            )
+            self._operations.require_firmware()
+            # X discards queued commands: enable telemetry AFTER stopping old work.
+            if not self._send_command("X") or not self._send_command("HF1"):
+                raise OperationRejected("Cannot prepare controller")
+            self.signals.progress.emit("Preparing: centering and zeroing resting pressure")
+            self.signals.baseline_changed.emit(False)
+            if not self.set_to_c_distance(0):
+                raise OperationRejected(self._failure_reason or "Lateral centering failed")
+            self._operations.baseline(self.config)
             if not self._configure_motor_speeds():
-                if not self._stop_requested.is_set():
-                    self.logger.error("Treatment blocked: firmware did not accept motor speeds")
-                    self.signals.motor_speed_failed.emit(
-                        "Motor speed setup failed. Check the connection and update motor firmware."
-                    )
-                self.is_running = False
-                self.signals.finished.emit(False)
-                return
-            self.start_time = time.time()
-            if not self._send_command("HF1"):
-                print("Failed to enable high-frequency status updates")
-                self.is_running = False
-                self.signals.finished.emit(False)
-                return
-            time.sleep(0.1)
-
-            if self.protocol == "1":
-                self.protocol_1()
-            elif self.protocol == "2":
-                self.protocol_2()
-            elif self.protocol == "3":
-                self.protocol_3()
-            elif self.protocol == "4":
-                self.protocol_4()
-            else:
-                print(f"Unknown protocol: {self.protocol}")
-                self.signals.finished.emit(False)
-            
-            if not self._send_command("HF0"):
-                print("Warning: Failed to disable high-frequency status updates")
-            time.sleep(0.1)
-            self.is_running = False
-            
-        except Exception as e:
-            print(f"Critical error executing protocol: {e}")
-            if self.arduino:
-                self._send_command("HF0")
-            time.sleep(0.1)
-            self.is_running = False
-            self.signals.finished.emit(False)
+                raise OperationRejected("Controller did not accept treatment motor speeds")
+            with self._command_lock:
+                self._check_cancelled()
+                self.arduino.baseline_valid = True
+                self.signals.baseline_changed.emit(True)
+                self.start_time = time.time()
+                self.signals.prepared.emit(self.start_time, time.monotonic())
+            handler = getattr(self, "protocol_" + self.protocol, None)
+            if handler is None:
+                raise OperationRejected("Unknown protocol " + self.protocol)
+            handler()
+        except OperationCancelled:
+            pass
+        except Exception as exc:
+            self._fail(str(exc))
         finally:
-            # This run is over: stop being invoked on every status frame
+            if not self._stop_requested.is_set() and not self._run_success:
+                self._send_command("X")
+                self.arduino.baseline_valid = False
+                self.signals.baseline_changed.emit(False)
+            if self._operations is not None:
+                self._operations.close()
+                self._operations = None
             self._disconnect_status()
+            self.is_running = False
+            self.completed.set()
+            if self._failure_reason and (self._terminal_failure.is_set()
+                                         or not self._stop_requested.is_set()):
+                self.signals.operation_failed.emit(self._failure_reason)
+            self.signals.finished.emit(self._run_success and not self._stop_requested.is_set())
 
     def stop(self):
         """Safely stop a running protocol and release applied traction.

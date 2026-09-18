@@ -11,6 +11,7 @@ from controllers.connection_manager import ConnectionManager
 from controllers.protocol_controller import ProtocolController
 from controllers.safety_monitor import SafetyMonitor
 from helpers.arduino import Arduino
+from helpers.treatment_session import TreatmentSession
 from kneespa import KneeSpa, _CloudBridge
 from fixtures.actuators import ControlsHarness
 from fixtures.controllers import make_stub
@@ -121,28 +122,24 @@ def test_pressure_release_remains_available_without_calibration() -> None:
     window.arduino.send.assert_called_once_with("P0")
 
 
-def test_lateral_wait_exits_after_stop_during_pause(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_manual_axial_home_does_not_fabricate_zero_pressure() -> None:
+    window = make_stub()
+
+    KneeSpa.reset_flexion_button_clicked(window, window.actuator_a)
+
+    window.arduino.send.assert_called_once_with("I120")
+    assert all(call.args[0] != "pressure" for call in window._reflect_setup.call_args_list)
+
+
+def test_lateral_wait_exits_after_stop_during_pause(protocol_clock):
     worker = make_protocol()
     worker.is_running = True
-    worker.current_pos_c = -1000
-    waits = []
-
-    def pause_on_send(command: str) -> bool:
+    def pause_and_cancel():
         worker.is_paused = True
-        return True
-
-    def wait_then_stop() -> None:
-        waits.append(1)
-        # Bound the old infinite loop without leaking a busy background thread.
-        assert len(waits) <= 3
-        if worker.is_paused:
-            worker.is_running = False
-
-    worker.arduino.send.side_effect = pause_on_send
-    monkeypatch.setattr(worker, "_wait_while_paused", wait_then_stop)
-
-    assert worker.set_to_c_distance(0) is False
-    assert len(waits) == 2
+        worker.cancel()
+    protocol_clock.on_sleep = pause_and_cancel
+    assert not worker.set_to_c_distance(0)
+    assert protocol_clock.elapsed < 1
 
 
 def test_reset_done_does_not_unlock_setup_controls(qtbot: QtBot) -> None:
@@ -201,8 +198,13 @@ def test_older_patient_response_cannot_replace_newer_selection(
         lambda *, target, daemon: SimpleNamespace(start=lambda: tasks.append(target)),
     )
     patients = {
-        "A": {"patient_id": "A", "settings": {"max_pressure_lb": 30}},
-        "B": {"patient_id": "B", "settings": {"max_pressure_lb": 50}},
+        name: {"patient_id": identity, "settings": {
+            "protocol_number": 1, "duration_min": 12, "max_pressure_lb": pressure,
+            "max_left_deg": 10, "max_right_deg": 10, "pulse_rate_hz": "2.4",
+        }} for name, identity, pressure in (
+            ("A", "11111111-1111-4111-8111-111111111111", 30),
+            ("B", "22222222-2222-4222-8222-222222222222", 50),
+        )
     }
     window.cloud_client.lookup_pin.side_effect = patients.get
     KneeSpa._on_patient_pin(window, "A")
@@ -211,8 +213,9 @@ def test_older_patient_response_cannot_replace_newer_selection(
     tasks[1]()
     tasks[0]()
 
-    assert window.cloud_patient["patient_id"] == "B"
-    window.shell.treatment.set_settings.assert_called_once_with({"max_pressure": 50.0})
+    assert window.cloud_patient["patient_id"] == patients["B"]["patient_id"]
+    assert window.shell.treatment.set_settings.call_count == 1
+    assert window.shell.treatment.set_settings.call_args.args[0]["max_pressure"] == 50
 
 
 @pytest.mark.parametrize("result", [None, {"error": "unknown_pin"}])
@@ -225,7 +228,9 @@ def test_late_lookup_failure_preserves_active_treatment_patient(
     window.protocol_running = True
 
     KneeSpa._on_cloud_lookup_done(window, 0, result)
-    ProtocolController(window)._upload_treatment(True, False, False)
+    controller = ProtocolController(window)
+    controller._session = TreatmentSession("B", 2, 720)
+    controller._upload_treatment(True, False, False)
 
     assert window.cloud_patient == {"patient_id": "B"}
     record = window.cloud_client.post_treatment_async.call_args.args[0]
@@ -237,7 +242,9 @@ def test_upload_uses_patient_captured_at_start(qtbot: QtBot) -> None:
     window.cloud_patient = {"patient_id": "A"}
     window._treatment_patient = {"patient_id": "B"}
 
-    ProtocolController(window)._upload_treatment(True, False, False)
+    controller = ProtocolController(window)
+    controller._session = TreatmentSession("B", 2, 720)
+    controller._upload_treatment(True, False, False)
 
     record = window.cloud_client.post_treatment_async.call_args.args[0]
     assert record["patient_id"] == "B"
@@ -337,20 +344,13 @@ def test_physical_stop_latches_fault_even_if_gpio_release_raises(qtbot: QtBot) -
     window.disable_actuator_controls.assert_called_once()
 
 
-def test_physical_stop_prevents_reset_retry(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_physical_stop_prevents_reset_retry(protocol_clock):
     from fixtures.reset import make_worker
-
     worker = make_worker()
     worker.main_window._physical_stop_active = False
-
-    def interrupted_wait(**kwargs: object) -> bool:
-        worker.main_window._physical_stop_active = True
-        return False
-
-    monkeypatch.setattr(worker, "_wait_for_done", interrupted_wait)
-
-    assert worker._try_command_with_retry("I131140") is False
-    worker.arduino.send.assert_called_once_with("I131140")
+    protocol_clock.on_sleep = lambda: setattr(worker.main_window, "_physical_stop_active", True)
+    worker.run()
+    worker.arduino.send.assert_called_once_with("Y")
 
 
 def test_physical_stop_prevents_queued_reset_from_starting() -> None:
@@ -428,6 +428,9 @@ def test_lateral_wait_accepts_correlated_v2_done_when_status_is_stale() -> None:
         assert command.startswith("K")
         handle = CommandHandle(command=command, sequence=1, result="DONE")
         handle.completed.set()
+        target = float(command[1:])
+        worker.arduino.motion_done.emit("K", target, target)
+        worker.arduino.done_emit.emit()
         return handle
 
     worker.arduino.send_tracked.side_effect = ack_done

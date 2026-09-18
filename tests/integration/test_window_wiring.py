@@ -5,10 +5,13 @@ window, configuration, CSV/auth, shell, controllers, wiring and timers are real.
 Queued single shots are delivered explicitly to simulate nested/late events.
 """
 
+import threading
+import time
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable, Iterator
 from unittest.mock import MagicMock
+from uuid import uuid4
 
 import pytest
 from PyQt5.QtCore import QEvent, QEventLoop, QTimer
@@ -26,6 +29,63 @@ from ui.screens.content import PHASES
 
 pytestmark = pytest.mark.integration
 _QT_SINGLE_SHOT = QTimer.singleShot
+
+
+def test_operator_login_opens_distinct_patient_modal(window_run: SimpleNamespace) -> None:
+    run = window_run
+    run.window.cloud_patient = {"patient_id": str(uuid4())}
+    run.window.update_ui_after_login()
+    assert run.window.shell.login_modal.isHidden()
+    assert run.window.shell.patient_modal.isVisible()
+    assert run.window.cloud_patient is None
+    assert run.window.current_user["username"] == "Test operator"
+    run.window.shell.patient_modal.close_overlay()
+    assert run.window.cloud_patient is None
+    assert not run.window._patient_lookup_pending
+    assert "No patient linked" in run.view._patient_label.text()
+
+
+def test_modal_patient_pin_and_cancel_invalidate_late_result(
+    window_run: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = window_run
+    run.cloud.enabled = True
+    jobs = []
+    monkeypatch.setattr(kneespa.threading, "Thread", lambda **kw: SimpleNamespace(
+        start=lambda: jobs.append(kw["target"])
+    ))
+    response = {"patient_id": str(uuid4()), "display_name": "Test Patient", "settings": {
+        "protocol_number": 4, "duration_min": 12, "max_pressure_lb": "50.0",
+        "max_left_deg": "0.0", "max_right_deg": "20.0", "pulse_rate_hz": "2.4",
+    }}
+    run.cloud.lookup_pin.return_value = response
+    run.window._show_patient_modal()
+    modal = run.window.shell.patient_modal
+    for digit in "0123":
+        modal._keypad._press(digit)
+    assert run.window._patient_lookup_pending
+    assert not run.view._start_btn.isEnabled()
+    modal.close_overlay()
+    jobs.pop()()
+    run.cloud.lookup_pin.assert_called_once_with("0123")
+    assert run.window.cloud_patient is None
+    assert run.view._start_btn.isEnabled()
+
+
+def test_modal_patient_success_applies_whole_plan(window_run: SimpleNamespace) -> None:
+    run = window_run
+    run.window._show_patient_modal()
+    response = {"patient_id": str(uuid4()), "display_name": None, "external_ref": "TEST-001",
+                "settings": {"protocol_number": 3, "duration_min": 15, "max_pressure_lb": "60",
+                             "max_left_deg": "0", "max_right_deg": "20", "pulse_rate_hz": "0"}}
+    run.window._on_cloud_lookup_done(run.window._patient_lookup_id, response)
+    assert run.window.shell.patient_modal.isHidden()
+    assert run.view._patient_label.text() == "TEST-001"
+    assert run.view.selected_protocol() == 3
+    assert run.window.protocol_value == "3"
+    assert run.view.settings_values()["pulse_rate"] == 0
+    start(run)
+    assert run.workers[-1][1][6] is False  # Zero pulses/sec disables pulsing.
 
 
 def test_motor_speed_settings_reach_worker(window_run: SimpleNamespace) -> None:
@@ -74,10 +134,13 @@ def window_run(themed_app: QApplication, tmp_path: Path,
         monkeypatch.delenv(key, raising=False)
 
     cloud = MagicMock(enabled=False)
-    monkeypatch.setattr(kneespa, "CloudClient", lambda: cloud)
+    monkeypatch.setattr(kneespa, "CloudClient", lambda **kwargs: cloud)
     smtp = MagicMock(side_effect=AssertionError("Unexpected SMTP connection"))
     monkeypatch.setattr(kneespa.smtplib, "SMTP_SSL", smtp)
     arduino = MagicMock(spec=Arduino)
+    arduino._connect_cancel = threading.Event()
+    arduino._io_thread = None
+    arduino.wait_for_drain.return_value = True
     arduino.connected = True
     arduino.send.return_value = True
     arduino.verify_connection.return_value = True
@@ -134,23 +197,31 @@ def window_run(themed_app: QApplication, tmp_path: Path,
 
     monkeypatch.setattr(protocol_controller.protocols, "Protocols", construct)
     pool = MagicMock()
+    pool.activeThreadCount.return_value = 0
     window.threadpool = pool
 
     def dispatch(worker: object) -> None:
         events.append("dispatch")
-        assert window.protocol_timer.isActive()
+        assert not window.protocol_timer.isActive()
         assert worker.signals.receivers(worker.signals.finished) == 1
         assert worker.signals.receivers(worker.signals.progress) == 1
-        assert worker.signals.receivers(worker.signals.reset_needed) == 1
+        assert worker.signals.receivers(worker.signals.reset_needed) == 0
+        worker.signals.prepared.emit(time.time(), time.monotonic())
 
     pool.start.side_effect = dispatch
     run = SimpleNamespace(window=window, view=window.shell.treatment, arduino=arduino,
                           cloud=cloud, events=events, pending=pending, timers=timers,
                           workers=workers, pool=pool, notices=notices, dispatch=dispatch)
+    events.clear()
+    real_thread = threading.Thread
     yield run
+    monkeypatch.setattr(threading, "Thread", real_thread)
     for timer in window.findChildren(QTimer):
         timer.stop()
     window.close()
+    window._cloud_close_thread.join(timeout=1)
+    window.close()
+    assert window._cleanup_complete
     assert not window.protocol_timer.isActive()
     window.deleteLater()
     QApplication.sendPostedEvents(None, QEvent.DeferredDelete)
@@ -224,15 +295,17 @@ def test_constructor_timer_wiring_and_cleanup(window_run: SimpleNamespace,
                                             monkeypatch: pytest.MonkeyPatch) -> None:
     run = window_run
     w = run.window
-    assert len(run.timers) == 1
-    assert w.protocol_timer is run.timers[-1]
+    assert len(run.timers) == 3
+    assert w._cloud_retry_timer in run.timers
+    assert not w._cloud_retry_timer.isActive()  # Cloud disabled in this offline fixture.
+    assert w.protocol_timer in run.timers
     assert w.protocol_timer.parent() is w
     assert w.protocol_timer.interval() == 1000
     assert w.protocol_timer.receivers(w.protocol_timer.timeout) == 1
     assert not w.protocol_timer.isActive()
     run.view.set_settings({"duration": 12})
     start(run)
-    assert run.events[:3] == ["worker", "timer", "dispatch"]
+    assert run.events[:3] == ["worker", "dispatch", "timer"]
     assert w.protocol_state == "running"
     assert run.view._start_btn.isVisible() and not run.view._start_btn.isEnabled()
     assert run.view._pause_btn.isEnabled()
@@ -320,9 +393,10 @@ def test_immediate_completion_cannot_be_promoted_to_running(window_run: SimpleNa
 
     run.pool.start.side_effect = finish
     start(run)
-    assert run.window.protocol_state == "idle"
+    assert run.window.protocol_state == ("idle" if success else "fault")
     assert not run.window.protocol_timer.isActive()
-    assert run.view._start_btn.isEnabled() and not run.view._pause_btn.isEnabled()
+    assert run.view._start_btn.isEnabled() == success
+    assert not run.view._pause_btn.isEnabled()
     assert phase(run) == PHASES["complete" if success else "stopped"][0]
 
 
@@ -388,6 +462,8 @@ def test_reset_signals_drive_real_controls(window_run: SimpleNamespace,
     assert run.window.reset_in_progress and not run.view._start_btn.isEnabled()
     if result == "error":
         reset.signals.error.emit("reset test failure")
+        assert run.window.reset_in_progress
+        reset.signals.finished.emit(False)
     else:
         reset.signals.finished.emit(result == "success")
     assert not run.window.reset_in_progress
@@ -460,3 +536,42 @@ def test_progress_view_error_still_updates_banner(window_run: SimpleNamespace,
     monkeypatch.setattr(run.view, "set_phase", MagicMock(side_effect=RuntimeError("view")))
     run.window.protocol.update_status_label(">>Pressure ramp")
     assert run.window.treatment_panel.phase_label.text() == "PRESSURE RAMP"
+
+
+@pytest.mark.parametrize("action", ["Dismiss", "Stop"])
+def test_pressure_notice_actions_keep_recovery_explicit(window_run, action, qtbot):
+    run = window_run
+    worker = start(run)
+    run.arduino.send.reset_mock()
+    run.window.on_pressure_progress_notice({"travel_counts": 2150, "rise_lb": 1.5})
+    notice = run.window._pressure_notice
+    assert notice.isVisible()
+    (notice.dismiss_button if action == "Dismiss" else notice.stop_button).click()
+    if action == "Dismiss":
+        run.arduino.send.assert_not_called()
+        worker.cancel.assert_not_called()
+    else:
+        assert [c.args[0] for c in run.arduino.send.call_args_list] == ["X", "X", "HF1"]
+        worker.cancel.assert_called_once_with(firmware_stopped=True)
+        assert run.window._no_automatic_recovery
+        run.window.protocol._stop_phase2()
+        run.window.connection._automatic_reset()
+        assert [c.args[0] for c in run.arduino.send.call_args_list] == ["X", "X", "HF1"]
+
+
+def test_restart_button_requests_cleanup_once(window_run):
+    run = window_run
+    run.window.shell.navigate("profile")
+    run.window.shell.profile._restart.click()
+    assert run.window.restart_requested and run.window._closing
+    run.window._on_restart_app()
+    assert [c.args[0] for c in run.arduino.send.call_args_list] == ["X", "P0", "HF0"]
+
+
+def test_pressure_caption_and_decimal_render_in_existing_panel(window_run, tmp_path):
+    run = window_run
+    run.window.on_sensor_diagnostics({"valid": True, "age_ms": 0})
+    run.window.on_baseline_changed(True)
+    run.view.set_pressure(40.25)
+    assert run.view._pressure_stat._value == "40.2"
+    assert run.view._pressure_stat.grab().save(str(tmp_path / "pressure-panel.png"))

@@ -38,6 +38,14 @@ void setUp(void) {
     hostV2 = false;
     currentCmdSeq = -1;
     activeCmdSeq = -1;
+    pressureCalibrated = true; pressureFault = false;
+    pressureGuardActive = false; pressureSampleValid = true;
+    pressureDonePending = false; pressurePollStarted = false;
+    tareActive = false; lastPressureSample = lastPressurePoll = 0;
+    pulseMotorSpeed = 0;
+    axialSpeed = PRESSURE_SPEED; lateralSpeed = C_SPEED; pulseSpeed = TREATMENT_SPEED_MAX;
+    scale._ready = true; scale._scale = 1; scale._offset = 0; scale._raw = 0;
+    STOP = true; _pin_levels[STOP_PIN] = HIGH;
     _millis_value = 0;
     jerkInterval = 200;  // mutable since Phase 3.5 (J<ms>); reset between tests
 }
@@ -72,7 +80,7 @@ void test_P_busy_reply_when_running(void) {
 
 void test_P_garbage_rejected(void) {
     processCommand("Pabc");
-    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Invalid P value"));
+    TEST_ASSERT_TRUE(Serial1.outputContains("FAULT|PRESSURE_TARGET_INVALID"));
     TEST_ASSERT_FALSE(measurePressure);
 }
 
@@ -102,18 +110,24 @@ void test_K_sets_c_position(void) {
 
 // --- Jerk commands ---
 void test_J_starts_jerking(void) {
+    pressureGuardActive = true; desiredPressure = 40; pressureCeiling = 50;
+    scale._raw = 40;
     processCommand("J");
     TEST_ASSERT_TRUE(jerking);
 }
 
 void test_JS_stops_jerking(void) {
     jerking = true;
+    pressureGuardActive = true; desiredPressure = 40; pressureCeiling = 50;
+    scale._raw = 40;
     processCommand("JS");
     TEST_ASSERT_FALSE(jerking);
 }
 
 // J<ms> sets the pulse cadence and starts jerking (Phase 3.5 §15.2).
 void test_J_with_interval_sets_interval(void) {
+    pressureGuardActive = true; desiredPressure = 40; pressureCeiling = 50;
+    scale._raw = 40;
     processCommand("J500");
     TEST_ASSERT_TRUE(jerking);
     TEST_ASSERT_EQUAL_UINT32(500, jerkInterval);
@@ -121,18 +135,24 @@ void test_J_with_interval_sets_interval(void) {
 
 void test_J_bare_keeps_interval(void) {
     jerkInterval = 350;
+    pressureGuardActive = true; desiredPressure = 40; pressureCeiling = 50;
+    scale._raw = 40;
     processCommand("J");
     TEST_ASSERT_TRUE(jerking);
     TEST_ASSERT_EQUAL_UINT32(350, jerkInterval);
 }
 
 void test_J_interval_below_min_ignored(void) {
+    pressureGuardActive = true; desiredPressure = 40; pressureCeiling = 50;
+    scale._raw = 40;
     processCommand("J50");
     TEST_ASSERT_TRUE(jerking);
     TEST_ASSERT_EQUAL_UINT32(200, jerkInterval);
 }
 
 void test_J_interval_above_max_ignored(void) {
+    pressureGuardActive = true; desiredPressure = 40; pressureCeiling = 50;
+    scale._raw = 40;
     processCommand("J99999");
     TEST_ASSERT_TRUE(jerking);
     TEST_ASSERT_EQUAL_UINT32(200, jerkInterval);
@@ -233,11 +253,15 @@ void test_I_busy_replies_busy(void) {
 
 // --- Symmetric deadband ---
 
-void test_I_within_deadband_completes_immediately(void) {
+void test_raw_I_requires_exact_crossing(void) {
     Wire.position_12 = 1500;
-    processCommand("I121510");  // 10 counts away: inside the band
+    processCommand("I121510");
+    TEST_ASSERT_TRUE(bRunning);
+    TEST_ASSERT_FALSE(Serial1.outputContains("MOTION_DONE"));
+    Wire.position_12 = 1510;
+    loop();
     TEST_ASSERT_FALSE(bRunning);
-    TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
+    TEST_ASSERT_TRUE(Serial1.outputContains("MOTION_DONE|I|1510|1510"));
 }
 
 void test_K_within_deadband_completes_immediately(void) {
@@ -337,7 +361,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_I_invalid_device_rejected);
     RUN_TEST(test_K_garbage_rejected);
     RUN_TEST(test_I_busy_replies_busy);
-    RUN_TEST(test_I_within_deadband_completes_immediately);
+    RUN_TEST(test_raw_I_requires_exact_crossing);
     RUN_TEST(test_K_within_deadband_completes_immediately);
     RUN_TEST(test_v2_parse_valid_frame);
     RUN_TEST(test_v2_rejects_corrupt_checksum);

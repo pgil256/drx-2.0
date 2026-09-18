@@ -1,5 +1,12 @@
 # Handoff: Connect drx-2.0 to kneespa-cloud
 
+> **September 15, 2026 update:** Cloud integration is now implemented in this
+> checkout, including strict patient-plan validation, a separate patient PIN
+> modal, session capture and a durable upload queue. See
+> [Cloud integration](docs/cloud-integration.md) for the current contract,
+> provisioning and verification. The original implementation proposal below
+> describes an older baseline and is retained as historical context.
+
 This document tells you how to add cloud connectivity to the KneeSpa DRx 2.0 app so it can look up patients by PIN from the cloud dashboard and upload treatment records after each session.
 
 ## What exists today

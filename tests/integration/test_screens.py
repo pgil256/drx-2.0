@@ -211,7 +211,7 @@ def test_treatment_run_state_button_gating(shell):
     t.set_run_state(running=True, paused=False)
     assert not t._start_btn.isEnabled() and t._pause_btn.isEnabled()
     assert all(not tile.isEnabled() for tile in t._proto_buttons.values())
-    assert not t._keypad.isEnabled()                # patient PIN is a pre-run input
+    assert not t._patient_button.isEnabled()        # patient PIN is a pre-run input
     assert t._settings["max_pressure"].isEnabled()  # live settings stay reachable
 
     t.set_run_state(running=True, paused=True)
@@ -279,7 +279,7 @@ def test_treatment_telemetry_setters(shell):
     assert abs(t._progress_fraction - 0.5) < 1e-6
     assert t._time_stat._value == "0:15"
     t.set_pressure(72)
-    assert t._pressure_stat._value == "72"
+    assert t._pressure_stat._value == "72.0"
     t.set_angle(-12)
     assert t._angle_stat._value == "-12°"
 
@@ -287,16 +287,18 @@ def test_treatment_telemetry_setters(shell):
 def test_treatment_patient_keypad_round_trip(shell):
     t = shell.treatment
     pins = []
-    t.patient_pin_submitted.connect(pins.append)
+    modal = shell.patient_modal
+    modal.submitted.connect(pins.append)
+    modal.open_over(shell)
 
     for d in "4321":
-        t._keypad._press(d)                       # auto-submits at 4 digits
+        modal._keypad._press(d)                   # auto-submits at 4 digits
     assert pins == ["4321"]
-    assert t._patient_label.text() == "Looking up…"
 
     t.set_patient_error("Unknown PIN")
+    modal.show_error("Unknown PIN")
     assert t._patient_label.text() == "Unknown PIN"
-    assert t._keypad.value() == ""                # cleared for a retry
+    assert modal._keypad.value() == ""            # cleared for a retry
 
     t.set_patient("Jane D.")
     assert t._patient_label.text() == "Jane D."

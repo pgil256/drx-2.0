@@ -7,6 +7,8 @@ from unittest.mock import MagicMock
 from PyQt5.QtCore import QThreadPool, QTimer
 
 from controllers.protocol_controller import ProtocolController
+from helpers.treatment_session import TreatmentSession
+from ui.modals import PatientModal
 from fixtures.protocols import make_arduino
 from ui.screens.setup import SetupScreen
 from ui.screens.treatment import TreatmentScreen
@@ -18,15 +20,16 @@ def make_shell() -> SimpleNamespace:
     treatment = MagicMock(spec_set=TreatmentScreen)
     treatment.settings_values.return_value = {
         "max_pressure": 50, "max_left": 10, "max_right": 10,
-        "duration": 12, "pulse_rate": 2.5,
+        "duration": 12, "pulse_rate": 2.4,
     }
     treatment.selected_protocol.return_value = 2
     setup = MagicMock(spec_set=SetupScreen)
     setup.row_value.return_value = 0.0
     return SimpleNamespace(
         treatment=treatment, setup=setup,
+        patient_modal=MagicMock(spec_set=PatientModal),
         video_modal=SimpleNamespace(cleanup=MagicMock()),
-        login_succeeded=MagicMock(), login_failed=MagicMock(), logout=MagicMock(),
+        setEnabled=MagicMock(), login_succeeded=MagicMock(), login_failed=MagicMock(), logout=MagicMock(),
         add_pin_succeeded=MagicMock(), add_pin_failed=MagicMock(),
     )
 
@@ -42,7 +45,8 @@ def make_worker_double() -> MagicMock:
     worker.is_paused = False
     worker.signals = SimpleNamespace(**{
         name: MagicMock(spec_set=["connect", "disconnect", "emit"])
-        for name in ("finished", "progress", "reset_needed", "motor_speed_failed")
+        for name in ("finished", "progress", "reset_needed", "motor_speed_failed",
+                     "prepared", "baseline_changed", "operation_failed")
     })
     return worker
 
@@ -67,11 +71,13 @@ def make_window(state: str = "idle") -> SimpleNamespace:
         protocol_start_time=None, mid_protocol_warning_shown=False,
         reset_in_progress=False, initial_setup_complete=True,
         _closing=False, _physical_stop_active=False, _calibration_active=False,
+        _no_automatic_recovery=False, on_baseline_changed=MagicMock(),
+        connection=SimpleNamespace(cancel_reset=MagicMock()),
         _patient_lookup_id=0, _paused_at=None, _prev_settings={},
         cloud_patient={"patient_id": "test-patient"},
         _treatment_patient={"patient_id": "test-patient"},
         current_user={"username": "Dr", "status": "user"},
-        current_use_pulse_setting=True, current_pulse_rate=2.5,
+        current_use_pulse_setting=True, current_pulse_rate=2.4,
         last_measured_pressure=None, worker=worker, config=config,
         shell=make_shell(), arduino=make_arduino(), arduino_thread=None,
         protocol_timer=MagicMock(spec_set=QTimer), threadpool=MagicMock(spec_set=QThreadPool),
@@ -80,6 +86,7 @@ def make_window(state: str = "idle") -> SimpleNamespace:
         logger=MagicMock(spec_set=logging.Logger),
         cloud_client=SimpleNamespace(
             enabled=True, lookup_pin=MagicMock(), post_treatment_async=MagicMock(),
+            close=MagicMock(),
         ),
         _duration_minutes=MagicMock(return_value=12),
         ensure_arduino_connection=MagicMock(return_value=True),
@@ -91,7 +98,10 @@ def make_window(state: str = "idle") -> SimpleNamespace:
         _finish_leg_reset=MagicMock(), disable_actuator_controls=MagicMock(),
         enable_actuator_controls=MagicMock(), reset_setup_readings=MagicMock(),
     )
+    window.threadpool.activeThreadCount.return_value = 0
     window.protocol = ProtocolController(window)
+    if state in ("running", "stopping"):
+        window.protocol._session = TreatmentSession("test-patient", 2, 720)
     window.set_protocol_state = window.protocol.set_state
     return window
 
@@ -115,6 +125,7 @@ def make_stub() -> SimpleNamespace:
         "move_actuator", "_apply_setup_pressure", "reset_flexion_button_clicked",
         "stop_leg_movement", "stop_position_flexion_button", "emergency_stop_clicked",
         "email_admin",
+        "_show_patient_modal", "_on_patient_edit",
     ):
         setattr(window, name, MagicMock())
     return window
@@ -141,6 +152,7 @@ class ConnectionWindow:
         self.set_protocol_state = self.protocol.set_state
         self.threadpool = MagicMock(spec_set=QThreadPool)
         self.logger = MagicMock(spec_set=logging.Logger)
+        self.on_baseline_changed = MagicMock()
         self.errors = []
         self.reset_readings = 0
         self.leg_resets = 0

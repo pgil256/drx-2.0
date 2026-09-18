@@ -32,6 +32,11 @@ void setUp(void) {
     jerking = false;
     hostV2 = false;
     currentCmdSeq = -1;
+    pressureFault = false; pressureCalibrated = false;
+    pressureGuardActive = false; pressureSampleValid = false;
+    pressurePollStarted = false; lastPressureSample = lastPressurePoll = 0;
+    tareActive = false; bRunning = measurePressure = releasingPressure = false;
+    scale._ready = true; scale._scale = 1; scale._offset = 0; scale._raw = 0;
     _millis_value = 0;
 }
 
@@ -133,7 +138,10 @@ void test_calibration_l0_sends_done(void) {
 }
 
 void test_calibration_l1_tare(void) {
-    processCommand("L1");
+    processCommand("L1|BASELINE");
+    TEST_ASSERT_FALSE(Serial1.outputContains("DONE"));
+    for (int i=0; i<10; ++i) { _millis_value += 100; servicePressure(); }
+    TEST_ASSERT_TRUE(Serial1.outputContains("CALIBRATION|TARE|OK"));
     TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
 }
 
@@ -165,7 +173,7 @@ void test_l5_delimited_zero_marks(void) {
     TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
 }
 
-void test_update_pressure_median_filters_spike(void) {
+void test_update_pressure_reports_first_valid_sample(void) {
     scale._ready = true;
     scale._scale = 1.0;
     scale._offset = 0.0;
@@ -175,10 +183,10 @@ void test_update_pressure_median_filters_spike(void) {
     updatePressure();
     TEST_ASSERT_FLOAT_WITHIN(0.01, 20.0, pressure);
 
-    // One spike sample cannot move the median
+    // The control loop must see the first fresh sample, without median lag.
     scale._raw = 5000;
     updatePressure();
-    TEST_ASSERT_FLOAT_WITHIN(0.01, 20.0, pressure);
+    TEST_ASSERT_FLOAT_WITHIN(0.01, 5000.0, pressure);
 }
 
 void test_update_pressure_rejects_saturated_sample(void) {
@@ -230,7 +238,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_calibration_l5_zero_marks);
     RUN_TEST(test_l5_legacy_four_digit_corruption_documented);
     RUN_TEST(test_l5_delimited_zero_marks);
-    RUN_TEST(test_update_pressure_median_filters_spike);
+    RUN_TEST(test_update_pressure_reports_first_valid_sample);
     RUN_TEST(test_update_pressure_rejects_saturated_sample);
     RUN_TEST(test_update_pressure_skips_when_not_ready);
 

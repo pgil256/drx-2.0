@@ -22,7 +22,7 @@ import smtplib
 import threading
 import shutil
 from email.mime.text import MIMEText
-from datetime import datetime, timezone
+from datetime import datetime
 from PyQt5 import QtWidgets, QtCore
 from PyQt5.QtCore import (
     Qt,
@@ -69,18 +69,22 @@ from config.constants import (
     DATA_PATHS,
 )
 
+from ui.modals.pressure_notice import PressureNotice
 from config.config import Configuration
 from helpers.arduino import Arduino
 from helpers.csv import CSVHelper
 from helpers.secure_auth import SecureAuthHelper
 from helpers import protocols
 from helpers.reset_worker import ResetWorker, ResetWorkerSignals
+from helpers.measurement_state import MeasurementState
+from helpers.app_restart import restart_app
 from helpers.conversions import (
     lateral_degrees_to_position,
     horizontal_degrees_to_position,
 )
 from helpers.angles import pos_c_to_angle
 from helpers.cloud_client import CloudClient
+from helpers.cloud_contract import cloud_error_message, validate_patient
 from controllers.calibration_controller import CalibrationController
 
 try:
@@ -110,15 +114,6 @@ from controllers.connection_manager import ConnectionManager
 os.environ["QT_X11_NO_MITSHM"] = "1"
 os.environ["QT_LOGGING_RULES"] = "*.debug=false;qt.qpa.xcb.warning=false"
 
-# Cloud patient settings -> Treatment Settings keys (and the cast applied).
-_CLOUD_SETTING_MAP = (
-    ("max_pressure_lb", "max_pressure", float),
-    ("max_left_deg", "max_left", float),
-    ("max_right_deg", "max_right", float),
-    ("pulse_rate_hz", "pulse_rate", float),
-    ("duration_min", "duration", int),
-)
-
 # Map a Setup jog action to the legacy (speed_factor, direction) pair used by
 # move_actuator ("20" = fast, "04" = slow; +1 forward, -1 reverse).
 _JOG_SPEED = {
@@ -132,6 +127,7 @@ _JOG_SPEED = {
 class _CloudBridge(QObject):
     """Carries cloud API results from worker threads back to the UI."""
     lookup_done = pyqtSignal(int, object)
+    status_changed = pyqtSignal(str)
 
 
 # Main Python class
@@ -195,6 +191,10 @@ class KneeSpa(QMainWindow):
         self.protocol_value = "1"          # selected protocol (Treatment picker)
         self.protocol_running = False
         self._closing = False
+        self.restart_requested = False
+        self._no_automatic_recovery = False
+        self._measurement = MeasurementState()
+        self._measurement_fault = None
         self.protocol_start_time = None
         self.protocol_duration = 0
         self._paused_at = None             # wall-clock pause anchor for the UI timer
@@ -313,12 +313,16 @@ class KneeSpa(QMainWindow):
             self._show_timed_error(f"Failed to load CSV data: {str(e)}")
 
         self.current_user = None
-        self.cloud_client = CloudClient()
         self.cloud_patient = None
         self._treatment_patient = None
         self._patient_lookup_id = 0
+        self._patient_lookup_pending = False
         self._cloud_bridge = _CloudBridge()
         self._cloud_bridge.lookup_done.connect(self._on_cloud_lookup_done)
+        self._cloud_bridge.status_changed.connect(self.shell.treatment.set_cloud_status)
+        self.cloud_client = CloudClient(on_status=self._cloud_bridge.status_changed.emit)
+        self._cloud_retry_timer = QTimer(self)
+        self._cloud_retry_timer.timeout.connect(self._retry_pending_uploads)
 
         # Controls locked while the MCU is busy (jog/Go/Stop/Reset-Arduino) —
         # the same gating group the legacy `actuator_controls` list provided.
@@ -354,7 +358,9 @@ class KneeSpa(QMainWindow):
         # here allowed firmware notices to appear before the app itself.
         QTimer.singleShot(100, self.setup_arduino)
         if self.cloud_client.enabled:
-            QTimer.singleShot(5000, self._retry_pending_uploads)
+            self.shell.treatment.set_cloud_status("Connecting to cloud…")
+            self.cloud_client.ping_async()
+            self._cloud_retry_timer.start(5000)
 
     # ----- view ↔ backend wiring -----
     def _connect_shell(self):
@@ -365,6 +371,7 @@ class KneeSpa(QMainWindow):
         s.login_attempted.connect(self._on_login_attempt)
         s.logout_requested.connect(self._on_logout)
         s.exit_requested.connect(self._on_exit_app)
+        s.profile.restart_requested.connect(self._on_restart_app)
         s.add_pin_submitted.connect(self._on_add_pin)
         s.profile.calibration_requested.connect(self.calibration_controller.open)
 
@@ -378,13 +385,20 @@ class KneeSpa(QMainWindow):
         s.setup.emergency_stop_requested.connect(self._on_estop)
 
         # Treatment screen.
-        s.treatment.patient_pin_submitted.connect(self._on_patient_pin)
+        s.treatment.patient_change_requested.connect(self._show_patient_modal)
+        s.treatment.cloud_retry_requested.connect(self._retry_blocked_uploads)
+        s.patient_modal.submitted.connect(self._on_patient_pin)
+        s.patient_modal.closed.connect(self._on_patient_cancel)
         s.treatment.protocol_selected.connect(self._on_protocol_selected)
         s.treatment.start_requested.connect(self.start_or_stop_protocol)
         s.treatment.resume_requested.connect(self._on_treatment_resume)
         s.treatment.pause_requested.connect(self._on_treatment_pause)
         s.treatment.estop_requested.connect(self._on_estop)
         s.treatment.setting_changed.connect(self._on_setting_changed)
+        self._pressure_state_timer = QTimer(self)
+        self._pressure_state_timer.setInterval(250)
+        self._pressure_state_timer.timeout.connect(self._refresh_pressure_state)
+        self._pressure_state_timer.start()
 
         # Support screen.
         s.support.request_assistance.connect(self.handle_assistance_request)
@@ -411,6 +425,8 @@ class KneeSpa(QMainWindow):
 
     def _send_motion_command(self, command, context):
         """Queue a Setup motion without fabricating success in the UI."""
+        if getattr(self, "_closing", False) is True:
+            return False
         try:
             queued = bool(self.arduino and self.arduino.send(command))
         except Exception as exc:
@@ -511,13 +527,18 @@ class KneeSpa(QMainWindow):
         self.protocol_value = str(n)
 
     def _on_patient_pin(self, pin: str) -> None:
-        if self.protocol_running:
+        if self.protocol_running or not self.current_user:
             return
         self._patient_lookup_id += 1
         request_id = self._patient_lookup_id
+        self.cloud_patient = None
+        self.shell.treatment.clear_patient()
         if not self.cloud_client.enabled:
-            self.shell.treatment.set_patient_error("Cloud not configured")
+            self._on_cloud_lookup_done(request_id, {"error": "disabled"})
             return
+        self._patient_lookup_pending = True
+        self.shell.treatment.set_patient_pending(True)
+        self.shell.patient_modal.set_pending(True)
         bridge = self._cloud_bridge
 
         def _lookup() -> None:
@@ -527,56 +548,66 @@ class KneeSpa(QMainWindow):
         threading.Thread(target=_lookup, daemon=True).start()
 
     def _on_cloud_lookup_done(self, request_id: int, result: object) -> None:
-        if request_id != self._patient_lookup_id:
+        if getattr(self, "_closing", False) or request_id != self._patient_lookup_id:
             return
         if self.protocol_running:
             # This guard includes errors: a failed lookup must not detach the
             # patient from an active treatment or alter its displayed plan.
             self.logger.warning("Ignoring patient lookup that resolved during a treatment")
             return
-        # External data: a non-object body (captive portal, proxy page) or a
-        # null/garbage field must never raise out of this slot and leave the
-        # patient half-applied.
-        if not isinstance(result, dict):
-            self.cloud_patient = None
-            self.shell.treatment.set_patient_error("Cloud unavailable")
+        self._patient_lookup_pending = False
+        self.shell.treatment.set_patient_pending(False)
+        self.shell.patient_modal.set_pending(False)
+        self.cloud_patient = None
+        if not isinstance(result, dict) or "error" in result:
+            message = cloud_error_message(result)
+            self.shell.treatment.set_patient_error(message + " — no patient linked")
+            self.shell.patient_modal.show_error(message)
             return
-        if "error" in result:
-            self.cloud_patient = None
-            if result["error"] == "rate_limited":
-                self.shell.treatment.set_patient_error("Too many lookups")
-            else:
-                self.shell.treatment.set_patient_error("Unknown PIN")
-            return
-        self.cloud_patient = result
-        self.shell.treatment.set_patient(result.get("display_name", "Unknown"))
-        settings = result.get("settings")
-        if not isinstance(settings, dict):
-            return
-        mapped = {}
-        for src, dst, cast in _CLOUD_SETTING_MAP:
-            value = settings.get(src)
-            if value is None:
-                continue
-            try:
-                mapped[dst] = cast(value)
-            except (TypeError, ValueError):
-                self.logger.warning("Ignoring invalid cloud setting %s=%r", src, value)
-        if mapped:
-            self.shell.treatment.set_settings(mapped)
         try:
-            proto = int(settings.get("protocol_number"))
-        except (TypeError, ValueError):
-            proto = None
-        if proto in (1, 2, 3, 4):
-            self.shell.treatment.select_protocol(proto)
+            patient, values, protocol = validate_patient(result)
+        except ValueError:
+            message = "Patient settings or identity need correction in the cloud dashboard"
+            self.shell.treatment.set_patient_error(message + " — no patient linked")
+            self.shell.patient_modal.show_error(message)
+            return
+        # Validation is atomic: no values reach clamping/rounding widgets until
+        # the identity and the entire plan have passed the contract.
+        self.shell.treatment.set_settings(values)
+        self.shell.treatment.select_protocol(protocol)
+        self.cloud_patient = patient
+        self.shell.treatment.set_patient(
+            patient.get("display_name") or patient.get("external_ref") or patient["patient_id"]
+        )
+        self.shell.patient_modal.hide()  # Success must not emit the cancellation signal.
+
+    def _on_patient_edit(self) -> None:
+        """Detach the previous identity as soon as replacement entry starts."""
+        if self.protocol_running:
+            return
+        self._patient_lookup_id += 1
+        self.cloud_patient = None
+        self._patient_lookup_pending = False
+        self.shell.treatment.set_patient_pending(False)
+        self.shell.treatment.clear_patient()
+
+    def _show_patient_modal(self) -> None:
+        if self.protocol_running or not self.current_user:
+            return
+        self._on_patient_edit()
+        self.shell.patient_modal.open_over(self.shell)
+
+    def _on_patient_cancel(self) -> None:
+        if self.protocol_running:
+            return
+        self._on_patient_edit()
 
     def _retry_pending_uploads(self):
-        threading.Thread(
-            target=self.cloud_client.retry_pending,
-            args=(DATA_PATHS.get("PENDING_UPLOADS"),),
-            daemon=True,
-        ).start()
+        if not getattr(self, "_closing", False):
+            self.cloud_client.retry_pending_async(DATA_PATHS["PENDING_UPLOADS"])
+
+    def _retry_blocked_uploads(self) -> None:
+        self.cloud_client.retry_pending_async(DATA_PATHS["PENDING_UPLOADS"], retry_blocked=True)
 
     def _on_setting_changed(self, key, value):
         """A Treatment Settings slider moved. Mid-protocol changes are gated by a
@@ -585,6 +616,8 @@ class KneeSpa(QMainWindow):
             self.shell.treatment.set_settings({key: self._prev_settings.get(key, value)})
             return
         self._prev_settings[key] = value
+        if key == "duration" and not self.protocol_running:
+            self.shell.treatment.set_progress(0, float(value) * 60)
         if key == "pulse_rate":
             self.current_use_pulse_setting = value > 0
             self.current_pulse_rate = value if value > 0 else None
@@ -627,7 +660,6 @@ class KneeSpa(QMainWindow):
     def start_or_stop_protocol(self):
         """Start/Stop button (see controllers.protocol_controller)."""
         self._seed_modern_run_inputs()
-        self._cloud_treatment_start = datetime.now(timezone.utc).isoformat()
         self.protocol.start_or_stop()
 
     def _on_treatment_pause(self):
@@ -847,6 +879,7 @@ class KneeSpa(QMainWindow):
         self._patient_lookup_id += 1
         self.current_user = None
         self.cloud_patient = None
+        self._patient_lookup_pending = False
         try:
             self.shell.treatment.clear_patient()
         except Exception:
@@ -858,6 +891,13 @@ class KneeSpa(QMainWindow):
         if self._block_nav_during_treatment():
             return
         print("Handling app exit")
+        self.close()
+
+    def _on_restart_app(self) -> None:
+        if self._closing or self.restart_requested:
+            return
+        self.restart_requested = True
+        self.logger.info("Application restart requested")
         self.close()
 
     def _on_add_pin(self, username, pin):
@@ -890,6 +930,7 @@ class KneeSpa(QMainWindow):
             self.current_user["username"], goto="protocols", title=title,
             is_admin=is_admin,
         )
+        self._show_patient_modal()
 
     # ----- Support -----
     def _on_issue_activated(self, question):
@@ -1055,63 +1096,70 @@ class KneeSpa(QMainWindow):
         self._set_badge(False)
         self.connection.handle_connection_failed(message)
 
-    def cleanup(self):
-        """Clean up resources, including the video player and GPIO."""
-        print("Cleaning up resources.")
-
-        self._closing = True
-        if getattr(self, "_calibration_active", False) is True:
-            self.calibration_controller.shutdown()
-        self.protocol_timer.stop()
-        firmware_stopped = getattr(self, "_physical_stop_active", False) is True
-        if self.worker:
-            try:
-                self.worker.cancel(firmware_stopped=firmware_stopped)
-            except Exception:
-                self.logger.exception("Could not cancel treatment worker during shutdown")
-
-        # Manual Setup motion has no treatment worker. Always discard pending
-        # motion and stop/release on the current transport before draining it.
-        # A physical stop already owns an autonomous firmware release, which
-        # must not be interrupted by X.
-        arduino = getattr(self, "arduino", None)
-        if arduino is not None:
-            if firmware_stopped:
-                arduino.cancel_pending_commands()
-            else:
-                for command in ("X", "P0", "HF0"):
-                    try:
-                        if not arduino.send(command):
-                            self.logger.error("Shutdown command %s was not queued", command)
-                    except Exception:
-                        self.logger.exception("Shutdown command %s failed", command)
-        try:
+    def cleanup(self) -> bool:
+        """Begin shutdown once and poll resource completion without blocking Qt."""
+        if not getattr(self, "_cleanup_started", False):
+            self._cleanup_started = True
+            self._closing = True
+            self._no_automatic_recovery = True
+            self._shutdown_began = time.monotonic()
+            self.protocol.latch_session_outcome("fault")
+            self.connection.cancel_reset()
+            if self.worker:
+                self.worker.cancel(firmware_stopped=self._physical_stop_active)
+            if getattr(self, "_calibration_active", False) is True:
+                self.calibration_controller.shutdown()
+            for name in ("protocol_timer", "controls_enable_timer", "_cloud_retry_timer",
+                         "_pressure_state_timer"):
+                timer = getattr(self, name, None)
+                if timer is not None:
+                    timer.stop()
+            arduino = self.arduino
+            if arduino is not None:
+                arduino._connect_cancel.set()
+                if self._physical_stop_active:
+                    arduino.cancel_pending_commands()
+                else:
+                    for command in ("X", "P0", "HF0"):
+                        arduino.send(command)
             self._release_leg_gpio()
-        except Exception:
-            self.logger.exception("Could not release leg GPIO during shutdown")
+            self.protocol.finalize_session()
+            # Outbox flushing may wait on bounded network I/O; keep Qt responsive.
+            self._cloud_close_thread = threading.Thread(
+                target=lambda: self.cloud_client.close(wait=True), name="cloud-shutdown",
+            )
+            self._cloud_close_thread.start()
+            self.shell.setEnabled(False)
 
-        # Release the embedded VLC player, if any.
-        if hasattr(self, "shell"):
-            try:
-                self.shell.video_modal.cleanup()
-            except Exception:
-                self.logger.exception("Could not release video player during shutdown")
+        arduino = self.arduino
+        if arduino is not None:
+            drained = arduino.wait_for_drain(0)
+            if not drained and time.monotonic() - self._shutdown_began < 2.0:
+                return False
+            arduino._running = False
+            io_thread = arduino._io_thread
+            if io_thread is not None and io_thread.is_alive():
+                return False
+        if self.arduino_thread is not None:
+            self.arduino_thread.quit()
+            if self.arduino_thread.isRunning():
+                return False
+        if self.threadpool.activeThreadCount() or self._cloud_close_thread.is_alive():
+            return False
+        if arduino is not None:
+            self.connection.teardown_arduino()
+        if not getattr(self, "_cleanup_complete", False):
+            self.shell.video_modal.cleanup()
+            GPIO.cleanup()
+            self._cleanup_complete = True
+        return True
 
-        # Give queued X/P0/HF0 traffic a bounded opportunity to reach the
-        # serial driver before closing it. The old immediate disconnect
-        # cleared these safety commands from the queues during application
-        # shutdown.
-        if hasattr(self, "connection"):
-            drained = self.connection.teardown_arduino(drain_timeout=1.5)
-            if not drained:
-                self.logger.error("Serial safety queue did not drain before shutdown")
-
-        GPIO.cleanup()
-
-    def closeEvent(self, event):
-        """Handle the close event to ensure cleanup."""
-        self.cleanup()
-        event.accept()
+    def closeEvent(self, event) -> None:
+        if self.cleanup():
+            event.accept()
+        else:
+            event.ignore()
+            QTimer.singleShot(50, self.close)
 
     def move_actuator(self, actuator, step, speed_factor, direction):
         """
@@ -1297,12 +1345,7 @@ class KneeSpa(QMainWindow):
                 return False
             self.axial_flexion_position = 0
             self._reflect_setup("axial", 0)
-            self._reflect_setup("pressure", 0)
-            # Re-send the scale factor once the move has had time to
-            # finish, without freezing the UI thread for 5 seconds.
-            # NOTE: the firmware tares on L0, so this must only happen
-            # in a no-load state -- which a completed axial home is.
-            QTimer.singleShot(5000, self.send_calibration)
+            # Automatic reset/protocol workflows own pressure zeroing.
             self.loading_spinner.hide()
 
             return
@@ -1310,6 +1353,7 @@ class KneeSpa(QMainWindow):
     def stop_actuators(self):
         """Emergency stop for all actuators."""
         print("Emergency stop triggered")
+        self.connection.cancel_reset()
         try:
             if not self.arduino.send("X"):  # Stop all movement
                 # A stop that could not even be queued is an alarm, not a
@@ -1530,6 +1574,40 @@ class KneeSpa(QMainWindow):
         except Exception as e:
             print(f"Error updating live status: {e}")
         return self.safety.on_status(position_a, position_b, steps, pressure)
+
+    def on_sensor_diagnostics(self, diagnostics: dict) -> None:
+        self._measurement.receive(diagnostics)
+        self._refresh_pressure_state()
+
+    def on_calibration_result(self, result: dict) -> None:
+        if result.get("operation") == "tare":
+            self.on_baseline_changed(False)
+
+    def on_baseline_changed(self, valid: bool) -> None:
+        if valid and (self._closing or self._no_automatic_recovery or self._physical_stop_active):
+            return
+        self._measurement.baseline_valid = valid
+        self._refresh_pressure_state()
+
+    def _refresh_pressure_state(self) -> None:
+        self._measurement.fault = self._measurement_fault
+        connected = self.arduino is not None and self.arduino.connected
+        self.shell.treatment.set_pressure_state(self._measurement.caption(connected))
+
+    def on_pressure_progress_notice(self, notice: dict) -> None:
+        """Advisory only: dismissing has no effect; Stop cannot schedule homing."""
+        if self._closing:
+            return
+        existing = getattr(self, "_pressure_notice", None)
+        if existing is not None and existing.isVisible():
+            return
+        box = PressureNotice(notice, self)
+        box.stop_requested.connect(
+            lambda: self.protocol.stop_without_recovery("Pressure-progress Stop")
+        )
+        box.show()
+        self._pressure_notice = box
+        box.destroyed.connect(lambda: setattr(self, "_pressure_notice", None))
 
     def _trigger_safety_stop(self, reason):
         self.safety.trigger_safety_stop(reason)
@@ -1753,7 +1831,12 @@ def main():
         _sync_logs(args.sync_logs)
 
     logging.shutdown()
-    os._exit(0)
+    if window.restart_requested:
+        try:
+            restart_app(__file__)
+        except OSError as exc:
+            QMessageBox.critical(None, "Restart failed",
+                                 f"Could not restart the app. Please reopen it.\n{exc}")
 
 
 if __name__ == "__main__":

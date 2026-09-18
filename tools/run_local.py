@@ -117,6 +117,15 @@ def main():
     window.show()
     print("KneeSpa launched (debug/windowed, no hardware). Close the window to exit.")
     app.exec_()
+    import logging
+    logging.shutdown()
+    if window.restart_requested:
+        try:
+            kneespa.restart_app(__file__)
+        except OSError as exc:
+            from PyQt5.QtWidgets import QMessageBox
+            QMessageBox.critical(None, "Restart failed",
+                                 f"Could not restart the app. Please reopen it.\n{exc}")
 
 
 if __name__ == "__main__":

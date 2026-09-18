@@ -379,7 +379,7 @@ def test_record_requires_fresh_settled_feedback_and_never_moves(session):
     assert not d.jog_buttons[0].isEnabled()
 
 
-@pytest.mark.parametrize("axis,command", [(0, "I131950"), (1, "K1738")])
+@pytest.mark.parametrize("axis,command", [(0, "I131950"), (1, "I141738")])
 def test_jog_routes_correct_axis_and_waits_for_ack_and_settle(session, axis, command):
     controller, window, _, feed = session
     d = controller.dialog

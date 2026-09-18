@@ -31,7 +31,8 @@ def test_dev_arduino_reports_connected_without_serial_port():
 
 
 @pytest.mark.unit
-def test_main_patches_connection_manager_backend(monkeypatch):
+@pytest.mark.parametrize("restart", [False, True])
+def test_main_patches_connection_manager_backend(monkeypatch, restart):
     class FakeApplication:
         def __init__(self, _args):
             pass
@@ -46,6 +47,7 @@ def test_main_patches_connection_manager_backend(monkeypatch):
         def __init__(self, debug_mode):
             assert debug_mode is True
             self.loading_spinner = MagicMock()
+            self.restart_requested = restart
 
         def setFixedSize(self, _width, _height):
             pass
@@ -64,7 +66,13 @@ def test_main_patches_connection_manager_backend(monkeypatch):
         original_reset,
     )
 
+    relaunch = MagicMock()
+    monkeypatch.setattr(run_local.kneespa, "restart_app", relaunch)
     run_local.main()
+    if restart:
+        relaunch.assert_called_once_with(run_local.__file__)
+    else:
+        relaunch.assert_not_called()
 
     assert manager_module.Arduino is run_local._DevArduino
     assert manager_module.ConnectionManager.reset_arduino is not original_reset
