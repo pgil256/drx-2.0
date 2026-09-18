@@ -68,8 +68,11 @@ void test_position_axial_above_max_clamped(void) {
 }
 
 void test_position_horizontal_below_min_clamped(void) {
-    // Device 13 (horizontal) min is HORIZONTAL_MIN_POS (non-zero).
-    TEST_ASSERT_EQUAL(HORIZONTAL_MIN_POS, clampPositionTarget(13, 0));
+    // Device 13 (horizontal): the calibrated -25 deg mark sits at position 0
+    // (BMarks), so 0 must NOT be clamped (the old floor of 50 silently
+    // shortened every legal -25 deg move).
+    TEST_ASSERT_EQUAL(0, clampPositionTarget(13, 0));
+    TEST_ASSERT_EQUAL(HORIZONTAL_MAX_POS, clampPositionTarget(13, 60000));
 }
 
 void test_position_lateral_within_range_unchanged(void) {

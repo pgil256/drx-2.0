@@ -81,7 +81,7 @@ class TestResetWorkerSequence:
     """Tests for the reset sequence against the real DONE signal chain."""
 
     def test_full_reset_sequence(self, reset_env, qtbot):
-        """The complete 6-step sequence runs to success, each step gated by
+        """The complete 7-step sequence runs to success, each step gated by
         a genuine firmware DONE (no artificial acks)."""
         arduino, fake, config, main_window = reset_env
 
@@ -96,9 +96,9 @@ class TestResetWorkerSequence:
 
         # Command order (ignoring automatic 'Q' status acks): the reset
         # sequence is Y, zero marks, lateral home, horizontal home,
-        # axial home, calibration.
+        # axial home, calibration. The leg-length axis is not homed.
         cmds = [c for c in fake.commands_received if not c.startswith("Q")]
-        prefixes = ["Y", "L5", "I14", "A13", "I12", "L0"]
+        prefixes = ["Y", "L5", "K", "I13", "I12", "L0", "L1"]
         assert len(cmds) == len(prefixes), f"unexpected commands: {cmds}"
         for cmd, prefix in zip(cmds, prefixes):
             assert cmd.startswith(prefix), f"expected {prefix}, got {cmd} in {cmds}"

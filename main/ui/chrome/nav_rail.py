@@ -84,9 +84,18 @@ class NavRail(QFrame):
         return btn
 
     def set_active(self, key):
-        """Sync the checked nav item to the current page (no signal emitted)."""
+        """Sync the checked nav item to the current page (no signal emitted).
+
+        A key with no rail item (e.g. "profile") clears the highlight."""
         btn = self._buttons.get(key)
-        if btn is not None and not btn.isChecked():
+        if btn is None:
+            self._group.setExclusive(False)
+            for b in self._buttons.values():
+                b.blockSignals(True)
+                b.setChecked(False)
+                b.blockSignals(False)
+            self._group.setExclusive(True)
+        elif not btn.isChecked():
             btn.blockSignals(True)
             btn.setChecked(True)
             btn.blockSignals(False)

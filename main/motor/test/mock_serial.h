@@ -9,7 +9,7 @@
 #include <string>
 #include <queue>
 
-#define MAX_OUTPUT_SIZE 4096
+#define MAX_OUTPUT_SIZE 524288
 
 class MockSerial {
 public:
@@ -24,6 +24,7 @@ public:
 
     void begin(long baud) {}
     void setTimeout(long) {}
+    void flush() {}
 
     int available() {
         if (inputIndex < (int)currentInput.length()) return 1;
@@ -63,6 +64,15 @@ public:
         snprintf(buf, sizeof(buf), "%.1f", val);
         return print(buf);
     }
+    size_t print(float val, int precision) {
+        char buf[64];
+        snprintf(buf, sizeof(buf), "%.*f", precision, (double)val);
+        return print(buf);
+    }
+    size_t println(float val, int precision) {
+        size_t n = print(val, precision);
+        return n + print("\n");
+    }
 
     size_t println(const char* s) {
         size_t n = print(s);
@@ -86,6 +96,28 @@ public:
     size_t println(const String& s) { return println(s.c_str()); }
     size_t print(uint16_t val) { return print((int)val); }
     size_t println(uint16_t val) { return println((int)val); }
+    // Arduino Print has long overloads; v2 sequence numbers are printed as
+    // long so they survive AVR's 16-bit int
+    size_t print(long val) {
+        char buf[24];
+        snprintf(buf, sizeof(buf), "%ld", val);
+        return print(buf);
+    }
+    size_t println(long val) {
+        size_t n = print(val);
+        n += print("\n");
+        return n;
+    }
+    size_t print(unsigned long val) {
+        char buf[24];
+        snprintf(buf, sizeof(buf), "%lu", val);
+        return print(buf);
+    }
+    size_t println(unsigned long val) {
+        size_t n = print(val);
+        n += print("\n");
+        return n;
+    }
     size_t println() { return print("\n"); }
 
     // Test helpers

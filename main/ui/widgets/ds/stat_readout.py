@@ -77,3 +77,8 @@ class DSStatReadout(QWidget):
     def set_size(self, size):
         self._size = size if size in SIZES else "md"
         self._render()
+
+    def set_label(self, label: str) -> None:
+        if self._caption is not None:
+            self._caption.setText(label)
+            self._caption.setWordWrap(True)

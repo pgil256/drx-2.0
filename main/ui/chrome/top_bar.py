@@ -8,7 +8,7 @@ line underlines the bar (the DS `box-shadow: inset 0 -2px 0 var(--brand-cyan)`).
 Signals (wired to the controller in Phase 3):
     home_clicked      — logo / wordmark tapped
     login_requested   — avatar tapped while logged out
-    logout_requested  — avatar tapped while logged in
+    profile_requested — avatar tapped while logged in (opens the Profile screen)
 """
 
 from PyQt5.QtCore import Qt, QSize, pyqtSignal
@@ -31,7 +31,7 @@ BAR_HEIGHT = 96
 class TopBar(QFrame):
     home_clicked = pyqtSignal()
     login_requested = pyqtSignal()
-    logout_requested = pyqtSignal()
+    profile_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -85,7 +85,7 @@ class TopBar(QFrame):
         self._identity.setVisible(False)
         lay.addWidget(self._identity)
 
-        # Avatar — login launcher (logged out) / identity + logout (logged in).
+        # Avatar — login launcher (logged out) / profile launcher (logged in).
         self._avatar = QPushButton()
         self._avatar.setCursor(Qt.PointingHandCursor)
         self._avatar.setFixedSize(52, 52)
@@ -105,17 +105,18 @@ class TopBar(QFrame):
 
     def _on_avatar(self):
         if self._username:
-            self.logout_requested.emit()
+            self.profile_requested.emit()
         else:
             self.login_requested.emit()
 
-    def set_user(self, username):
+    def set_user(self, username, title="Clinician"):
         """Show the identity block + name when logged in, hide it when out."""
         self._username = username
         if username:
             self._name.setText(username)
+            self._role.setText(title)
             self._identity.setVisible(True)
-            self._avatar.setToolTip(f"{username} — tap to log out")
+            self._avatar.setToolTip(f"{username} — tap to view profile")
         else:
             self._identity.setVisible(False)
             self._avatar.setToolTip("Login")

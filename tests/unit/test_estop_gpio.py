@@ -41,6 +41,14 @@ def estop_env(monkeypatch):
 
 @pytest.mark.unit
 class TestEmergencyStopGpio:
+    def test_banner_stop_uses_hardware_estop_path(self, qtbot, estop_env):
+        events, gpio, controller, _ = estop_env
+
+        controller.panel_stop_requested()
+
+        assert events[0] == ("gpio", EMERGENCYSTOP, gpio.LOW)
+        assert events[1] == "stop_actuators"
+
     def test_asserts_gpio_low_before_serial_x(self, qtbot, estop_env):
         """The hardware line goes LOW first: it must not depend on the
         serial link that the 'X' command needs."""

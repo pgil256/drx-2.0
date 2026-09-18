@@ -1,7 +1,7 @@
 """HomeScreen — splash page (full logo + login).
 
 Mirrors `HomeScreen` in `bundle.jsx`: the full KneeSpa DRx logo centered on
-white, with a large primary Login button when logged out, or a quiet hint to
+white, with a primary Login button when logged out, or a quiet hint to
 pick a protocol when logged in.
 
 Signal:
@@ -46,7 +46,7 @@ class HomeScreen(QWidget):
         lay.addStretch(1)
 
         # Footer area: Login button (logged out) or hint text (logged in).
-        self._login_btn = DSButton("Login", variant="primary", size="lg")
+        self._login_btn = DSButton("Login", variant="primary", size="md")
         self._login_btn.clicked.connect(self.login_requested)
 
         self._hint = QLabel("Select Protocols to begin a treatment.")

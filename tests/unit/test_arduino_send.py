@@ -12,6 +12,7 @@ when the device was misbehaving). The old monitor_buffer()/reset_dtr() tests
 were retired with those methods.
 """
 import threading
+import time
 import pytest
 from unittest.mock import MagicMock, patch
 
@@ -36,16 +37,16 @@ class TestSendQueuesCommand:
 
     def test_send_returns_true_and_queues(self, arduino):
         assert arduino.send("Z") is True
-        assert list(arduino._tx_queue) == ["Z"]
+        assert [cmd for cmd, _ in arduino._tx_queue] == ["Z"]
 
     def test_send_strips_whitespace_before_queueing(self, arduino):
         assert arduino.send("  GO  ") is True
-        assert list(arduino._tx_queue) == ["GO"]
+        assert [cmd for cmd, _ in arduino._tx_queue] == ["GO"]
 
     def test_send_accepts_non_string_command(self, arduino):
         """send() coerces its argument via str() before queueing."""
         assert arduino.send(42) is True
-        assert list(arduino._tx_queue) == ["42"]
+        assert [cmd for cmd, _ in arduino._tx_queue] == ["42"]
 
     def test_send_never_writes_inline(self, arduino):
         """Writing belongs to the I/O thread; send() must not touch the port."""
@@ -61,8 +62,8 @@ class TestSendQueuesCommand:
         """'X' must jump ahead of queued commands, not wait in line."""
         arduino.send("P40")
         arduino.send("X")
-        assert list(arduino._priority_queue) == ["X"]
-        assert list(arduino._tx_queue) == ["P40"]
+        assert [cmd for cmd, _ in arduino._priority_queue] == ["X"]
+        assert not arduino._tx_queue
 
 
 @pytest.mark.unit
@@ -120,7 +121,7 @@ class TestVerifyConnection:
     def test_verify_queues_test_probe_with_priority(self, arduino):
         arduino.ok_event.set()
         arduino.verify_connection(tries=1, timeout_s=0.5)
-        assert "T" in arduino._priority_queue
+        assert "T" in [cmd for cmd, _ in arduino._priority_queue]
 
     def test_verify_returns_false_on_timeout(self, arduino):
         """No OK ever arrives -> all tries time out -> False."""
@@ -131,7 +132,7 @@ class TestVerifyConnection:
         """With no OK, one 'T' probe is queued per try."""
         arduino.ok_event.clear()
         arduino.verify_connection(tries=3, timeout_s=0.01)
-        assert list(arduino._priority_queue) == ["T", "T", "T"]
+        assert [cmd for cmd, _ in arduino._priority_queue] == ["T", "T", "T"]
 
     def test_verify_returns_false_when_serial_none(self, arduino):
         arduino.serial_com = None
@@ -146,3 +147,110 @@ class TestVerifyConnection:
         arduino.connection_ready_event.set()
         arduino.verify_connection(tries=1, timeout_s=0.01)
         assert not arduino.connection_ready_event.is_set()
+
+
+class TestDrainBeforeDisconnect:
+    def test_safety_queue_is_written_before_drain_completes(self, arduino):
+        arduino.send("P40")
+        arduino.send("X")
+
+        arduino._service_tx_queue()
+
+        assert arduino.wait_for_drain(0.1) is True
+        payloads = [call.args[0] for call in arduino.serial_com.write.call_args_list]
+        assert payloads == [b"X\n"]
+
+    def test_disconnect_reports_drain_timeout_then_clears_queue(self, arduino):
+        arduino.send("X")
+
+        assert arduino.disconnect(drain_timeout=0.01) is False
+        assert not arduino._priority_queue
+
+
+@pytest.mark.unit
+class TestTrackedQueueSafety:
+    @pytest.mark.parametrize("protocol_v2", [False, True])
+    def test_stop_discards_old_motion_but_allows_pressure_release(self, arduino, protocol_v2):
+        arduino.protocol_v2 = protocol_v2
+        old_move = arduino.send_tracked("P40")
+        old_priority = arduino.send_tracked("K1500", priority=True)
+        stop = arduino.send_tracked("X")
+        release = arduino.send_tracked("P0")
+
+        arduino._service_tx_queue()
+
+        payloads = [
+            call.args[0].decode().strip()
+            for call in arduino.serial_com.write.call_args_list
+        ]
+        if protocol_v2:
+            payloads = [payload.split(":", 1)[1].split("*")[0] for payload in payloads]
+        assert payloads == ["X", "P0"]
+        for handle in (old_move, old_priority):
+            assert handle.completed.is_set()
+            assert handle.result == "CANCELLED"
+            assert not handle.written.is_set()
+            assert handle.sequence not in arduino._pending_v2
+        assert stop.written.is_set()
+        assert release.written.is_set()
+
+    def test_identical_commands_track_their_own_writes(self, arduino):
+        first = arduino.send_tracked("P0")
+        second = arduino.send_tracked("P0")
+
+        arduino._service_tx_queue()
+        assert first.written.is_set()
+        assert not second.written.is_set()
+
+        arduino._last_tx = 0
+        arduino._service_tx_queue()
+        assert second.written.is_set()
+
+    def test_priority_duplicate_does_not_mark_normal_command_written(self, arduino):
+        normal = arduino.send_tracked("T")
+        priority = arduino.send_tracked("T", priority=True)
+        # Keep the normal queue paced while sending the priority probe.
+        arduino._last_tx = time.time()
+
+        arduino._service_tx_queue()
+
+        assert priority.written.is_set()
+        assert not normal.written.is_set()
+
+    @pytest.mark.parametrize("protocol_v2", [False, True])
+    def test_disconnect_does_not_claim_unsent_command_was_written(self, arduino, protocol_v2):
+        arduino.protocol_v2 = protocol_v2
+        handle = arduino.send_tracked("X")
+
+        arduino.disconnect()
+
+        assert not handle.written.is_set()
+        assert handle.completed.is_set()
+        assert handle.result == "DISCONNECTED"
+
+    @pytest.mark.parametrize("protocol_v2", [False, True])
+    def test_failed_write_resolves_handle_without_claiming_delivery(self, arduino, protocol_v2):
+        from serial import SerialException
+
+        arduino.protocol_v2 = protocol_v2
+        handle = arduino.send_tracked("X")
+        arduino.serial_com.write.side_effect = SerialException("link failed")
+
+        with pytest.raises(SerialException):
+            arduino._service_tx_queue()
+
+        assert not handle.written.is_set()
+        assert handle.completed.is_set()
+        assert handle.result == "DISCONNECTED"
+        assert handle.sequence not in arduino._pending_v2
+        assert arduino._write_in_progress == 0
+
+    def test_unsolicited_write_does_not_complete_queued_handle(self, arduino):
+        handle = arduino.send_tracked("T")
+
+        # The silence watchdog writes its own probe without using the queue.
+        arduino._write_now("T")
+
+        assert not handle.written.is_set()
+        arduino._service_tx_queue()
+        assert handle.written.is_set()

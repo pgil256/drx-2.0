@@ -1,14 +1,18 @@
 import configparser
+import copy
 import os
+import shutil
 import tempfile
 import uuid
-from typing import Optional
+from typing import Dict, Mapping, Optional
+
+from helpers.motor_speed import motor_speed_values
 
 from config.constants import (
     CONFIG_PATH,
+    DEFAULT_CONFIG_PATH,
     DEFAULT_PROTOCOL_MINUTES,
-    LATERAL_MIN,
-    LATERAL_MAX,
+    LEGACY_CONFIG_PATH,
 )
 
 # A real HX711 scale factor for this hardware is in the tens of
@@ -19,9 +23,6 @@ MIN_PLAUSIBLE_SCALE_FACTOR = 1000.0
 
 
 class Configuration:
-    def get_list(option, sep=",", chars=None):
-        return [chunk.strip(chars) for chunk in option.split(sep)]
-
     def __init__(self, config_path: Optional[str] = None):
         self.flexion_position = 0
         self.a_factor = 1900
@@ -46,15 +47,24 @@ class Configuration:
         self.calibration_warnings = []
 
         # Treatment Settings defaults persisted by Setup's "Mark As Default"
-        # (Phase 3.5 §15.4). Fallbacks match the legacy 50/10/10 + a 2/sec pulse.
-        self.default_max_pressure = 50.0
+        # (Phase 3.5 §15.4). Fallbacks: 40 lbs / 10° / 10° + a 2/sec pulse.
+        self.default_max_pressure = 40.0
         self.default_max_left = 10.0
         self.default_max_right = 10.0
         self.default_pulse_rate = 2.0
         self.default_duration = float(DEFAULT_PROTOCOL_MINUTES)
+        for key, value in motor_speed_values().items():
+            setattr(self, f"default_{key}", value)
+        # True only once an operator has pressed "Mark As Default" (or a
+        # file written by that action was loaded). Until then the code
+        # defaults above apply and are NOT persisted: update_config() used
+        # to write them on every save, so a default changed in code never
+        # reached a device whose kneespa.cfg already carried the old value.
+        self.protocol_defaults_marked = False
 
         # Per-device id for support tickets (Phase 3.5 §15.5); generated once.
         self.device_id = ""
+        self.device_number = 1
 
     @property
     def calibrated(self) -> bool:
@@ -78,6 +88,7 @@ class Configuration:
         self.marks_valid = False
         self.scale_calibrated = False
         # Load configuration
+        self._migrate_legacy_config()
 
         if not os.path.exists(self.configFile):
             self._set_default_c_marks()
@@ -91,7 +102,7 @@ class Configuration:
             return
 
         try:
-            self.config.read(self.configFile)
+            self.config.read(self.configFile, encoding="utf-8")
 
             allSections = {
                 s: dict(self.config.items(s)) for s in self.config.sections()
@@ -192,6 +203,13 @@ class Configuration:
         section = "ProtocolDefaults"
         if not self.config.has_section(section):
             return
+        if self.config.get(section, "marked", fallback="") != "1":
+            print(
+                "Ignoring [ProtocolDefaults] that was auto-written rather than "
+                "marked by an operator; using code defaults"
+            )
+            return
+        self.protocol_defaults_marked = True
         specs = {
             "max_pressure": "default_max_pressure",
             "max_left": "default_max_left",
@@ -205,18 +223,68 @@ class Configuration:
                     setattr(self, attr, float(self.config[section][key]))
                 except (ValueError, TypeError) as e:
                     print(f"Error parsing ProtocolDefaults.{key}: {e}, using default")
+        for key in motor_speed_values():
+            try:
+                values = motor_speed_values({key: self.config.getfloat(
+                    section, key, fallback=getattr(self, f"default_{key}")
+                )})
+                setattr(self, f"default_{key}", values[key])
+            except (ValueError, TypeError):
+                print(f"Invalid ProtocolDefaults.{key}; using default motor speed")
 
-    def _load_device(self):
-        """Load the persisted per-device id, if present."""
+    def _migrate_legacy_config(self) -> None:
+        """Copy legacy calibration once, without overwriting an existing config.
+
+        Custom config paths keep their existing behavior. Copy failures propagate
+        instead of silently replacing real calibration with generated defaults.
+        """
+        if (
+            os.path.abspath(self.configFile) != os.path.abspath(DEFAULT_CONFIG_PATH)
+            or os.path.exists(self.configFile)
+            or not os.path.isfile(LEGACY_CONFIG_PATH)
+        ):
+            return
+        os.makedirs(os.path.dirname(os.path.abspath(self.configFile)), exist_ok=True)
+        with open(LEGACY_CONFIG_PATH, "rb") as source:
+            try:
+                destination = open(self.configFile, "xb")
+            except FileExistsError:
+                return
+            try:
+                with destination:
+                    shutil.copyfileobj(source, destination)
+                    destination.flush()
+                    os.fsync(destination.fileno())
+            except Exception:
+                os.unlink(self.configFile)
+                raise
+        print(f"Copied legacy configuration from {LEGACY_CONFIG_PATH} to {self.configFile}")
+
+    def _load_device(self) -> None:
+        """Load the device identity and a device number from 1 through 3."""
         if self.config.has_section("Device") and self.config.has_option("Device", "id"):
             self.device_id = self.config["Device"]["id"]
+        raw_number = self.config.get("Device", "number", fallback="1")
+        try:
+            number = int(raw_number)
+            if number not in (1, 2, 3):
+                raise ValueError("must be 1, 2, or 3")
+        except (ValueError, TypeError):
+            print(f"Invalid Device.number {raw_number!r}; using default 1")
+            number = 1
+        self.device_number = number
+        self._set_section("Device", {"number": number})
 
-    def _set_section(self, section, mapping):
+    def _set_section(
+        self, section: str, mapping: Mapping[str, object],
+        parser: Optional[configparser.ConfigParser] = None,
+    ) -> None:
         """Write a flat string-valued section, creating it if missing."""
-        if not self.config.has_section(section):
-            self.config.add_section(section)
+        parser = self.config if parser is None else parser
+        if not parser.has_section(section):
+            parser.add_section(section)
         for key, value in mapping.items():
-            self.config.set(section, key, str(value))
+            parser.set(section, key, str(value))
 
     def protocol_defaults(self):
         """Return the persisted Treatment Settings defaults as a dict."""
@@ -226,22 +294,38 @@ class Configuration:
             "max_right": self.default_max_right,
             "pulse_rate": self.default_pulse_rate,
             "duration": self.default_duration,
+            **{key: getattr(self, f"default_{key}") for key in motor_speed_values()},
         }
 
-    def save_protocol_defaults(self, max_pressure, max_left, max_right, pulse_rate,
-                               duration=None):
+    def save_protocol_defaults(
+        self, max_pressure: float, max_left: float, max_right: float, pulse_rate: float,
+        duration: Optional[float] = None,
+        motor_speeds: Optional[Mapping[str, float]] = None,
+    ) -> None:
         """Persist new Treatment Settings defaults (values should be pre-clamped).
 
         ``duration`` is optional for backward compatibility; when omitted the
         existing persisted duration is kept.
+
+        Write errors propagate without publishing any candidate values, so the
+        caller can report failure and the previous defaults remain available.
         """
-        self.default_max_pressure = float(max_pressure)
-        self.default_max_left = float(max_left)
-        self.default_max_right = float(max_right)
-        self.default_pulse_rate = float(pulse_rate)
-        if duration is not None:
-            self.default_duration = float(duration)
-        self.update_config()
+        defaults = {
+            "max_pressure": float(max_pressure),
+            "max_left": float(max_left),
+            "max_right": float(max_right),
+            "pulse_rate": float(pulse_rate),
+            "duration": self.default_duration if duration is None else float(duration),
+            **motor_speed_values(self.protocol_defaults() if motor_speeds is None else motor_speeds),
+        }
+        candidate = copy.deepcopy(self.config)
+        self._populate_config(candidate, defaults)
+        self._ensure_config_sections(candidate)
+        self._atomic_write(candidate)
+        self.config = candidate
+        for key, value in defaults.items():
+            setattr(self, f"default_{key}", value)
+        self.protocol_defaults_marked = True
 
     def ensure_device_id(self):
         """Return the persisted per-device id, generating + saving one if absent."""
@@ -273,8 +357,10 @@ class Configuration:
     def _validate_calibration(self):
         """Decide marks_valid / scale_calibrated after a clean load."""
         marks_ok = True
-        for name, marks in (("CMarks", self.CMarks),
-                            ("AMarks", self.AMarks),
+        # CMarks is operator-calibrated device data. Once its keys and values
+        # have parsed as numbers in _load_marks(), preserve it exactly rather
+        # than imposing generated geometry, monotonicity, or range policy.
+        for name, marks in (("AMarks", self.AMarks),
                             ("BMarks", self.BMarks)):
             error = self.validate_marks(marks)
             if error:
@@ -286,22 +372,6 @@ class Configuration:
             for e in self.calibration_errors
         )
 
-        # Range-vs-firmware-clamp mismatches are recorded but do not
-        # block: some shipped tables exceed LATERAL_MIN/MAX and the
-        # authoritative range is a pending hardware measurement.
-        try:
-            c_positions = [int(v) for v in self.CMarks.values()]
-            if c_positions and (
-                min(c_positions) < LATERAL_MIN or max(c_positions) > LATERAL_MAX
-            ):
-                self._flag_warning(
-                    f"CMarks span {min(c_positions)}-{max(c_positions)}, outside "
-                    f"the firmware clamp {LATERAL_MIN}-{LATERAL_MAX}; targets "
-                    "will be clamped"
-                )
-        except (ValueError, TypeError):
-            pass
-
         if abs(float(self.calibration)) < MIN_PLAUSIBLE_SCALE_FACTOR:
             self.scale_calibrated = False
             self._flag_error(
@@ -311,28 +381,39 @@ class Configuration:
         else:
             self.scale_calibrated = True
 
-    def _ensure_config_sections(self):
+    def _ensure_config_sections(
+        self, parser: Optional[configparser.ConfigParser] = None,
+    ) -> None:
         """Ensure defaults are persisted for sections missing from the file."""
-        if not self.config.has_section("Options"):
-            self.config.add_section("Options")
+        parser = self.config if parser is None else parser
+        if not parser.has_section("Options"):
+            parser.add_section("Options")
         for section_name, marks in {
             "CMarks": self.CMarks,
             "AMarks": self.AMarks,
             "BMarks": self.BMarks,
         }.items():
-            if not self.config.has_section(section_name):
-                self.config.add_section(section_name)
+            if not parser.has_section(section_name):
+                parser.add_section(section_name)
             for key, value in marks.items():
-                if not self.config.has_option(section_name, key):
-                    self.config.set(section_name, key, str(value))
+                if not parser.has_option(section_name, key):
+                    parser.set(section_name, key, str(value))
 
-    def _atomic_write(self):
+    def _atomic_write(self, candidate: Optional[configparser.ConfigParser] = None) -> None:
         """Write the config file atomically (temp file + fsync + rename).
 
         The calibration file used to be rewritten in place; a power cut
         mid-write -- routine on a kiosk Pi -- corrupted it, and the next
         boot silently ran on generated default geometry.
+
+        Args:
+            candidate: Parser to persist, or the live parser when omitted.
+                This method does not publish the candidate to live state.
+
+        Raises:
+            Exception: Write errors propagate to the caller after temp-file cleanup.
         """
+        parser = self.config if candidate is None else candidate
         directory = os.path.dirname(os.path.abspath(self.configFile)) or "."
         os.makedirs(directory, exist_ok=True)
         fd, tmp_path = tempfile.mkstemp(
@@ -340,7 +421,7 @@ class Configuration:
         )
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as tmp_file:
-                self.config.write(tmp_file)
+                parser.write(tmp_file)
                 tmp_file.flush()
                 os.fsync(tmp_file.fileno())
             os.replace(tmp_path, self.configFile)
@@ -363,13 +444,16 @@ class Configuration:
         self.config["AMarks"] = {k: str(v) for k, v in self.AMarks.items()}
         self.config["BMarks"] = {k: str(v) for k, v in self.BMarks.items()}
         self.config["CMarks"] = {k: str(v) for k, v in self.CMarks.items()}
+        self._set_section("Device", {"id": self.device_id, "number": self.device_number})
         self._atomic_write()
 
-    def update_config(self):
-        """Update the configuration file with current values."""
+    def _populate_config(
+        self, parser: configparser.ConfigParser, defaults: Optional[Dict[str, float]] = None,
+    ) -> None:
+        """Copy current values and optional new defaults into the selected parser."""
         section = "Options"
-        if not self.config.has_section(section):
-            self.config.add_section(section)
+        if not parser.has_section(section):
+            parser.add_section(section)
 
         # List of configuration options to update
         config_options = [
@@ -380,18 +464,26 @@ class Configuration:
         # Set each option in the config
         for option in config_options:
             if hasattr(self, option):
-                self.config.set(section, option, str(getattr(self, option)))
+                parser.set(section, option, str(getattr(self, option)))
 
         # Persist the Phase-3.5 sections alongside the legacy Options.
-        self._set_section("ProtocolDefaults", {
-            "max_pressure": self.default_max_pressure,
-            "max_left": self.default_max_left,
-            "max_right": self.default_max_right,
-            "pulse_rate": self.default_pulse_rate,
-            "duration": self.default_duration,
-        })
-        self._set_section("Device", {"id": self.device_id})
+        # Protocol defaults are only written once an operator marked them;
+        # a stale auto-written section is dropped so the file cannot pin
+        # old code defaults.
+        if defaults is not None or self.protocol_defaults_marked:
+            self._set_section("ProtocolDefaults", {
+                "marked": 1,
+                **(self.protocol_defaults() if defaults is None else defaults),
+            }, parser)
+        elif parser.has_section("ProtocolDefaults"):
+            parser.remove_section("ProtocolDefaults")
+        self._set_section("Device", {
+            "id": self.device_id, "number": self.device_number,
+        }, parser)
 
+    def update_config(self):
+        """Update current values, retaining this caller's legacy error reporting."""
+        self._populate_config(self.config)
         print("Config updated")
         try:
             self._ensure_config_sections()
@@ -402,12 +494,25 @@ class Configuration:
 
     def _set_default_c_marks(self):
         """Set default CMarks values for lateral actuator."""
-        self.CMarks = {}
-        for i in range(17):
-            angle = (i * 2.5) - 20
-            ratio = i / 16
-            position = int(round(LATERAL_MIN + ((LATERAL_MAX - LATERAL_MIN) * ratio)))
-            self.CMarks[str(angle)] = position
+        self.CMarks = {
+            "-20.0": 500,
+            "-17.5": 635,
+            "-15.0": 770,
+            "-12.5": 905,
+            "-10.0": 1042,
+            "-7.5": 1203,
+            "-5.0": 1364,
+            "-2.5": 1526,
+            "0.0": 1688,
+            "2.5": 1806,
+            "5.0": 1925,
+            "7.5": 2044,
+            "10.0": 2162,
+            "12.5": 2223,
+            "15.0": 2282,
+            "17.5": 2341,
+            "20.0": 2400,
+        }
 
     def _set_default_a_marks(self):
         """Set default AMarks values for axial actuator."""

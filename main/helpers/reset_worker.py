@@ -1,231 +1,120 @@
-from PyQt5.QtCore import QRunnable, QObject, pyqtSignal, pyqtSlot
+"""Ordered reset with per-worker replies, cancellation, and resting baseline."""
+import threading
 import time
-from helpers.logging import (
-    debug, debug_timing, debug_error, debug_state_change
-)
+from typing import Optional
 
-# Define the signals this worker can emit
+from PyQt5.QtCore import QObject, QRunnable, pyqtSignal, pyqtSlot
+
+try:
+    from main.config.constants import DEFAULT_HORIZONTAL_POSITION
+except ModuleNotFoundError:
+    from config.constants import DEFAULT_HORIZONTAL_POSITION
+from helpers.controller_operations import (
+    ControllerOperations, OperationCancelled, OperationRejected,
+)
+from helpers.conversions import horizontal_degrees_to_position, lateral_degrees_to_position
+from helpers.logging import setup_logger
+
+
 class ResetWorkerSignals(QObject):
-    finished = pyqtSignal(bool) # True for success, False for failure
+    finished = pyqtSignal(bool)
     error = pyqtSignal(str)
 
+
 class ResetWorker(QRunnable):
-    """
-    Worker thread to handle the multi-step Arduino reset sequence
-    asynchronously using polling for command completion status.
-    """
-    # Add main_window parameter to accept the KneeSpa instance
-    def __init__(self, arduino_instance, config_instance, main_window):
+    """Replay a failed sequence once; baseline/rejection/cancellation never retry."""
+
+    def __init__(self, arduino_instance: object, config_instance: object,
+                 main_window: object) -> None:
         super().__init__()
-        debug("Initializing reset worker thread", component="ResetWorker", level="INFO")
         self.signals = ResetWorkerSignals()
         self.arduino = arduino_instance
         self.config = config_instance
-        # Store the reference to the main KneeSpa instance
-        self.main_window = main_window # Reference to access I2Cstatus
-        self.step_times = []  # Track time for each step
-        debug("ResetWorker initialization complete", component="ResetWorker")
+        self.main_window = main_window
+        self.logger = setup_logger(component="ResetWorker")
+        self._cancelled = threading.Event()
+        self._command_lock = threading.RLock()
+        self.completed = threading.Event()
+        self.step_times = []
 
-    def _wait_for_done(self, timeout=10.0, operation_name="operation"):
-        """
-        Waits for main_window.I2Cstatus to become 1 or timeout using thread-safe event.
-        Resets the flag via main_window reference before returning.
-        NOTE: Runs in the worker thread.
-        """
-        start_time = time.time()
-        debug(f"Waiting for '{operation_name}' completion", component="ResetWorker",
-              timeout=timeout, method="event" if hasattr(self.main_window, 'I2Cstatus_event') else "polling")
+    def cancel(self) -> None:
+        with self._command_lock:
+            self._cancelled.set()
+            self.arduino.baseline_valid = False
 
-        # Use thread-safe event if available, otherwise fall back to polling
-        if hasattr(self.main_window, 'I2Cstatus_event'):
-            # Thread-safe wait using event
-            if self.main_window.I2Cstatus_event.wait(timeout=timeout):
-                debug_timing(f"'{operation_name}' completed via event",
-                           start_time=start_time, component="ResetWorker")
-                self.main_window.I2Cstatus_event.clear()  # Reset event for next use
-                self.main_window.I2Cstatus = 0  # Reset flag for compatibility
-                debug_state_change("ResetWorker.I2Cstatus", 1, 0, f"{operation_name} completed")
-                return True
-            else:
-                debug(f"Timeout waiting for '{operation_name}'", component="ResetWorker",
-                     level="WARNING", elapsed=f"{time.time()-start_time:.1f}s")
-                self.main_window.I2Cstatus = 0  # Ensure flag is reset on timeout
-                return False
-        else:
-            # Fallback to polling if event not available (backward compatibility)
-            poll_count = 0
-            while self.main_window.I2Cstatus == 0 and time.time() - start_time < timeout:
-                time.sleep(0.05)  # Short sleep in worker thread
-                poll_count += 1
+    def _check_cancelled(self) -> None:
+        if (self._cancelled.is_set()
+                or getattr(self.main_window, "_closing", False) is True
+                or getattr(self.main_window, "_physical_stop_active", False) is True):
+            raise OperationCancelled("Reset cancelled")
 
-            if self.main_window.I2Cstatus == 1:
-                debug_timing(f"'{operation_name}' completed via polling",
-                           start_time=start_time, component="ResetWorker",
-                           poll_count=poll_count)
-                debug_state_change("ResetWorker.I2Cstatus", 1, 0, f"{operation_name} completed")
-                self.main_window.I2Cstatus = 0
-                return True
-            else:
-                debug(f"Timeout waiting for '{operation_name}'", component="ResetWorker",
-                     level="WARNING", elapsed=f"{time.time()-start_time:.1f}s", poll_count=poll_count)
-                self.main_window.I2Cstatus = 0
-                return False
-            
-    def _try_command_with_retry(self, command, operation_name="operation", timeout=30.0):
-        """
-        Send a command and wait for its DONE. Retries the send once on a
-        completion timeout. (The old DTR-reset recovery between attempts
-        was a no-op on /dev/serial0 -- the Pi UART has no modem lines
-        wired to the Arduino RESET pin -- and only added ~8s of delay.)
-        """
-        for attempt in (1, 2):
-            debug(f"Attempting '{operation_name}' with command: {command}",
-                  component="ResetWorker", attempt=attempt)
-            self.main_window.I2Cstatus = 0  # Reset flag BEFORE sending command
-            if hasattr(self.main_window, 'I2Cstatus_event'):
-                self.main_window.I2Cstatus_event.clear()
-            if not self.arduino.send(command):
-                debug(f"Failed to send command for {operation_name}",
-                      component="ResetWorker", level="ERROR")
-                return False
+    def _send(self, command: str) -> object:
+        with self._command_lock:
+            self._check_cancelled()
+            return self.arduino.send_tracked(command)
 
-            if self._wait_for_done(timeout=timeout, operation_name=operation_name):
-                return True
-            debug(f"Timeout waiting for {operation_name} completion (attempt {attempt})",
-                  component="ResetWorker", level="WARNING")
-        return False
+    def _sequence(self, operations: ControllerOperations) -> None:
+        operations.perform("Y", ("ready",), 10.0)
+        operations.require_firmware()
+        deadline = time.monotonic() + 1.0
+        while time.monotonic() < deadline:
+            self._check_cancelled()
+            time.sleep(0.02)
+        a_zero = int(self.config.AMarks.get("0.0", self.config.AMarks.get("0", 0)))
+        b_zero = int(self.config.BMarks.get("0.0", self.config.BMarks.get("0", 0)))
+        pos_c, _ = lateral_degrees_to_position(self.config.CMarks, 0)
+        pos_b = horizontal_degrees_to_position(self.config.BMarks, DEFAULT_HORIZONTAL_POSITION)
+        if any(not 0 <= value <= 4095 for value in (a_zero, b_zero, pos_c, pos_b)):
+            raise OperationRejected("Configured reset position exceeds controller feedback range")
+        operations.perform(f"L5|{a_zero}|{b_zero}", ("zeros", a_zero, b_zero), 10.0)
+        for command, kind, target, tolerance, timeout in (
+            (f"K{pos_c}", "K", pos_c, 100, 30.0),
+            (f"I13{pos_b}", "I", pos_b, 25, 30.0),
+            ("I120", "I", a_zero, 25, 60.0),
+        ):
+            operations.perform(command, ("motion", kind, target, max(0, target - tolerance),
+                                         min(4095, target + tolerance)), timeout)
+        if not self.config.scale_calibrated:
+            raise OperationRejected("A valid scale calibration is required before pressure zero")
+        factor = float(self.config.calibration)
+        operations.perform(f"L0{factor}", ("set", factor), 10.0)
+        operations.baseline(self.config)
 
     @pyqtSlot()
-    def run(self):
-        """Execute the reset sequence steps."""
-        debug("="*60, component="ResetWorker", level="INFO")
-        debug("Starting full Arduino reset sequence (6 steps)", component="ResetWorker", level="INFO")
-        debug("="*60, component="ResetWorker", level="INFO")
-
-        # Safety check: Ensure no protocol is running
-        if hasattr(self.main_window, 'worker') and self.main_window.worker:
-            if hasattr(self.main_window.worker, 'is_running') and self.main_window.worker.is_running:
-                debug("ERROR - Protocol is still running! Aborting reset",
-                     component="ResetWorker", level="ERROR")
-                self.signals.error.emit("Cannot reset while protocol is running")
-                self.signals.finished.emit(False)
-                return
-
-        success = True
-        sequence_start = time.time()
+    def run(self) -> None:
+        success = False
+        operations: Optional[ControllerOperations] = None
         try:
-            # --- Step 1: Send 'Y' (Reset Command) ---
-            step_start = time.time()
-            debug("[STEP 1/6] Sending 'Y' (Reset Command)", component="ResetWorker", level="INFO")
-            ready_event = getattr(self.arduino, "ready_event", None)
-            if ready_event is not None:
-                ready_event.clear()
-            if not self.arduino.send("Y"):
-                raise RuntimeError("Failed to send Y reset command")
-
-            # 'Y' never acks with DONE (the MCU resets first); wait for the
-            # boot banner instead of the old blind 5s sleep
-            if ready_event is not None:
-                if ready_event.wait(timeout=15.0):
-                    debug("Arduino announced 'Ready to Go' after reset",
-                          component="ResetWorker")
-                else:
-                    debug("No 'Ready to Go' seen within 15s after 'Y'; continuing",
-                          component="ResetWorker", level="WARNING")
-            else:
-                time.sleep(5)
-            debug_timing("[STEP 1/6] Reset command complete", start_time=step_start, component="ResetWorker")
-            self.step_times.append(("Reset Command", time.time() - step_start))
-
-            # --- Step 2: Send Zero Mark ('L5') ---
-            step_start = time.time()
-            debug("[STEP 2/6] Sending zero mark ('L5')", component="ResetWorker", level="INFO")
-            a_zero = self.config.AMarks.get("0.0", self.config.AMarks.get("0", 0))
-            b_zero = self.config.BMarks.get("0.0", self.config.BMarks.get("0", 0))
-            # Delimited form: the legacy fixed-width "L5{:3} {:3}" format
-            # silently truncated any 4-digit zero mark (1900 became 190)
-            zero_cmd = "L5|{}|{}".format(a_zero, b_zero)
-            if not self._try_command_with_retry(zero_cmd, "Zero Mark", 30.0):
-                raise TimeoutError("Failed to complete Zero Mark setup even after retry")
-            debug_timing("[STEP 2/6] Zero mark complete", start_time=step_start, component="ResetWorker")
-            self.step_times.append(("Zero Mark", time.time() - step_start))
-
-            # --- Step 3: Reset Actuator C ('I14') ---
-            step_start = time.time()
-            debug("[STEP 3/6] Resetting Actuator C ('I14')", component="ResetWorker", level="INFO")
-            pos_c = self.config.CMarks["{:.1f}".format(0)]
-            cmd_c = f"I14{pos_c}"
-            debug(f"Actuator C command: {cmd_c}", component="ResetWorker", position=pos_c)
-            if not self._try_command_with_retry(cmd_c, "Actuator C Reset", 30.0):
-                raise TimeoutError("Failed to reset Actuator C even after retry")
-            debug_timing("[STEP 3/6] Actuator C reset complete", start_time=step_start, component="ResetWorker")
-            self.step_times.append(("Actuator C", time.time() - step_start))
-
-            # --- Step 4: Reset Actuator B ('A13') ---
-            step_start = time.time()
-            debug("[STEP 4/6] Resetting Actuator B ('A13')", component="ResetWorker", level="INFO")
-            cmd_b = f"A13{3}" # Equivalent inches for -10 degrees
-            debug(f"Actuator B command: {cmd_b}", component="ResetWorker", inches=3)
-            if not self._try_command_with_retry(cmd_b, "Actuator B Reset", 30.0):
-                raise TimeoutError("Failed to reset Actuator B even after retry")
-            debug_timing("[STEP 4/6] Actuator B reset complete", start_time=step_start, component="ResetWorker")
-            self.step_times.append(("Actuator B", time.time() - step_start))
-
-            # --- Step 5: Reset Actuator A ('I12') ---
-            step_start = time.time()
-            debug("[STEP 5/6] Resetting Actuator A ('I12')", component="ResetWorker", level="INFO")
-            cmd_a = f"I12{0}"
-            debug(f"Actuator A command: {cmd_a}", component="ResetWorker", position=0)
-            if not self._try_command_with_retry(cmd_a, "Actuator A Reset", 60.0):
-                raise TimeoutError("Failed to reset Actuator A even after retry")
-            debug_timing("[STEP 5/6] Actuator A reset complete", start_time=step_start, component="ResetWorker")
-            self.step_times.append(("Actuator A", time.time() - step_start))
-
-            # --- Step 6: Send Calibration ('L0') ---
-            step_start = time.time()
-            debug("[STEP 6/6] Sending Calibration ('L0')", component="ResetWorker", level="INFO")
-            if getattr(self.config, "scale_calibrated", True):
-                calib_cmd = f"L0{self.config.calibration}"
-                debug(f"Calibration command: {calib_cmd}", component="ResetWorker")
-                if not self._try_command_with_retry(calib_cmd, "Calibration", 30.0):
-                    raise TimeoutError("Failed to complete calibration even after retry")
-            else:
-                # Never push an implausible/default factor to the firmware;
-                # pressure features stay gated off by the app instead
-                debug(
-                    f"SKIPPING calibration: scale factor {self.config.calibration} "
-                    "is implausible (device uncalibrated)",
-                    component="ResetWorker", level="WARNING",
-                )
-            debug_timing("[STEP 6/6] Calibration complete", start_time=step_start, component="ResetWorker")
-            self.step_times.append(("Calibration", time.time() - step_start))
-
-            # Log summary of all step times
-            debug("="*60, component="ResetWorker", level="INFO")
-            for step_name, step_time in self.step_times:
-                debug(f"Step timing: {step_name} = {step_time:.1f}s", component="ResetWorker")
-            debug_timing("RESET SEQUENCE COMPLETED SUCCESSFULLY", start_time=sequence_start, component="ResetWorker")
-            debug("="*60, component="ResetWorker", level="INFO")
-
-        except Exception as e:
-            elapsed_time = time.time() - sequence_start
-            debug("="*60, component="ResetWorker", level="ERROR")
-            debug_error(f"Reset sequence FAILED after {elapsed_time:.1f}s",
-                       exception=e, component="ResetWorker")
-
-            # Log step timing up to failure
-            if self.step_times:
-                debug("Completed steps before failure:", component="ResetWorker", level="ERROR")
-                for step_name, step_time in self.step_times:
-                    debug(f"  {step_name}: {step_time:.1f}s", component="ResetWorker")
-
-            debug("="*60, component="ResetWorker", level="ERROR")
-
-            self.signals.error.emit(str(e)) # Emit error signal
-            success = False
+            self._check_cancelled()
+            worker = getattr(self.main_window, "worker", None)
+            if worker is not None and worker.is_running:
+                raise OperationRejected("Cannot reset while a treatment worker is running")
+            operations = ControllerOperations(self.arduino, self._send, self._check_cancelled)
+            for attempt in range(2):
+                try:
+                    self._sequence(operations)
+                    with self._command_lock:
+                        self._check_cancelled()
+                        self.arduino.baseline_valid = True
+                        success = True
+                    break
+                except (OperationCancelled, OperationRejected):
+                    raise
+                except TimeoutError:
+                    if attempt:
+                        raise
+                    # The Pi UART has no wired DTR reset. A fresh Y replays all
+                    # initialization; never resume a single failed axis step.
+                    self.logger.warning("Reset timed out; replaying complete initialization once")
+        except OperationCancelled:
+            self.logger.info("Reset cancelled")
+        except Exception as exc:
+            self.logger.exception("Reset failed")
+            if not self._cancelled.is_set():
+                self.arduino.send("X")
+                self.signals.error.emit(str(exc))
         finally:
-            # Emit finished signal regardless of success/failure
-            result_msg = "SUCCESS" if success else "FAILURE"
-            debug(f"ResetWorker finished with result: {result_msg}",
-                 component="ResetWorker", level="INFO" if success else "ERROR")
-            self.signals.finished.emit(success)
+            if operations is not None:
+                operations.close()
+            self.completed.set()
+            self.signals.finished.emit(success and not self._cancelled.is_set())

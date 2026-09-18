@@ -1,8 +1,12 @@
 # tests/conftest.py
-import sys
+from contextlib import ExitStack
+import logging
 import os
-import pytest
+import sys
+from tempfile import TemporaryDirectory
 from unittest.mock import MagicMock
+
+import pytest
 
 # Add main/ to sys.path so imports like `from config.constants import ...` work
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'main'))
@@ -21,48 +25,45 @@ sys.modules['PyQt5.QtMultimediaWidgets'] = MagicMock()
 # Mock vlc (video player dependency not available in test env)
 sys.modules['vlc'] = MagicMock()
 
-# Patch os.path.exists so Pi-local validation paths do not fail in test env.
-_original_exists = os.path.exists
-
-
-def _patched_exists(path):
-    if str(path).startswith('/home/pi/'):
-        return True
-    return _original_exists(path)
-
-
-os.path.exists = _patched_exists
-
-# Patch os.makedirs so logging.py can create log dirs under /home/pi/...
-_original_makedirs = os.makedirs
-
-
-def _patched_makedirs(name, mode=0o777, exist_ok=False):
-    if str(name).startswith('/home/pi/'):
-        return  # Silently skip
-    return _original_makedirs(name, mode=mode, exist_ok=exist_ok)
-
-
-os.makedirs = _patched_makedirs
-
-# Patch logging.handlers.RotatingFileHandler to avoid creating log files
-import logging.handlers
-_OriginalRotatingFileHandler = logging.handlers.RotatingFileHandler
-
-
-class _MockRotatingFileHandler(logging.Handler):
-    """A no-op handler that replaces RotatingFileHandler in tests."""
-    def __init__(self, *args, **kwargs):
-        logging.Handler.__init__(self)
-
-    def emit(self, record):
-        pass
-
-
-logging.handlers.RotatingFileHandler = _MockRotatingFileHandler
-
 # Set Qt to offscreen mode for headless testing
 os.environ['QT_QPA_PLATFORM'] = 'offscreen'
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Isolate import-time application logs without patching filesystem APIs."""
+    from config import constants
+
+    stack = ExitStack()
+    config.add_cleanup(stack.close)
+    log_base = stack.enter_context(TemporaryDirectory(prefix="kneespa-test-logs-"))
+    app_logger = logging.getLogger(constants.APP_NAME)
+    serial_logger = logging.getLogger(f"{constants.APP_NAME}.serial")
+    saved_handlers = list(app_logger.handlers)
+    saved_serial_handlers = list(serial_logger.handlers)
+    saved_filters = list(logging.getLogger("PyQt5").filters)
+    saved_level = app_logger.level
+
+    def restore_logging() -> None:
+        for handler in list(app_logger.handlers):
+            if handler not in saved_handlers:
+                app_logger.removeHandler(handler)
+                handler.close()
+        app_logger.setLevel(saved_level)
+        for handler in list(serial_logger.handlers):
+            if handler not in saved_serial_handlers:
+                serial_logger.removeHandler(handler)
+                handler.close()
+        logging.getLogger("PyQt5").filters[:] = saved_filters
+
+    # Close file handles before TemporaryDirectory removes the log directory.
+    stack.callback(restore_logging)
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(constants, "LOG_DIR", log_base)
+        from helpers import logging as app_logging
+
+    # logging imports LOG_DIR by value; leave only its local copy isolated
+    # for the session, including tests that reconstruct the logger singleton.
+    stack.callback(setattr, app_logging, "LOG_DIR", constants.LOG_DIR)
 
 
 # --- Integration fixtures ---

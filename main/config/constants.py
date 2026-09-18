@@ -16,11 +16,16 @@ APP_BASE_DIR = os.path.abspath(
         os.path.join(os.path.dirname(__file__), os.pardir),
     )
 )
+PROJECT_DIR = os.path.dirname(APP_BASE_DIR)
 
 # Logging Configuration
 LOG_FILE = "kneespa_app.log"
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 LOG_LEVEL = "DEBUG"
+LOG_DIR = os.path.join(PROJECT_DIR, "logs")
+LOG_MAX_FILE_BYTES = 20 * 1024 * 1024
+LOG_TOTAL_BUDGET_BYTES = 1024 * 1024 * 1024
+LOG_CLEANUP_INTERVAL_S = 60
 
 # UI Constants
 WINDOW_TITLE = "KneeSpa Control Interface"
@@ -30,7 +35,9 @@ DEGREES = "\u00b0"
 # view layer; the modern UI is code-built under ui/)
 UI_PATHS = {
     "PROTOCOL_IMAGES": os.path.join(APP_BASE_DIR, "ui/media/images/graphics"),
-    "VIDEOS": os.path.join(APP_BASE_DIR, "ui/media/videos/1.mp4"),
+    # Directory of demo clips; the video modal plays every .mp4 in it, in
+    # sorted filename order (1.mp4, 2.mp4, ...).
+    "VIDEOS": os.path.join(APP_BASE_DIR, "ui/media/videos"),
 }
 
 DATA_PATHS = {
@@ -46,6 +53,10 @@ DATA_PATHS = {
         "KNEESPA_AUTH_STATE_PATH",
         os.path.join(APP_BASE_DIR, "data/auth_state.json"),
     ),
+    "PENDING_UPLOADS": os.environ.get(
+        "KNEESPA_PENDING_UPLOADS_PATH",
+        os.path.join(APP_BASE_DIR, "data/pending_uploads.json"),
+    ),
 }
 
 # GPIO Pin Configuration
@@ -54,10 +65,12 @@ EXTRAFORWARD = 27
 EXTRABACKWARD = 22
 EXTRAENABLE = 17
 
-# Path of config file
+# Persistent device configuration lives beside main/, so code updates preserve it.
+DEFAULT_CONFIG_PATH = os.path.join(PROJECT_DIR, "config", "kneespa.cfg")
+LEGACY_CONFIG_PATH = os.path.join(APP_BASE_DIR, "config", "kneespa.cfg")
 CONFIG_PATH = os.environ.get(
     "KNEESPA_CONFIG_PATH",
-    os.path.join(APP_BASE_DIR, "config/kneespa.cfg"),
+    DEFAULT_CONFIG_PATH,
 )
 
 # Actuator Configuration
@@ -96,12 +109,39 @@ ACTUATORS = {
 
 # Safety Limits
 MIN_PRESSURE = 10  # Minimum pressure in lbs
-PRESSURE_MAX = 80  # Maximum safe pressure in lbs
+PRESSURE_MAX = 80  # Maximum treatment setpoint in lbs
+PRESSURE_WARNING_MAX = 100  # Warning-only measured-pressure threshold
+PRESSURE_TARGET_TOLERANCE = 2  # Control goal: within +/- this many lbs
+PRESSURE_OVERSHOOT_ALLOWANCE = 10  # Acceptable excess after trying to settle
 AXIAL_MAX = 4600  # Maximum axial position
 LATERAL_MIN = 500  # Minimum lateral position
 LATERAL_MAX = 2400  # Maximum lateral position
-HORIZONTAL_MIN = 50  # Minimum horizontal position (-5 degrees)
-HORIZONTAL_MAX = 4500  # Maximum horizontal position (-25 degrees)
+# Horizontal (B actuator) encoder envelope. Positions follow the calibrated
+# BMarks convention (-25 deg = 0 ... +5 deg ~= 2280 on the bench unit); the
+# SafetyMonitor derives its legal band from BMarks/CMarks when the device is
+# calibrated and only falls back to these static values. The old MIN of 50
+# came from a legacy convention and clamped/flagged legal -25 deg moves.
+HORIZONTAL_MIN = 0  # Minimum horizontal position (calibrated -25 deg mark)
+HORIZONTAL_MAX = 4500  # Maximum horizontal position (envelope ceiling)
+
+# Guided service calibration uses raw positions before an angle table exists.
+CALIBRATION_AXES = {
+    "horizontal": {
+        "label": "Horizontal", "table": "BMarks", "factor": "b_factor",
+        "prefix": "I13", "position_limits": (HORIZONTAL_MIN, HORIZONTAL_MAX),
+        "angle_limits": ACTUATORS["HORIZONTAL"]["LIMITS"], "angle_step": 5.0,
+    },
+    "lateral": {
+        "label": "Lateral", "table": "CMarks", "factor": "c_factor",
+        "prefix": "K", "position_limits": (LATERAL_MIN, LATERAL_MAX),
+        "angle_limits": ACTUATORS["LATERAL"]["LIMITS"], "angle_step": 2.5,
+    },
+}
+CALIBRATION_STATUS_MAX_AGE_S = 2.0
+CALIBRATION_MOVE_TIMEOUT_S = 15.0
+CALIBRATION_SETTLE_COUNTS = 8
+CALIBRATION_POSITION_TOLERANCE = 25  # firmware POSITION_DEADBAND
+CALIBRATION_DISTANCE_REFERENCE_INCHES = 6.0  # read_position() factor convention
 AXIAL_MIN_INCHES = ACTUATORS["AXIAL"]["LIMITS"][0]
 AXIAL_MAX_INCHES = ACTUATORS["AXIAL"]["LIMITS"][1]
 LATERAL_MIN_DEGREES = ACTUATORS["LATERAL"]["LIMITS"][0]
@@ -122,7 +162,7 @@ LEG_LENGTH_MAX = 6.0  # Maximum leg length in inches
 
 # Movement Configuration
 MOVEMENT_DELAY = 0.5  # seconds between movements
-DEFAULT_HORIZONTAL_POSITION = -15  # degrees
+DEFAULT_HORIZONTAL_POSITION = -10  # degrees
 
 # Default Positions
 DEFAULT_AXIAL_POSITION = 0  # inches
@@ -138,14 +178,11 @@ PROTOCOL_MAPPING = {
     4: "AC4"
 }
 
-# Pulse-rate configuration (Phase 3.5 §15.2).
-# The firmware pulse cadence (motor.ino jerkInterval) only becomes host-settable
-# after the device is reflashed with the numeric-`J<ms>` build. Until then the
-# worker MUST keep sending a bare `J` (on/off) — a numeric `J<ms>` is a no-op on
-# the old firmware and would silently disable pulsing. Flip this to True only on
-# a flashed device.
+# Pulse-rate configuration (Phase 3.5 §15.2). Numeric J<ms> cadence is enabled
+# for the current firmware by default. Set KNEESPA_PULSE_RATE_FIRMWARE=0 as the
+# field rollback when connecting to older firmware that only understands bare J.
 PULSE_RATE_FIRMWARE_SUPPORT = (
-    os.environ.get("KNEESPA_PULSE_RATE_FIRMWARE", "0") == "1"
+    os.environ.get("KNEESPA_PULSE_RATE_FIRMWARE", "1") == "1"
 )
 MIN_JERK_INTERVAL_MS = 100   # fastest safe pulse (~10/sec)
 MAX_JERK_INTERVAL_MS = 5000  # slowest pulse the slider can request (0.2/sec)
@@ -153,6 +190,41 @@ MAX_JERK_INTERVAL_MS = 5000  # slowest pulse the slider can request (0.2/sec)
 # 1000 / the default pulse rate (2/sec) so the UI's claim matches the device.
 # Paired with motor.ino's jerkInterval initializer (scripts/check_limits_sync.py).
 DEFAULT_JERK_INTERVAL_MS = 500
+
+# Motor output as a percentage of the 1600-unit treatment ceiling, not a
+# calibrated travel velocity. Keep the proven 800-unit breakaway floor and
+# the existing 1600-unit pulse ceiling. Defaults preserve existing motion.
+MOTOR_SPEED_MIN = 50
+MOTOR_SPEED_MAX = 100
+MOTOR_SPEED_STEP = 5
+MOTOR_SPEED_DEFAULTS = {
+    "axial_speed": 50,
+    "lateral_speed": 50,
+    "pulse_speed": 100,
+}
+MOTOR_SPEED_ACK_TIMEOUT_S = 6.0
+
+# How long the host waits for a commanded pressure (initial build, each
+# ramp increment, and direct P moves) before accepting the overshoot allowance
+# or failing if still outside it. Sits
+# ABOVE the firmware's advisory PRESSURE_MOVE_TIMEOUT (motor.ino) so the
+# device's own diagnosis always arrives first. Raised from 35 s on
+# 2026-09-10: the axial actuator builds load slowly and real treatments
+# were being aborted mid-build.
+PRESSURE_BUILD_TIMEOUT_S = 95
+# After the host sees measured pressure within tolerance, wait for firmware
+# DONE before pulsing. Older firmware may still drive to the exact target
+# and reject J with BUSY. Bound the wait so missing ACKs cannot stall treatment.
+PRESSURE_DONE_SETTLE_S = 15
+# How long the host waits for a commanded lateral (K) move before failing
+# the protocol. The firmware drives C at C_SPEED 800, which the bench unit
+# moves at ~72 counts/s (2026-09-10 log: 1458 -> 1798 in 4.7 s); with
+# ~47 counts/degree that is ~1.5 deg/s, so a 10 deg move takes ~6.5 s and
+# protocol 4's full -20 -> +20 swing ~26 s. The old hardcoded 5 s could
+# never cover a real move and aborted treatments mid-travel. The firmware
+# reports its own no-progress stall (POSITION_STALL_MS = 20 s), so this
+# only needs to be a backstop above the longest legitimate move.
+LATERAL_MOVE_TIMEOUT_S = 45
 
 # Protocol Default Settings
 PROTOCOL_DEFAULT_SETTINGS = {

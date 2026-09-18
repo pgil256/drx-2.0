@@ -22,32 +22,83 @@ class CSVHelper:
         self.users = {}
 
     def initialize_data(self):
-        """Initialize CSV data by loading user data."""
+        """Initialize CSV data by loading user data.
+
+        Environment-provisioned users (SecureAuthHelper) and CSV rows are
+        merged: the CSV is where runtime-added PINs (admin "Add PIN") are
+        persisted, so it must load even when the env provides the seed
+        users. Env entries win on a hash collision.
+        """
         print("CSVHelper: Initializing user data")
 
-        # Try to load from secure authentication first
+        # KNEESPA_USER_PINS_PATH overrides the default in-repo location;
+        # the file itself is runtime state and is not tracked in git.
+        users_file = DATA_PATHS["USER_PINS"]
+        self._seed_users_file(users_file)
+        print(f"CSVHelper: Loading user data from {users_file}")
+        self.users = self.load_csv(users_file)
+        print(f"CSVHelper: Loaded {len(self.users)} user records from CSV")
+
         secure_auth = SecureAuthHelper()
         if secure_auth.users:
-            print("CSVHelper: Using secure authentication from environment variables")
-            self.users = secure_auth.users
-            print(f"CSVHelper: Loaded {len(self.users)} user records from secure auth")
-        else:
-            print("CSVHelper: Falling back to hashed CSV file")
-            # KNEESPA_USER_PINS_PATH overrides the default in-repo location;
-            # the file itself is runtime state and is not tracked in git.
-            users_file = DATA_PATHS["USER_PINS"]
-            self._seed_users_file(users_file)
-            print(f"CSVHelper: Loading user data from {users_file}")
-            self.users = self.load_csv(users_file)
-            print(f"CSVHelper: Loaded {len(self.users)} user records from CSV")
-            if not self.users:
-                self.logger.warning(
-                    "No users provisioned. Add rows to %s (pin_hash via "
-                    "SecureAuthHelper.hash_pin_secure) or set ADMIN_PIN_HASH/"
-                    "USER_PIN_HASH in the environment. See README 'User "
-                    "provisioning'.",
-                    users_file,
+            print("CSVHelper: Merging secure authentication users from environment")
+            self.users.update(secure_auth.users)
+
+        if not self.users:
+            self.logger.warning(
+                "No users provisioned. Add rows to %s (pin_hash via "
+                "SecureAuthHelper.hash_pin_secure) or set ADMIN_PIN_HASH/"
+                "USER_PIN_HASH in the environment. See README 'User "
+                "provisioning'.",
+                users_file,
+            )
+
+    def add_user(self, username, pin, status="user", email=""):
+        """Provision a new user PIN at runtime (admin "Add PIN").
+
+        Appends a salted-hash row to the runtime users CSV and adds it to
+        ``self.users`` in place (the window aliases that dict, so the new
+        PIN can log in immediately).
+
+        Returns:
+            (bool, str): success flag + operator-facing message.
+        """
+        username = (username or "").strip() or "User"
+        pin = str(pin or "").strip()
+        if not pin.isdigit() or len(pin) != 4:
+            return False, "PIN must be exactly 4 digits."
+        # A duplicate PIN would be ambiguous at login (first hash match
+        # wins), silently shadowing one of the two users.
+        for stored_hash in self.users:
+            if SecureAuthHelper.verify_pin(pin, stored_hash):
+                return False, "That PIN is already in use. Choose another."
+
+        pin_hash = SecureAuthHelper.hash_pin_secure(pin)
+        row = {
+            "pin_hash": pin_hash,
+            "username": username,
+            "email": email,
+            "status": status,
+        }
+
+        users_file = DATA_PATHS["USER_PINS"]
+        self._seed_users_file(users_file)
+        try:
+            file_exists = os.path.exists(users_file)
+            with open(users_file, "a", newline="", encoding="utf-8") as file:
+                writer = csv.DictWriter(
+                    file, fieldnames=["pin_hash", "username", "email", "status"]
                 )
+                if not file_exists or os.path.getsize(users_file) == 0:
+                    writer.writeheader()
+                writer.writerow(row)
+        except OSError as e:
+            self.logger.error("Could not save new user to %s: %s", users_file, e)
+            return False, "Could not save the new PIN to disk."
+
+        self.users[pin_hash] = row
+        self.logger.info("Provisioned new %s %r via Add PIN", status, username)
+        return True, f"PIN added for {username}."
 
     def _seed_users_file(self, users_file):
         """Create the runtime users file from the tracked template if absent.

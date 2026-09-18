@@ -8,7 +8,7 @@ set -euo pipefail
 # Safety properties (the old version had none of these):
 # - Stops the kneespa service before syncing: Restart=always used to be
 #   able to relaunch the app mid-rsync into a half-synced tree.
-# - Device-local state (calibration file, user PINs, logs) is excluded
+# - Device-local state (calibration, user PINs, auth state, uploads, logs) is excluded
 #   so a deploy can never clobber a device's calibration.
 # - --delete keeps the code tree clean (the old -u flag meant deleted
 #   files lived on devices forever).
@@ -21,7 +21,11 @@ PROJECT_DIR="$(cd "$SCRIPT_DIR/.." && pwd)"
 SOURCE_DIR="${SOURCE_DIR:-$PROJECT_DIR/main/}"
 DEST_DIR="${DEST_DIR:-/home/pi/drx-2.0/main/}"
 PI_USER="${PI_USER:-pi}"
-PI_HOSTS="${PI_HOSTS:-100.111.162.21 100.93.117.101 100.95.232.121}"
+PI_HOSTS="${PI_HOSTS:-}"
+if [[ -z "${PI_HOSTS//[[:space:]]/}" ]]; then
+    echo "Set PI_HOSTS to explicitly verified device hosts before deploying." >&2
+    exit 2
+fi
 SSH_OPTS="${SSH_OPTS:--o StrictHostKeyChecking=accept-new}"
 SERVICE="${SERVICE:-kneespa.service}"
 
@@ -29,6 +33,8 @@ SERVICE="${SERVICE:-kneespa.service}"
 EXCLUDES=(
     --exclude "config/kneespa.cfg"
     --exclude "data/user_pins.csv"
+    --exclude "data/auth_state.json"
+    --exclude "data/pending_uploads.json"
     --exclude "logs/"
     --exclude "__pycache__/"
 )

@@ -1,6 +1,7 @@
 # tests/unit/test_secure_auth.py
+from pathlib import Path
+
 import pytest
-from unittest.mock import MagicMock
 
 from helpers.secure_auth import SecureAuthHelper
 from controllers.auth_controller import AuthController
@@ -33,10 +34,11 @@ class TestPinHashing:
         assert not SecureAuthHelper.verify_pin("1234", "")
         assert not SecureAuthHelper.verify_pin("1234", None)
 
-
-class _DialogStub:
-    def accept(self):
-        pass
+    def test_non_ascii_legacy_hash_is_rejected_not_raised(self):
+        """hmac.compare_digest raises TypeError on non-ASCII str; a mis-columned
+        CSV row must fail that one user, not abort the whole login loop."""
+        assert not SecureAuthHelper.verify_pin("1234", "Jäne Doe")
+        assert not SecureAuthHelper.verify_pin("1234", 12345)
 
 
 class StubWindow:
@@ -47,9 +49,6 @@ class StubWindow:
         self.login_pin = ""
         self.current_user = None
         self.errors = []
-        self.login_dialog = _DialogStub()
-        self.login_line_edit = MagicMock()
-        self.login_line_edit.text.return_value = ""
 
     def _show_timed_error(self, message):
         self.errors.append(message)
@@ -72,12 +71,14 @@ class TestLoginLockout:
         w.login_pin = "7531"
         auth.handle_login()
         assert w.current_user is not None
+        assert w.login_pin == ""
 
     def test_lockout_after_five_failures(self, tmp_path):
         auth, w = self._make(tmp_path)
         for _ in range(5):
             w.login_pin = "0000"
             auth.handle_login()
+            assert w.login_pin == ""
         assert auth.lockout_until > 0
         assert any("locked" in e.lower() for e in w.errors)
 
@@ -85,6 +86,7 @@ class TestLoginLockout:
         w.login_pin = "7531"
         auth.handle_login()
         assert w.current_user is None
+        assert w.login_pin == ""
 
     def test_success_resets_counter(self, tmp_path):
         auth, w = self._make(tmp_path)
@@ -99,16 +101,22 @@ class TestLoginLockout:
     def test_backspace_removes_last_digit(self, tmp_path):
         auth, w = self._make(tmp_path)
         w.login_pin = "753"
-        w.login_line_edit.text.return_value = "753"
         auth.backspace_digit()
         assert w.login_pin == "75"
-        w.login_line_edit.setText.assert_called_with("75")
 
     def test_backspace_on_empty_pin_is_safe(self, tmp_path):
         auth, w = self._make(tmp_path)
         w.login_pin = ""
-        w.login_line_edit.text.return_value = ""
         auth.backspace_digit()
+        assert w.login_pin == ""
+
+    def test_append_and_clear_pin_buffer(self, tmp_path: Path) -> None:
+        """Legacy PIN methods retain buffer semantics without fake widgets."""
+        auth, w = self._make(tmp_path)
+        auth.append_digit("7")
+        auth.append_digit("0")
+        assert w.login_pin == "70"
+        auth.clear_pin()
         assert w.login_pin == ""
 
 

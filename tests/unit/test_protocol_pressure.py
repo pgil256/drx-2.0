@@ -1,140 +1,70 @@
-# tests/unit/test_protocol_pressure.py
-"""Unit tests for Protocols pressure ramp, emergency stop, and cached state.
-
-These tests are Windows-runnable: the Arduino is a MagicMock (no pty/FakeArduino),
-methods are called directly (no real QThreadPool), and pressure ramps are driven by
-seeding the cached pressure state so the device-feedback loops terminate quickly.
-"""
+"""Pressure commands require typed, stopped-motor evidence with no blind resends."""
 import threading
-import time
 from unittest.mock import MagicMock
-
 import pytest
+from fixtures.protocols import make_protocol
+from main.config.constants import PRESSURE_BUILD_TIMEOUT_S
 
-from helpers.protocols import (
-    Protocols,
-    MAX_SAFE_PRESSURE,
-    PRESSURE_INCREMENT,
-)
-from config.config import Configuration
+pytestmark = pytest.mark.unit
 
+@pytest.mark.parametrize("target", [-1, 81, float("nan"), float("inf")])
+def test_invalid_target_never_sent(target):
+    worker = make_protocol()
+    worker.is_running = True
+    assert not worker.set_to_pressure(target)
+    worker.arduino.send.assert_not_called()
 
-def make_protocol(**kwargs):
-    """Create a Protocols instance with a mocked Arduino and sane defaults."""
-    defaults = dict(
-        a_factor=1900,
-        protocol="1",
-        max_pressure=50,
-        max_left=10.0,
-        max_right=10.0,
-        duration=1,  # 1 minute
-        use_pulse=False,
-        ser=MagicMock(),
-        config=None,
-    )
-    defaults.update(kwargs)
+@pytest.mark.parametrize("start,target,commands", [
+    (20, 50, ["P30|50", "P40|50", "P50|50"]),
+    (40, 40, []), (50, 30, ["P30|30"]),
+])
+def test_ramp_does_not_repeat_completed_waypoints(start, target, commands):
+    worker = make_protocol(acknowledge=True, max_pressure=target)
+    worker.is_running = True
+    assert worker.run_pressure_sequence(start, target)
+    assert [c.args[0] for c in worker.arduino.send.call_args_list] == commands
 
-    if defaults["config"] is None:
-        config = Configuration()
-        config._set_default_c_marks()
-        config._set_default_a_marks()
-        config._set_default_b_marks()
-        defaults["config"] = config
+@pytest.mark.parametrize("reply", ["none", "done", "typed", "wrong_kind", "wrong_target"])
+def test_pressure_cannot_complete_without_matching_evidence_and_ack(protocol_clock, reply):
+    worker = make_protocol()
+    worker.is_running = True
+    worker.current_pressure = 50
+    def receive():
+        if reply in ("typed", "wrong_kind", "wrong_target"):
+            worker.arduino.motion_done.emit("K" if reply == "wrong_kind" else "P",
+                                           40 if reply == "wrong_target" else 50, 50)
+        if reply not in ("none", "typed"):
+            worker.arduino.done_emit.emit()
+    protocol_clock.on_sleep = receive
+    assert not worker.set_to_pressure(50)
+    worker.arduino.send.assert_called_once_with("P50|50")
+    assert PRESSURE_BUILD_TIMEOUT_S <= protocol_clock.elapsed < PRESSURE_BUILD_TIMEOUT_S + 1
 
-    p = Protocols(**defaults)
-    # MagicMock.send returns a truthy Mock by default; make it an explicit bool
-    # so the "command failed" branches behave like the real Arduino (True = ok).
-    p.arduino.send = MagicMock(return_value=True)
-    return p
+def test_cancellation_prevents_later_waypoint(protocol_clock):
+    worker = make_protocol()
+    worker.is_running = True
+    protocol_clock.on_sleep = worker.cancel
+    assert not worker.run_pressure_sequence(20, 50)
+    worker.arduino.send.assert_called_once_with("P30|50")
+    assert protocol_clock.elapsed < 1
 
+def test_rejected_send_ends_ramp_immediately(protocol_clock):
+    worker = make_protocol()
+    worker.is_running = True
+    worker.arduino.send.return_value = False
+    assert not worker.run_pressure_sequence(20, 50)
+    assert protocol_clock.elapsed == 0
 
-@pytest.mark.unit
-class TestRunPressureSequence:
-    """Tests for run_pressure_sequence ramp toward a target pressure."""
-
-    def test_rejects_negative_target(self):
-        """A negative target pressure is outside the safe range and aborts."""
-        p = make_protocol()
-        p.is_running = True
-        assert p.run_pressure_sequence(10, -5) is False
-
-    def test_rejects_over_max_safe_target(self):
-        """A target above MAX_SAFE_PRESSURE is rejected before any command."""
-        p = make_protocol()
-        p.is_running = True
-        result = p.run_pressure_sequence(10, MAX_SAFE_PRESSURE + 1)
-        assert result is False
-        p.arduino.send.assert_not_called()
-
-    def test_returns_true_when_target_reached(self):
-        """When status already reports the target, the sequence completes True."""
-        p = make_protocol()
-        p.is_running = True
-        # Seed the cached pressure at the target so every wait loop breaks at once.
-        p.current_pressure = 50
-        result = p.run_pressure_sequence(50, 50)
-        assert result is True
-
-    def test_sends_initial_pressure_command(self):
-        """The first command sent is the starting pressure P-command."""
-        p = make_protocol()
-        p.is_running = True
-        p.current_pressure = 50
-        p.run_pressure_sequence(50, 50)
-        first_call = p.arduino.send.call_args_list[0][0][0]
-        assert first_call == "P50"
-
-    def test_sends_final_target_pressure_command(self):
-        """The final target pressure P-command is sent before returning True."""
-        p = make_protocol()
-        p.is_running = True
-        p.current_pressure = 50
-        result = p.run_pressure_sequence(50, 50)
-        assert result is True
-        # Every command should be a pressure command; the target must appear.
-        sent = [c[0][0] for c in p.arduino.send.call_args_list]
-        assert all(cmd.startswith("P") for cmd in sent)
-        assert "P50" in sent
-
-    def test_ramps_through_increments_toward_target(self):
-        """Ramping from start to a higher target sends increasing P-commands."""
-        p = make_protocol()
-        p.is_running = True
-        # Seed at the highest value so each increment's stabilization check passes
-        # immediately (abs(current - command) <= tolerance is satisfied).
-        p.current_pressure = 50
-        start = 50 - PRESSURE_INCREMENT  # one increment below target
-        result = p.run_pressure_sequence(start, 50)
-        assert result is True
-        sent = [c[0][0] for c in p.arduino.send.call_args_list]
-        # Both the starting and the target pressure commands must have been sent.
-        assert f"P{start}" in sent
-        assert "P50" in sent
-
-    def test_returns_false_when_initial_pressure_command_fails(self):
-        """If the Arduino rejects the initial P-command, the sequence aborts."""
-        p = make_protocol()
-        p.is_running = True
-        p.current_pressure = 50
-        p.arduino.send = MagicMock(return_value=False)
-        assert p.run_pressure_sequence(50, 50) is False
-
-    def test_aborts_when_status_never_reaches_target(self):
-        """If status never reports reaching pressure, the build times out -> False."""
-        p = make_protocol()
-        p.is_running = True
-        p.current_pressure = 0  # never reaches target
-        result = p.run_pressure_sequence(50, 50)
-        assert result is False
-
-    def test_aborts_immediately_when_not_running(self):
-        """An emergency stop during the initial build aborts the sequence."""
-        p = make_protocol()
-        p.is_running = False  # simulates stop() having cleared the flag
-        p.current_pressure = 0
-        result = p.run_pressure_sequence(50, 50)
-        assert result is False
-
+@pytest.mark.parametrize("signal,result", [
+    ("fault_emit", {"reason": "PRESSURE_LIMIT"}),
+    ("command_rejected", {"command": "P", "reason": "TARE_REQUIRED"}),
+])
+def test_fault_or_rejection_cancels_even_during_hold(signal, result):
+    worker = make_protocol()
+    worker.is_running = True
+    getattr(worker.arduino, signal).emit(result)
+    assert not worker.is_running
+    assert not worker._send_command("P50")
 
 @pytest.mark.unit
 class TestStop:
@@ -276,19 +206,3 @@ class TestUpdateStatus:
         p.signals.status_emit.connect(handler)
         p.update_status(pos_a=5, pos_b=6, pos_c=7, pressure=8.0)
         handler.assert_called_once_with(5, 6, 7, 8.0)
-
-    def test_drives_pressure_loop_to_completion(self):
-        """update_status feeding the target lets run_pressure_sequence finish True."""
-        p = make_protocol()
-        p.is_running = True
-
-        def feed():
-            # Give the build loop a moment, then report the device at target.
-            time.sleep(0.05)
-            p.update_status(pos_a=0, pos_b=0, pos_c=0, pressure=50.0)
-
-        feeder = threading.Thread(target=feed)
-        feeder.start()
-        result = p.run_pressure_sequence(50, 50)
-        feeder.join()
-        assert result is True

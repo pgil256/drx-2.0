@@ -4,7 +4,7 @@ import os
 import time
 import serial
 
-from fixtures.fake_arduino import FakeArduino, PTY_AVAILABLE
+from fixtures.fake_arduino import FakeArduino, PRESSURE_WARNING_LBS, PTY_AVAILABLE
 
 pytestmark = pytest.mark.skipif(
     not PTY_AVAILABLE,
@@ -244,17 +244,23 @@ class TestFakeArduinoFirmwareParity:
         finally:
             fake.stop()
 
-    def test_pressure_limit_error(self):
+    def test_pressure_warning_threshold_is_advisory(self):
+        """Firmware parity (motor.ino PRESSURE_WARNING_LBS): measured pressure
+        above the warning threshold emits ONE advisory WARNING and does not
+        abort the ramp. The hard cap applies to the treatment *target*, which
+        'P' clamps to MAX_PRESSURE_LBS — the old "ERROR: Pressure limit
+        exceeded" abort no longer exists in the firmware."""
         fake = FakeArduino()
-        fake.pressure_rate = 5.0  # slow ramp so overshoot hits mid-ramp
+        fake.pressure_rate = 5.0  # slow ramp so the overshoot lands mid-ramp
         fake.start()
         try:
             send_cmd(fake, b"P50\n")
             assert wait_until(lambda: fake.measure_pressure)
-            fake.simulate_pressure_overshoot(85.0)
+            fake.simulate_pressure_overshoot(PRESSURE_WARNING_LBS + 10)
             output = read_output(fake, duration=0.5)
-            assert "ERROR: Pressure limit exceeded" in output
-            assert fake.measure_pressure is False
+            assert output.count("WARNING: Pressure warning threshold exceeded") == 1
+            assert "ERROR: Pressure limit exceeded" not in output
+            assert fake.measure_pressure is True  # ramp continues toward target
         finally:
             fake.stop()
 
