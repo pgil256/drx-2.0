@@ -8,42 +8,47 @@ load cell (treatment pressure, up to 80 lbs).
 
 ## Layout
 
-| Path | What it is |
-|---|---|
-| `main/kneespa.py` | Application entry point + UI controller |
-| `main/helpers/` | Serial transport (`arduino.py`), protocol engine (`protocols.py`), reset sequence, auth, conversions |
-| `main/config/` | Python configuration loader and code constants |
-| `config/` | Persistent device calibration (`kneespa.cfg`), template, and presets |
-| `logs/` | Timestamped Python app and Arduino serial logs for each run |
-| `main/motor/` | Arduino Mega firmware (`motor.ino`) + native unit tests |
-| `main/ui/` | Qt Designer `.ui` files, dialogs, widgets (incl. the treatment status banner) |
-| `tools/calibrate.py` | CLI calibration tool (jog, marks, load-cell tare + known-weight factor) |
-| `tests/` | pytest suite: unit + pty-based integration against a firmware-faithful FakeArduino |
-| `rpi/` | Deployment notes, systemd unit example, `sync_pis.sh` deploy script |
-| `docs/audits/`, `docs/plans/` | The 2026-06-11 full audit, improvement plan (with status), and the Flash Batch-1 hardware checklist |
+| Directory | Contents | Sync policy |
+|---|---|---|
+| `runtime/raspberry-pi/` | Python application, UI assets, dependencies, launcher | Shared software updates to every Pi |
+| `runtime/arduino/motor/` | Production Arduino Mega firmware and build definition | Shared firmware updates; flash to the Arduino separately |
+| `devices/local/raspberry-pi/` | This device's calibration, IDs, credentials, outbox, logs | Preserve during software updates |
+| `devices/profiles/<device-name>/raspberry-pi/` | PC copies of a specific device's state | Explicit transfer for that device only; ignored by Git |
+| `devices/templates/` | Provisioning examples and historical calibration presets | Copy selected files during setup |
+| `devices/maintenance/` | Pi diagnostics and Arduino calibration/scale sketches | Optional maintenance only |
+| `development/` | Documentation, Python and firmware tests, PC tools, sync scripts | Kept on the PC; excluded from routine deployment |
+
+Git/CI metadata, `pytest.ini`, and this README remain at the repository root.
+See [deployment and migration](development/docs/deployment.md) for the exact
+device layout, upgrade steps, and sync commands. Firmware tests live under
+`development/tests/firmware/`, separate from the shipped sketch.
 
 ## Running
 
 ```bash
-python main/kneespa.py                  # on the Pi (requires RPi.GPIO, PyQt5)
-python main/kneespa.py --debug --print-logs
+python runtime/raspberry-pi/main/kneespa.py                  # on the Pi (requires RPi.GPIO, PyQt5)
+python runtime/raspberry-pi/main/kneespa.py --debug --print-logs
+python development/tools/run_local.py   # desktop preview with simulated hardware
 ```
 
 ## User provisioning & runtime secrets
 
-`config/kneespa.cfg` (per-device calibration, beside `main/`) and
-`main/data/user_pins.csv` (login credentials) are runtime state and are
-**not tracked in git** — the repo ships `*.example` templates. On first
+`devices/local/raspberry-pi/config/kneespa.cfg` (calibration and identity) and
+`devices/local/raspberry-pi/data/user_pins.csv` (login credentials) are device
+state and are **not tracked in git** — the repo ships `*.example` templates. On first
 run the app generates a default (uncalibrated) config and seeds an empty
 users file; with zero users provisioned nobody can log in.
 
-Replacing `main/` preserves the sibling `config/` and `logs/` folders. If the
-new config is absent but `main/config/kneespa.cfg` still exists, the app copies
-that legacy file to `config/kneespa.cfg` on first load, leaving the source intact.
-For a manual upgrade, move your existing config out before replacing `main/`.
-`--config PATH` and `KNEESPA_CONFIG_PATH` still select a custom config.
+Replacing `runtime/` preserves all of `devices/`. The first normal application
+launch copies legacy config, credentials, auth state, pending uploads, env files,
+and logs into `devices/local/raspberry-pi/`, without overwriting existing files.
+The original files remain for rollback. Migrate before removing any legacy folders.
+Set `KNEESPA_DEVICE_DIR` to a device profile directory to select a different device;
+explicit profiles do not import another device's legacy state. The desktop preview
+uses its own `devices/development/` state. `--config PATH` and the existing
+`KNEESPA_*_PATH` overrides still work.
 
-Set the device number in `config/kneespa.cfg`:
+Set the device number in `devices/local/raspberry-pi/config/kneespa.cfg`:
 
 ```ini
 [Device]
@@ -53,7 +58,8 @@ number = 1
 Valid numbers are **1, 2, and 3**, with **1** used when missing or invalid.
 Keep the existing `id` entry; it is the separate unique id used for support.
 
-Every application process creates a matching pair of logs in `logs/`:
+Every application process creates a matching pair of logs in the selected
+device's `raspberry-pi/logs/` directory:
 `python_YYYYMMDD-HHMMSS-microseconds_PID.log` and
 `arduino_YYYYMMDD-HHMMSS-microseconds_PID.log`. The Python log includes debug,
 error, printed output, and Python stderr. The serial log timestamps sent (`TX`)
@@ -74,7 +80,7 @@ copies logs and numbered segments from this folder after exit.
 
 Provision users one of two ways:
 
-- **Environment / `.env`** (preferred): set `ADMIN_PIN_HASH` /
+- **Environment / device-local `.env`** (preferred): set `ADMIN_PIN_HASH` /
   `USER_PIN_HASH` (values from `SecureAuthHelper.hash_pin_secure`), plus
   optional `ADMIN_USERNAME` / `ADMIN_EMAIL` etc. Plaintext `ADMIN_PIN` /
   `USER_PIN` also work but keep the PIN readable in the environment.
@@ -86,7 +92,7 @@ Provision users one of two ways:
 Generate a hash:
 
 ```bash
-python -c "import sys; sys.path.insert(0, 'main'); \
+python -c "import sys; sys.path.insert(0, 'runtime/raspberry-pi/main'); \
 from helpers.secure_auth import SecureAuthHelper; \
 print(SecureAuthHelper.hash_pin_secure(input('PIN: ')))"
 ```
@@ -95,16 +101,16 @@ print(SecureAuthHelper.hash_pin_secure(input('PIN: ')))"
 
 DRx connects to the KneeSpa cloud Device API for patient PIN lookup, treatment
 settings, and session history. Operator PIN login remains local. See
-[Cloud integration](docs/cloud-integration.md) for provisioning, supported
+[Cloud integration](development/docs/cloud-integration.md) for provisioning, supported
 settings, upload status, offline behavior, and verification instructions.
 
 ## Testing
 
 ```bash
 python -m pytest                        # unit tests anywhere; integration tests need POSIX pty
-bash tools/wsl_run_tests.sh             # full suite + firmware tests (WSL/Linux)
-bash main/motor/run_native_tests.sh     # firmware suites (g++ + vendored Unity)
-cd main/motor && pio test -e native     # same, via PlatformIO where available
+bash development/tools/wsl_run_tests.sh             # full suite + firmware tests (WSL/Linux)
+bash development/tests/firmware/run_native_tests.sh     # firmware suites (g++ + vendored Unity)
+cd runtime/arduino/motor && pio test -e native  # same, via PlatformIO where available
 ```
 
 CI (`.github/workflows/ci.yml`) runs the full Python suite, the firmware
@@ -112,7 +118,7 @@ native tests, and an AVR compile check of `motor.ino` for the Mega 2560.
 
 ### Physical touchscreen E2E
 
-`tools/e2e_touchscreen.py` launches the real GUI and uses operating-system
+`development/tools/e2e_touchscreen.py` launches the real GUI and uses operating-system
 mouse events at the physical 1366x768 screen coordinates. It can test the
 automatic reset acknowledgement, PIN login, Setup actuators, protocols 1-3,
 and the video player. It does not call Qt slots directly.
@@ -127,16 +133,16 @@ Stop any already-running KneeSpa service first so only the E2E-launched app
 owns `/dev/serial0`. Then run one of:
 
 ```bash
-python tools/e2e_touchscreen.py --setup --yes-move-hardware
-python tools/e2e_touchscreen.py --actuators axial lateral --yes-move-hardware
-python tools/e2e_touchscreen.py --protocols 1 2 3 --yes-move-hardware
-python tools/e2e_touchscreen.py --video
-python tools/e2e_touchscreen.py --all --yes-move-hardware
+python development/tools/e2e_touchscreen.py --setup --yes-move-hardware
+python development/tools/e2e_touchscreen.py --actuators axial lateral --yes-move-hardware
+python development/tools/e2e_touchscreen.py --protocols 1 2 3 --yes-move-hardware
+python development/tools/e2e_touchscreen.py --video
+python development/tools/e2e_touchscreen.py --all --yes-move-hardware
 ```
 
 Actuator/protocol runs require `--yes-move-hardware`: remove the patient,
 clear the mechanism, and keep an operator at the physical STOP throughout.
-Each run writes a timestamped folder under `logs/e2e/` with `e2e.log`, raw
+Each run writes a timestamped folder under `devices/local/raspberry-pi/logs/e2e/` with `e2e.log`, raw
 serial `TX`/`RX` in `serial.log` when the port connects, step screenshots when
 available, and `summary.json`. Protocols are observed for 20 seconds by
 default and then stopped through the permanent on-screen STOP; change this
@@ -145,20 +151,23 @@ with `--protocol-observe-seconds`.
 ## Deploying
 
 ```bash
-PI_HOSTS="<verified-device-host>" ./rpi/sync_pis.sh
-# Stops the service, syncs main/, and restarts after a successful sync.
-# Preserves device-local calibration, PINs, authentication state, pending uploads, and logs.
+PI_HOSTS="<verified-device-host>" bash development/sync/sync_pis.sh --dry-run
+PI_HOSTS="<verified-device-host>" bash development/sync/sync_pis.sh --apply
 ```
 
 `PI_HOSTS` is required; verify the current device addresses before deployment.
-The script does not fall back to the historical host list.
+The script does not fall back to the historical host list. Apply stops the service,
+syncs only `runtime/`, and restarts after a successful copy. Firmware is staged on
+the Pi, not flashed automatically. Existing installations need the one-time
+[service-path update](development/docs/deployment.md#upgrade-an-existing-device).
+Use `development/sync/sync_device_state.sh` for explicit per-device transfers.
 
 ### Display diagnostics
 
 Install two double-clickable Pi desktop launchers:
 
 ```bash
-bash rpi/install_display_diagnostics.sh
+bash devices/maintenance/raspberry-pi/install_display_diagnostics.sh
 ```
 
 Use **KneeSpa - Collect Display Baseline** once while the display and touch are
@@ -211,7 +220,7 @@ settings. A Pi-only update with older firmware and v2 disabled still accepts
 legacy unchecked reports and cannot detect a digit changing into another
 valid digit. FAILSAFE-2 through FAILSAFE-6 already checksum periodic status
 when launched with `KNEESPA_PROTOCOL_V2=1` after hardware checkout; for example,
-from the project root: `KNEESPA_PROTOCOL_V2=1 python3 main/kneespa.py --debug --print-logs`.
+from the project root: `KNEESPA_PROTOCOL_V2=1 python3 runtime/raspberry-pi/main/kneespa.py --debug --print-logs`.
 Checksums detect transmission damage; the underlying UART corruption and
 the separately logged stall near 1940 counts still need device diagnosis.
 
@@ -221,7 +230,7 @@ firmware, including live Treatment-slider changes. Set
 rollback when operating a device with older bare-`J` firmware.
 
 **Before flashing firmware to a device**, run the checkout list in
-[docs/plans/2026-06-11-batch1-hardware-checklist.md](docs/plans/2026-06-11-batch1-hardware-checklist.md)
+[hardware checklist](development/docs/plans/2026-06-11-batch1-hardware-checklist.md)
 — including the watchdog/bootloader recovery check (A2) and the
 position-convention measurements (E1–E3) that later math corrections
 are gated on.

@@ -1,0 +1,5 @@
+The current service template is devices/templates/raspberry-pi/kneespa.service.example.
+
+See development/docs/deployment.md for installation and one-time migration.
+ExecStart must point to runtime/raspberry-pi/main/kneespa.py.
+Reload systemd after changing the unit, before using development/sync/sync_pis.sh.

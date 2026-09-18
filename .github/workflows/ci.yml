@@ -22,7 +22,7 @@ jobs:
         with:
           python-version: "3.12"
           cache: pip
-          cache-dependency-path: requirements-test.txt
+          cache-dependency-path: development/requirements-test.txt
 
       - name: Install system libraries for PyQt5 (headless)
         run: |
@@ -39,12 +39,12 @@ jobs:
       - name: Install Python test dependencies
         run: |
           python -m pip install --upgrade pip
-          pip install -r requirements-test.txt
+          pip install -r development/requirements-test.txt
 
       # H7: host clamps (constants.py) and firmware clamps (motor.ino)
       # declare the same limits twice; fail fast if they drift.
       - name: Check host/firmware safety-limit sync
-        run: python scripts/check_limits_sync.py
+        run: python development/scripts/check_limits_sync.py
 
       # On Linux the pty-based integration tests run for real
       # (they skip on Windows dev machines).
@@ -64,7 +64,7 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build and run firmware test suites
-        run: bash main/motor/run_native_tests.sh
+        run: bash development/tests/firmware/run_native_tests.sh
 
   firmware-avr-build:
     name: Firmware AVR build check (Mega 2560)
@@ -87,8 +87,8 @@ jobs:
         uses: actions/cache@v4
         with:
           path: ~/.platformio
-          key: pio-${{ runner.os }}-${{ hashFiles('main/motor/platformio.ini') }}
+          key: pio-${{ runner.os }}-${{ hashFiles('runtime/arduino/motor/platformio.ini') }}
 
       - name: Compile firmware for target hardware
-        working-directory: main/motor
+        working-directory: runtime/arduino/motor
         run: pio run -e mega

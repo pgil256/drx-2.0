@@ -56,7 +56,9 @@ debug.txt
 htmlcov/
 .pytest_cache/
 .tox/
-# Firmware native-test build artifacts (created by main/motor/run_native_tests.sh)
+# Firmware build output, including caches left behind by pre-migration checkouts.
+development/tests/firmware/.native-build/
+runtime/arduino/motor/.pio/
 main/motor/.native-build/
 main/motor/.pio/
 
@@ -83,6 +85,14 @@ config/kneespa.cfg
 main/data/user_pins.csv
 main/data/auth_state.json
 cloud.env
+
+# Device profiles, live state and collected logs must never be committed.
+/devices/local/
+/devices/profiles/
+/devices/development/
+/runtime/raspberry-pi/main/data/*.csv
+/runtime/raspberry-pi/main/data/*.json
+/runtime/raspberry-pi/main/config/kneespa.cfg
 
 # Design-source scratch ? reference material dropped in the working tree,
 # never part of the app build (the code-built UI lives under main/ui/)
@@ -129,7 +139,6 @@ claude_old/
 
 
 
-main/motor/.native-build/
 
 # Local backup copies of the two files above (calibration + user PIN table)
 main/config/kneespa-backup*.cfg

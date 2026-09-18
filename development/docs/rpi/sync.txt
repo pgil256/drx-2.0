@@ -1,0 +1,6 @@
+From the project root, in WSL/Linux:
+
+PI_HOSTS="<verified-device-host>" bash development/sync/sync_pis.sh --dry-run
+PI_HOSTS="<verified-device-host>" bash development/sync/sync_pis.sh --apply
+
+See development/docs/deployment.md for migration and per-device state transfer.

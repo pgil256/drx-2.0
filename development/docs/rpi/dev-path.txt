@@ -1,0 +1,7 @@
+From the project root on a Pi:
+
+python3 runtime/raspberry-pi/main/kneespa.py
+
+On the PC with simulated hardware:
+
+python development/tools/run_local.py

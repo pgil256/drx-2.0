@@ -1,4 +1,0 @@
-From the project root:
-
-cd main
-python3 kneespa.py

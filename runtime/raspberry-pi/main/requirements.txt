@@ -1,0 +1,20 @@
+# Runtime requirements for the KneeSpa application.
+# Test-only dependencies live in development/requirements-test.txt at the repository root.
+
+# Hardware Control
+RPi.GPIO==0.7.1
+pyserial==3.5
+
+# Environment Variables
+python-dotenv==0.19.2
+
+# Configuration Management
+configparser==5.0.2  # Enhanced config file parsing
+
+# Video Playback
+python-vlc==3.0.12118
+
+# NOTES:
+# ------
+# PyQt5 MUST be installed via apt-get:
+#   sudo apt-get install python3-pyqt5
