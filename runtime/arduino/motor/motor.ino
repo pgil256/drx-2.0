@@ -13,7 +13,7 @@
   - Fixed STOP pin logic (INPUT_PULLUP reads HIGH when not pressed)
 */
 
-#define VERSION "2026-09-17-DRX2-NB2"
+#define VERSION "2026-09-18-DRX2-NB2-SERVICE"
 #define HX711_DRIVER "DRX-HX711-NB2"
 #include <math.h>
 #ifndef UNIT_TEST
@@ -723,6 +723,35 @@ void reportSensorDiagnostics() {
   Serial1.println(scale.is_ready() ? 1 : 0);
 }
 
+// Explicit, read-only service probe. A cached position cannot establish that
+// a controller is connected: preserve the validity of each fresh I2C read.
+// Fit has no position feedback; its flag reports commanded output only.
+void reportHardwareDiagnostics() {
+  uint8_t savedDevice = smcDeviceNumber;
+  bool healthy[3] = {false, false, false};
+  for (uint8_t i = 0; i < 3; ++i) {
+    // Safety service may change the selected SMC when it stops every axis;
+    // select this probe's axis afterwards, so health never names another one.
+    servicePressure();
+    smcDeviceNumber = 12 + i;
+    uint16_t value = 0;
+    healthy[i] = readPositionOnce(value) || readPositionOnce(value);
+    servicePressure();
+  }
+  smcDeviceNumber = savedDevice;
+  bool stopPressed = digitalRead(STOP_PIN) == LOW;
+  bool fitActive = moveFITForward || digitalRead(DIR_FIT_FORWARD) == HIGH ||
+                   digitalRead(DIR_FIT_REVERSE) == HIGH;
+  Serial1.print("DIAG|HARDWARE|");
+  for (uint8_t i = 0; i < 3; ++i) {
+    Serial1.print(healthy[i] ? 1 : 0);
+    Serial1.print("|");
+  }
+  Serial1.print(stopPressed ? 1 : 0);
+  Serial1.print("|");
+  Serial1.println(fitActive ? 1 : 0);
+}
+
 void rejectTare(const char *reason) {
   tareActive = false;
   pressureCalibrated = false;
@@ -932,7 +961,7 @@ void processCommand(String cmd) {
 
   char commandType = cmd[0];
   if (pressureFault && commandType != 'Y' && commandType != 'X' &&
-      commandType != 'T' && commandType != 'Q' && commandType != 'S' &&
+      commandType != 'T' && commandType != 'Q' && commandType != 'S' && commandType != 'D' &&
       commandType != 'H' && cmd != "JS" && cmd != "F0") {
     char kind[2] = {commandType, 0};
     rejectCommand(kind, "FAULT_LATCHED");
@@ -1004,6 +1033,14 @@ void processCommand(String cmd) {
       }
       break;
     }
+    // Hardware service probe: never start a motor or clear a fault.
+    case 'D':
+        if (cmd != "D") { emitCmdError("Invalid D diagnostics"); return; }
+        reportHardwareDiagnostics();
+        // Legacy OK/DONE could be mistaken for a motion/test acknowledgement.
+        if (currentCmdSeq >= 0) emitAck("OK", currentCmdSeq);
+        break;
+
     // Test command
     case 'T':
         Dbg.println("Test command received");

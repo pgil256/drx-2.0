@@ -71,6 +71,11 @@ def parse_diagnostic_frame(frame):
                 return "calibration_result", result
         raise ValueError("Malformed calibration response")
     if parts[0] == "DIAG":
+        if len(parts) >= 2 and parts[1] == "HARDWARE":
+            if len(parts) != 7 or any(value not in ("0", "1") for value in parts[2:]):
+                raise ValueError("Malformed hardware diagnostics")
+            fields = ("a_ok", "b_ok", "c_ok", "stop_pressed", "fit_active")
+            return "hardware_diagnostics", dict(zip(fields, (value == "1" for value in parts[2:])))
         if len(parts) != 10 or parts[1] != "HX711":
             raise ValueError("Malformed HX711 diagnostics")
         values = {"raw": _integer(parts[2], -8388608, 8388607),

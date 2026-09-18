@@ -96,7 +96,8 @@ from helpers.conversions import (
 from helpers.angles import pos_c_to_angle
 from helpers.cloud_client import CloudClient
 from helpers.cloud_contract import cloud_error_message, validate_patient
-from controllers.calibration_controller import CalibrationController
+from controllers.hardware_service_controller import HardwareServiceController
+from helpers.hardware_service import axial_position
 
 from helpers.logging import LoggerSetup, read_recent_log_lines, setup_logger
 
@@ -138,10 +139,14 @@ class KneeSpa(QMainWindow):
     """Main application class for KneeSpa."""
 
     def set_to_distance(self, inches, actuator, factor):
-        position = int(inches * (factor / 8.0))
-        print("Setting to {} in {} pos {} act".format(inches, position, actuator))
-        # Format inches with at least 1 decimal place for proper Arduino parsing
         command = "A{}{:.1f}".format(actuator, inches)
+        config = getattr(self, "config", None)
+        if str(actuator) == "12" and getattr(config, "axial_service_calibrated", False) is True:
+            try:
+                command = f"I12{axial_position(config.AMarks, inches)}"
+            except (ValueError, TypeError, KeyError) as exc:
+                self._show_timed_error(f"Axial calibration is invalid: {exc}")
+                return False
         self.I2Cstatus_event.clear()
         if not KneeSpa._send_motion_command(self, command, "axial movement"):
             return False
@@ -297,7 +302,7 @@ class KneeSpa(QMainWindow):
         self.auth = AuthController(self)
         self.protocol = ProtocolController(self)
         self.connection = ConnectionManager(self)
-        self.calibration_controller = CalibrationController(self)
+        self.calibration_controller = HardwareServiceController(self)
         self._calibration_active = False
         # Protocol lifecycle state: idle / starting / running / stopping / fault
         self.protocol_state = "idle"
@@ -429,6 +434,9 @@ class KneeSpa(QMainWindow):
     def _send_motion_command(self, command, context):
         """Queue a Setup motion without fabricating success in the UI."""
         if getattr(self, "_closing", False) is True:
+            return False
+        if getattr(self, "_calibration_active", False) is True:
+            self._show_timed_error("Close Hardware Tests & Calibration before normal movement.")
             return False
         try:
             queued = bool(self.arduino and self.arduino.send(command))
@@ -1227,6 +1235,14 @@ class KneeSpa(QMainWindow):
             # Arduino expects: A[2-digit device][float value starting at position 3]
             # Format position with at least 1 decimal place to ensure proper parsing
             command = f"A12{new_position:.1f}"
+            if getattr(self.config, "axial_service_calibrated", False) is True:
+                try:
+                    command = f"I12{axial_position(self.config.AMarks, new_position)}"
+                except (ValueError, TypeError, KeyError) as exc:
+                    self._show_timed_error(f"Axial calibration is invalid: {exc}")
+                    self.loading_spinner.hide()
+                    self.enable_actuator_controls()
+                    return False
             print(f"Sending axial command: {command}")
             if not KneeSpa._send_motion_command(self, command, "axial movement"):
                 return False
@@ -1390,6 +1406,9 @@ class KneeSpa(QMainWindow):
     # ----- leg-length (FIT) jog handlers (open-loop F-commands + GPIO) -----
     def _move_leg(self, command, delta, duration_ms, forward):
         """Start one bounded open-loop FIT movement."""
+        if getattr(self, "_service_leg_position_unknown", False) is True:
+            self._show_timed_error("Use the leg-length Reset control after service movement.")
+            return False
         target = self.leg_length + delta
         if target < self.LEG_LENGTH_MIN or target > self.LEG_LENGTH_MAX:
             self._show_timed_error(
@@ -1434,6 +1453,14 @@ class KneeSpa(QMainWindow):
         GPIO.output(EXTRAFORWARD, GPIO.LOW)
         GPIO.output(EXTRABACKWARD, GPIO.LOW)
 
+    def _start_service_leg_gpio(self, forward: bool) -> None:
+        """Exercise the production Pi leg drive for one bounded service jog."""
+        if not self._calibration_active or self._physical_stop_active or self._closing:
+            raise RuntimeError("Service movement is no longer permitted")
+        GPIO.output(EXTRAFORWARD, GPIO.HIGH if forward else GPIO.LOW)
+        GPIO.output(EXTRABACKWARD, GPIO.LOW if forward else GPIO.HIGH)
+        QTimer.singleShot(600, self._release_leg_gpio)
+
     def reset_extra_button_clicked(self):
         """Home the open-loop FIT axis, updating zero only after completion."""
         self.loading_spinner.show()
@@ -1452,6 +1479,11 @@ class KneeSpa(QMainWindow):
 
     def _finish_leg_reset(self):
         self._release_leg_gpio()
+        if any(getattr(self, flag, False) is True for flag in (
+            "_physical_stop_active", "_closing", "_no_automatic_recovery",
+        )):
+            return
+        self._service_leg_position_unknown = False
         self.leg_length = 0.0
         self._reflect_setup("leg_length", 0.0)
         self.loading_spinner.hide()

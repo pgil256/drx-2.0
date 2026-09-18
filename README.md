@@ -19,6 +19,9 @@ load cell (treatment pressure, up to 80 lbs).
 | `development/` | Documentation, Python and firmware tests, PC tools, sync scripts | Kept on the PC; excluded from routine deployment |
 
 Git/CI metadata, `pytest.ini`, and this README remain at the repository root.
+Local test artifacts live under the ignored `.cache/` directory. Original design
+files are in `development/reference/local/`, workspace backup archives in
+`development/backups/local/`, and migrated device originals in `devices/archive/`.
 See [deployment and migration](development/docs/deployment.md) for the exact
 device layout, upgrade steps, and sync commands. Firmware tests live under
 `development/tests/firmware/`, separate from the shipped sketch.

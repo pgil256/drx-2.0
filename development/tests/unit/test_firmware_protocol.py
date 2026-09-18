@@ -15,6 +15,7 @@ pytestmark = pytest.mark.unit
     "CALIBRATION|TARE|CANCELLED|STOP", "COMMAND_REJECTED|P|TARE_REQUIRED",
     "DIAG|HX711|-300|-200|-100|1.000000|20|40|150|1",
     "DIAG|HX711|0|0|1|0|-1|40|150|0", "NOTICE|PRESSURE_NO_PROGRESS|2150|1.5|2.5",
+    "DIAG|HARDWARE|1|1|1|0|0", "DIAG|HARDWARE|0|0|0|1|1",
 ])
 def test_valid_typed_replies(frame):
     signal, result = parse_diagnostic_frame(frame)
@@ -28,6 +29,10 @@ def test_valid_typed_replies(frame):
     "DIAG|HX711|0|0|1|nan|0|0|0|1", "DIAG|HX711|0|0|1|0|0|0|0|2",
     "DIAG|HX711|0|0|1|0|-2|0|0|0", "FAULT|PRESSURE_LIMIT|40|nan",
     "NOTICE|PRESSURE_NO_PROGRESS|2150|1|-1", "COMMAND_REJECTED|P|BAD REASON",
+    "DIAG|HARDWARE|1|1|1|0", "DIAG|HARDWARE|1|1|1|0|0|DONE",
+    "DIAG|HARDWARE|2|1|1|0|0", "DIAG|HARDWARE|1|1|1|false|0",
+    "DIAG|HARDWARE|1|1|1|0|-0", "DIAG|HARDWARE|01|1|1|0|0",
+    "DIAG|HARDWARE|1.0|1|1|0|0", "DIAG|HARDWARE|1|1|1|0|0*AA",
 ])
 def test_invalid_typed_replies_never_emit(frame):
     with pytest.raises(ValueError):
@@ -35,10 +40,26 @@ def test_invalid_typed_replies_never_emit(frame):
     arduino = Arduino()
     received = Mock()
     for name in ("motion_done", "calibration_result", "sensor_diagnostics", "fault_emit",
-                 "pressure_warning", "command_rejected", "done_emit"):
+                 "hardware_diagnostics", "pressure_warning", "command_rejected", "done_emit"):
         getattr(arduino, name).connect(received)
     arduino.handle_com(frame)
     received.assert_not_called()
+
+
+@pytest.mark.parametrize("v2", [False, True])
+def test_hardware_probe_emits_booleans_without_acknowledging_motion(v2):
+    arduino = Arduino()
+    arduino.protocol_v2 = v2
+    received, motion_done = Mock(), Mock()
+    arduino.hardware_diagnostics.connect(received)
+    arduino.done_emit.connect(motion_done)
+    arduino.handle_com("DIAG|HARDWARE|1|0|1|1|0")
+    received.assert_called_once_with({
+        "a_ok": True, "b_ok": False, "c_ok": True,
+        "stop_pressed": True, "fit_active": False,
+    })
+    motion_done.assert_not_called()
+    assert not arduino.ok_event.is_set()
 
 
 def test_identity_is_invalidated_by_reboot_and_calibration_is_blocked():

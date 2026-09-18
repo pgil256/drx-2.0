@@ -95,10 +95,17 @@ class TestResetGating:
 
     def test_reset_finished_success(self, manager):
         cm, w = manager
+        w.axial_flexion_position = 3.0
+        w.horizontal_flexion_position = -20
+        w.lateral_flexion_position = 15
         w.reset_in_progress = True
         cm._on_reset_finished(True)
         assert w.reset_in_progress is False
         assert w.initial_setup_complete is True
+        from config.constants import DEFAULT_HORIZONTAL_POSITION
+        assert w.axial_flexion_position == 0
+        assert w.horizontal_flexion_position == DEFAULT_HORIZONTAL_POSITION
+        assert w.lateral_flexion_position == 0
         w.shell.treatment.set_busy.assert_called_with(False)
 
     def test_reset_finished_failure_keeps_start_disabled(self, manager):

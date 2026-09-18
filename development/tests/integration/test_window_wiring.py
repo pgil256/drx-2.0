@@ -21,10 +21,11 @@ from pytestqt.qtbot import QtBot
 import kneespa
 from config.config import Configuration
 from config.constants import DATA_PATHS
-from controllers import connection_manager, protocol_controller
+from controllers import connection_manager, hardware_service_controller, protocol_controller
 from helpers.arduino import Arduino
 from helpers.protocols import WorkerSignals
 from helpers.reset_worker import ResetWorkerSignals
+from helpers.service_auth import ServiceAccess
 from ui.screens.content import PHASES
 
 pytestmark = pytest.mark.integration
@@ -132,6 +133,11 @@ def window_run(themed_app: QApplication, tmp_path: Path,
     (tmp_path / "user_pins").write_text("pin_hash,username,email,status\n", encoding="utf-8")
     for key in ("ADMIN_PIN", "ADMIN_PIN_HASH", "USER_PIN", "USER_PIN_HASH"):
         monkeypatch.delenv(key, raising=False)
+    monkeypatch.delenv("KNEESPA_SERVICE_PIN_HASH", raising=False)
+    monkeypatch.setattr(hardware_service_controller, "DEVICE_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(hardware_service_controller, "ServiceAccess", lambda: ServiceAccess(
+        str(tmp_path / "service-pin.json")
+    ))
 
     cloud = MagicMock(enabled=False)
     monkeypatch.setattr(kneespa, "CloudClient", lambda **kwargs: cloud)
@@ -142,6 +148,7 @@ def window_run(themed_app: QApplication, tmp_path: Path,
     arduino._io_thread = None
     arduino.wait_for_drain.return_value = True
     arduino.connected = True
+    arduino.firmware_version = "service-test"
     arduino.send.return_value = True
     arduino.verify_connection.return_value = True
     arduino.disconnect.return_value = True
@@ -233,21 +240,28 @@ def window_run(themed_app: QApplication, tmp_path: Path,
 def test_calibration_button_opens_shared_session(
     window_run: SimpleNamespace, page: str, qtbot: QtBot,
 ) -> None:
-    """Both visible entry points open the real controller without requesting motion."""
+    """Both entry points demand the separate PIN before acquiring the shared link."""
     w = window_run.window
     w.shell.navigate(page)
     button = getattr(w.shell, page)._calibration
     assert button.isVisible()
     assert button.isEnabled()
     window_run.arduino.send.reset_mock()
+    controller = w.calibration_controller
+    controller.access.provision("654321", "654321", is_admin=True)
 
     button.click()
 
-    controller = w.calibration_controller
+    assert controller.dialog is None
+    assert controller.pin_dialog.isVisible()
+    window_run.arduino.send.assert_not_called()
+    controller.pin_dialog.submit("111111")
+    assert controller.dialog is None
+    controller.pin_dialog.submit("654321")
     assert controller.dialog.isVisible()
     assert w._calibration_active
-    assert not controller.dialog.capture_button.isEnabled()
-    window_run.arduino.send.assert_called_once_with("HF1")
+    assert not controller.ready()
+    assert [call.args[0] for call in window_run.arduino.send.call_args_list] == ["HF1", "T"]
     assert not w.shell.setup._rows["horizontal"].motion_buttons[0].isEnabled()
 
     controller.dialog.close_button.click()
