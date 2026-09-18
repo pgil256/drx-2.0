@@ -229,9 +229,9 @@ class SetupScreen(QWidget):
         header_layout.setContentsMargins(0, 0, 0, 0)
         header_layout.setSpacing(12)
         header_layout.addWidget(self._arduino_badge)
-        self._calibration = DSButton("Calibrate Actuators", variant="secondary", size="sm")
+        self._calibration = DSButton("Hardware Tests & Calibration", variant="secondary", size="sm")
         self._calibration.setToolTip(
-            "Calibrate horizontal and lateral angle marks and distance factors"
+            "Technician PIN: guided hardware checks and measured calibration"
         )
         self._calibration.clicked.connect(self.calibration_requested)
         header_layout.addWidget(self._calibration)

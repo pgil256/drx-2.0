@@ -107,6 +107,7 @@ class Arduino(QObject):
     calibration_result = pyqtSignal(dict)
     firmware_identity = pyqtSignal(dict)
     sensor_diagnostics = pyqtSignal(dict)
+    hardware_diagnostics = pyqtSignal(dict)
     pressure_warning = pyqtSignal(dict)
     command_rejected = pyqtSignal(dict)
     fault_emit = pyqtSignal(dict)

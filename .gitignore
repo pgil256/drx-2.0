@@ -45,6 +45,9 @@ debug.txt
 *_log.txt
 
 # Local development
+/.cache/
+/development/reference/local/
+/development/backups/local/
 *.local
 .env.local
 .env.development.local
@@ -64,6 +67,7 @@ main/motor/.pio/
 
 # Distribution
 *.tar.gz
+!/kneespa-pi-desktop-setup.tar.gz
 *.zip
 *.rar
 
@@ -90,6 +94,7 @@ cloud.env
 /devices/local/
 /devices/profiles/
 /devices/development/
+/devices/archive/
 /runtime/raspberry-pi/main/data/*.csv
 /runtime/raspberry-pi/main/data/*.json
 /runtime/raspberry-pi/main/config/kneespa.cfg

@@ -1,0 +1,9 @@
+[Desktop Entry]
+Type=Application
+Name=Install KneeSpa
+Comment=Install the KneeSpa app and firmware shortcuts on the Pi desktop
+Exec=/bin/bash /home/pi/drx/devices/install_kneespa_desktop.sh
+Icon=system-software-install
+Terminal=true
+StartupNotify=false
+Categories=System;

@@ -14,7 +14,7 @@ from PyQt5.QtWidgets import QApplication
 
 from helpers.arduino import Arduino
 from helpers.reset_worker import ResetWorker
-from config.constants import ARDUINO_SETTINGS
+from config.constants import ARDUINO_SETTINGS, DEFAULT_HORIZONTAL_POSITION
 
 
 class ConnectionManager:
@@ -300,6 +300,11 @@ class ConnectionManager:
         window.reset_in_progress = False
 
         if success:
+            # The reset worker has verified these home targets. Rebase normal
+            # jog estimates after service movement before controls are enabled.
+            window.axial_flexion_position = 0
+            window.horizontal_flexion_position = DEFAULT_HORIZONTAL_POSITION
+            window.lateral_flexion_position = 0
             window._measurement_fault = None
             window.on_baseline_changed(True)
             window.loading_spinner.hide() # Hide spinner when done
@@ -398,5 +403,4 @@ class ConnectionManager:
         window = self.window
         print(message)
         window._show_timed_error(message)
-
 

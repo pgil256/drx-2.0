@@ -141,6 +141,31 @@ CALIBRATION_MOVE_TIMEOUT_S = 15.0
 CALIBRATION_SETTLE_COUNTS = 8
 CALIBRATION_POSITION_TOLERANCE = 25  # firmware POSITION_DEADBAND
 CALIBRATION_DISTANCE_REFERENCE_INCHES = 6.0  # read_position() factor convention
+# Raw service targets must also fit the SMC's 12-bit feedback range. Factors
+# describe counts per six inches for legacy distance readouts, not safety limits.
+SERVICE_AXES = {
+    "axial": {
+        "label": "Axial", "table": "AMarks", "factor": "a_factor", "prefix": "I12",
+        "position_limits": (0, min(AXIAL_MAX, 4095)),
+        "measurement_limits": ACTUATORS["AXIAL"]["LIMITS"], "step": 0.5,
+        "unit": "in", "status_index": 0,
+    },
+    "horizontal": {
+        "label": "Horizontal", "table": "BMarks", "factor": "b_factor", "prefix": "I13",
+        "position_limits": (HORIZONTAL_MIN, min(HORIZONTAL_MAX, 4095)),
+        "measurement_limits": ACTUATORS["HORIZONTAL"]["LIMITS"], "step": 5.0,
+        "unit": DEGREES, "status_index": 1,
+    },
+    "lateral": {
+        "label": "Lateral", "table": "CMarks", "factor": "c_factor", "prefix": "I14",
+        "position_limits": (LATERAL_MIN, min(LATERAL_MAX, 4095)),
+        "measurement_limits": ACTUATORS["LATERAL"]["LIMITS"], "step": 2.5,
+        "unit": DEGREES, "status_index": 2,
+    },
+}
+SERVICE_PIN_PATH = os.environ.get(
+    "KNEESPA_SERVICE_PIN_PATH", os.path.join(DEVICE_STATE_DIR, "service-pin.json"),
+)
 AXIAL_MIN_INCHES = ACTUATORS["AXIAL"]["LIMITS"][0]
 AXIAL_MAX_INCHES = ACTUATORS["AXIAL"]["LIMITS"][1]
 LATERAL_MIN_DEGREES = ACTUATORS["LATERAL"]["LIMITS"][0]

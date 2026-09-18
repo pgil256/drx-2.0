@@ -31,6 +31,9 @@ class Configuration:
         # "unlock" was a legacy unused option that carried a real code in
         # shipped configs; it is no longer read, written, or defaulted.
         self.calibration = 1.0
+        # Legacy AMarks were not used for axial commands. Opt in only after
+        # a technician measures the axial endpoints in the service wizard.
+        self.axial_service_calibrated = False
         self.configFile = config_path or CONFIG_PATH
         self.config = configparser.ConfigParser(allow_no_value=True)
         self.CMarks = {}
@@ -88,6 +91,7 @@ class Configuration:
         self.marks_valid = False
         self.scale_calibrated = False
         # Load configuration
+        self.axial_service_calibrated = False
         self._migrate_legacy_config()
 
         if not os.path.exists(self.configFile):
@@ -170,6 +174,14 @@ class Configuration:
         section = "Options"
         if not self.config.has_section(section):
             self.config.add_section(section)
+
+        try:
+            self.axial_service_calibrated = self.config.getboolean(
+                section, "axial_service_calibrated", fallback=False,
+            )
+        except ValueError:
+            self.axial_service_calibrated = False
+            self._flag_error("Invalid axial_service_calibrated flag; device is UNCALIBRATED")
 
         config_options = {
             "flexion_position": {"default": self.flexion_position, "type": int},
@@ -356,6 +368,13 @@ class Configuration:
 
     def _validate_calibration(self):
         """Decide marks_valid / scale_calibrated after a clean load."""
+        # Re-evaluate service validation errors after a technician repairs a
+        # table. Keep load/fallback errors: untouched defaults are not measured.
+        service_error_prefix = "Axial service calibration: "
+        self.calibration_errors = [
+            error for error in self.calibration_errors
+            if not error.startswith(service_error_prefix)
+        ]
         marks_ok = True
         # CMarks is operator-calibrated device data. Once its keys and values
         # have parsed as numbers in _load_marks(), preserve it exactly rather
@@ -366,6 +385,16 @@ class Configuration:
             if error:
                 marks_ok = False
                 self._flag_error(f"{name}: {error}")
+        if self.axial_service_calibrated:
+            # Lazy import avoids a module dependency cycle. Only opted-in
+            # axial tables obey the stricter measured-distance contract.
+            from helpers.hardware_service import validate_axis_marks
+
+            try:
+                validate_axis_marks("axial", self.AMarks)
+            except (ValueError, TypeError) as error:
+                marks_ok = False
+                self._flag_error(f"{service_error_prefix}{error}")
         # Only meaningful if nothing already flagged a fallback
         self.marks_valid = marks_ok and not any(
             "defaults in use" in e or "UNCALIBRATED" in e
@@ -440,6 +469,7 @@ class Configuration:
             "b_factor": str(self.b_factor),
             "c_factor": str(self.c_factor),
             "calibration": str(self.calibration),
+            "axial_service_calibrated": str(self.axial_service_calibrated),
         }
         self.config["AMarks"] = {k: str(v) for k, v in self.AMarks.items()}
         self.config["BMarks"] = {k: str(v) for k, v in self.BMarks.items()}
@@ -458,7 +488,7 @@ class Configuration:
         # List of configuration options to update
         config_options = [
             "flexion_position", "a_factor", "b_factor", "c_factor",
-            "calibration"
+            "calibration", "axial_service_calibrated"
         ]
 
         # Set each option in the config
