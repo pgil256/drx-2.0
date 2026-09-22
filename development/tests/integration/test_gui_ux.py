@@ -122,15 +122,19 @@ def test_ready_clears_recovery_phase_without_losing_outcome(shell, outcome, expe
     assert view._readiness.isHidden()
 
 
-def test_slider_responds_across_its_touch_height_without_moving_device(shell, qtbot):
+def test_target_stepper_changes_target_without_moving_device(shell, qtbot):
+    # Setup targets change only through the − / + stepper; the position track
+    # beneath each row is an indicator and never takes input.
     shell.navigate("setup")
-    control = shell.setup._rows["pressure"].slider
+    row = shell.setup._rows["pressure"]
+    control = row.slider
     control.set_value(0)
-    track = control._slider
     go = Mock()
     shell.setup.go_requested.connect(go)
-    qtbot.mouseClick(track, Qt.LeftButton, pos=QPoint(track.width() * 3 // 4, 3))
+    qtbot.mouseClick(control._right_btn, Qt.LeftButton)
     assert control.value() > 0
+    assert row.track._target == control.value()
+    assert row.track.testAttribute(Qt.WA_TransparentForMouseEvents)
     go.assert_not_called()
 
 
