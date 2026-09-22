@@ -4,8 +4,12 @@ Mirrors `Button` in the design system (variant × size). Styling lives in the
 global `app.qss` via `variant`/`size` dynamic properties; this class just sets
 the properties and keeps them switchable at runtime.
 
-Variants: dark · primary · success · danger · secondary · ghost
+Variants: primary · success · danger · destructive · secondary · ghost · dark
 Sizes:    sm · md · lg   (md is the default; lg is START/keypad scale)
+
+Colour carries one meaning per variant (see ``app.qss``): success = go,
+danger = stop motion, destructive = irreversible, primary = navigate/confirm.
+Buttons take focus from Tab only, so a tap never leaves a focus ring behind.
 """
 
 from PyQt5.QtCore import QSize, Qt
@@ -13,7 +17,7 @@ from PyQt5.QtWidgets import QPushButton, QSizePolicy
 
 from ._common import repolish
 
-VARIANTS = ("dark", "primary", "success", "danger", "secondary", "ghost")
+VARIANTS = ("dark", "primary", "success", "danger", "destructive", "secondary", "ghost")
 SIZES = ("sm", "md", "lg")
 _ICON_PX = {"sm": 16, "md": 18, "lg": 22}
 
@@ -23,6 +27,7 @@ class DSButton(QPushButton):
                  icon=None, parent=None):
         super().__init__(text, parent)
         self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.TabFocus)
         self._variant = "primary"
         self._size = "md"
         self.set_variant(variant)

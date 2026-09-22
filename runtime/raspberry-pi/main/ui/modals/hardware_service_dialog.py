@@ -90,19 +90,10 @@ class HardwareServiceDialog(QDialog):
         self.resize(1080, 700)
         self.setMinimumSize(900, 620)
         self.setFont(sans_font(size="--text-base"))
+        # Lists, tables, combos, spin boxes and checkboxes use the global theme.
         self.setStyleSheet(
-            f"QDialog {{ background: {resolve('--surface-page')}; }}"
             "QScrollArea { border: none; background: transparent; }"
             "QScrollArea > QWidget > QWidget { background: transparent; }"
-            "QListWidget { background: white; border: 1px solid #dbe3e8;"
-            " border-radius: 10px; padding: 4px; }"
-            "QListWidget::item { min-height: 36px; padding: 4px 8px; }"
-            "QListWidget::item:selected { background: #e1f5fb; color: #075970; }"
-            "QComboBox { min-height: 48px; padding: 0 10px; background: white; }"
-            "QDoubleSpinBox { min-height: 48px; padding: 0 112px 0 12px; background: white; }"
-            "QPlainTextEdit, QTableWidget { background: white; border: 1px solid #ccd8df; }"
-            "QCheckBox { spacing: 12px; padding: 6px 0; }"
-            "QCheckBox::indicator { width: 24px; height: 24px; }"
         )
 
         root = QVBoxLayout(self)
@@ -120,7 +111,10 @@ class HardwareServiceDialog(QDialog):
         root.addLayout(heading)
         self.live = self._label("Live readings: waiting for the device.")
         self.live.setMinimumHeight(38)
-        self.live.setStyleSheet("background: #eaf1f5; padding: 8px; border-radius: 6px;")
+        self.live.setStyleSheet(
+            f"background: {resolve('--surface-page')}; padding: 8px;"
+            f" border-radius: {resolve('--radius-sm')};"
+        )
         root.addWidget(self.live)
         body = QHBoxLayout()
         body.setSpacing(18)
@@ -153,7 +147,7 @@ class HardwareServiceDialog(QDialog):
         self.message.setMinimumHeight(42)
         root.addWidget(self.message)
         footer = QHBoxLayout()
-        self.close_button = DSButton("Close service", variant="dark")
+        self.close_button = DSButton("Close service", variant="secondary")
         self.close_button.setMinimumHeight(48)
         self.close_button.clicked.connect(self.reject)
         footer.addWidget(self.close_button)
@@ -478,9 +472,10 @@ class HardwareServiceDialog(QDialog):
         self.bench_check.currentIndexChanged.connect(self._change_bench_check)
         row = QHBoxLayout()
         for status, label, variant in (
-            ("pass", "Observed pass", "dark"),
+            # Recording an observation is not a motion or go/stop action.
+            ("pass", "Observed pass", "secondary"),
             ("skip", "Skip / not tested", "secondary"),
-            ("fail", "Observed failure", "danger"),
+            ("fail", "Observed failure", "secondary"),
         ):
             button = DSButton(label, variant=variant)
             button.setMinimumHeight(48)
@@ -565,9 +560,10 @@ class HardwareServiceDialog(QDialog):
         layout.addWidget(notes)
         row = QHBoxLayout()
         for status, label, variant in (
-            ("pass", "Observed pass", "dark"),
+            # Recording an observation is not a motion or go/stop action.
+            ("pass", "Observed pass", "secondary"),
             ("skip", "Skip / not tested", "secondary"),
-            ("fail", "Observed failure", "danger"),
+            ("fail", "Observed failure", "secondary"),
         ):
             button = DSButton(label, variant=variant)
             button.setMinimumHeight(48)

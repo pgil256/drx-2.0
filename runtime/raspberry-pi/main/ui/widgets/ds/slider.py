@@ -1,13 +1,13 @@
 """DSSlider — labeled range row (label · track · mono value).
 
 Two modes: ``mode='slider'`` (default) shows a QSlider track; ``mode='stepper'``
-replaces the track with left/right arrow buttons and the value between them.
+replaces the track with − / + buttons and the value between them.
 
 QSlider is integer-only, so both modes map a float ``min/max/step`` domain onto
 integer ticks and report real floats via ``valueChanged(float)``.
 """
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QMouseEvent
 from PyQt5.QtWidgets import (
     QHBoxLayout,
@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from ui.theme import GLYPH
+from ui.theme import control_icon
 
 from ._common import mono_font, resolve, sans_font
 
@@ -72,17 +72,16 @@ class _TouchSlider(QSlider):
 def _arrow_btn_css():
     return (
         "QPushButton {"
-        f" background: #ffffff;"
-        f" color: {resolve('--ink-800')};"
-        f" border: 2px solid {resolve('--border-control')};"
+        f" background: {resolve('--white')};"
+        f" border: 1px solid {resolve('--border-control')};"
         f" border-radius: {resolve('--radius-md')};"
-        " padding: 0 0 4px 0; }"  # optical centering for the ‹ › glyphs
-        f" QPushButton:hover {{ background: {resolve('--blue-050')};"
-        f" border-color: {resolve('--color-primary')}; }}"
+        " padding: 0; min-height: 0; }"
+        f" QPushButton:hover {{ background: {resolve('--gray-050')}; }}"
         f" QPushButton:pressed {{ background: {resolve('--blue-100')}; }}"
-        f" QPushButton:focus {{ border: 3px solid {resolve('--ink-900')}; }}"
-        f" QPushButton:disabled {{ background: {resolve('--gray-200')};"
-        f" color: {resolve('--gray-600')}; border-color: {resolve('--gray-400')}; }}"
+        f" QPushButton[keyboardFocus=\"true\"]:focus {{"
+        f" border: 2px solid {resolve('--ink-900')}; }}"
+        f" QPushButton:disabled {{ background: {resolve('--gray-100')};"
+        f" border-color: {resolve('--gray-300')}; }}"
     )
 
 
@@ -123,7 +122,7 @@ class DSSlider(QWidget):
     # -- build variants ------------------------------------------------
     def _build_slider(self, lay):
         if self._with_steps:
-            self._left_btn = self._arrow_button("−", self._decrement)
+            self._left_btn = self._arrow_button("minus", self._decrement)
             lay.addWidget(self._left_btn)
         self._slider = _TouchSlider(Qt.Horizontal, self)
         self._slider.setRange(0, self._steps)
@@ -135,7 +134,7 @@ class DSSlider(QWidget):
         self._slider.valueChanged.connect(self._on_slider)
         lay.addWidget(self._slider, 1)
         if self._with_steps:
-            self._right_btn = self._arrow_button("+", self._increment)
+            self._right_btn = self._arrow_button("plus", self._increment)
             lay.addWidget(self._right_btn)
 
         self._value_label = QLabel(self)
@@ -146,9 +145,7 @@ class DSSlider(QWidget):
         lay.addWidget(self._value_label)
 
     def _build_stepper(self, lay):
-        # Plex-safe arrow glyphs (‹ ›) — the design's ◀ ▶ tofu in IBM Plex; see
-        # ui/theme/icons.py. Same glyphs as the Setup page's jog buttons.
-        self._left_btn = self._arrow_button(GLYPH["jog_rev"], self._decrement)
+        self._left_btn = self._arrow_button("minus", self._decrement)
         lay.addWidget(self._left_btn)
 
         self._value_label = QLabel(self)
@@ -158,14 +155,17 @@ class DSSlider(QWidget):
         self._value_label.setStyleSheet(_LABEL_CSS)
         lay.addWidget(self._value_label, 1)
 
-        self._right_btn = self._arrow_button(GLYPH["jog_fwd"], self._increment)
+        self._right_btn = self._arrow_button("plus", self._increment)
         lay.addWidget(self._right_btn)
 
-    def _arrow_button(self, glyph, slot):
-        btn = QPushButton(glyph, self)
+    def _arrow_button(self, icon, slot):
+        btn = QPushButton(self)
         btn.setCursor(Qt.PointingHandCursor)
+        btn.setFocusPolicy(Qt.TabFocus)
         btn.setFixedSize(_ARROW_PX, _ARROW_PX)
-        btn.setFont(sans_font(size=28, weight=700))
+        btn.setIcon(control_icon(icon, resolve("--ink-800"), 24,
+                                 disabled_color=resolve("--gray-400")))
+        btn.setIconSize(QSize(24, 24))
         btn.setStyleSheet(_arrow_btn_css())
         # Press-and-hold steps repeatedly (touch users expect this on ‹ ›).
         btn.setAutoRepeat(True)

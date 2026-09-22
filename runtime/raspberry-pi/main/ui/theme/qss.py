@@ -3,7 +3,8 @@
 Responsibilities:
   * ``resolve()`` / ``qss()`` — expand CSS ``var(--token)`` references against
     :data:`ui.theme.tokens.TOKENS` (Qt's QSS has no ``var()``).
-  * ``load_app_qss()`` — read ``app.qss`` and return it fully resolved.
+  * ``load_app_qss()`` — read ``app.qss`` and return it fully resolved,
+    including ``url(theme:<file>)`` references to the baked ``icons/`` PNGs.
   * ``load_fonts()`` — register any bundled ``.ttf``/``.otf`` in ``fonts/`` with
     Qt (so the offline Pi can use IBM Plex without a network).
   * ``apply_theme(app)`` — the Phase 0 entry point: load fonts, set the base
@@ -22,8 +23,10 @@ from .tokens import TOKENS
 _THEME_DIR = os.path.dirname(os.path.abspath(__file__))
 _APP_QSS_PATH = os.path.join(_THEME_DIR, "app.qss")
 _FONT_DIR = os.path.join(_THEME_DIR, "fonts")
+_ICON_DIR = os.path.join(_THEME_DIR, "icons")
 
 _VAR_RE = re.compile(r"var\(\s*(--[A-Za-z0-9_-]+)\s*\)")
+_ASSET_RE = re.compile(r"url\(theme:([A-Za-z0-9_.-]+)\)")
 _COMMENT_RE = re.compile(r"/\*.*?\*/", re.S)
 
 _logger = logging.getLogger("kneespa.theme")
@@ -96,10 +99,21 @@ def qss(template):
     return _resolve_text(strip_comments(template), set())
 
 
+def theme_asset(name):
+    """Absolute, QSS-safe path to a baked theme image (``icons/<name>``)."""
+    return os.path.join(_ICON_DIR, name).replace("\\", "/")
+
+
+def _resolve_assets(text):
+    # QSS resolves relative url() paths against the working directory, not the
+    # stylesheet, so theme images are always emitted as absolute paths.
+    return _ASSET_RE.sub(lambda match: f'url("{theme_asset(match.group(1))}")', text)
+
+
 def load_app_qss():
     """Return the global ``app.qss`` stylesheet, fully resolved."""
     with open(_APP_QSS_PATH, encoding="utf-8") as fh:
-        return qss(fh.read())
+        return _resolve_assets(qss(fh.read()))
 
 
 def load_fonts():
@@ -152,7 +166,9 @@ def apply_theme(app, set_base_font=True):
 
     app.setStyleSheet(load_app_qss())
     from .dialogs import install_dialog_theme
+    from .focus import install_keyboard_focus
 
     install_dialog_theme(app)
+    install_keyboard_focus(app)
 
     return {"font_families": families, "plex_loaded": plex_loaded}

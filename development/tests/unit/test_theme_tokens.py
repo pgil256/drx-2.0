@@ -97,3 +97,58 @@ def test_rendered_app_qss_has_no_unresolved_vars():
     assert "var(" not in rendered, "app.qss still contains unresolved var() refs"
     # sanity: the primary interactive blue made it into the stylesheet
     assert "#176b9a" in rendered
+
+
+_TYPE_SCALE = ("--text-2xs", "--text-xs", "--text-sm", "--text-base", "--text-md",
+               "--text-lg", "--text-xl", "--text-2xl", "--text-3xl")
+
+
+def _px(token):
+    return int(resolve(token).replace("px", ""))
+
+
+def test_type_scale_is_strictly_increasing():
+    """Every step reads as a different volume; no two steps collapse together."""
+    sizes = [_px(token) for token in _TYPE_SCALE]
+    assert sizes == sorted(set(sizes)), dict(zip(_TYPE_SCALE, sizes))
+
+
+def test_arm_length_text_stays_at_least_16px():
+    """Readouts, labels and buttons use --text-sm or larger; only captions go below."""
+    assert _px("--text-sm") >= 16
+    assert _px("--text-base") >= 16
+    assert _px("--text-2xs") >= 12  # eyebrows / units still legible
+
+
+def _rgb(token):
+    value = resolve(token).lstrip("#")
+    return tuple(int(value[i:i + 2], 16) for i in (0, 2, 4))
+
+
+def test_danger_resolves_to_red_and_never_to_primary_blue():
+    red, green, blue = _rgb("--color-danger")
+    assert red > 2 * green and red > 2 * blue, resolve("--color-danger")
+    assert resolve("--color-danger") != resolve("--color-primary")
+    assert resolve("--color-danger-hover") != resolve("--color-primary-hover")
+
+
+def test_success_resolves_to_green():
+    red, green, blue = _rgb("--color-success")
+    assert green > red and green > blue, resolve("--color-success")
+
+
+def test_each_action_variant_has_its_own_qss_rule():
+    rendered = load_app_qss()
+    for variant in ("primary", "success", "danger", "destructive", "secondary", "ghost"):
+        assert f'QPushButton[variant="{variant}"] {{' in rendered, variant
+    # The legacy "danger renders as primary" selector list must not return.
+    assert 'QPushButton[variant="primary"],\nQPushButton[variant="danger"]' not in rendered
+
+
+def test_theme_asset_urls_resolve_to_bundled_files():
+    rendered = load_app_qss()
+    paths = re.findall(r'url\("([^"]+)"\)', rendered)
+    assert paths, "expected themed sub-control images"
+    for path in paths:
+        assert os.path.isfile(path), path
+    assert "url(theme:" not in rendered
