@@ -1,12 +1,12 @@
-"""NavRail — persistent 120px dark left rail.
+"""NavRail — persistent 108px dark left rail.
 
 Mirrors `NavRail` in `bundle.jsx` (dark chrome): five exclusive nav items
-(Home · Setup · Protocols · Help · Support) over a separated Video launcher.
+(Home · Setup · Treatment · Support · Device), with Video above Support and Device.
 Active item paints cyan with a 4px cyan left border. The rail only reports the
 intent; ``app_shell`` applies login gating and the actual page switch.
 
 Signals:
-    navigate(str)     — a nav item ('home'|'setup'|'protocols'|'help'|'support')
+    navigate(str)     — a nav item ('home'|'setup'|'protocols'|'support'|'device')
     video_requested   — the Video launcher
 """
 
@@ -20,9 +20,9 @@ from ui.widgets.ds.nav_rail_button import DSNavRailButton
 NAV_ITEMS = [
     ("home", "Home", "home"),
     ("setup", "Setup", "setup"),
-    ("protocols", "Protocols", "protocols"),
-    ("help", "Help", "help"),
+    ("protocols", "Treatment", "protocols"),
     ("support", "Support", "support"),
+    ("device", "Device", "device"),
 ]
 
 
@@ -41,7 +41,7 @@ class NavRail(QFrame):
         rail = px("--rail-width")
         self.setFixedWidth(rail)
         self.setStyleSheet(
-            f"#NavRail {{ background: {resolve('--ink-900')}; border-right: 1px solid #000; }}"
+            f"#NavRail {{ background: {resolve('--surface-chrome')}; border: none; }}"
         )
 
         lay = QVBoxLayout(self)
@@ -59,7 +59,7 @@ class NavRail(QFrame):
             lay.addWidget(btn)
 
         self._video = self._make_video_button(rail)
-        lay.addWidget(self._video)
+        lay.insertWidget(3, self._video)
 
         self._buttons["home"].setChecked(True)
 
@@ -69,7 +69,7 @@ class NavRail(QFrame):
         btn.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
         btn.setText("Video")
         btn.setToolTip("Demo video")
-        btn.setFont(sans_font(size="--text-md", weight=700))
+        btn.setFont(sans_font(size=19, weight=700))
         btn.setIcon(nav_icon("play", "#ffffff", 28))
         btn.setIconSize(QSize(28, 28))
         btn.setFixedWidth(rail)
@@ -77,8 +77,8 @@ class NavRail(QFrame):
         btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
         btn.setStyleSheet(
             "QToolButton { color: #ffffff; background: %s; border: none;"
-            " border-top: 1px solid #000; }"
-            " QToolButton:hover { background: #2a2a2a; }" % resolve("--ink-900")
+            " padding: 18px 0; }"
+            " QToolButton:hover { background: #2a2a2a; }" % resolve("--surface-chrome")
         )
         btn.clicked.connect(self.video_requested)
         return btn
@@ -91,11 +91,11 @@ class NavRail(QFrame):
         if btn is None:
             self._group.setExclusive(False)
             for b in self._buttons.values():
-                b.blockSignals(True)
                 b.setChecked(False)
-                b.blockSignals(False)
             self._group.setExclusive(True)
         elif not btn.isChecked():
-            btn.blockSignals(True)
             btn.setChecked(True)
-            btn.blockSignals(False)
+
+    def set_page_enabled(self, key: str, enabled: bool) -> None:
+        """Reflect role restrictions without changing the selected page."""
+        self._buttons[key].setEnabled(enabled)

@@ -80,7 +80,11 @@ main/motor/.pio/
 
 # Node
 node_modules/
+*.tsbuildinfo
 package-lock.json
+!/development/simulator/viewer/package-lock.json
+*.blend1
+*.blend2
 
 # Runtime secrets / per-device state ? never commit (templates are tracked
 # as *.example; see README "User provisioning")

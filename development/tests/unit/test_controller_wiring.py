@@ -89,10 +89,14 @@ class TestLogin:
         stub = SimpleNamespace(
             shell=shell,
             current_user=None,
+            protocol_running=False,
+            machine_sign_in=SimpleNamespace(clear=MagicMock()),
             login_pin="",
             users={SecureAuthHelper.hash_pin_secure("7531"): user},
             _show_timed_error=MagicMock(),
             _show_patient_modal=MagicMock(),
+            _on_patient_edit=MagicMock(),
+            patients=SimpleNamespace(clear_session=MagicMock()),
         )
         stub._is_admin = partial(KneeSpa._is_admin, stub)
         stub.update_ui_after_login = partial(KneeSpa.update_ui_after_login, stub)
@@ -149,20 +153,23 @@ class TestLogin:
 
     def test_update_ui_after_login_drives_shell(self):
         stub = make_stub()
+        stub.shell._current = "protocols"
         stub.current_user = {"username": "Dr. Vasquez"}
         stub._is_admin.return_value = False
         KneeSpa.update_ui_after_login(stub)
         stub.shell.login_succeeded.assert_called_once_with(
-            "Dr. Vasquez", goto="protocols", title="Clinician", is_admin=False
+            "Dr. Vasquez", title="Clinician", is_admin=False
         )
+        stub.patients.clear_session.assert_called_once()
 
     def test_update_ui_after_login_admin_title(self):
         stub = make_stub()
+        stub.shell._current = "protocols"
         stub.current_user = {"username": "Administrator", "status": "admin"}
         stub._is_admin.return_value = True
         KneeSpa.update_ui_after_login(stub)
         stub.shell.login_succeeded.assert_called_once_with(
-            "Administrator", goto="protocols", title="Administrator",
+            "Administrator", title="Administrator",
             is_admin=True,
         )
 
@@ -177,63 +184,63 @@ class TestLogin:
 
     def test_logout_clears_user(self):
         stub = make_stub()
-        stub._block_nav_during_treatment.return_value = False
+        stub._block_active_treatment_exit.return_value = False
         KneeSpa._on_logout(stub)
         assert stub.current_user is None
         stub.shell.logout.assert_called_once()
+        stub.patients.clear_session.assert_called_once()
 
     def test_exit_app_closes_window(self):
         """Exit App routes through self.close() so closeEvent runs the full
         hardware cleanup (Arduino disconnect + GPIO)."""
         stub = make_stub()
-        stub._block_nav_during_treatment.return_value = False
+        stub._block_active_treatment_exit.return_value = False
         KneeSpa._on_exit_app(stub)
         stub.close.assert_called_once()
 
     def test_exit_app_blocked_during_treatment(self):
         stub = make_stub()
-        stub._block_nav_during_treatment.return_value = True
+        stub._block_active_treatment_exit.return_value = True
         KneeSpa._on_exit_app(stub)
         stub.close.assert_not_called()
-
-    def test_add_pin_persists_via_csv_helper(self):
-        stub = make_stub()
-        stub._is_admin.return_value = True
-        stub.csv.add_user.return_value = (True, "PIN added for Dr. New.")
-        KneeSpa._on_add_pin(stub, "Dr. New", "4321")
-        stub.csv.add_user.assert_called_once_with("Dr. New", "4321")
-        stub.shell.add_pin_succeeded.assert_called_once()
-        stub.shell.add_pin_failed.assert_not_called()
-
-    def test_add_pin_failure_stays_in_modal(self):
-        stub = make_stub()
-        stub._is_admin.return_value = True
-        stub.csv.add_user.return_value = (False, "That PIN is already in use.")
-        KneeSpa._on_add_pin(stub, "Dr. New", "4321")
-        stub.shell.add_pin_failed.assert_called_once_with(
-            "That PIN is already in use."
-        )
-        stub.shell.add_pin_succeeded.assert_not_called()
-
-    def test_add_pin_rejected_for_non_admin(self):
-        """The shell hides the button for non-admins, but the backend must
-        enforce it independently — the view can never bypass the check."""
-        stub = make_stub()
-        stub._is_admin.return_value = False
-        KneeSpa._on_add_pin(stub, "Sneaky", "4321")
-        stub.csv.add_user.assert_not_called()
-        stub.shell.add_pin_failed.assert_called_once()
 
     def test_logout_blocked_during_treatment(self):
         """Logging out mid-treatment would drop the operator's session while
         traction is applied; the nav guard blocks it."""
         stub = make_stub()
-        stub._block_nav_during_treatment.return_value = True
+        stub._block_active_treatment_exit.return_value = True
         user = {"username": "Dr"}
         stub.current_user = user
         KneeSpa._on_logout(stub)
         assert stub.current_user == user
         stub.shell.logout.assert_not_called()
+
+
+# ----- treatment navigation warning -----
+class TestTreatmentNavigation:
+    def test_confirmed_navigation_leaves_treatment_screen(self, qtbot: QtBot) -> None:
+        shell = AppShell()
+        qtbot.addWidget(shell)
+        shell.set_user("Dr")
+        shell.navigate("protocols")
+        confirmation = MagicMock(return_value=True)
+        shell.set_nav_confirmation(confirmation)
+
+        shell.nav_rail.navigate.emit("home")
+
+        confirmation.assert_called_once_with("protocols", "home")
+        assert shell._current == "home"
+
+    def test_cancelled_navigation_stays_on_treatment_screen(self, qtbot: QtBot) -> None:
+        shell = AppShell()
+        qtbot.addWidget(shell)
+        shell.set_user("Dr")
+        shell.navigate("protocols")
+        shell.set_nav_confirmation(MagicMock(return_value=False))
+
+        shell.nav_rail.navigate.emit("help")
+
+        assert shell._current == "protocols"
 
 
 # ----- Setup jog -----
@@ -269,7 +276,7 @@ class TestSetupJog:
         stub = make_stub()
         KneeSpa._on_setup_jog(stub, "pressure", "fwd")
         stub.move_actuator.assert_not_called()
-        stub._reflect_setup.assert_called_once()
+        stub._reflect_setup.assert_not_called()  # target editing is not a command or measurement
 
 
 class TestSetupReset:
@@ -343,13 +350,16 @@ class TestSetupGo:
         KneeSpa._on_setup_go(stub, "pressure")
         stub._apply_setup_pressure.assert_called_once()
 
-    def test_leg_go_is_refused_without_locking_controls(self):
+    def test_leg_go_uses_tracked_leg_controller(self):
         stub = make_stub()
+        stub.shell.setup.row_value.return_value = 1.25
+        stub.leg = MagicMock()
+        stub.leg.move_to.return_value = True
         result = KneeSpa._on_setup_go(stub, "leg_length")
-        assert result is False
+        assert result is True
+        stub.leg.move_to.assert_called_once_with(1.25)
         stub.disable_actuator_controls.assert_not_called()
         stub.loading_spinner.show.assert_not_called()
-        stub._show_timed_error.assert_called_once()
 
     def test_horizontal_go_uses_calibrated_absolute_position(self):
         stub = make_stub()
@@ -555,13 +565,12 @@ class TestSupport:
         KneeSpa._on_issue_activated(stub, "Pressure not reaching target")
         assert stub._selected_issue == "Pressure not reaching target"
 
-    @pytest.mark.parametrize("issue", [None, "", "Device won't start"])
-    def test_submit_ticket_uses_selected_issue_or_fallback(self, issue: Optional[str]) -> None:
+    def test_empty_ticket_is_rejected_at_controller_boundary(self) -> None:
         stub = make_stub()
-        stub._selected_issue = issue
-        stub.submit_ticket = MagicMock()
-        KneeSpa._on_submit_ticket(stub)
-        stub.submit_ticket.assert_called_once_with(issue or "General support request")
+        stub._send_support_email = MagicMock()
+        KneeSpa._on_submit_ticket(stub, {})
+        stub._send_support_email.assert_not_called()
+        assert stub.shell.support.set_delivery_state.call_args.args[0] == "invalid"
 
     def test_assistance_reads_current_user(self):
         stub = make_stub()
@@ -607,6 +616,7 @@ class TestPresentation:
         ("Protocol complete", "complete"),
         ("Protocol stopped", "stopped"),
         ("Protocol Started", "ramping"),
+        ("Preparing: centering and zeroing resting pressure", "starting"),
     ])
     def test_status_maps_to_phase(self, text, phase):
         stub = make_stub()

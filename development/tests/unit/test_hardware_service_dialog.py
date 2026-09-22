@@ -10,7 +10,7 @@ from ui.theme import load_fonts
 
 
 @pytest.fixture
-def service_dialog(qtbot):
+def service_dialog(qtbot, request):
     load_fonts()
     draft = SimpleNamespace(
         marks={
@@ -23,7 +23,7 @@ def service_dialog(qtbot):
         recorded={"axial": {"0.0"}, "horizontal": set(), "lateral": set()},
         changes=lambda: [],
     )
-    dialog = HardwareServiceDialog(draft)
+    dialog = HardwareServiceDialog(draft, mode=getattr(request, "param", "calibration"))
     qtbot.addWidget(dialog, before_close_func=lambda widget: setattr(widget, "_closed", True))
     yield dialog
     dialog._closed = True
@@ -43,6 +43,7 @@ class TestHardwareServiceDialog:
         dialog.begin_button.click()
         assert actions == [("begin", None)]
 
+    @pytest.mark.parametrize("service_dialog", ["tests"], indirect=True)
     def test_each_movement_requires_fresh_confirmation(self, service_dialog, monkeypatch):
         dialog = service_dialog
         dialog.set_available(True, False)
@@ -102,7 +103,7 @@ class TestHardwareServiceDialog:
         assert not dialog.begin_button.isEnabled()
         assert not dialog.save_button.isEnabled()
         dialog.draft.changes = lambda: [("scale", "1", "2")]
-        dialog.steps.setCurrentRow(8)
+        dialog.steps.setCurrentRow(dialog.steps.count() - 1)
         assert dialog.save_button.isEnabled()
 
     def test_review_does_not_infer_pass_from_staged_changes(self, service_dialog):
@@ -113,10 +114,10 @@ class TestHardwareServiceDialog:
         assert not dialog.save_button.isEnabled()
         dialog.set_result("axial", "fail", "Unexpected direction")
         dialog.set_result("loadcell", "skip", "No force reference available")
-        dialog.steps.setCurrentRow(8)
+        dialog.steps.setCurrentRow(dialog.steps.count() - 1)
         assert dialog.save_button.isEnabled()
-        statuses = [dialog.results_table.item(row, 1).text() for row in range(8)]
-        assert statuses.count("Incomplete") == 6
+        statuses = [dialog.results_table.item(row, 1).text() for row in range(dialog.results_table.rowCount())]
+        assert statuses.count("Incomplete") == 4
         assert "Observed failure" in statuses
         assert "Skipped / not tested" in statuses
         assert dialog.changes_table.item(0, 2).text() == "2000"
@@ -142,6 +143,7 @@ class TestHardwareServiceDialog:
         assert table.item(0, 2).text() == "Recorded this session"
         assert table.item(1, 2).text() == "Existing / unverified"
 
+    @pytest.mark.parametrize("service_dialog", ["tests"], indirect=True)
     def test_bench_observations_start_untested_and_remain_individual(self, service_dialog):
         dialog = service_dialog
         assert all(dialog.bench_review_table.item(row, 1).text() == "Not tested"

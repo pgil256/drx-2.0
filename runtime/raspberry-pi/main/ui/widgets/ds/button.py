@@ -4,7 +4,7 @@ Mirrors `Button` in the design system (variant × size). Styling lives in the
 global `app.qss` via `variant`/`size` dynamic properties; this class just sets
 the properties and keeps them switchable at runtime.
 
-Variants: primary · success · danger · secondary · ghost
+Variants: dark · primary · success · danger · secondary · ghost
 Sizes:    sm · md · lg   (md is the default; lg is START/keypad scale)
 """
 
@@ -13,7 +13,7 @@ from PyQt5.QtWidgets import QPushButton, QSizePolicy
 
 from ._common import repolish
 
-VARIANTS = ("primary", "success", "danger", "secondary", "ghost")
+VARIANTS = ("dark", "primary", "success", "danger", "secondary", "ghost")
 SIZES = ("sm", "md", "lg")
 _ICON_PX = {"sm": 16, "md": 18, "lg": 22}
 

@@ -1,4 +1,5 @@
 # Runtime requirements for the KneeSpa application.
+# Buster / Python 3.7 maintenance pins. Keep upgrades compatible with the deployed Pi.
 # Test-only dependencies live in development/requirements-test.txt at the repository root.
 
 # Hardware Control
@@ -6,13 +7,16 @@ RPi.GPIO==0.7.1
 pyserial==3.5
 
 # Environment Variables
-python-dotenv==0.19.2
+python-dotenv==0.21.1
+
+# Local QR generation for phone sign-in and patient registration (Python 3.7 compatible).
+qrcode==7.4.2
 
 # Configuration Management
-configparser==5.0.2  # Enhanced config file parsing
+configparser==5.3.0  # Legacy backport; Python 3 uses its built-in configparser.
 
 # Video Playback
-python-vlc==3.0.12118
+python-vlc==3.0.21203
 
 # NOTES:
 # ------

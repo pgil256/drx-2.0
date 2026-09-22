@@ -263,7 +263,7 @@ def test_cancelled_lookup_error_cannot_clear_newer_patient(qtbot: QtBot) -> None
 
 def test_logout_invalidates_pending_lookup(qtbot: QtBot) -> None:
     window = lookup_window()
-    window._block_nav_during_treatment.return_value = False
+    window._block_active_treatment_exit.return_value = False
     KneeSpa._on_logout(window)
 
     KneeSpa._on_cloud_lookup_done(window, 0, {"patient_id": "old-session"})

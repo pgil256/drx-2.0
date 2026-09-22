@@ -189,19 +189,16 @@ def test_keypad_entry_submit_clear_back(app):
 
 
 def test_protocol_and_nav_toggle(app):
-    from PyQt5.QtWidgets import QGraphicsOpacityEffect
-
     from ui.widgets.ds import DSNavRailButton, DSProtocolButton
 
     p = DSProtocolButton(2, "Left")
     assert p.isCheckable() and not p.isChecked()
     p.setChecked(True)
     assert p.isChecked()
-    # Disabled dims the whole tile to 0.5 opacity (not just the text color).
+    # Disabled identity remains readable without fading the whole tile.
     p.setEnabled(False)
     p.ensurePolished()
-    assert isinstance(p.graphicsEffect(), QGraphicsOpacityEffect)
-    assert p.graphicsEffect().opacity() == 0.5
+    assert p.graphicsEffect() is None
     p.setEnabled(True)
     p.ensurePolished()
     assert p.graphicsEffect() is None

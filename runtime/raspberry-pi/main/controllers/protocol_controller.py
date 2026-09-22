@@ -19,6 +19,8 @@ from PyQt5.QtWidgets import QMessageBox
 from helpers import protocols
 from helpers.cloud_contract import end_settings
 from helpers.treatment_session import TreatmentSession
+from controllers.machine_sign_in_controller import authorize
+from ui.modals.treatment_review import TreatmentReviewDialog
 
 try:
     from main.config.constants import DATA_PATHS, EMERGENCYSTOP
@@ -75,6 +77,18 @@ class ProtocolController:
             # A fault is not treatment-ready. Recovery reset is the only path
             # back to idle.
             self.set_busy(True)
+        if state in ("starting", "running", "stopping"):
+            try:
+                window.shell.close_nonessential_overlays()
+            except Exception:
+                pass
+        refresh = getattr(window, "_refresh_device_presentation", None)
+        if callable(refresh):
+            try:
+                refresh()
+            except Exception:
+                # A display failure must not interrupt the lifecycle's safety work.
+                window.logger.exception("Could not refresh device presentation")
 
     def _set_run_state(self, running: bool) -> None:
         """Present an unpaused lifecycle transition without delaying safety work."""
@@ -90,14 +104,47 @@ class ProtocolController:
         except Exception:
             pass
 
-    def block_nav(self):
-        """Navigation away from the treatment screen is blocked while a
-        protocol is active; the setup page's jog controls would conflict
-        with the running protocol."""
+    def confirm_leave_treatment(self, source_page: str, destination_page: str) -> bool:
+        """Warn before leaving the Treatment screen during an active protocol.
+
+        The protocol continues to own the hardware after navigation. Returning
+        ``False`` lets the operator cancel the navigation from the warning.
+        """
+        window = self.window
+        active = window.protocol_state in ("starting", "running", "stopping")
+        leaving_treatment = source_page == "protocols" and destination_page != source_page
+        if not active or not leaving_treatment:
+            return True
+
+        result = QMessageBox.warning(
+            window,
+            "Caution",
+            (
+                "Caution: An active treatment protocol is in progress. Leaving the "
+                "Treatment screen does not stop the protocol; it will continue to run.\n\n"
+                "Press OK to leave the screen, or Cancel to stay and monitor treatment."
+            ),
+            QMessageBox.Ok | QMessageBox.Cancel,
+            QMessageBox.Cancel,
+        )
+        return result == QMessageBox.Ok
+
+    def block_active_treatment_exit(self) -> bool:
+        """Block logout or application exit while a protocol owns the hardware."""
         window = self.window
         if window.protocol_state in ("starting", "running", "stopping"):
             window._show_timed_error(
-                "Treatment in progress - press STOP before leaving this screen."
+                "Treatment in progress - press STOP before logging out or exiting."
+            )
+            return True
+        return False
+
+    def block_nonessential_overlay(self) -> bool:
+        """Keep nonessential overlays closed while a protocol is active."""
+        window = self.window
+        if window.protocol_state in ("starting", "running", "stopping"):
+            window._show_timed_error(
+                "Treatment in progress - return after the protocol has stopped."
             )
             return True
         return False
@@ -116,12 +163,11 @@ class ProtocolController:
         """
         window = self.window
         try:
-            protocol = str(window.protocol_value)
-            max_pressure = window.shell.treatment.settings_values().get("max_pressure", 50)
-            max_left = window.shell.treatment.settings_values().get("max_left", 10)
-            max_right = window.shell.treatment.settings_values().get("max_right", 10)
-            duration = int(window._duration_minutes())
-            pulse = "on" if window.current_use_pulse_setting else "off"
+            protocol = int(window.protocol_value)
+            if protocol not in (1, 2, 3, 4):
+                return False
+            settings = dict(window.shell.treatment.settings_values())
+            settings["duration"] = int(window._duration_minutes())
         except Exception as e:
             print(f"Error reading protocol parameters for confirmation: {e}")
             return False
@@ -133,22 +179,7 @@ class ProtocolController:
             patient_summary = f"Patient: {name}"
         else:
             patient_summary = "No cloud patient linked. This treatment will not upload."
-        summary = (
-            f"Protocol {protocol}\n"
-            f"Max pressure: {max_pressure} lbs\n"
-            f"Lateral range: {max_left}° left / {max_right}° right\n"
-            f"Duration: {duration} min\n"
-            f"Pulse: {pulse}\n\n{patient_summary}\n\n"
-            "Confirm the patient is positioned and start treatment?"
-        )
-        reply = QMessageBox.question(
-            window,
-            "Start treatment?",
-            summary,
-            QMessageBox.Yes | QMessageBox.No,
-            QMessageBox.No,
-        )
-        return reply == QMessageBox.Yes
+        return TreatmentReviewDialog.confirm(window, protocol, settings, patient_summary)
 
 
     def start_or_stop(self) -> None:
@@ -164,6 +195,9 @@ class ProtocolController:
         """Start or stop the protocol with debouncing to prevent multiple rapid clicks."""
         window = self.window
         print("Toggling protocol start/stop")
+        if window.protocol_state == "idle" and not authorize(
+                window, "treatment", self.start_or_stop):
+            return
 
         # Prevent rapid clicking by disabling the button during operation
         self.set_busy(True)
@@ -216,10 +250,8 @@ class ProtocolController:
                     if window.protocol_state == "starting":
                         self.set_state("idle")
                     return
-                # Only promote the start request that is still active; a
-                # completion or fault must retain its resulting state.
-                if window.protocol_state == "starting":
-                    self.set_state("running")
+                # Dispatch is not preparation completion. The worker's prepared
+                # signal owns the running transition and treatment clock.
             else:
                 self._set_run_state(True)
                 self.stop_protocol()
@@ -242,13 +274,24 @@ class ProtocolController:
     def start_protocol(self):
         """Start protocol execution."""
         window = self.window
+        if not authorize(window, "treatment", self.start_protocol):
+            return False
         if getattr(window, "_patient_lookup_pending", False) is True:
             window._show_timed_error(
                 "Wait for patient lookup or choose treatment without a patient."
             )
             return False
-        if getattr(window, "_calibration_active", False) is True:
-            window._show_timed_error("Close actuator calibration before starting treatment.")
+        if (getattr(window, "_calibration_active", False) is True
+                or getattr(window, "_device_maintenance_active", False) is True):
+            window._show_timed_error("Finish device service before starting treatment.")
+            return False
+        if (window.protocol_state not in ("idle", "starting")
+                or getattr(window, "initial_setup_complete", False) is not True
+                or any(getattr(window, flag, False) is True for flag in (
+                    "_closing", "_physical_stop_active", "_no_automatic_recovery",
+                    "reset_in_progress", "actuator_command_in_progress",
+                ))):
+            window._show_timed_error("Finish recovery/reset and movement before starting treatment.")
             return False
         if not window.current_user:
             print("Access denied: User not logged in")
@@ -598,8 +641,21 @@ class ProtocolController:
                 window.shell.treatment.set_cloud_status(
                     "Treatment record needs attention; contact support"
                 )
+                window._cloud_bridge.upload_failed.emit(
+                    "The treatment record could not be saved for upload. Contact support.", False
+                )
             except Exception:
                 window.logger.error("Could not display the treatment recording failure")
+        try:
+            window.shell.treatment.set_outcome(session.outcome, session.elapsed())
+        except Exception:
+            window.logger.exception("Could not display treatment outcome")
+        sign_in = getattr(window, "machine_sign_in", None)
+        if sign_in is not None:
+            try:
+                sign_in.treatment_finished()
+            except Exception:
+                window.logger.error("Could not finish sign-out presentation after treatment")
 
     def _session_progress(self, text: str, session: TreatmentSession) -> None:
         if session is self._session and not session.finalized:
@@ -723,7 +779,9 @@ class ProtocolController:
     def _set_phase_from_text(self, text: str) -> None:
         """Map legacy progress text in precedence order; retain unknown phases."""
         lowered = str(text).lower()
-        if "pulsing" in lowered:
+        if "prepar" in lowered:
+            phase = "starting"
+        elif "pulsing" in lowered:
             phase = "pulsing"
         elif "oscillat" in lowered:
             phase = "oscillating"

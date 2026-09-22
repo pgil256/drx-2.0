@@ -19,7 +19,7 @@ def test_full_protocol_orders_preparation_and_final_baseline(protocol_clock, v2,
     worker.signals.prepared.connect(lambda *args: prepared.append(list(link.commands)))
     worker.signals.finished.connect(lambda value: finished.append((value, list(link.commands))))
     worker.run()
-    assert prepared and prepared[0][-2:] == ["L1|BASELINE", "V50,50,100"]
+    assert prepared and prepared[0][-2:] == ["L1|BASELINE", "V50,50,50"]
     assert not any(c.startswith("P") for c in prepared[0])
     assert finished[0][0] and worker.completed.is_set() and link.baseline_valid
     assert link.commands[-4:] == ["P0|0", "X", "I120", "L1|BASELINE"]

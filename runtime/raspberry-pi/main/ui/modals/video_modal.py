@@ -1,16 +1,17 @@
-"""VideoModal — the demo-video player over a dim scrim.
+"""VideoModal — a video library and playlist player over a dim scrim.
 
 Mirrors `VideoModal` in `bundle.jsx`: an 800px card with a dark title bar, a 16:9
 stage (radial-gradient backdrop, faint knee watermark, big play button) and a
 transport bar (play/pause, elapsed/total time, progress track).
 
+Opening the modal shows every clip in a selectable list. Choosing one starts
+the playlist at that clip; All videos stops playback and returns to the list.
 The stage embeds a VLC media player (``_VlcEngine``) that plays every ``.mp4``
 in the videos directory in sorted filename order — advancing to the next clip
 automatically when one ends — with prev/next transport buttons to skip between
 clips. VLC and the bundled clips are both optional — if either is missing the
-modal degrades to the static frame (the play button still toggles its icon and
-emits ``play_toggled`` so the UI stays consistent), so it can never block the
-app on a machine without VLC.
+modal shows a static frame with an unavailable message, so it can never block
+the app or claim to be playing on a machine without VLC.
 
 Signals:
     play_toggled(bool)  — play button pressed (True = now playing)
@@ -33,9 +34,12 @@ from PyQt5.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QListWidget,
+    QListWidgetItem,
     QPushButton,
     QSizePolicy,
     QSlider,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
@@ -48,13 +52,19 @@ from ._overlay import Overlay
 
 try:  # VLC is optional — absent on dev boxes / headless CI (mocked in tests).
     import vlc
-except Exception:  # pragma: no cover - exercised only where vlc is missing
+except Exception as exc:  # pragma: no cover - exercised only where vlc is missing
+    print(f"VideoModal: VLC unavailable: {exc!r}")
     vlc = None
 
-_FALLBACK_DURATION = 150  # seconds; used for the static clock when VLC is absent
 _DEFAULT_VOLUME = 100
 _VIDEO_CARD_WIDTH = 800
 _TOUCH_CONTROL_SIZE = 48
+# Keep the original clip filenames so existing devices retain their playback order.
+_VIDEO_TITLES = {
+    "1": "Regenerative Medicine Explained",
+    "2": "Stem Cell Research and Innovation",
+    "3": "How KneeSpa Works",
+}
 
 
 def _fmt(seconds):
@@ -223,8 +233,8 @@ class _VlcEngine:
             if os.path.isdir(folder):
                 return [
                     os.path.join(folder, f)
-                    for f in sorted(os.listdir(folder))
-                    if f.lower().endswith(".mp4")
+                    for f in sorted(os.listdir(folder), key=str.casefold)
+                    if f.lower().endswith(".mp4") and os.path.isfile(os.path.join(folder, f))
                 ]
         except Exception:
             pass
@@ -235,6 +245,16 @@ class _VlcEngine:
 
     def index(self):
         return self._index
+
+    def titles(self) -> List[str]:
+        """Return readable clip names in their playback order."""
+        names = [os.path.splitext(os.path.basename(path))[0] for path in self._playlist]
+        return [
+            _VIDEO_TITLES.get(
+                name, f"Demo video {name}" if name.isdigit() else name.replace("_", " ")
+            )
+            for name in names
+        ]
 
     def audio_device(self) -> str:
         return self._audio_device
@@ -513,8 +533,15 @@ class VideoModal(Overlay):
         lay.setSpacing(0)
 
         lay.addWidget(self._title_bar())
-        lay.addWidget(self._stage())
-        lay.addWidget(self._transport())
+        self._pages = QStackedWidget()
+        self._player_page = QWidget()
+        player_layout = QVBoxLayout(self._player_page)
+        player_layout.setContentsMargins(0, 0, 0, 0)
+        player_layout.setSpacing(0)
+        player_layout.addWidget(self._stage())
+        player_layout.addWidget(self._transport())
+        self._pages.addWidget(self._player_page)
+        lay.addWidget(self._pages)
 
         self.set_card(card)
 
@@ -524,6 +551,9 @@ class VideoModal(Overlay):
             volume=self._volume,
         )
         self._update_clip_label()
+        self._set_playing(False, emit=False)
+        if not self._engine.available:
+            self._show_playback_error()
         self._poll = QTimer(self)
         self._poll.setInterval(250)
         self._poll.timeout.connect(self._on_poll)
@@ -531,6 +561,104 @@ class VideoModal(Overlay):
         # a failure when VLC independently reports the player as stopped.
         self._none_polls = 0
         self._MAX_NONE_POLLS = 3
+        self._library_page = self._library()
+        self._pages.addWidget(self._library_page)
+        self._show_library()
+
+    def _library(self) -> QWidget:
+        """Build a scrollable, touch-sized list of all playable clips."""
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(24, 22, 24, 24)
+        layout.setSpacing(14)
+        intro = QLabel(
+            f"{self._engine.count()} videos · Choose where to start\n"
+            "The following videos will play automatically in the order shown."
+        )
+        intro.setWordWrap(True)
+        intro.setFont(sans_font(size="--text-base"))
+        intro.setStyleSheet(f"color: {resolve('--ink-700')}; background: transparent;")
+        layout.addWidget(intro)
+        self._video_list = QListWidget()
+        self._video_list.setAccessibleName("Video playlist")
+        self._video_list.setWordWrap(True)
+        self._video_list.setFont(sans_font(size="--text-base"))
+        self._video_list.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self._video_list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
+        self._video_list.setVerticalScrollMode(QListWidget.ScrollPerPixel)
+        self._video_list.verticalScrollBar().setAccessibleName("Scroll video playlist")
+        # Override the theme's handle border too, so the touch-sized thumb stays visible.
+        self._video_list.setStyleSheet(
+            "QListWidget { background: #ffffff; color: #172b3b; border: none; }"
+            "QListWidget::item { padding: 10px 14px; border: 1px solid #d9e2e8;"
+            " border-radius: 8px; margin-bottom: 6px; }"
+            "QListWidget::item:hover { background: #f0f7fb; }"
+            "QListWidget::item:selected { background: #e4f3fb; color: #123a52;"
+            " border-color: #1678a5; }"
+            f"QScrollBar:vertical {{ width: {_TOUCH_CONTROL_SIZE}px;"
+            " background: #f0f7fb; border: none; border-radius: 12px; margin: 0; }"
+            "QScrollBar::handle:vertical { background: #1678a5;"
+            " border: 4px solid #f0f7fb; border-radius: 12px; min-height: 64px; }"
+            "QScrollBar::handle:vertical:hover, QScrollBar::handle:vertical:pressed"
+            " { background: #123a52; }"
+            "QScrollBar::handle:vertical:disabled { background: #d9e2e8; }"
+            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical"
+            " { height: 0; background: none; }"
+            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical"
+            " { background: none; }"
+        )
+        for index, title in enumerate(self._engine.titles()):
+            item = QListWidgetItem(f"{index + 1:02d}   {title}")
+            item.setSizeHint(QSize(0, 76))
+            item.setToolTip(title)
+            self._video_list.addItem(item)
+        self._video_list.itemClicked.connect(self._select_video)
+        self._video_list.itemActivated.connect(self._select_video)
+        layout.addWidget(self._video_list, 1)
+        self._library_message = QLabel()
+        self._library_message.setWordWrap(True)
+        self._library_message.setFont(sans_font(size="--text-base"))
+        self._library_message.setStyleSheet("color: #714600; background: #fff4d9; padding: 12px;")
+        self._library_message.setVisible(not self._engine.available)
+        self._library_message.setText(self._playback_message.text())
+        layout.addWidget(self._library_message)
+        return page
+
+    def open_over(self, parent: Optional[QWidget] = None) -> None:
+        """Always start at the library when the operator opens Video."""
+        self._show_library()
+        super().open_over(parent)
+        self._video_list.setFocus()
+
+    def _show_library(self) -> None:
+        """Stop playback and return to the list without dismissing the modal."""
+        was_playing = self._playing
+        self._reset_playback()
+        if was_playing:
+            self.play_toggled.emit(False)
+        if self._fullscreen:
+            self._toggle_fullscreen()
+        self._pages.setCurrentWidget(self._library_page)
+        self._header_title.setText("Videos")
+        self._library_btn.hide()
+        self._fs_btn.hide()
+        self._video_list.clearSelection()
+        self._video_list.scrollToTop()
+        self._library_message.setVisible(not self._engine.available)
+        self._library_message.setText(self._playback_message.text())
+
+    def _select_video(self, item: QListWidgetItem) -> None:
+        """Start the selected clip, then continue through the remaining playlist."""
+        if self._pages.currentWidget() is not self._library_page:
+            return
+        index = self._video_list.row(item)
+        if not self._engine.set_track(index):
+            self._show_playback_error()
+            self._library_message.setText(self._playback_message.text())
+            self._library_message.show()
+            return
+        self._update_clip_label()
+        self._toggle()
 
     def _title_bar(self):
         bar = QFrame()
@@ -543,29 +671,44 @@ class VideoModal(Overlay):
         )
         h = QHBoxLayout(bar)
         h.setContentsMargins(18, 12, 18, 12)
-        title = QLabel("Demo Video — Getting Started")
+        title = QLabel("Videos")
         title.setFont(sans_font(size="--text-base", weight=600))
         title.setStyleSheet("color: #ffffff; background: transparent;")
+        self._header_title = title
         close = QPushButton(GLYPH["close"])
         close.setCursor(Qt.PointingHandCursor)
-        close.setFixedSize(32, 32)
+        close.setFixedSize(48, 48)
+        close.setAccessibleName("Close video")
         close.setFont(sans_font(size="--text-base", weight=600))
         close.setStyleSheet(
-            "QPushButton { border: none; border-radius: 16px; color: #ffffff;"
+            "QPushButton { border: none; border-radius: 16px; padding: 0; color: #ffffff;"
             " background: rgba(255,255,255,0.15); }"
             " QPushButton:hover { background: rgba(255,255,255,0.28); }"
         )
         close.clicked.connect(self.close_overlay)
         h.addWidget(title)
         h.addStretch(1)
+        self._library_btn = QPushButton("All videos")
+        self._library_btn.setAccessibleName("Back to video list")
+        self._library_btn.setMinimumSize(116, 48)
+        self._library_btn.setCursor(Qt.PointingHandCursor)
+        self._library_btn.setFont(sans_font(size="--text-base", weight=600))
+        self._library_btn.setStyleSheet(
+            "QPushButton { color: #ffffff; background: #38424b;"
+            " border: none; border-radius: 10px; padding: 0 14px; }"
+            "QPushButton:hover { background: #46535e; }"
+        )
+        self._library_btn.clicked.connect(self._show_library)
+        h.addWidget(self._library_btn)
         self._fs_btn = QPushButton()
         self._fs_btn.setCursor(Qt.PointingHandCursor)
-        self._fs_btn.setFixedSize(32, 32)
+        self._fs_btn.setFixedSize(48, 48)
+        self._fs_btn.setAccessibleName("Toggle video fullscreen")
         self._fs_btn.setIconSize(QSize(16, 16))
         self._fs_btn.setIcon(_expand_icon("#ffffff", 16))
         self._fs_btn.setToolTip("Full screen")
         self._fs_btn.setStyleSheet(
-            "QPushButton { border: none; border-radius: 16px; color: #ffffff;"
+            "QPushButton { border: none; border-radius: 16px; padding: 0; color: #ffffff;"
             " background: rgba(255,255,255,0.15); }"
             " QPushButton:hover { background: rgba(255,255,255,0.28); }"
         )
@@ -630,6 +773,15 @@ class VideoModal(Overlay):
         )
         self._big_play.clicked.connect(self._toggle)
         grid.addWidget(self._big_play, 0, 0, Qt.AlignCenter)  # stacks above watermark
+        self._playback_message = QLabel()
+        self._playback_message.setWordWrap(True)
+        self._playback_message.setAlignment(Qt.AlignCenter)
+        self._playback_message.setMaximumWidth(560)
+        self._playback_message.setStyleSheet(
+            "color: #ffffff; background: #1b2838; padding: 16px; border-radius: 8px;"
+        )
+        self._playback_message.hide()
+        grid.addWidget(self._playback_message, 0, 0, Qt.AlignHCenter | Qt.AlignBottom)
         self._watermark.raise_()
         self._big_play.raise_()
         self._stage_frame = stage
@@ -646,6 +798,13 @@ class VideoModal(Overlay):
         )
         outer = QVBoxLayout(bar)
         outer.setContentsMargins(20, 14, 20, 16)
+        self._current_title = QLabel()
+        self._current_title.setWordWrap(True)
+        self._current_title.setFont(sans_font(size="--text-base", weight=600))
+        self._current_title.setStyleSheet(
+            f"color: {resolve('--ink-900')}; background: transparent;"
+        )
+        outer.addWidget(self._current_title)
         outer.setSpacing(12)
 
         transport_row = QWidget(bar)
@@ -708,7 +867,7 @@ class VideoModal(Overlay):
         self._track.installEventFilter(self)
         h.addWidget(self._track, 1)
 
-        self._total = QLabel(_fmt(_FALLBACK_DURATION))
+        self._total = QLabel("--:--")
         self._total.setFont(mono_font(size="--text-sm"))
         self._total.setStyleSheet(f"color: {resolve('--gray-600')}; background: transparent;")
         h.addWidget(self._total)
@@ -908,6 +1067,11 @@ class VideoModal(Overlay):
     def _toggle(self):
         target_playing = not self._playing
         if target_playing:
+            self._pages.setCurrentWidget(self._player_page)
+            self._header_title.setText("Video playlist")
+            self._library_btn.show()
+            self._fs_btn.show()
+            self._playback_message.hide()
             # Reveal the native surface BEFORE starting VLC so its X window
             # is mapped when the video output binds to it — binding to a
             # still-hidden window is a black-stage race on the Pi. Degrades
@@ -917,9 +1081,7 @@ class VideoModal(Overlay):
                 self._watermark.setVisible(False)
                 self._big_play.setVisible(False)
             if not self._engine.available:
-                # Preserve the optional-VLC fallback contract: the button can
-                # still be demonstrated even though no playback poll starts.
-                self._set_playing(True)
+                self._show_playback_error()
             elif self._engine.play():
                 self._none_polls = 0
                 self._set_playing(True)
@@ -929,11 +1091,24 @@ class VideoModal(Overlay):
                 self._watermark.setVisible(True)
                 self._big_play.setVisible(True)
                 self._set_playing(False)
+                self._show_playback_error()
         else:
             self._engine.pause()
             self._big_play.setVisible(True)
             self._poll.stop()
             self._set_playing(False)
+
+    def _show_playback_error(self) -> None:
+        """Explain unavailable playback without changing the transport to playing."""
+        if not self._engine.count():
+            message = "No demo videos are available on this device."
+        elif not self._engine.available:
+            message = "Video playback is unavailable. Please contact support."
+        else:
+            message = "The video could not play. Please try again."
+        self._playback_message.setText(message)
+        self._playback_message.show()
+        self._playback_message.raise_()
 
     def _skip(self, delta):
         """Jump to the previous/next clip (wraps at the ends).
@@ -949,30 +1124,33 @@ class VideoModal(Overlay):
             return
         self._update_clip_label()
         self._elapsed.setText(_fmt(0))
+        self._total.setText("--:--")
         self._set_progress(0)
         if self._playing:
             self._none_polls = 0
-            self._engine.play()
+            if not self._engine.play():
+                self._on_playback_failed()
 
     def _update_clip_label(self):
         count = self._engine.count()
         self._clip_label.setText(f"{self._engine.index() + 1} / {count}" if count else "")
+        titles = self._engine.titles()
+        self._current_title.setText(titles[self._engine.index()] if titles else "")
         self._clip_label.setVisible(count > 1)
         self._prev_btn.setVisible(count > 1)
         self._next_btn.setVisible(count > 1)
 
     def _advance(self):
-        """Current clip finished — continue with the next, or reset after the
-        last so the playlist starts over from clip 1 on the next play."""
+        """Continue with the next clip, or return to the list after the last."""
         nxt = self._engine.index() + 1
         if nxt < self._engine.count() and self._engine.set_track(nxt) and self._engine.play():
             self._update_clip_label()
             self._none_polls = 0
             self._elapsed.setText(_fmt(0))
+            self._total.setText("--:--")
             self._set_progress(0)
         else:
-            self._reset_playback()
-            self.play_toggled.emit(False)
+            self._show_library()
 
     def _on_poll(self):
         state = self._engine.playback_state()
@@ -1019,6 +1197,7 @@ class VideoModal(Overlay):
         """
         print("VideoModal: playback position stalled; resetting to poster")
         self._reset_playback()
+        self._show_playback_error()
         self.play_toggled.emit(False)
 
     def _reset_playback(self):
@@ -1034,6 +1213,7 @@ class VideoModal(Overlay):
         self._watermark.setVisible(True)
         self._big_play.setVisible(True)
         self._elapsed.setText(_fmt(0))
+        self._total.setText("--:--")
         self._set_progress(0)
 
     def close_overlay(self):

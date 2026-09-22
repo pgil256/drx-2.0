@@ -6,6 +6,7 @@ the controller connects their signals to the Arduino / Protocols layer in
 Phase 3. Built in code (not Qt Designer) per the modernization plan.
 """
 
+from .device import DeviceScreen
 from .help import HelpScreen
 from .home import HomeScreen
 from .profile import ProfileScreen
@@ -14,6 +15,7 @@ from .support import SupportScreen
 from .treatment import TreatmentScreen
 
 __all__ = [
+    "DeviceScreen",
     "HomeScreen",
     "SetupScreen",
     "TreatmentScreen",

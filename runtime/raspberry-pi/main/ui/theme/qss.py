@@ -134,7 +134,7 @@ def apply_theme(app, set_base_font=True):
       2. sets the base application font to IBM Plex Sans **iff** it loaded
          (otherwise leaves Qt's default so the QSS ``--font-sans`` fallback
          applies — avoids forcing a wrong family on the Pi),
-      3. installs the resolved global stylesheet.
+      3. installs the resolved global stylesheet and standard-dialog styling.
 
     Returns a small dict describing what happened (handy for logs/tests).
     Designed to be safe: a stylesheet/font problem must never stop the device
@@ -151,5 +151,8 @@ def apply_theme(app, set_base_font=True):
         app.setFont(base)
 
     app.setStyleSheet(load_app_qss())
+    from .dialogs import install_dialog_theme
+
+    install_dialog_theme(app)
 
     return {"font_families": families, "plex_loaded": plex_loaded}

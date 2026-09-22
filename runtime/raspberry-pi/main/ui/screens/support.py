@@ -1,35 +1,29 @@
-"""SupportScreen — troubleshooting + contact (absorbs the old Profile actions).
+"""Unified support references, troubleshooting, and contact form."""
 
-Mirrors `SupportScreen` in `bundle.jsx`: a "Troubleshooting" card with an
-accordion of common failures, and a "Contact Support" card (phone, Request
-Assistance, Submit a Ticket). The accordion expands/collapses here; the
-ticket-email wiring (§15.5) lands in Phase 3.5.
+from typing import Optional
 
-Signals:
-    issue_activated(str)        — a troubleshooting item header was tapped
-    request_assistance          — "Request Assistance" button
-    submit_ticket_requested     — "Submit a Ticket" button
-"""
-
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QLineEdit,
+    QPlainTextEdit,
     QPushButton,
+    QStackedWidget,
     QVBoxLayout,
     QWidget,
 )
 
 from ui.theme import GLYPH
-from ui.widgets.common import eyebrow
+from ui.modals.text_keyboard import TextKeyboard
 from ui.widgets.ds import DSButton, DSCard
-from ui.widgets.ds._common import mono_font, resolve, sans_font
+from ui.widgets.ds._common import resolve, sans_font
 
-from .content import HELP_FAILURES
+from helpers.support_ticket import validate_ticket
 
-_PAD = 20
-_GAP = 16
+from .content import TROUBLESHOOTING
+from .help import HelpScreen
 
 
 class _FailureItem(QFrame):
@@ -53,24 +47,29 @@ class _FailureItem(QFrame):
         lay.setSpacing(0)
 
         self._header = QPushButton()
+        self._header.setMinimumHeight(56)
+        self._header.setAccessibleName(question)
         self._header.setCursor(Qt.PointingHandCursor)
         self._header.setLayoutDirection(Qt.LeftToRight)
         self._header.setStyleSheet(
             "QPushButton { text-align: left; border: none; background: transparent;"
             " padding: 12px 18px; }"
             f" QPushButton:hover {{ background: {resolve('--gray-050')}; }}"
+            f" QPushButton:focus {{ border: 3px solid {resolve('--border-focus')}; }}"
         )
         hlay = QHBoxLayout(self._header)
         hlay.setContentsMargins(18, 12, 18, 12)
         hlay.setSpacing(12)
         self._q = QLabel(question)
-        self._q.setFont(sans_font(size="--text-sm", weight=700))
+        self._q.setFont(sans_font(size="--text-base", weight=700))
         self._q.setStyleSheet(f"color: {resolve('--ink-900')}; background: transparent;")
         self._q.setWordWrap(True)
+        self._q.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._indicator = QLabel(GLYPH["accordion_closed"])
+        self._indicator.setAttribute(Qt.WA_TransparentForMouseEvents, True)
         self._indicator.setFont(sans_font(size="--text-lg", weight=600))
         self._indicator.setStyleSheet(
-            f"color: {resolve('--brand-cyan')}; background: transparent;"
+            f"color: {resolve('--color-primary')}; background: transparent;"
         )
         hlay.addWidget(self._q, 1)
         hlay.addWidget(self._indicator, 0, Qt.AlignVCenter)
@@ -79,7 +78,7 @@ class _FailureItem(QFrame):
 
         self._body = QLabel(answer)
         self._body.setWordWrap(True)
-        self._body.setFont(sans_font(size="--text-sm"))
+        self._body.setFont(sans_font(size="--text-base"))
         self._body.setContentsMargins(18, 0, 18, 14)
         self._body.setStyleSheet(f"color: {resolve('--ink-700')}; background: transparent;")
         self._body.setVisible(False)
@@ -95,83 +94,218 @@ class _FailureItem(QFrame):
             "QPushButton { text-align: left; border: none; padding: 12px 18px;"
             f" background: {resolve('--gray-050') if self._open else 'transparent'}; }}"
             f" QPushButton:hover {{ background: {resolve('--gray-050')}; }}"
+            f" QPushButton:focus {{ border: 3px solid {resolve('--border-focus')}; }}"
         )
-        self.activated.emit(self._question)
+        if self._open:
+            self.activated.emit(self._question)
 
 
-class SupportScreen(QWidget):
+class SupportScreen(HelpScreen):
     issue_activated = pyqtSignal(str)
-    request_assistance = pyqtSignal()
-    submit_ticket_requested = pyqtSignal()
+    submit_ticket_requested = pyqtSignal(dict)
 
-    def __init__(self, parent=None):
-        super().__init__(parent)
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent, section_titles=(
+            "Protocols", "Controls", "Troubleshooting", "Contact Support",
+        ))
         self.setObjectName("SupportScreen")
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setStyleSheet(f"#SupportScreen {{ background: {resolve('--surface-page')}; }}")
+        self._sending = False
+        self._keyboard = None
+        self._keyboard_targets = {}
+        self._deferred_contact = None
+        self._issue = "General support request"
+        self._add_section().addWidget(self._troubleshooting_card())
+        self._add_section().addWidget(self._contact_card())
 
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(_PAD, _PAD, _PAD, _PAD)
-        lay.setSpacing(_GAP)
-
-        lay.addWidget(self._troubleshooting_card(), 1)
-        lay.addWidget(self._contact_card(), 0)
-
-    def _troubleshooting_card(self):
+    def _troubleshooting_card(self) -> DSCard:
         card = DSCard("Troubleshooting", padded=False)
         host = QWidget()
         vlay = QVBoxLayout(host)
         vlay.setContentsMargins(18, 12, 18, 16)
         vlay.setSpacing(10)
-        intro = QLabel("Common points of failure — tap any item to see how to resolve it.")
-        intro.setFont(sans_font(size="--text-sm"))
+        intro = QLabel("Choose a topic, then tap an issue for checks and next steps.")
+        intro.setWordWrap(True)
+        intro.setFont(sans_font(size="--text-base"))
         intro.setStyleSheet(f"color: {resolve('--ink-700')}; background: transparent;")
         vlay.addWidget(intro)
-        for q, a in HELP_FAILURES:
-            item = _FailureItem(q, a)
-            item.activated.connect(self.issue_activated)
-            vlay.addWidget(item)
-        vlay.addStretch(1)
+        topics = QHBoxLayout()
+        self._trouble_pages = QStackedWidget()
+        self._trouble_buttons = []
+        for index, (topic, entries) in enumerate(TROUBLESHOOTING.items()):
+            button = DSButton(topic.replace("&", "&&"), variant="secondary", full_width=True)
+            button.clicked.connect(lambda _checked, i=index: self._select_topic(i))
+            topics.addWidget(button)
+            self._trouble_buttons.append(button)
+            page = QWidget()
+            rows = QVBoxLayout(page)
+            rows.setContentsMargins(0, 0, 0, 0)
+            rows.setSpacing(10)
+            for question, answer in entries:
+                item = _FailureItem(question, answer)
+                item.activated.connect(self._select_issue)
+                rows.addWidget(item)
+            rows.addStretch(1)
+            self._trouble_pages.addWidget(page)
+        vlay.addLayout(topics)
+        vlay.addWidget(self._trouble_pages)
+        self._select_topic(0)
         card.add_widget(host)
         return card
 
-    def _contact_card(self):
+    def _select_topic(self, index: int) -> None:
+        self._trouble_pages.setCurrentIndex(index)
+        for i, button in enumerate(self._trouble_buttons):
+            button.set_variant("primary" if i == index else "secondary")
+
+    def _contact_card(self) -> DSCard:
         card = DSCard("Contact Support", padded=False)
         host = QWidget()
-        row = QHBoxLayout(host)
-        row.setContentsMargins(18, 16, 18, 16)
-        row.setSpacing(_GAP)
-
-        info = QHBoxLayout()
-        info.setSpacing(20)
-        phone_box = QVBoxLayout()
-        phone_box.setSpacing(3)
-        phone_box.addWidget(eyebrow("Phone Support"))
-        phone = QLabel("1-833-KNEE-SPA")
-        phone.setFont(mono_font(size=26, weight=600))  # DS 26px (between --text-lg/xl)
-        phone.setStyleSheet(f"color: {resolve('--ink-900')}; background: transparent;")
-        phone_box.addWidget(phone)
-        info.addLayout(phone_box, 0)
-        helper = QLabel(
-            "Still stuck? Open a support ticket or request live assistance and our "
-            "team will follow up."
+        form = QVBoxLayout(host)
+        form.setContentsMargins(20, 16, 20, 16)
+        form.setSpacing(10)
+        phone = QLabel("Phone support: 1-833-KNEE-SPA")
+        phone.setFont(sans_font(size="--text-md", weight=600))
+        form.addWidget(phone)
+        note = QLabel(
+            "Describe the problem and how we can reach you. Device ID, software and firmware "
+            "versions are included automatically. Do not include patient information."
         )
-        helper.setWordWrap(True)
-        helper.setFont(sans_font(size="--text-xs"))
-        helper.setMaximumWidth(320)
-        helper.setStyleSheet(f"color: {resolve('--ink-700')}; background: transparent;")
-        info.addWidget(helper, 1)
-        row.addLayout(info, 1)
-
-        btns = QHBoxLayout()
-        btns.setSpacing(12)
-        assist = DSButton("Request Assistance", variant="secondary")
-        assist.clicked.connect(self.request_assistance)
-        ticket = DSButton("Submit a Ticket", variant="primary")
-        ticket.clicked.connect(self.submit_ticket_requested)
-        btns.addWidget(assist)
-        btns.addWidget(ticket)
-        row.addLayout(btns, 0)
-
+        note.setWordWrap(True)
+        note.setFont(sans_font(size="--text-base"))
+        form.addWidget(note)
+        self._selected_issue = QLabel("Related issue: " + self._issue)
+        self._selected_issue.setTextFormat(Qt.PlainText)
+        self._selected_issue.setWordWrap(True)
+        form.addWidget(self._selected_issue)
+        identity = QHBoxLayout()
+        self.contact_name = QLineEdit()
+        self.contact_name.setPlaceholderText("Your name (required)")
+        self.contact_name.setAccessibleName("Your name")
+        self.contact_name.setMaxLength(100)
+        self.contact_email = QLineEdit()
+        self.contact_email.setPlaceholderText("Reply email (required)")
+        self.contact_email.setAccessibleName("Reply email")
+        self.contact_email.setMaxLength(254)
+        self.contact_email.setInputMethodHints(Qt.ImhEmailCharactersOnly)
+        identity.addWidget(self.contact_name)
+        identity.addWidget(self.contact_email)
+        form.addLayout(identity)
+        self.subject = QLineEdit()
+        self.subject.setPlaceholderText("Brief summary (required)")
+        self.subject.setAccessibleName("Ticket summary")
+        self.subject.setMaxLength(160)
+        form.addWidget(self.subject)
+        self.description = QPlainTextEdit()
+        self.description.setPlaceholderText(
+            "What happened? What did you expect? Include any error message and steps "
+            "already tried. (Required, maximum 4,000 characters)"
+        )
+        self.description.setAccessibleName("Problem description")
+        self.description.setFixedHeight(120)
+        form.addWidget(self.description)
+        self._fields = (self.contact_name, self.contact_email, self.subject, self.description)
+        for field in self._fields:
+            field.setFont(sans_font(size="--text-base"))
+            if isinstance(field, QLineEdit):
+                field.setMinimumHeight(48)
+            target = field.viewport() if isinstance(field, QPlainTextEdit) else field
+            self._keyboard_targets[target] = field
+            target.installEventFilter(self)
+        self._delivery_status = QLabel("Complete the form to create a support ticket.")
+        self._delivery_status.setTextFormat(Qt.PlainText)
+        self._delivery_status.setWordWrap(True)
+        self._delivery_status.setFont(sans_font(size="--text-base"))
+        form.addWidget(self._delivery_status)
+        self.ticket_button = DSButton("Submit Ticket", variant="primary")
+        self.ticket_button.clicked.connect(self._submit)
+        self._send_buttons = (self.ticket_button,)
+        form.addWidget(self.ticket_button, 0, Qt.AlignRight)
         card.add_widget(host)
         return card
+
+    def eventFilter(self, watched: object, event: QEvent) -> bool:
+        field = self._keyboard_targets.get(watched)
+        if field is not None and not self._sending and event.type() == QEvent.MouseButtonRelease:
+            if self._keyboard is None:
+                multiline = isinstance(field, QPlainTextEdit)
+                value = field.toPlainText() if multiline else field.text()
+                keyboard = TextKeyboard(
+                    field.accessibleName(), value, 4000 if multiline else field.maxLength(),
+                    multiline=multiline, parent=self,
+                )
+                self._keyboard = keyboard
+
+                def finish(result: int) -> None:
+                    if result == TextKeyboard.Accepted and not self._sending:
+                        if multiline:
+                            field.setPlainText(keyboard.value())
+                        else:
+                            field.setText(keyboard.value())
+                    self._keyboard = None
+                    keyboard.deleteLater()
+
+                keyboard.finished.connect(finish)
+                keyboard.open()
+                keyboard.editor.setFocus()
+            return True
+        return super().eventFilter(watched, event)
+
+    def _select_issue(self, question: str) -> None:
+        if not self._sending:
+            self._issue = question
+            self._selected_issue.setText("Related issue: " + question)
+            if not self.subject.text().strip():
+                self.subject.setText(question)
+        self.issue_activated.emit(question)
+
+    def set_contact(self, username: str, email: str = "") -> None:
+        """Clear the previous operator's draft when the signed-in identity changes."""
+        if self._keyboard is not None:
+            self._keyboard.reject()
+        if self._sending:
+            self._deferred_contact = (username, email)
+            return
+        self.contact_name.setText(username)
+        self.contact_email.setText(email)
+        self.subject.clear()
+        self.description.clear()
+        self._issue = "General support request"
+        self._selected_issue.setText("Related issue: " + self._issue)
+        self.set_delivery_state("idle", "Complete the form to create a support ticket.")
+
+    def _submit(self) -> None:
+        if self._sending:
+            return
+        payload = {
+            "name": self.contact_name.text(), "email": self.contact_email.text(),
+            "subject": self.subject.text(), "description": self.description.toPlainText(),
+            "issue": self._issue,
+        }
+        try:
+            payload = validate_ticket(payload)
+        except ValueError as exc:
+            self.set_delivery_state("invalid", str(exc))
+            return
+        self.submit_ticket_requested.emit(payload)
+
+    def set_delivery_state(self, state: str, message: str) -> None:
+        """Preserve failed drafts, prevent duplicate sends, and show persistent results."""
+        self._sending = state == "sending"
+        if self._sending and self._keyboard is not None:
+            self._keyboard.reject()
+        self._delivery_status.setText(message)
+        tone = "--red-500" if state in ("failed", "invalid") else "--ink-800"
+        self._delivery_status.setStyleSheet(f"color: {resolve(tone)};")
+        for field in self._fields:
+            field.setEnabled(not self._sending)
+        self.ticket_button.setEnabled(not self._sending)
+        self.ticket_button.setText("Retry Ticket" if state == "failed" else "Submit Ticket")
+        if state == "sent":
+            self.subject.clear()
+            self.description.clear()
+            self._issue = "General support request"
+            self._selected_issue.setText("Related issue: " + self._issue)
+        if not self._sending and self._deferred_contact is not None:
+            contact = self._deferred_contact
+            self._deferred_contact = None
+            self.set_contact(*contact)

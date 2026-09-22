@@ -41,6 +41,7 @@ class HardwareServiceController:
         self.window = window
         self.logger = setup_logger(component="Hardware Service")
         self.access = ServiceAccess()
+        self.mode = "calibration"
         self.dialog: Optional[HardwareServiceDialog] = None
         self.pin_dialog: Optional[ServicePinDialog] = None
 
@@ -48,13 +49,21 @@ class HardwareServiceController:
         w = self.window
         return bool(w.current_user) and not (
             w.protocol_running or w.reset_in_progress
+            or getattr(w, "_device_maintenance_active", False)
             or (w.actuator_command_in_progress and w.protocol_state != "fault")
             or w.protocol_state not in ("idle", "fault") or getattr(w, "_closing", False)
             or getattr(w, "_physical_stop_active", False)
         )
 
+    def open_tests(self) -> None:
+        """Start supervised tests without permitting calibration edits."""
+        self._open_mode("tests")
+
     def open(self) -> None:
-        """Authenticate each visit and recheck ownership after PIN entry."""
+        """Use the authenticated Service visit for calibration."""
+        self._open_mode("calibration")
+
+    def _open_mode(self, mode: str) -> None:
         if self.dialog is not None:
             self.dialog.raise_()
             return
@@ -64,6 +73,12 @@ class HardwareServiceController:
         if not self._can_open():
             self.window._show_timed_error("Log in and finish movement, treatment or reset first.")
             return
+        self.mode = mode
+        device = getattr(self.window, "device_controller", None)
+        if device is not None:
+            device.require_service(lambda _user: self._start_authorized(mode))
+            return
+        self._auth_user = dict(self.window.current_user)
         try:
             d = ServicePinDialog(
                 self.access, self.window.current_user.get("status") == "admin", self.window,
@@ -82,12 +97,18 @@ class HardwareServiceController:
         if pin_dialog is None:
             return
         pin_dialog.deleteLater()
-        if result != QDialog.Accepted or not self._can_open():
+        if (result != QDialog.Accepted or not self._can_open()
+                or self.window.current_user != self._auth_user):
             return
         self._start_session()
 
+    def _start_authorized(self, mode: str) -> None:
+        if self._can_open() and self.window.device_controller.service_authorized():
+            self.mode = mode
+            self._start_session()
+
     def _start_session(self) -> None:
-        """Called only after service authentication; acquire session ownership."""
+        """Acquire one session; calibration entry requires service authentication."""
         w = self.window
         try:
             self.draft = HardwareServiceDraft(w.config)
@@ -123,7 +144,7 @@ class HardwareServiceController:
         self.events = []
         self.report_path = None
         self.session_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        self.dialog = HardwareServiceDialog(self.draft, w)
+        self.dialog = HardwareServiceDialog(self.draft, w, mode=self.mode)
         d = self.dialog
         d.action_requested.connect(self.action)
         d.stop_requested.connect(lambda: self.abort("Stopped by technician."))
@@ -150,18 +171,19 @@ class HardwareServiceController:
         self.timer = QTimer(d)
         self.timer.timeout.connect(self.tick)
         self.timer.start(100)
-        self.event("opened", "Technician authenticated; no movement requested.")
+        self.event("opened", {"mode": self.mode, "movement_requested": False})
         if self.diagnostic_only:
             d.show_message(
                 "Diagnostic access after a fault: movement is locked. You may measure the "
-                "load cell and save calibration, then close and reset unloaded."
+                "load cell, then close and reset unloaded."
             )
         d.open()
 
     def owns_session(self) -> bool:
         w = self.window
         return bool(w.current_user) and w.current_user == self.user and not (
-            w.protocol_running or w.reset_in_progress or getattr(w, "_closing", False)
+            w.protocol_running or w.reset_in_progress
+            or getattr(w, "_device_maintenance_active", False) or getattr(w, "_closing", False)
         )
 
     def blocked(self) -> bool:
@@ -337,7 +359,16 @@ class HardwareServiceController:
 
     def action(self, name: str, value: object = None) -> None:
         """Dispatch user actions; recheck authorization and evidence at execution."""
+        from controllers.machine_sign_in_controller import authorize
+        if not authorize(self.window, "service", lambda: self.action(name, value)):
+            return
         if self.dialog is None or not self.owns_session():
+            return
+        if self.mode == "tests" and name not in {
+            "begin", "check_link", "result", "bench_result", "export", "stop_check",
+            "pressure_capture", "jog", "leg",
+        }:
+            self.dialog.show_message("Open password-protected Calibration to change settings.", True)
             return
         try:
             if name == "begin":
@@ -453,6 +484,9 @@ class HardwareServiceController:
         self.moved = True
         if axis == "leg":
             self.window._service_leg_position_unknown = True
+            leg = getattr(self.window, "leg", None)
+            if leg is not None:
+                leg.invalidate()
         self.move_started = time.monotonic()
         self.move_axis, self.target = axis, target
         self.move_origin = self.position(axis) if axis != "leg" else None
@@ -563,6 +597,8 @@ class HardwareServiceController:
 
     def save(self) -> None:
         """Persist reviewed drafts; deliberate reset applies the firmware settings."""
+        if self.mode != "calibration" or not self.owns_session():
+            return
         if self.handle is not None or self.dialog.current_step() != "review":
             return
         if not self.draft.dirty:
@@ -652,6 +688,7 @@ class HardwareServiceController:
                  "loadcell", "stops")
         report = {
             "schema": 1, "session": self.session_id, "updated_at": self.timestamp(),
+            "mode": self.mode,
             "technician": self.user.get("username", ""),
             "firmware": getattr(self.arduino, "firmware_version", None),
             "config_path": str(self.window.config.configFile),

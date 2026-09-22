@@ -13,6 +13,9 @@ from .paths import APP_BASE_DIR, DEVICE_STATE_DIR, PROJECT_DIR
 APP_NAME = "KneeSpa"
 APP_VERSION = "3.0"
 
+# Clinician web page on the configured cloud origin; distinct from the device API.
+PATIENT_PORTAL_PATH = "/patients/new"
+
 # Logging Configuration
 LOG_FILE = "kneespa_app.log"
 LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
@@ -217,14 +220,15 @@ DEFAULT_JERK_INTERVAL_MS = 500
 
 # Motor output as a percentage of the 1600-unit treatment ceiling, not a
 # calibrated travel velocity. Keep the proven 800-unit breakaway floor and
-# the existing 1600-unit pulse ceiling. Defaults preserve existing motion.
+# the existing 1600-unit pulse ceiling. Treatment uses one shared 50% default.
 MOTOR_SPEED_MIN = 50
 MOTOR_SPEED_MAX = 100
 MOTOR_SPEED_STEP = 5
+MOTOR_SPEED_DEFAULT = 50
 MOTOR_SPEED_DEFAULTS = {
-    "axial_speed": 50,
-    "lateral_speed": 50,
-    "pulse_speed": 100,
+    "axial_speed": MOTOR_SPEED_DEFAULT,
+    "lateral_speed": MOTOR_SPEED_DEFAULT,
+    "pulse_speed": MOTOR_SPEED_DEFAULT,
 }
 MOTOR_SPEED_ACK_TIMEOUT_S = 6.0
 

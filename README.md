@@ -26,13 +26,25 @@ See [deployment and migration](development/docs/deployment.md) for the exact
 device layout, upgrade steps, and sync commands. Firmware tests live under
 `development/tests/firmware/`, separate from the shipped sketch.
 
+See [Raspberry Pi setup and maintenance scripts](development/docs/rpi/setup-and-maintenance.md)
+for desktop installation, Pi diagnostics, Buster updates, firmware flashing and sync commands.
+
 ## Running
+
+Install Git LFS before cloning, then run `git lfs pull` from the repository root
+to fetch the large HCT/P educational video. Fetch LFS media before running the app,
+syncing `runtime/` to a Pi, or packaging a release; Git LFS pointer files cannot play
+as videos.
 
 ```bash
 python runtime/raspberry-pi/main/kneespa.py                  # on the Pi (requires RPi.GPIO, PyQt5)
 python runtime/raspberry-pi/main/kneespa.py --debug --print-logs
 python development/tools/run_local.py   # desktop preview with simulated hardware
+python development/tools/run_simulator.py   # real GUI + Blender model + mock device
 ```
+
+See the [3D testing guide](development/simulator/README.md) for setup, demo logins,
+fault injection, recordings, and editing the Blender model.
 
 ## User provisioning & runtime secrets
 

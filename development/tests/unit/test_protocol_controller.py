@@ -11,10 +11,12 @@ The shared window facade has explicit state and bounded collaborator APIs;
 no Qt window or Arduino is constructed. Constructor coverage lives in Gate W.
 """
 from functools import partial
+from types import SimpleNamespace
 from unittest.mock import MagicMock, call
 
 import pytest
 from PyQt5.QtCore import QObject, pyqtSignal
+from PyQt5.QtWidgets import QMessageBox
 from pytestqt.qtbot import QtBot
 
 from controllers.protocol_controller import ProtocolController
@@ -99,20 +101,59 @@ class TestSetState:
         w.treatment_panel.set_stopping.assert_called_once()
 
 
-# ----- navigation gating -----
-class TestBlockNav:
+# ----- navigation confirmation / destructive exit gating -----
+class TestConfirmLeaveTreatment:
+    @pytest.mark.parametrize("state", ["starting", "running", "stopping"])
+    @pytest.mark.parametrize(
+        "response,expected", [(QMessageBox.Ok, True), (QMessageBox.Cancel, False)]
+    )
+    def test_warns_and_honors_operator_choice(
+        self, controller, state, response, expected, monkeypatch
+    ):
+        pc, w = controller
+        w.protocol_state = state
+        warning = MagicMock(return_value=response)
+        monkeypatch.setattr(QMessageBox, "warning", warning)
+
+        assert pc.confirm_leave_treatment("protocols", "home") is expected
+        warning.assert_called_once()
+        assert warning.call_args.args[1] == "Caution"
+        assert warning.call_args.args[2].startswith("Caution:")
+
+    @pytest.mark.parametrize("state", ["idle", "fault"])
+    def test_allows_without_warning_when_inactive(self, controller, state, monkeypatch):
+        pc, w = controller
+        w.protocol_state = state
+        warning = MagicMock()
+        monkeypatch.setattr(QMessageBox, "warning", warning)
+
+        assert pc.confirm_leave_treatment("protocols", "home") is True
+        warning.assert_not_called()
+
+    def test_does_not_warn_when_not_leaving_treatment(self, controller, monkeypatch):
+        pc, w = controller
+        w.protocol_state = "running"
+        warning = MagicMock()
+        monkeypatch.setattr(QMessageBox, "warning", warning)
+
+        assert pc.confirm_leave_treatment("home", "help") is True
+        assert pc.confirm_leave_treatment("protocols", "protocols") is True
+        warning.assert_not_called()
+
+
+class TestBlockActiveTreatmentExit:
     @pytest.mark.parametrize("state", ["starting", "running", "stopping"])
     def test_blocks_while_active(self, controller, state):
         pc, w = controller
         w.protocol_state = state
-        assert pc.block_nav() is True
+        assert pc.block_active_treatment_exit() is True
         w._show_timed_error.assert_called_once()
 
     @pytest.mark.parametrize("state", ["idle", "fault"])
     def test_allows_when_inactive(self, controller, state):
         pc, w = controller
         w.protocol_state = state
-        assert pc.block_nav() is False
+        assert pc.block_active_treatment_exit() is False
 
 
 # ----- start_or_stop: the gate chain -----
@@ -149,17 +190,24 @@ class TestStartGates:
         pc.start_or_stop()
         assert w.protocol_state == "idle"
 
-    def test_successful_start_reaches_running(self, controller, monkeypatch):
+    def test_successful_start_waits_for_worker_preparation(self, controller, monkeypatch):
         pc, w = controller
         monkeypatch.setattr(pc, "confirm_start", lambda: True)
         w.ensure_arduino_connection.return_value = True
         worker_cls = MagicMock(return_value=make_worker_double())
         monkeypatch.setattr(protocols_module, "Protocols", worker_cls)
         pc.start_or_stop()
-        assert w.protocol_state == "running"
+        assert w.protocol_state == "starting"
         assert w.protocol_running is True
+        w.shell.treatment.set_busy.assert_called_with(True)
+        w.protocol_timer.start.assert_not_called()
         w.ensure_arduino_connection.assert_called_once()
         w.threadpool.start.assert_called_once_with(worker_cls.return_value)
+        prepared = worker_cls.return_value.signals.prepared.connect.call_args.args[0]
+        prepared(1000, 2000)
+        assert w.protocol_state == "running"
+        w.shell.treatment.set_busy.assert_called_with(False)
+        w.protocol_timer.start.assert_called_once()
 
     def test_fault_state_requires_recovery_before_restart(self, controller, monkeypatch):
         pc, w = controller
@@ -189,20 +237,30 @@ class TestStartGates:
         pc, w = controller
         from controllers import protocol_controller as pc_module
 
-        class StubMessageBox:
-            Yes = 0x4000   # ints so QMessageBox.Yes | QMessageBox.No works
-            No = 0x10000
-
-            @classmethod
-            def question(cls, *args, **kwargs):
-                return getattr(cls, answer)
-
-        monkeypatch.setattr(pc_module, "QMessageBox", StubMessageBox)
+        monkeypatch.setattr(pc_module.TreatmentReviewDialog, "confirm",
+                            lambda *args: answer == "Yes")
         assert pc.confirm_start() is expected
 
 
 # ----- start_protocol: the last line of defense -----
 class TestStartProtocolGates:
+    @pytest.mark.parametrize("state", ["fault", "running", "stopping"])
+    def test_direct_start_respects_device_lifecycle(self, controller, state):
+        pc, w = controller
+        w.protocol_state = state
+        assert pc.start_protocol() is False
+        w.threadpool.start.assert_not_called()
+
+    @pytest.mark.parametrize("flag", [
+        "_closing", "_physical_stop_active", "_no_automatic_recovery",
+        "reset_in_progress", "actuator_command_in_progress",
+    ])
+    def test_direct_start_respects_recovery_and_movement(self, controller, flag):
+        pc, w = controller
+        setattr(w, flag, True)
+        assert pc.start_protocol() is False
+        w.threadpool.start.assert_not_called()
+
     def test_denied_when_not_logged_in(self, controller):
         pc, w = controller
         w.current_user = None
@@ -303,6 +361,8 @@ class TestTreatmentWiring:
         pc, w = controller
         w.pressure_dialog = _RetiredDialog()
         w.arduino = _StatusSource()
+        w.arduino.connected = True
+        w._measurement = SimpleNamespace(caption=lambda connected: "Pressure live")
         w.config.CMarks = {"0.0": 100, "10.0": 200, "20.0": 300}
         w.config.BMarks = {"0.0": 0, "10.0": 100}
         w.initial_setup_complete = True
@@ -507,7 +567,7 @@ class TestStartRecheck:
 
         assert w.protocol_state == "idle"
 
-    def test_clean_start_reaches_running(self, controller, monkeypatch):
+    def test_clean_dispatch_stays_starting(self, controller, monkeypatch):
         pc, w = controller
         w.reset_in_progress = False
         monkeypatch.setattr(pc, "confirm_start", lambda: True)
@@ -516,7 +576,7 @@ class TestStartRecheck:
 
         pc.start_or_stop()
 
-        assert w.protocol_state == "running"
+        assert w.protocol_state == "starting"
 
 
 # ----- release before the recovery reset -----

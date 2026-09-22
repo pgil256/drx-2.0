@@ -11,6 +11,7 @@ from helpers.treatment_session import TreatmentSession
 from ui.modals import PatientModal
 from fixtures.protocols import make_arduino
 from ui.screens.setup import SetupScreen
+from ui.screens.support import SupportScreen
 from ui.screens.treatment import TreatmentScreen
 from ui.widgets.treatment_status_panel import TreatmentStatusPanel
 
@@ -26,11 +27,11 @@ def make_shell() -> SimpleNamespace:
     setup = MagicMock(spec_set=SetupScreen)
     setup.row_value.return_value = 0.0
     return SimpleNamespace(
-        treatment=treatment, setup=setup,
+        treatment=treatment, setup=setup, support=MagicMock(spec_set=SupportScreen),
         patient_modal=MagicMock(spec_set=PatientModal),
         video_modal=SimpleNamespace(cleanup=MagicMock()),
         setEnabled=MagicMock(), login_succeeded=MagicMock(), login_failed=MagicMock(), logout=MagicMock(),
-        add_pin_succeeded=MagicMock(), add_pin_failed=MagicMock(),
+        set_access_role=MagicMock(),
     )
 
 
@@ -73,6 +74,12 @@ def make_window(state: str = "idle") -> SimpleNamespace:
         _closing=False, _physical_stop_active=False, _calibration_active=False,
         _no_automatic_recovery=False, on_baseline_changed=MagicMock(),
         connection=SimpleNamespace(cancel_reset=MagicMock()),
+        patients=SimpleNamespace(clear_session=MagicMock()),
+        machine_sign_in=SimpleNamespace(
+            clear=MagicMock(), timer=SimpleNamespace(stop=MagicMock()),
+            treatment_finished=MagicMock(),
+        ),
+        _block_active_treatment_exit=MagicMock(return_value=False),
         _patient_lookup_id=0, _paused_at=None, _prev_settings={},
         cloud_patient={"patient_id": "test-patient"},
         _treatment_patient={"patient_id": "test-patient"},
@@ -117,7 +124,7 @@ def make_stub() -> SimpleNamespace:
     window.safety = SimpleNamespace(on_status=MagicMock())
     window.protocol = MagicMock(spec_set=ProtocolController)
     window._is_admin = MagicMock(return_value=False)
-    window._block_nav_during_treatment = MagicMock(return_value=False)
+    window._block_active_treatment_exit = MagicMock(return_value=False)
     window._confirm_mid_protocol_change = MagicMock(return_value=True)
     window.set_to_distance = MagicMock(return_value=True)
     for name in (
@@ -125,7 +132,7 @@ def make_stub() -> SimpleNamespace:
         "move_actuator", "_apply_setup_pressure", "reset_flexion_button_clicked",
         "stop_leg_movement", "stop_position_flexion_button", "emergency_stop_clicked",
         "email_admin",
-        "_show_patient_modal", "_on_patient_edit",
+        "_show_patient_modal", "_on_patient_edit", "_on_mark_default",
     ):
         setattr(window, name, MagicMock())
     return window

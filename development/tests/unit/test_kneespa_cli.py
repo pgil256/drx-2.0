@@ -40,8 +40,9 @@ def test_main_routes_options(
     app = MagicMock(spec=["setStyle", "exec_"])
     app.exec_.side_effect = lambda: events.append("event-loop")
     app_cls = MagicMock(return_value=app)
-    window = MagicMock(spec=["show", "restart_requested"])
+    window = MagicMock(spec=["show", "restart_requested", "_system_power_action"])
     window.restart_requested = False
+    window._system_power_action = None
     window_cls = MagicMock(return_value=window)
     printer = MagicMock(side_effect=lambda: events.append("print"))
     sync = MagicMock(side_effect=lambda path: events.append("sync"))

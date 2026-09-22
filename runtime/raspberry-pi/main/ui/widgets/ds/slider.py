@@ -8,12 +8,14 @@ integer ticks and report real floats via ``valueChanged(float)``.
 """
 
 from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtGui import QMouseEvent
 from PyQt5.QtWidgets import (
-    QGraphicsOpacityEffect,
     QHBoxLayout,
     QLabel,
     QPushButton,
     QSlider,
+    QStyle,
+    QStyleOptionSlider,
     QWidget,
 )
 
@@ -24,7 +26,47 @@ from ._common import mono_font, resolve, sans_font
 _LABEL_CSS = f"color: {resolve('--ink-800')}; background: transparent;"
 
 _HANDLE_PX = 24
-_ARROW_PX = 48  # stepper arrow buttons — touch target
+_ARROW_PX = 56  # frequent stepper controls
+
+
+class _TouchSlider(QSlider):
+    """Use the entire 48 px row for touch, retaining Qt's tracking contract."""
+
+    def _position_at(self, x: int) -> int:
+        option = QStyleOptionSlider()
+        self.initStyleOption(option)
+        handle = self.style().subControlRect(
+            QStyle.CC_Slider, option, QStyle.SC_SliderHandle, self,
+        )
+        span = max(1, self.width() - handle.width())
+        position = max(0, min(span, x - handle.width() // 2))
+        return QStyle.sliderValueFromPosition(
+            self.minimum(), self.maximum(), position, span, option.upsideDown,
+        )
+
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.LeftButton:
+            self.setFocus(Qt.MouseFocusReason)
+            self.setSliderDown(True)
+            self.setSliderPosition(self._position_at(event.x()))
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self.isSliderDown():
+            self.setSliderPosition(self._position_at(event.x()))
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.LeftButton and self.isSliderDown():
+            self.setSliderPosition(self._position_at(event.x()))
+            self.setSliderDown(False)
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
 
 
 def _arrow_btn_css():
@@ -32,12 +74,15 @@ def _arrow_btn_css():
         "QPushButton {"
         f" background: #ffffff;"
         f" color: {resolve('--ink-800')};"
-        f" border: 2px solid {resolve('--gray-300')};"
+        f" border: 2px solid {resolve('--border-control')};"
         f" border-radius: {resolve('--radius-md')};"
         " padding: 0 0 4px 0; }"  # optical centering for the ‹ › glyphs
         f" QPushButton:hover {{ background: {resolve('--blue-050')};"
         f" border-color: {resolve('--color-primary')}; }}"
         f" QPushButton:pressed {{ background: {resolve('--blue-100')}; }}"
+        f" QPushButton:focus {{ border: 3px solid {resolve('--ink-900')}; }}"
+        f" QPushButton:disabled {{ background: {resolve('--gray-200')};"
+        f" color: {resolve('--gray-600')}; border-color: {resolve('--gray-400')}; }}"
     )
 
 
@@ -45,7 +90,7 @@ class DSSlider(QWidget):
     valueChanged = pyqtSignal(float)
 
     def __init__(self, label=None, value=0, minimum=0, maximum=100, step=1,
-                 unit="", parent=None, mode="slider", label_width=110):
+                 unit="", parent=None, mode="slider", label_width=110, with_steps=False):
         super().__init__(parent)
         self._min = float(minimum)
         self._max = float(maximum)
@@ -54,6 +99,8 @@ class DSSlider(QWidget):
         self._value = self._min
         self._steps = max(1, round((self._max - self._min) / self._step))
         self._mode = mode
+        self._with_steps = with_steps
+        self._accessible_label = label or "Value"
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -75,16 +122,24 @@ class DSSlider(QWidget):
 
     # -- build variants ------------------------------------------------
     def _build_slider(self, lay):
-        self._slider = QSlider(Qt.Horizontal, self)
+        if self._with_steps:
+            self._left_btn = self._arrow_button("−", self._decrement)
+            lay.addWidget(self._left_btn)
+        self._slider = _TouchSlider(Qt.Horizontal, self)
         self._slider.setRange(0, self._steps)
         self._slider.setSingleStep(1)
         self._slider.setPageStep(max(1, self._steps // 10))
-        self._slider.setMinimumHeight(_HANDLE_PX)
+        self._slider.setMinimumHeight(48)
+        self._slider.setMinimumWidth(70)
+        self._slider.setAccessibleName(self._accessible_label)
         self._slider.valueChanged.connect(self._on_slider)
         lay.addWidget(self._slider, 1)
+        if self._with_steps:
+            self._right_btn = self._arrow_button("+", self._increment)
+            lay.addWidget(self._right_btn)
 
         self._value_label = QLabel(self)
-        self._value_label.setFont(mono_font(size="--text-base", weight=600))
+        self._value_label.setFont(mono_font(size="--text-md", weight=600))
         self._value_label.setMinimumWidth(64)
         self._value_label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self._value_label.setStyleSheet(_LABEL_CSS)
@@ -119,19 +174,27 @@ class DSSlider(QWidget):
         btn.clicked.connect(slot)
         return btn
 
+    def set_accessible_label(self, label: str) -> None:
+        """Name the value and its direction controls for assistive technology."""
+        self._accessible_label = label
+        self.setAccessibleName(label)
+        if hasattr(self, "_slider"):
+            self._slider.setAccessibleName(label)
+        if hasattr(self, "_left_btn"):
+            self._left_btn.setAccessibleName("Decrease " + label)
+            self._right_btn.setAccessibleName("Increase " + label)
+
     # -- stepper actions -----------------------------------------------
     def _increment(self):
         new = round(min(self._max, self._value + self._step), 6)
         if new != self._value:
-            self._value = new
-            self._update_label()
+            self.set_value(new)
             self.valueChanged.emit(self._value)
 
     def _decrement(self):
         new = round(max(self._min, self._value - self._step), 6)
         if new != self._value:
-            self._value = new
-            self._update_label()
+            self.set_value(new)
             self.valueChanged.emit(self._value)
 
     # -- value mapping -------------------------------------------------
@@ -158,12 +221,7 @@ class DSSlider(QWidget):
 
     def setEnabled(self, enabled):
         super().setEnabled(enabled)
-        if enabled:
-            self.setGraphicsEffect(None)
-        else:
-            effect = QGraphicsOpacityEffect(self)
-            effect.setOpacity(0.45)
-            self.setGraphicsEffect(effect)
+        # A locked input is also a treatment summary: keep its value readable.
 
     def _on_slider(self, pos):
         self._value = round(self._from_pos(pos), 6)

@@ -9,7 +9,7 @@ import pytest
 from config.config import Configuration
 from fixtures.protocols import make_protocol
 from helpers.arduino import Arduino, CommandHandle
-from helpers.motor_speed import motor_speed_command, motor_speed_values
+from helpers.motor_speed import motor_speed_command, motor_speed_values, treatment_motor_speed
 from ui.screens.treatment import TreatmentScreen
 
 pytestmark = pytest.mark.unit
@@ -59,19 +59,19 @@ def test_v2_requires_matching_sequence():
 @pytest.mark.parametrize("result, accepted", [("OK", True), ("BUSY", False), ("ERR", False)])
 def test_worker_requires_speed_acceptance(result, accepted):
     worker = make_protocol(motor_speeds={"axial_speed": 75})
-    handle = CommandHandle("V75,50,100")
+    handle = CommandHandle("V75,50,50")
     handle.result = result
     handle.completed.set()
     worker.arduino.send_tracked.side_effect = None
     worker.arduino.send_tracked.return_value = handle
     assert worker._configure_motor_speeds() is accepted
-    worker.arduino.send_tracked.assert_called_once_with("V75,50,100")
+    worker.arduino.send_tracked.assert_called_once_with("V75,50,50")
 
 
 def test_missing_firmware_ack_prevents_treatment(monkeypatch):
     monkeypatch.setattr("helpers.protocols.MOTOR_SPEED_ACK_TIMEOUT_S", 0)
     worker = make_protocol(motor_speeds={})
-    worker.arduino.send_tracked.return_value = CommandHandle("V50,50,100")
+    worker.arduino.send_tracked.return_value = CommandHandle("V50,50,50")
     worker.set_to_c_distance = Mock(return_value=True)
     monkeypatch.setattr("helpers.controller_operations.ControllerOperations.baseline", Mock())
     worker.protocol_1 = Mock()
@@ -87,7 +87,7 @@ def test_missing_firmware_ack_prevents_treatment(monkeypatch):
 
 def test_stop_interrupts_speed_wait():
     worker = make_protocol(motor_speeds={})
-    worker.arduino.send_tracked.return_value = CommandHandle("V50,50,100")
+    worker.arduino.send_tracked.return_value = CommandHandle("V50,50,50")
     timer = threading.Timer(0.02, worker.cancel)
     timer.start()
     try:
@@ -129,18 +129,62 @@ def test_speed_save_failure_keeps_previous_values(tmp_path, monkeypatch):
 def test_speed_sliders_and_run_gating(qtbot):
     screen = TreatmentScreen()
     qtbot.addWidget(screen)
-    screen._settings_tabs[1].click()
-    assert screen._settings_pages.currentIndex() == 1
+    screen._edit_treatment_button.click()
+    assert screen._editor.isVisible()
+    assert screen.settings_values()["motor_speed"] == 50
     changes = []
     screen.setting_changed.connect(lambda k, v: changes.append((k, v)))
-    screen._settings["pulse_speed"]._slider.setValue(2)
-    assert changes == [("pulse_speed", 60)]
+    screen._settings["motor_speed"]._slider.setValue(2)
+    assert changes == [("motor_speed", 60)]
     assert screen.settings_values()["pulse_rate"] == 2
     for running, paused, busy in ((True, False, False), (True, True, False),
                                   (False, False, True)):
         screen.set_busy(busy)
         screen.set_run_state(running, paused)
-        assert all(not screen._settings[key].isEnabled() for key in motor_speed_values())
+        assert not screen._settings["motor_speed"].isEnabled()
         assert screen._estop_btn.isEnabled()
     screen.set_busy(False)
-    assert all(screen._settings[key].isEnabled() for key in motor_speed_values())
+    assert screen._settings["motor_speed"].isEnabled()
+
+
+@pytest.mark.parametrize("value", [50, 75, 100])
+def test_shared_motor_speed_reaches_all_outputs(value):
+    settings = {"motor_speed": value, "pulse_speed": 100}
+    assert motor_speed_command(settings) == f"V{value},{value},{value}"
+    worker = make_protocol(motor_speeds=settings)
+    handle = CommandHandle(motor_speed_command(settings))
+    handle.result = "OK"
+    handle.completed.set()
+    worker.arduino.send_tracked.side_effect = None
+    worker.arduino.send_tracked.return_value = handle
+    assert worker._configure_motor_speeds()
+    worker.arduino.send_tracked.assert_called_once_with(f"V{value},{value},{value}")
+
+
+@pytest.mark.parametrize("value", [49, 101, 75.5, float("nan"), "bad"])
+def test_invalid_shared_speed_rejected(value):
+    with pytest.raises((ValueError, TypeError)):
+        motor_speed_command({"motor_speed": value})
+
+
+def test_shared_speed_defaults_round_trip(tmp_path, qtbot):
+    config = Configuration(str(tmp_path / "device.cfg"))
+    config.get_config()
+    config.save_protocol_defaults(40, 10, 10, 2, motor_speeds={"motor_speed": 75})
+    loaded = Configuration(config.configFile)
+    loaded.get_config()
+    screen = TreatmentScreen()
+    qtbot.addWidget(screen)
+    screen.set_settings(loaded.protocol_defaults())
+    assert screen.settings_values()["motor_speed"] == 75
+    assert motor_speed_command(screen.settings_values()) == "V75,75,75"
+
+
+def test_legacy_settings_use_lowest_speed(qtbot):
+    legacy = {"axial_speed": 75, "lateral_speed": 90, "pulse_speed": 60}
+    assert treatment_motor_speed(legacy) == 60
+    screen = TreatmentScreen()
+    qtbot.addWidget(screen)
+    screen.set_settings(legacy)
+    assert screen._summary_values["motor_speed"].text() == "60%"
+    assert motor_speed_command(screen.settings_values()) == "V60,60,60"

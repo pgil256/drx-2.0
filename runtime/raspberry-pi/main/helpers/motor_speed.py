@@ -10,16 +10,22 @@ except ModuleNotFoundError:  # python runtime/raspberry-pi/main/kneespa.py
 
 
 def motor_speed_values(values: Optional[Mapping[str, float]] = None) -> Dict[str, int]:
-    """Validate complete output percentages, filling missing keys with defaults."""
+    """Expand a shared speed for firmware, accepting legacy per-motor settings."""
     result = dict(MOTOR_SPEED_DEFAULTS)
     for key, default in result.items():
-        value = float((values or {}).get(key, default))
+        source = values or {}
+        value = float(source.get("motor_speed", source.get(key, default)))
         if not math.isfinite(value) or not value.is_integer():
             raise ValueError(f"Invalid {key}: expected an integer percentage")
         if not MOTOR_SPEED_MIN <= value <= MOTOR_SPEED_MAX:
             raise ValueError(f"Invalid {key}: outside motor output limits")
         result[key] = int(value)
     return result
+
+
+def treatment_motor_speed(values: Optional[Mapping[str, float]] = None) -> int:
+    """Use one speed; migrate unequal legacy outputs without increasing any motor."""
+    return min(motor_speed_values(values).values())
 
 
 def motor_speed_command(values: Mapping[str, float]) -> str:

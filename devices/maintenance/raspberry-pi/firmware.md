@@ -18,8 +18,11 @@ updates or reuse a previously compiled HEX file.
 5. Wait for **SUCCESS: firmware written and verified**. Close the progress window.
    Complete the existing firmware boot/hardware checkout before reopening **KneeSpa**.
 
-The script builds the PlatformIO `mega` environment, then uses its bundled
-`avrdude` with the Mega 2560's `wiring` protocol at 115200 baud. It reads the old
+The script builds the PlatformIO `mega` environment, then explicitly installs
+its optional `avrdude` upload dependency if needed. A successful build alone does
+not install that tool. The updater uses PlatformIO's own Python environment to
+resolve the selected tool version and package location, including custom storage.
+It uses `avrdude` with the Mega 2560's `wiring` protocol at 115200 baud. It reads the old
 flash into `previous.hex` before writing `current.hex`; a failed read cancels the
 write. Normal avrdude readback verification remains enabled. Flashing does not
 burn a bootloader, change fuses, or upload an EEPROM image.
@@ -44,6 +47,15 @@ serial-device group); permission problems are reported before the board is touch
 For scripted use, the entry point also accepts `--port /dev/ttyACM0`.
 Environment overrides: `KNEESPA_APP_DIR`, `KNEESPA_DEVICE_DIR`, `KNEESPA_SERVICE`,
 `KNEESPA_PIO` (full executable path), and `PLATFORMIO_CORE_DIR`. Use absolute paths.
+
+If an older launcher reports **Cannot find PlatformIO's avrdude package** after
+a successful build, update `devices/flash_firmware.sh` from the current
+[Pi setup bundle](../../../kneespa-pi-desktop-setup.tar.gz) and retry the desktop
+shortcut. Extract the bundle into `/home/pi/drx`, replacing its launcher files.
+Routine runtime sync does not update this script. That lookup failure happens
+before stopping the service or reading/writing the board; the new launcher prepares
+the missing tool before those steps. An internet connection is needed to download
+an upload tool that is not already installed.
 
 Build/upload settings follow the repository's `platformio.ini` and PlatformIO's
 [Mega board definition](https://github.com/platformio/platform-atmelavr/blob/master/boards/megaatmega2560.json)

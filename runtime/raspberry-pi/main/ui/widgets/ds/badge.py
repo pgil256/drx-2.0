@@ -16,7 +16,7 @@ TONES = {
     "success": ("--green-100", "--green-600"),
     "danger": ("--red-100", "--red-600"),
     "warning": ("--amber-100", "#9a6206"),
-    "cyan": ("--brand-cyan-soft", "--brand-cyan-dark"),
+    "cyan": ("--brand-cyan-soft", "--blue-700"),
 }
 
 

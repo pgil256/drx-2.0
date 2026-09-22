@@ -124,6 +124,40 @@ def test_message_and_transport_contract(
     run.window.logger.error.assert_not_called()
 
 
+@pytest.mark.parametrize("success", [True, False])
+def test_delivery_feedback_prevents_duplicate_requests_and_allows_retry(email_run, success):
+    """Queued delivery is distinct from completion, with retry restored by the GUI slot."""
+    run = email_run
+    run.window.shell = SimpleNamespace(support=Mock())
+    run.window.support_email_result = Mock()
+    deliver = queue_email(run, "ticket")
+    run.window.shell.support.set_delivery_state.assert_called_once_with(
+        "sending", "Sending request…",
+    )
+    run.window.email_admin()
+    run.thread_factory.assert_called_once()
+    if not success:
+        run.server.sendmail.side_effect = OSError("Offline test failure")
+    deliver()
+    result = run.window.support_email_result.emit.call_args.args
+    assert result[0] is success
+    KneeSpa._on_support_email_result(run.window, *result)
+    assert not run.window._support_mail_busy
+    assert run.window.shell.support.set_delivery_state.call_args.args[0] == (
+        "sent" if success else "failed"
+    )
+
+
+def test_worker_start_failure_leaves_support_retryable(email_run):
+    run = email_run
+    run.window.shell = SimpleNamespace(support=Mock())
+    run.thread.start.side_effect = RuntimeError("Thread unavailable")
+    run.window.email_admin()
+    assert not run.window._support_mail_busy
+    assert run.window.shell.support.set_delivery_state.call_args.args[0] == "failed"
+    run.smtp.assert_not_called()
+
+
 @pytest.mark.parametrize("kind", ["assistance", "ticket"])
 @pytest.mark.parametrize("missing", ["SENDER_EMAIL", "SENDER_PASSWORD", "recipient"])
 def test_missing_credentials_log_without_connecting(
@@ -193,3 +227,58 @@ def test_ticket_identity_fallbacks(
     assert str(message["Subject"]) == f"[KneeSpa {device_id}] Support ticket"
     assert message.get_content() == f"Device: {device_id}\nUser: {username} ()\n\nIssue:\n{ISSUE}"
     run.window.logger.error.assert_not_called()
+
+
+def ticket_form():
+    return {
+        "name": "Dr. Zoë", "email": "clinician@example.test",
+        "subject": "Controller disconnects", "description": ISSUE,
+        "issue": "Connection issue",
+    }
+
+
+def test_form_sends_reply_address_versions_and_stable_retry_reference(email_run):
+    run = email_run
+    run.window.shell = SimpleNamespace(support=Mock())
+    run.window.support_email_result = Mock()
+    run.window.arduino = SimpleNamespace(connected=True, firmware_version="service-test")
+    run.window.cloud_client = SimpleNamespace(device_id="cloud-device-01")
+    run.window.protocol_state = "idle"
+    KneeSpa._on_submit_ticket(run.window, ticket_form())
+    deliver = run.thread_factory.call_args.kwargs["target"]
+    KneeSpa._on_submit_ticket(run.window, ticket_form())
+    assert run.thread_factory.call_count == 1
+    run.server.sendmail.side_effect = OSError("Offline")
+    deliver()
+    result = run.window.support_email_result.emit.call_args.args
+    KneeSpa._on_support_email_result(run.window, *result)
+    first = run.window._pending_support_ticket[1]
+    KneeSpa._on_submit_ticket(run.window, ticket_form())
+    assert run.window._pending_support_ticket[1] is first
+    run.server.sendmail.side_effect = None
+    run.thread_factory.call_args.kwargs["target"]()
+    message = message_from_string(run.server.sendmail.call_args.args[2], policy=policy.default)
+    assert str(message["Reply-To"]) == "clinician@example.test"
+    assert first["reference"] in str(message["Subject"])
+    for expected in ("cloud-device-01", "service-test", ISSUE, "Software version:", "idle"):
+        assert expected in message.get_content()
+    result = run.window.support_email_result.emit.call_args.args
+    assert result[0] is True
+    assert first["reference"] in result[1]
+    KneeSpa._on_support_email_result(run.window, *result)
+    assert run.window._pending_support_ticket is None
+
+
+@pytest.mark.parametrize("key,value", [
+    ("name", ""), ("email", "missing-at"), ("email", "ok@example.test\nBcc: victim@example.test"),
+    ("subject", ""), ("subject", "Subject\r\nBcc: victim@example.test"),
+    ("description", ""), ("description", "x" * 4001),
+])
+def test_invalid_form_never_queues_email(email_run, key, value):
+    run = email_run
+    run.window.shell = SimpleNamespace(support=Mock())
+    form = ticket_form()
+    form[key] = value
+    KneeSpa._on_submit_ticket(run.window, form)
+    run.thread_factory.assert_not_called()
+    assert run.window.shell.support.set_delivery_state.call_args.args[0] == "invalid"

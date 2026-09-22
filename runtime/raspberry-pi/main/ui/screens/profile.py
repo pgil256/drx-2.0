@@ -1,121 +1,120 @@
-"""ProfileScreen — the logged-in clinician's identity + logout.
+"""Operator account and current-session information."""
 
-Reached from the top-bar avatar while logged in (the avatar no longer logs
-out directly). A single centered card shows the avatar mark, "Name — Title",
-and the actions: Calibrate Actuators, Add PIN (admins only), Log Out, and Exit App.
-``app_shell`` forwards the buttons as signals so the controller keeps one
-logout / shutdown path.
+from datetime import datetime
+import time
+from typing import Optional
 
-Signals:
-    add_pin_requested — the Add PIN button was tapped (admin only)
-    calibration_requested — the guided actuator calibration button was tapped
-    logout_requested  — the Log Out button was tapped
-    exit_requested    — the Exit App button was tapped
-"""
-
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import QHBoxLayout, QLabel, QVBoxLayout, QWidget
-
-try:
-    from main.config.constants import APP_VERSION
-except ModuleNotFoundError:
-    from config.constants import APP_VERSION
+from PyQt5.QtCore import Qt, QTimer, pyqtSignal
+from PyQt5.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
 from ui.widgets.common import image_label
 from ui.widgets.ds import DSButton, DSCard
-from ui.widgets.ds._common import image_path, mono_font, resolve, sans_font
-
-_PAD = 20
+from ui.widgets.ds._common import image_path, resolve, sans_font
 
 
 class ProfileScreen(QWidget):
-    add_pin_requested = pyqtSignal()
-    calibration_requested = pyqtSignal()
     logout_requested = pyqtSignal()
     exit_requested = pyqtSignal()
     restart_requested = pyqtSignal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
+        self._username = None
+        self._started = None
+        self._login_time = None
         self.setObjectName("ProfileScreen")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet(f"#ProfileScreen {{ background: {resolve('--surface-page')}; }}")
-
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(_PAD, _PAD, _PAD, _PAD)
-        lay.addStretch(1)
-        row = QHBoxLayout()
-        row.addStretch(1)
-        row.addWidget(self._profile_card(), 0)
-        row.addStretch(1)
-        lay.addLayout(row, 0)
-        lay.addStretch(2)
-
-    def _profile_card(self):
-        card = DSCard("Profile", padded=False)
-        card.setMinimumWidth(440)
-        host = QWidget()
-        vlay = QVBoxLayout(host)
-        vlay.setContentsMargins(32, 28, 32, 28)
-        vlay.setSpacing(8)
-
-        avatar = image_label(image_path("buttons", "user-profile.png"), 88, 88)
-        vlay.addWidget(avatar, 0, Qt.AlignHCenter)
-        vlay.addSpacing(8)
-
-        self._name = QLabel()
-        self._name.setAlignment(Qt.AlignHCenter)
-        self._name.setFont(sans_font(size="--text-xl", weight=700))
-        self._name.setStyleSheet(f"color: {resolve('--ink-900')}; background: transparent;")
-        vlay.addWidget(self._name)
-
-        self._title = QLabel()
-        self._title.setAlignment(Qt.AlignHCenter)
-        self._title.setFont(mono_font(size="--text-sm"))
-        self._title.setStyleSheet(f"color: {resolve('--ink-700')}; background: transparent;")
-        vlay.addWidget(self._title)
-
-        vlay.addSpacing(16)
-        self._calibration = DSButton(
-            "Hardware Tests & Calibration", variant="secondary", full_width=True,
-        )
-        self._calibration.clicked.connect(self.calibration_requested)
-        vlay.addWidget(self._calibration)
-        self._add_pin = DSButton("Add PIN", variant="secondary", full_width=True)
-        self._add_pin.clicked.connect(self.add_pin_requested)
-        self._add_pin.setVisible(False)  # admins only (see set_user)
-        vlay.addWidget(self._add_pin)
-
-        vlay.addSpacing(10)
-        self._logout = DSButton("Log Out", variant="danger", full_width=True)
-        self._logout.clicked.connect(self.logout_requested)
-        vlay.addWidget(self._logout)
-
-        vlay.addSpacing(10)
-        self._exit = DSButton("Exit App", variant="ghost", full_width=True)
-        self._exit.clicked.connect(self.exit_requested)
-        self._restart = DSButton("Restart App", variant="secondary", full_width=True)
-        self._restart.clicked.connect(self.restart_requested)
+        root = QVBoxLayout(self)
+        root.setContentsMargins(32, 28, 32, 28)
+        root.setSpacing(20)
+        identity = DSCard("Your profile")
+        head = QWidget()
+        row = QHBoxLayout(head)
+        row.setSpacing(24)
+        row.addWidget(image_label(image_path("buttons", "user-profile.png"), 88, 88))
+        text = QVBoxLayout()
+        self._name = self._label("", large=True)
+        self._title = self._label("")
+        text.addWidget(self._name)
+        text.addWidget(self._title)
+        row.addLayout(text, 1)
+        identity.add_widget(head)
+        root.addWidget(identity)
+        grid = QGridLayout()
+        grid.setSpacing(20)
+        account = DSCard("Account details")
+        self._email = self._label("Email: Not provided")
+        self._access = self._label("Access: Signed out")
+        self._clinic = self._label("Cloud clinic: No staff session")
+        for label in (self._email, self._access, self._clinic):
+            account.add_widget(label)
+        grid.addWidget(account, 0, 0)
+        session = DSCard("Current session")
+        self._login = self._label("Logged in: —")
+        self._duration = self._label("Session duration: —")
+        self._automatic = self._label("Automatic logout: Never")
+        for label in (self._login, self._duration, self._automatic):
+            session.add_widget(label)
+        grid.addWidget(session, 0, 1)
+        grid.setColumnStretch(0, 1)
+        grid.setColumnStretch(1, 1)
+        root.addLayout(grid)
+        root.addWidget(self._label(
+            "Your operator login identifies who is using this device. Technician service and "
+            "cloud staff access require their own sign-in."
+        ))
+        root.addStretch(1)
         actions = QHBoxLayout()
-        actions.addWidget(self._restart)
-        actions.addWidget(self._exit)
-        vlay.addLayout(actions)
+        self._restart = DSButton("Restart App", variant="dark", full_width=True)
+        self._exit = DSButton("Exit App", variant="secondary", full_width=True)
+        self._logout = DSButton("Log Out", variant="danger", full_width=True)
+        for button, signal in ((self._restart, self.restart_requested),
+                               (self._exit, self.exit_requested),
+                               (self._logout, self.logout_requested)):
+            button.clicked.connect(signal)
+            actions.addWidget(button)
+        root.addLayout(actions)
+        self._timer = QTimer(self)
+        self._timer.setInterval(1000)
+        self._timer.timeout.connect(self._update_duration)
+        self._timer.start()
 
-        vlay.addSpacing(8)
-        self._version = QLabel(f"App version {APP_VERSION}")
-        self._version.setAlignment(Qt.AlignHCenter)
-        self._version.setFont(mono_font(size="--text-sm"))
-        self._version.setStyleSheet(
-            f"color: {resolve('--ink-700')}; background: transparent;"
-        )
-        vlay.addWidget(self._version)
+    @staticmethod
+    def _label(text: str, large: bool = False) -> QLabel:
+        label = QLabel(text)
+        label.setTextFormat(Qt.PlainText)
+        label.setWordWrap(True)
+        label.setFont(sans_font(size="--text-xl" if large else "--text-base",
+                                weight=700 if large else 400))
+        return label
 
-        card.add_widget(host)
-        return card
+    def set_user(self, username: Optional[str], title: str = "Clinician",
+                 is_admin: bool = False) -> None:
+        if username != self._username:
+            self._started = time.monotonic() if username else None
+            self._login_time = datetime.now().astimezone() if username else None
+            self._email.setText("Email: Not provided")
+            self._clinic.setText("Cloud clinic: No staff session")
+        self._username = username
+        self._name.setText(username or "Signed out")
+        self._title.setText(title if username else "Log in to view your session")
+        self._access.setText("Access: " + ("Administrator" if is_admin else
+                                          "Operator" if username else "Signed out"))
+        stamp = self._login_time.strftime("%b %d, %Y · %I:%M %p") if self._login_time else "—"
+        self._login.setText("Logged in: " + stamp)
+        self._update_duration()
 
-    def set_user(self, username, title="Clinician", is_admin=False):
-        """Refresh the identity card (None clears it, e.g. after logout)."""
-        self._name.setText(username or "")
-        self._title.setText(title if username else "")
-        self._add_pin.setVisible(bool(username) and is_admin)
-        self._calibration.setEnabled(bool(username))
+    def set_session_details(self, email: str = "", logout_minutes: int = 0,
+                            clinic: str = "") -> None:
+        self._email.setText("Email: " + (email or "Not provided"))
+        self._automatic.setText("Automatic logout: " + (
+            f"After {logout_minutes} minutes idle" if logout_minutes else "Never"))
+        self._clinic.setText("Cloud clinic: " + (clinic or "No staff session"))
+
+    def _update_duration(self) -> None:
+        if self._started is None:
+            self._duration.setText("Session duration: —")
+            return
+        elapsed = max(0, int(time.monotonic() - self._started))
+        self._duration.setText(f"Session duration: {elapsed // 3600}h {(elapsed // 60) % 60}m")

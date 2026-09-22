@@ -81,28 +81,37 @@ from config.constants import (
 )
 
 from ui.modals.pressure_notice import PressureNotice
+from ui.modals.upload_error import UploadErrorDialog
 from config.config import Configuration
 from helpers.arduino import Arduino
 from helpers.csv import CSVHelper
 from helpers.secure_auth import SecureAuthHelper
 from helpers import protocols
 from helpers.reset_worker import ResetWorker, ResetWorkerSignals
-from helpers.measurement_state import MeasurementState
+from helpers.measurement_state import DIAGNOSTICS_MAX_AGE_S, MeasurementState
 from helpers.app_restart import restart_app
+from helpers.device_system import DeviceSystem
 from helpers.conversions import (
     lateral_degrees_to_position,
     horizontal_degrees_to_position,
 )
-from helpers.angles import pos_c_to_angle
 from helpers.cloud_client import CloudClient
 from helpers.cloud_contract import cloud_error_message, validate_patient
 from controllers.hardware_service_controller import HardwareServiceController
+from controllers.device_controller import DeviceController
+from controllers.patient_controller import PatientController
+from controllers.machine_sign_in_controller import MachineSignInController, authorize
+from helpers.support_ticket import create_ticket, validate_ticket
+from main.config.constants import APP_VERSION
+from controllers.leg_length_controller import LegLengthController
 from helpers.hardware_service import axial_position
 
 from helpers.logging import LoggerSetup, read_recent_log_lines, setup_logger
 
 # Modern view layer — the composition root for chrome + screens + modals.
 from ui.app_shell import AppShell
+from ui.measurements import calibrated_reading
+from ui.presentation import device_presentation
 from ui.widgets.loading_spinner import LoadingSpinner
 from ui.widgets.treatment_status_panel import TreatmentStatusPanel
 
@@ -132,11 +141,14 @@ class _CloudBridge(QObject):
     """Carries cloud API results from worker threads back to the UI."""
     lookup_done = pyqtSignal(int, object)
     status_changed = pyqtSignal(str)
+    upload_failed = pyqtSignal(str, bool)
 
 
 # Main Python class
 class KneeSpa(QMainWindow):
     """Main application class for KneeSpa."""
+
+    support_email_result = pyqtSignal(bool, str)
 
     def set_to_distance(self, inches, actuator, factor):
         command = "A{}{:.1f}".format(actuator, inches)
@@ -200,6 +212,8 @@ class KneeSpa(QMainWindow):
         self.protocol_running = False
         self._closing = False
         self.restart_requested = False
+        self._system_power_action = None
+        self._device_maintenance_active = False
         self._no_automatic_recovery = False
         self._measurement = MeasurementState()
         self._measurement_fault = None
@@ -302,7 +316,9 @@ class KneeSpa(QMainWindow):
         self.auth = AuthController(self)
         self.protocol = ProtocolController(self)
         self.connection = ConnectionManager(self)
+        self.leg = LegLengthController(self)
         self.calibration_controller = HardwareServiceController(self)
+        self.device_controller = DeviceController(self)
         self._calibration_active = False
         # Protocol lifecycle state: idle / starting / running / stopping / fault
         self.protocol_state = "idle"
@@ -327,8 +343,17 @@ class KneeSpa(QMainWindow):
         self._patient_lookup_pending = False
         self._cloud_bridge = _CloudBridge()
         self._cloud_bridge.lookup_done.connect(self._on_cloud_lookup_done)
-        self._cloud_bridge.status_changed.connect(self.shell.treatment.set_cloud_status)
-        self.cloud_client = CloudClient(on_status=self._cloud_bridge.status_changed.emit)
+        self._cloud_bridge.status_changed.connect(self._on_cloud_status)
+        self._cloud_bridge.upload_failed.connect(self._show_upload_error)
+        self._upload_error_dialog = None
+        self._last_upload_error = None
+        self.cloud_client = CloudClient(
+            on_status=self._cloud_bridge.status_changed.emit,
+            on_upload_error=self._cloud_bridge.upload_failed.emit,
+        )
+        self.patients = PatientController(self)
+        self.machine_sign_in = MachineSignInController(self)
+        self._patient_editor = self.patients.editor
         self._cloud_retry_timer = QTimer(self)
         self._cloud_retry_timer.timeout.connect(self._retry_pending_uploads)
 
@@ -345,18 +370,31 @@ class KneeSpa(QMainWindow):
         # Wire the view's signals/setters to the backend, then start hardware.
         self._connect_shell()
         self.setup_timers()
+        from helpers.release_installer import firmware_recovery
+        from config.paths import DEVICE_STATE_DIR
+        from pathlib import Path
+        self._firmware_update_recovery = firmware_recovery(Path(DEVICE_STATE_DIR))
+        if self._firmware_update_recovery:
+            self._no_automatic_recovery = True
+            self.set_protocol_state("fault")
 
         # Ensure a persisted per-device id exists for support tickets (§15.5).
         try:
-            self.config.ensure_device_id()
+            configured_device_id = self.config.ensure_device_id()
         except Exception as e:
-            print(f"Could not ensure device id: {e}")
+            configured_device_id = ""
+            self.logger.error("Could not ensure device id: %s", e)
+        cloud_device_id = getattr(self.cloud_client, "device_id", "")
+        self.shell.device.set_device_id(
+            (cloud_device_id if isinstance(cloud_device_id, str) else "") or configured_device_id
+        )
 
         self.shell.navigate("home")
         self._set_badge(False)  # offline until the Arduino connects
-        # Navigation away from the Treatment screen is blocked while a
-        # protocol is active (see controllers.protocol_controller.block_nav).
-        self.shell.set_nav_guard(self._block_nav_during_treatment)
+        # Leaving the Treatment screen during an active protocol requires an
+        # explicit caution acknowledgement; the protocol keeps running.
+        self.shell.set_nav_confirmation(self._confirm_leave_treatment)
+        self.shell.set_overlay_guard(self._block_nonessential_overlay_during_treatment)
 
         # Initialize GPIO setup
         self.setup_gpio()
@@ -379,23 +417,25 @@ class KneeSpa(QMainWindow):
         s.login_attempted.connect(self._on_login_attempt)
         s.logout_requested.connect(self._on_logout)
         s.exit_requested.connect(self._on_exit_app)
-        s.profile.restart_requested.connect(self._on_restart_app)
-        s.add_pin_submitted.connect(self._on_add_pin)
-        s.profile.calibration_requested.connect(self.calibration_controller.open)
+        s.profile.restart_requested.connect(lambda: self.device_controller.action("restart_app"))
+        s.device.calibration_requested.connect(self.calibration_controller.open)
+        s.device.hardware_tests_requested.connect(self.calibration_controller.open_tests)
 
         # Setup screen.
         s.setup.jog_requested.connect(self._on_setup_jog)
         s.setup.go_requested.connect(self._on_setup_go)
         s.setup.stop_requested.connect(self._on_setup_stop)
         s.setup.mark_default_requested.connect(self._on_mark_default)
-        s.setup.reset_arduino_requested.connect(self.reset_arduino)
-        s.setup.calibration_requested.connect(self.calibration_controller.open)
+        s.setup.reset_arduino_requested.connect(self._on_setup_reset_arduino)
         s.setup.emergency_stop_requested.connect(self._on_estop)
 
         # Treatment screen.
         s.treatment.patient_change_requested.connect(self._show_patient_modal)
-        s.treatment.cloud_retry_requested.connect(self._retry_blocked_uploads)
+        s.treatment.patient_edit_requested.connect(self._edit_patient)
+        s.treatment.cloud_error_requested.connect(self._reopen_upload_error)
+        s.treatment.next_treatment_requested.connect(self._prepare_next_treatment)
         s.patient_modal.submitted.connect(self._on_patient_pin)
+        s.patient_modal.add_requested.connect(self._add_patient)
         s.patient_modal.closed.connect(self._on_patient_cancel)
         s.treatment.protocol_selected.connect(self._on_protocol_selected)
         s.treatment.start_requested.connect(self.start_or_stop_protocol)
@@ -405,13 +445,13 @@ class KneeSpa(QMainWindow):
         s.treatment.setting_changed.connect(self._on_setting_changed)
         self._pressure_state_timer = QTimer(self)
         self._pressure_state_timer.setInterval(250)
-        self._pressure_state_timer.timeout.connect(self._refresh_pressure_state)
+        self._pressure_state_timer.timeout.connect(self._refresh_measurement_display)
         self._pressure_state_timer.start()
 
         # Support screen.
-        s.support.request_assistance.connect(self.handle_assistance_request)
         s.support.submit_ticket_requested.connect(self._on_submit_ticket)
         s.support.issue_activated.connect(self._on_issue_activated)
+        self.support_email_result.connect(self._on_support_email_result)
 
         # Video modal (owns the embedded VLC player).
         s.video_modal.play_toggled.connect(self._on_video_toggled)
@@ -420,12 +460,24 @@ class KneeSpa(QMainWindow):
         """Reflect Arduino connectivity on the Setup header badge."""
         try:
             self.shell.setup.set_arduino_connected(connected)
+            self._refresh_device_presentation()
         except Exception:
             pass
 
+    def _refresh_device_presentation(self) -> None:
+        """Present controller readiness without modifying device operation."""
+        state = device_presentation(
+            connected=bool(self.arduino and self.arduino.connected),
+            protocol_state=self.protocol_state,
+            resetting=self.reset_in_progress is True,
+            initialized=self.initial_setup_complete is True,
+            calibrated=bool(self.config.marks_valid and self.config.scale_calibrated),
+            physical_stop=getattr(self, "_physical_stop_active", False) is True,
+        )
+        self.shell.set_device_status(state.label, state.detail, state.can_start)
+
     def _reflect_setup(self, key, value):
-        """Push a controller-commanded position back onto the Setup row + Live
-        Position readout (tolerant of a mocked shell in unit tests)."""
+        """Reflect a commanded target without claiming that a sensor measured it."""
         try:
             self.shell.setup.set_position(key, value)
         except Exception:
@@ -435,8 +487,9 @@ class KneeSpa(QMainWindow):
         """Queue a Setup motion without fabricating success in the UI."""
         if getattr(self, "_closing", False) is True:
             return False
-        if getattr(self, "_calibration_active", False) is True:
-            self._show_timed_error("Close Hardware Tests & Calibration before normal movement.")
+        if (getattr(self, "_calibration_active", False) is True
+                or getattr(self, "_device_maintenance_active", False) is True):
+            self._show_timed_error("Finish device service before normal movement.")
             return False
         try:
             queued = bool(self.arduino and self.arduino.send(command))
@@ -468,7 +521,10 @@ class KneeSpa(QMainWindow):
             w.setEnabled(False)
 
     def enable_actuator_controls(self):
-        if getattr(self, "_calibration_active", False) is True:
+        if getattr(getattr(self, "leg", None), "active", False) is True:
+            return
+        if (getattr(self, "_calibration_active", False) is True
+                or getattr(self, "_device_maintenance_active", False) is True):
             return
         if (
             self.reset_in_progress
@@ -493,7 +549,10 @@ class KneeSpa(QMainWindow):
 
     def _apply_enable_actuator_controls(self):
         self.controls_enable_timer = None
-        if getattr(self, "_calibration_active", False) is True:
+        if getattr(getattr(self, "leg", None), "active", False) is True:
+            return
+        if (getattr(self, "_calibration_active", False) is True
+                or getattr(self, "_device_maintenance_active", False) is True):
             return
         # The state may have changed during the 200 ms debounce window.
         if (
@@ -509,7 +568,6 @@ class KneeSpa(QMainWindow):
     def reset_setup_readings(self):
         """Reset setup readings to default values (modern Setup rows)."""
         self._reflect_setup("axial", 0)
-        self._reflect_setup("leg_length", 0.0)
         self._reflect_setup("lateral", 0)
         self._reflect_setup("pressure", 0)
         self._reflect_setup("horizontal", DEFAULT_HORIZONTAL_POSITION)
@@ -539,6 +597,8 @@ class KneeSpa(QMainWindow):
 
     def _on_patient_pin(self, pin: str) -> None:
         if self.protocol_running or not self.current_user:
+            return
+        if not authorize(self, "patients.view", lambda: self._on_patient_pin(pin)):
             return
         self._patient_lookup_id += 1
         request_id = self._patient_lookup_id
@@ -602,9 +662,22 @@ class KneeSpa(QMainWindow):
         self.shell.treatment.set_patient_pending(False)
         self.shell.treatment.clear_patient()
 
+    def _add_patient(self) -> None:
+        self.patients.add()
+
+    def _edit_patient(self) -> None:
+        self.patients.edit()
+
     def _show_patient_modal(self) -> None:
         if self.protocol_running or not self.current_user:
             return
+        if self.current_user.get("machine_sign_in"):
+            if self.current_user.get("status") == "patient":
+                self._on_logout()
+                self.shell.show_login()
+                return
+            if not authorize(self, "patients.view", self._show_patient_modal):
+                return
         self._on_patient_edit()
         self.shell.patient_modal.open_over(self.shell)
 
@@ -620,10 +693,59 @@ class KneeSpa(QMainWindow):
     def _retry_blocked_uploads(self) -> None:
         self.cloud_client.retry_pending_async(DATA_PATHS["PENDING_UPLOADS"], retry_blocked=True)
 
+    def _on_cloud_status(self, message: str) -> None:
+        if self._closing:
+            return
+        self.shell.treatment.set_cloud_status(message)
+        if message == "Treatments synced":
+            self._last_upload_error = None
+            if self._upload_error_dialog is not None:
+                self._upload_error_dialog.close()
+
+    def _show_upload_error(self, message: str, can_retry: bool = False) -> None:
+        """Show a persistent, nonblocking upload alert on the GUI thread."""
+        if self._closing:
+            return
+        self._last_upload_error = (message, can_retry)
+        self.shell.treatment.set_upload_error()
+        dialog = self._upload_error_dialog
+        if dialog is None:
+            dialog = UploadErrorDialog(self)
+            dialog.retry_requested.connect(self._retry_blocked_uploads)
+            self._upload_error_dialog = dialog
+        dialog.set_message(message, can_retry)
+        dialog.show()
+        dialog.raise_()
+
+    def _reopen_upload_error(self) -> None:
+        if self._last_upload_error is not None:
+            self._show_upload_error(*self._last_upload_error)
+
+    def _prepare_next_treatment(self) -> None:
+        """Require an explicit patient choice after recovery has completed."""
+        if self.protocol_state != "idle" or self.reset_in_progress or self._physical_stop_active:
+            return
+        self.shell.treatment.clear_outcome()
+        self.shell.treatment.set_progress(0, self._duration_minutes() * 60)
+        self.shell.treatment.set_phase("idle")
+        if not self.current_user:
+            self.shell.show_login()
+        else:
+            self._show_patient_modal()
+
     def _on_setting_changed(self, key, value):
         """A Treatment Settings slider moved. Mid-protocol changes are gated by a
         one-time safety confirmation; on cancel the slider rolls back."""
-        if not self._confirm_mid_protocol_change():
+        if (self.current_user or {}).get("machine_sign_in"):
+            def apply_setting():
+                self.shell.treatment.set_settings({key: value})
+                self._on_setting_changed(key, value)
+
+            if not authorize(self, "settings", apply_setting):
+                self.shell.treatment.set_settings({key: self._prev_settings.get(key, value)})
+                return
+        if ((self.current_user or {}).get("status") == "patient"
+                or not self._confirm_mid_protocol_change()):
             self.shell.treatment.set_settings({key: self._prev_settings.get(key, value)})
             return
         self._prev_settings[key] = value
@@ -670,6 +792,9 @@ class KneeSpa(QMainWindow):
     # ----- Treatment: run-state handlers -----
     def start_or_stop_protocol(self):
         """Start/Stop button (see controllers.protocol_controller)."""
+        if not self.current_user and not self.protocol_running:
+            self.shell.show_login()
+            return
         self._seed_modern_run_inputs()
         self.protocol.start_or_stop()
 
@@ -703,10 +828,17 @@ class KneeSpa(QMainWindow):
         return self.protocol.confirm_start()
 
     # ----- Setup: jog / go / stop / reset -----
+    def _on_setup_reset_arduino(self) -> None:
+        """Authorize user-requested resets without gating automatic recovery."""
+        if authorize(self, "setup", self._on_setup_reset_arduino):
+            self.reset_arduino()
+
     def _on_setup_jog(self, key, action):
         """A Setup jog button was tapped. move_actuator stays the authoritative,
         safety-clamped path; the row's local pre-move is corrected by reflecting
         the true commanded position back onto the slider."""
+        if not authorize(self, "setup", lambda: self._on_setup_jog(key, action)):
+            return
         if action == "reset":
             self._setup_reset(key)
             return
@@ -714,9 +846,7 @@ class KneeSpa(QMainWindow):
             self._leg_jog(action)
             return
         if key == "pressure":
-            # Pressure has no jog-command in the legacy device; the row already
-            # nudged its slider — just refresh the Live Position readout.
-            self._reflect_setup("pressure", self.shell.setup.row_value("pressure"))
+            # Pressure arrows edit the target. Only Go sends a pressure command.
             return
 
         speed, direction = _JOG_SPEED.get(action, ("04", 1))
@@ -760,6 +890,8 @@ class KneeSpa(QMainWindow):
     def _on_setup_go(self, key):
         """Move an actuator to its row's current slider value (the legacy Go
         path), preserving the per-actuator unit conversions and clamps."""
+        if not authorize(self, "setup", lambda: self._on_setup_go(key)):
+            return False
         if key in ("axial", "horizontal", "lateral") and not self.config.marks_valid:
             self._warn_uncalibrated()
             return False
@@ -767,10 +899,7 @@ class KneeSpa(QMainWindow):
             self._warn_uncalibrated()
             return False
         if key == "leg_length":
-            # FIT is open-loop: there is no absolute position sensor with
-            # which a slider's Go target could be reached safely.
-            self._show_timed_error("Leg Length has no absolute Go position; use Jog or Reset.")
-            return False
+            return self.leg.move_to(self.shell.setup.row_value("leg_length"))
 
         self.loading_spinner.show()
         self.disable_actuator_controls()
@@ -830,6 +959,7 @@ class KneeSpa(QMainWindow):
         # This is a target, not measured pressure. The live readout is updated
         # only by status_emit feedback.
         self.current_pressure = pressure
+        self._reflect_setup("pressure", pressure)
         return True
 
     def _on_setup_stop(self, key):
@@ -851,6 +981,8 @@ class KneeSpa(QMainWindow):
     def _on_mark_default(self):
         """Mark As Default: persist the current Treatment Settings as protocol
         defaults (§15.4), clamped to constants."""
+        if not authorize(self, "setup", lambda: self._on_mark_default()):
+            return
         vals = self.shell.treatment.settings_values()
         mp = max(0, min(PRESSURE_MAX, vals.get("max_pressure", 40)))
         ml = max(0, min(abs(LATERAL_MAX_DEGREES), abs(vals.get("max_left", 10))))
@@ -863,7 +995,11 @@ class KneeSpa(QMainWindow):
                 {"max_pressure": mp, "max_left": ml, "max_right": mr,
                  "pulse_rate": pr, "duration": dur}
             )
-            self._show_timed_error("Saved current settings as the default.")
+            self._show_timed_error(
+                f"Saved treatment defaults: {dur} min · {mp:g} lbs · "
+                f"left {ml:g}° / right {mr:g}° · pulse {pr:g}/sec.\n"
+                f"Motor speed: {vals['motor_speed']:g}%."
+            )
         except Exception as e:
             print(f"Failed to save defaults: {e}")
             self.logger.error("Failed to save defaults: %s", e)
@@ -873,6 +1009,9 @@ class KneeSpa(QMainWindow):
     def _on_login_attempt(self, pin):
         """Modern login modal submits the whole PIN; the salted-hash verify and
         lockout live in controllers.auth_controller."""
+        if self.protocol_running:
+            return
+        self.machine_sign_in.clear()
         self.login_pin = pin
         self.auth.handle_login()
         if self.current_user is None:
@@ -884,9 +1023,11 @@ class KneeSpa(QMainWindow):
                 pass
 
     def _on_logout(self):
-        if self._block_nav_during_treatment():
+        if self._block_active_treatment_exit():
             return
         print("Handling logout")
+        self.machine_sign_in.clear()
+        self.patients.clear_session()
         self._patient_lookup_id += 1
         self.current_user = None
         self.cloud_patient = None
@@ -899,34 +1040,17 @@ class KneeSpa(QMainWindow):
 
     def _on_exit_app(self):
         """Exit App from the Profile screen — full cleanup via closeEvent."""
-        if self._block_nav_during_treatment():
+        if self._block_active_treatment_exit():
             return
         print("Handling app exit")
         self.close()
 
     def _on_restart_app(self) -> None:
-        if self._closing or self.restart_requested:
+        if self._closing or self.restart_requested or self._block_active_treatment_exit():
             return
         self.restart_requested = True
         self.logger.info("Application restart requested")
         self.close()
-
-    def _on_add_pin(self, username, pin):
-        """Persist a new user PIN (admin only; the shell hides the button for
-        non-admins, but re-check here so the view can never bypass it)."""
-        if not self._is_admin():
-            self.shell.add_pin_failed("Only administrators can add PINs.")
-            return
-        try:
-            ok, message = self.csv.add_user(username, pin)
-        except Exception as e:
-            self.logger.error("Add PIN failed: %s", e)
-            ok, message = False, "Could not save the new PIN."
-        if ok:
-            self.shell.add_pin_succeeded()
-            self._show_timed_error(message)
-        else:
-            self.shell.add_pin_failed(message)
 
     def _is_admin(self):
         return bool(self.current_user) and self.current_user.get("status") == "admin"
@@ -935,21 +1059,67 @@ class KneeSpa(QMainWindow):
         """Update user interface with user details after login (modern shell:
         close the modal, set the user chip, and go to the Treatment screen)."""
         print("Updating UI after login")
+        self.machine_sign_in.clear()
+        self.shell.set_access_role(None)
+        self.patients.clear_session()
         is_admin = self._is_admin()
         title = "Administrator" if is_admin else "Clinician"
         self.shell.login_succeeded(
-            self.current_user["username"], goto="protocols", title=title,
+            self.current_user["username"], title=title,
             is_admin=is_admin,
         )
-        self._show_patient_modal()
+        self.shell.support.set_contact(
+            self.current_user.get("username", ""), self.current_user.get("email", ""),
+        )
+        if self.shell._current == "protocols":
+            # Start with a clean patient selection; entry is an explicit operator action.
+            self._on_patient_edit()
 
     # ----- Support -----
     def _on_issue_activated(self, question):
         # Remember the last-opened troubleshooting item as ticket context.
         self._selected_issue = question
 
-    def _on_submit_ticket(self):
-        self.submit_ticket(self._selected_issue or "General support request")
+    def _on_submit_ticket(self, payload: dict) -> None:
+        """Validate contact details and send a retryable request with device context."""
+        if getattr(self, "_support_mail_busy", False) is True:
+            return
+        try:
+            payload = validate_ticket(payload)
+        except ValueError as exc:
+            self.shell.support.set_delivery_state("invalid", str(exc))
+            return
+        pending = getattr(self, "_pending_support_ticket", None)
+        if pending is None or pending[0] != payload:
+            try:
+                device_id = self.config.ensure_device_id()
+            except Exception:
+                self.logger.exception("Could not read support device identity")
+                device_id = "Unavailable"
+            cloud_id = getattr(getattr(self, "cloud_client", None), "device_id", "")
+            if isinstance(cloud_id, str) and cloud_id:
+                device_id = cloud_id
+            arduino = getattr(self, "arduino", None)
+            connected = bool(arduino and arduino.connected)
+            user = self.current_user or {}
+            ticket = create_ticket(payload, {
+                "Device ID": device_id,
+                "Software version": APP_VERSION,
+                "Firmware version": (getattr(arduino, "firmware_version", None) or "Not reported")
+                    if connected else "Controller disconnected",
+                "Controller connection": "Connected" if connected else "Disconnected",
+                "Device state": getattr(self, "protocol_state", "Unknown"),
+                "Operator": user.get("username", "Not signed in"),
+            })
+            self._pending_support_ticket = (dict(payload), ticket)
+        else:
+            ticket = pending[1]
+        self._send_support_email(
+            subject=ticket["subject"], body=ticket["body"],
+            receiver_email=EMAIL_CONFIG["TICKET_EMAIL"], reply_to=ticket["reply_to"],
+            success_message=f"Ticket sent. Request reference: {ticket['reference']}.",
+            failure_prefix="Failed to send ticket",
+        )
 
     def _on_video_toggled(self, playing):
         # The VideoModal owns the embedded VLC player; this is just telemetry.
@@ -1022,9 +1192,16 @@ class KneeSpa(QMainWindow):
 
     def _send_support_email(
         self, *, subject: str, body: str, receiver_email: str,
-        success_message: str, failure_prefix: str,
+        success_message: str, failure_prefix: str, reply_to: str = "",
     ) -> None:
         """Build MIME headers and send on a daemon thread, logging SMTP failures."""
+        if getattr(self, "_support_mail_busy", False) is True:
+            return
+        self._support_mail_busy = True
+        signal = getattr(self, "support_email_result", None)
+        shell = getattr(self, "shell", None)
+        if shell is not None:
+            shell.support.set_delivery_state("sending", "Sending request…")
         sender_email = EMAIL_CONFIG["SENDER_EMAIL"]
         sender_password = EMAIL_CONFIG["SENDER_PASSWORD"]
         smtp_server = EMAIL_CONFIG["SMTP_SERVER"]
@@ -1034,6 +1211,8 @@ class KneeSpa(QMainWindow):
         message["Subject"] = subject
         message["From"] = sender_email
         message["To"] = receiver_email
+        if reply_to:
+            message["Reply-To"] = reply_to
 
         def _send() -> None:
             try:
@@ -1043,19 +1222,52 @@ class KneeSpa(QMainWindow):
                     server.login(sender_email, sender_password)
                     server.sendmail(sender_email, receiver_email, message.as_string())
                 print(success_message)
+                if signal is not None:
+                    signal.emit(True, success_message)
             except Exception as e:
                 print(f"{failure_prefix}: {e}")
                 self.logger.error(f"{failure_prefix}: {e}")
+                if signal is not None:
+                    signal.emit(False, "Request not sent. Check the connection or contact your administrator.")
 
-        threading.Thread(target=_send, daemon=True).start()
+        try:
+            threading.Thread(target=_send, daemon=True).start()
+        except RuntimeError as exc:
+            self._support_mail_busy = False
+            self.logger.error("Could not start support delivery: %s", exc)
+            if shell is not None:
+                shell.support.set_delivery_state("failed", "Request not sent. Please retry.")
+
+    def _on_support_email_result(self, success: bool, message: str) -> None:
+        """Receive worker results on the GUI thread, with a persistent retryable result."""
+        self._support_mail_busy = False
+        if success:
+            self._pending_support_ticket = None
+        if not getattr(self, "_closing", False):
+            self.shell.support.set_delivery_state("sent" if success else "failed", message)
 
     # ----- protocol state / navigation gating -----
     def set_protocol_state(self, state):
         """Protocol lifecycle (see controllers.protocol_controller)."""
         self.protocol.set_state(state)
+        controller = getattr(self, "device_controller", None)
+        if controller is not None and state != "idle":
+            controller.wake()
 
-    def _block_nav_during_treatment(self):
-        return self.protocol.block_nav()
+    def _confirm_leave_treatment(self, source_page: str, destination_page: str) -> bool:
+        return self.protocol.confirm_leave_treatment(source_page, destination_page)
+
+    def _block_active_treatment_exit(self) -> bool:
+        if any(getattr(self, name, False) is True for name in (
+            "_device_maintenance_active", "_calibration_active", "reset_in_progress",
+            "actuator_command_in_progress",
+        )):
+            self._show_timed_error("Finish movement, reset or device service before leaving.")
+            return True
+        return self.protocol.block_active_treatment_exit()
+
+    def _block_nonessential_overlay_during_treatment(self) -> bool:
+        return self.protocol.block_nonessential_overlay()
 
     def panel_stop_requested(self):
         self.protocol.panel_stop_requested()
@@ -1112,6 +1324,9 @@ class KneeSpa(QMainWindow):
         if not getattr(self, "_cleanup_started", False):
             self._cleanup_started = True
             self._closing = True
+            self.machine_sign_in.clear()
+            self.machine_sign_in.timer.stop()
+            self.patients.clear_session()
             self._no_automatic_recovery = True
             self._shutdown_began = time.monotonic()
             self.protocol.latch_session_outcome("fault")
@@ -1155,6 +1370,9 @@ class KneeSpa(QMainWindow):
             self.arduino_thread.quit()
             if self.arduino_thread.isRunning():
                 return False
+        device_controller = getattr(self, "device_controller", None)
+        if device_controller is not None and not device_controller.shutdown_ready():
+            return False
         if self.threadpool.activeThreadCount() or self._cloud_close_thread.is_alive():
             return False
         if arduino is not None:
@@ -1405,32 +1623,11 @@ class KneeSpa(QMainWindow):
 
     # ----- leg-length (FIT) jog handlers (open-loop F-commands + GPIO) -----
     def _move_leg(self, command, delta, duration_ms, forward):
-        """Start one bounded open-loop FIT movement."""
+        """Delegate timing and estimate updates to the FIT command owner."""
         if getattr(self, "_service_leg_position_unknown", False) is True:
-            self._show_timed_error("Use the leg-length Reset control after service movement.")
+            self._show_timed_error("Use the leg-length Return control to establish zero.")
             return False
-        target = self.leg_length + delta
-        if target < self.LEG_LENGTH_MIN or target > self.LEG_LENGTH_MAX:
-            self._show_timed_error(
-                f"Leg Length is limited to {self.LEG_LENGTH_MIN:.0f}-"
-                f"{self.LEG_LENGTH_MAX:.0f} inches."
-            )
-            return False
-
-        self.loading_spinner.show()
-        self.disable_actuator_controls()
-        if not KneeSpa._send_motion_command(self, command, "leg-length movement"):
-            return False
-
-        GPIO.output(EXTRAFORWARD, GPIO.HIGH if forward else GPIO.LOW)
-        GPIO.output(EXTRABACKWARD, GPIO.LOW if forward else GPIO.HIGH)
-        QTimer.singleShot(duration_ms, self._release_leg_gpio)
-        self.leg_length = max(
-            self.LEG_LENGTH_MIN, min(self.LEG_LENGTH_MAX, target)
-        )
-        self._reflect_setup("leg_length", self.leg_length)
-        self.loading_spinner.hide()
-        return True
+        return self.leg.move(command)
 
     def forward_button_clicked(self):
         """Handle forward button press - normal speed."""
@@ -1450,6 +1647,8 @@ class KneeSpa(QMainWindow):
 
     def _release_leg_gpio(self):
         """Drop the Pi-side leg-motor direction pins to a safe state."""
+        if getattr(self, "leg", None) is not None:
+            self.leg.cancel()
         GPIO.output(EXTRAFORWARD, GPIO.LOW)
         GPIO.output(EXTRABACKWARD, GPIO.LOW)
 
@@ -1463,33 +1662,11 @@ class KneeSpa(QMainWindow):
 
     def reset_extra_button_clicked(self):
         """Home the open-loop FIT axis, updating zero only after completion."""
-        self.loading_spinner.show()
-        self.disable_actuator_controls()
-        if not KneeSpa._send_motion_command(self, "FR", "leg-length reset"):
-            return False
-        self._start_leg_reset_gpio()
-        QTimer.singleShot(6100, self._finish_leg_reset)
-        return True
-
-    def _start_leg_reset_gpio(self) -> None:
-        """Bound the local homing drive even if the firmware never acknowledges."""
-        GPIO.output(EXTRAFORWARD, GPIO.LOW)
-        GPIO.output(EXTRABACKWARD, GPIO.HIGH)
-        QTimer.singleShot(6100, self._release_leg_gpio)
-
-    def _finish_leg_reset(self):
-        self._release_leg_gpio()
-        if any(getattr(self, flag, False) is True for flag in (
-            "_physical_stop_active", "_closing", "_no_automatic_recovery",
-        )):
-            return
-        self._service_leg_position_unknown = False
-        self.leg_length = 0.0
-        self._reflect_setup("leg_length", 0.0)
-        self.loading_spinner.hide()
+        return self.leg.home()
 
     def stop_leg_movement(self):
         """Stop leg length actuator movement."""
+        self.leg.cancel()
         self.loading_spinner.show()
         if not KneeSpa._send_motion_command(self, "F0", "leg-length stop"):
             # Local GPIO stop remains mandatory even when serial is down.
@@ -1593,6 +1770,7 @@ class KneeSpa(QMainWindow):
         """Device status -> safety supervision (see controllers.safety_monitor),
         plus the Treatment screen's live pressure/angle readouts."""
         try:
+            self._status_received_at = time.monotonic()
             # Latest MEASURED load; the stop sequence waits on this before
             # running the recovery reset (see ProtocolController).
             self.last_measured_pressure = float(pressure)
@@ -1600,12 +1778,31 @@ class KneeSpa(QMainWindow):
             pass
         try:
             self.shell.treatment.set_pressure(pressure)
-            lateral_angle = pos_c_to_angle(steps, self.config.CMarks)
+            connected = bool(self.arduino and self.arduino.connected)
+            calibrated = connected and self.config.marks_valid
+            lateral_angle = (calibrated_reading(steps, self.config.CMarks)
+                             if calibrated else None)
             self.shell.treatment.set_angle(lateral_angle)
-            # Setup's pressure/lateral readouts are measured values. Command
-            # handlers no longer overwrite them merely because a send queued.
-            self._reflect_setup("pressure", pressure)
-            self._reflect_setup("lateral", lateral_angle)
+            # Measured feedback must never overwrite an unsubmitted Setup target.
+            caption = self._measurement.caption(connected)
+            self.shell.setup.set_measured_position(
+                "pressure", pressure if caption == "Pressure live" else None, caption,
+            )
+            for key, raw, marks in (
+                ("axial", position_a, self.config.AMarks),
+                ("horizontal", position_b, self.config.BMarks),
+                ("lateral", steps, self.config.CMarks),
+            ):
+                reading = calibrated_reading(raw, marks) if calibrated else None
+                # Older devices use the existing distance factor for axial travel.
+                if (key == "axial" and calibrated
+                        and not self.config.axial_service_calibrated):
+                    factor = float(self.config.a_factor)
+                    reading = float(raw) * 6 / factor if factor > 0 else None
+                self.shell.setup.set_measured_position(
+                    key, round(reading, 1) if reading is not None else None,
+                    "From calibration" if reading is not None else "Check calibration",
+                )
         except Exception as e:
             print(f"Error updating live status: {e}")
         return self.safety.on_status(position_a, position_b, steps, pressure)
@@ -1627,7 +1824,28 @@ class KneeSpa(QMainWindow):
     def _refresh_pressure_state(self) -> None:
         self._measurement.fault = self._measurement_fault
         connected = self.arduino is not None and self.arduino.connected
-        self.shell.treatment.set_pressure_state(self._measurement.caption(connected))
+        caption = self._measurement.caption(connected)
+        received = getattr(self, "_status_received_at", None)
+        if caption == "Pressure live":
+            if received is None:
+                caption = "Waiting for pressure"
+            elif time.monotonic() - received > DIAGNOSTICS_MAX_AGE_S:
+                caption = "Pressure stale"
+        self.shell.treatment.set_pressure_state(caption)
+        if caption != "Pressure live":
+            self.shell.setup.set_measured_position("pressure", None, caption)
+
+    def _refresh_measurement_display(self) -> None:
+        """Age displayed readings independently of new serial events or motion logic."""
+        if getattr(self, "_closing", False):
+            return
+        self._refresh_pressure_state()
+        self._refresh_device_presentation()
+        received = getattr(self, "_status_received_at", None)
+        if (not (self.arduino and self.arduino.connected) or received is None
+                or time.monotonic() - received > DIAGNOSTICS_MAX_AGE_S):
+            self.shell.setup.invalidate_measurements("Waiting" if received is None else "Stale")
+            self.shell.treatment.set_angle(None)
 
     def on_pressure_progress_notice(self, notice: dict) -> None:
         """Advisory only: dismissing has no effect; Stop cannot schedule homing."""
@@ -1683,7 +1901,7 @@ class KneeSpa(QMainWindow):
     @QtCore.pyqtSlot()
     def handle_pressure_released(self):
         self.current_pressure = 0
-        self._reflect_setup("pressure", 0)
+        # Release completion is not a new numeric measurement or target edit.
         self.enable_actuator_controls()
         self.loading_spinner.hide()
         self.safety.on_pressure_released()
@@ -1850,6 +2068,7 @@ def main():
             print(f"Theme not applied, continuing with default style: {theme_err}")
 
         window = KneeSpa(debug_mode=args.debug, config_path=args.config)
+        window._release_install_enabled = True
         window.show()
 
         app.exec_()
@@ -1865,8 +2084,15 @@ def main():
     if args.sync_logs:
         _sync_logs(args.sync_logs)
 
+    from ui.modals.release_install import finish_release_install
+    finish_release_install(window)
     logging.shutdown()
-    if window.restart_requested:
+    if getattr(window, "_system_power_action", None):
+        try:
+            DeviceSystem.power(window._system_power_action)
+        except (RuntimeError, ValueError) as exc:
+            QMessageBox.critical(None, "Power action failed", str(exc) + "\nPlease reopen KneeSpa.")
+    elif window.restart_requested:
         try:
             restart_app(__file__)
         except OSError as exc:

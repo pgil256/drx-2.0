@@ -3,6 +3,8 @@
 import time
 from typing import Optional
 
+DIAGNOSTICS_MAX_AGE_S = 2.5
+
 
 class MeasurementState:
     def __init__(self) -> None:
@@ -25,7 +27,7 @@ class MeasurementState:
         if not self.diagnostics["valid"]:
             return "Pressure unavailable"
         if (self.diagnostics["age_ms"] > 500 or self.received_at is None
-                or time.monotonic() - self.received_at > 2.5):
+                or time.monotonic() - self.received_at > DIAGNOSTICS_MAX_AGE_S):
             return "Pressure stale"
         if not self.baseline_valid:
             return "Pressure zero required"

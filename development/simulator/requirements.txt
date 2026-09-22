@@ -1,0 +1,4 @@
+# Install in the desktop development environment only.
+-r ../requirements-test.txt
+# Real instructional-video playback (also requires a native VLC 3 runtime).
+python-vlc==3.0.21203

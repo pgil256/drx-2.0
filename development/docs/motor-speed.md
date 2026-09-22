@@ -1,26 +1,27 @@
 # Treatment motor speed
 
-Open **Protocols → Settings → Motor Speed** before starting a treatment.
-Three independent sliders set axial movement, lateral movement, and motor
-movement during pulsation. The existing **Pulse Rate** setting still controls
-the interval between pulse strokes; changing pulsation motor speed does not
-change that interval.
+The treatment screen puts a full-width live monitor above a compact settings strip,
+loaded from device defaults or the linked patient's plan. Select a protocol using the
+1–4 buttons beside its description. Open **Edit treatment** to change settings
+in the popup. **Motor Speed**, directly below
+**Pulse Rate**, sets axial, lateral, and pulsation output to one percentage.
+Pulse Rate continues to control the interval between pulse strokes.
 
-- Sliders range from 50–100% in 5% increments. Percentages refer to the
-  configured treatment output ceiling of 1600 controller units, not a measured
-  travel velocity or percentage of the previous speed.
-- Axial and lateral default to 50% (800 units); pulsation defaults to 100%
-  (1600 units). These preserve the previous fixed outputs.
-- The 800-unit minimum preserves the documented axial breakaway floor.
-  Axial/lateral cannot be reduced below their previous output in this version.
-  The ceiling preserves the previous pulsation maximum. Actual travel speed
-  depends on load and hardware; the new range needs bench validation.
-- Motor speeds lock during treatment, including pause and reset/reconnect.
-  Stop remains available. **Mark As Default** saves all three speeds with the
-  other treatment settings. Old configurations load the original output defaults.
-- Horizontal movement retains its fixed output. Pressure release (`P0`) and
-  emergency release retain their fixed 800-unit output. `X` also restores the
-  original speed defaults so later Setup moves use their original output.
+- Motor Speed defaults to **50%** and ranges from 50–100% in 5% increments.
+  Percentages refer to the configured output ceiling of 1600 controller units,
+  not measured travel velocity. The default is 800 units for all three outputs.
+- Protocol, duration and motor speed lock throughout treatment, including pause.
+  Permitted live pressure, angle and pulse-rate edits retain their existing
+  confirmation and controller checks. The popup includes Stop during a run.
+- Edits apply immediately; Done closes the popup. The main screen's Start button
+  retains the existing start confirmation and device readiness checks.
+- Mark As Default saves the shared speed using equal values in the existing
+  three-field configuration format. Older unequal saved speeds load as their
+  lowest percentage, so consolidation does not increase any motor's output.
+- Patient plans retain their existing cloud fields; motor speed uses the current
+  device treatment setting because the patient API has no motor-speed field.
+- Horizontal movement, pressure release (`P0`), emergency release, and firmware
+  reset defaults retain their existing behavior.
 
 ## Firmware and protocol
 
@@ -31,7 +32,7 @@ settings. The existing initial lateral centering can precede configuration
 and continues at its original speed.
 
 `V<axial>,<lateral>,<pulse>` sets three whole-number percentages atomically.
-Example: `V75,90,60` selects 1200, 1440, and 960 controller units. Invalid
+The shared UI sends equal values: `V75,75,75` selects 1200 units for each output. Invalid
 fields or values outside 50–100 are rejected without changing any setting.
 Configuration does not start a motor; active axial/pressure/pulse/release
 operations reject it with `BUSY`.
@@ -47,7 +48,7 @@ lateral movement timeouts remain valid. This change does not extend them.
 
 ## Verification
 
-Host tests cover bounds, independent settings, persistence, firmware
+Host tests cover bounds, shared and legacy settings, persistence, firmware
 acknowledgments, cancellation, and UI locking. Native firmware tests inspect
 actual encoded motor writes for axial/lateral position moves, pressure moves,
 and alternating pulse strokes, plus release and emergency stop behavior.

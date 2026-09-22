@@ -24,6 +24,7 @@ def shell(app):
 
     s = AppShell()
     s.resize(1366, 768)
+    s.set_device_status("Ready", "Review settings before starting.", True)
     return s
 
 
@@ -47,7 +48,7 @@ def test_drawn_icons_render_non_null(app):
     for icon in (play_icon("#fff", 24), pause_icon("#000", 24)):
         assert not icon.isNull()
         assert not icon.pixmap(24, 24).isNull()
-    for name in ("home", "setup", "protocols", "help", "support", "play"):
+    for name in ("home", "setup", "protocols", "device", "support", "play"):
         ic = nav_icon(name, "#29abe2", 26)
         assert not ic.pixmap(26, 26).isNull()
 
@@ -55,7 +56,7 @@ def test_drawn_icons_render_non_null(app):
 # ----- shell: nav + gating -----
 def test_shell_builds_with_six_screens(shell):
     from ui.screens import (
-        HelpScreen,
+        DeviceScreen,
         HomeScreen,
         ProfileScreen,
         SetupScreen,
@@ -67,7 +68,7 @@ def test_shell_builds_with_six_screens(shell):
     assert isinstance(shell.home, HomeScreen)
     assert isinstance(shell.setup, SetupScreen)
     assert isinstance(shell.treatment, TreatmentScreen)
-    assert isinstance(shell.help, HelpScreen)
+    assert isinstance(shell.device, DeviceScreen)
     assert isinstance(shell.support, SupportScreen)
     assert isinstance(shell.profile, ProfileScreen)
 
@@ -83,7 +84,7 @@ def test_gated_pages_bounce_to_login_when_logged_out(shell):
 
     # Ungated page is always reachable.
     shell.nav_rail.navigate.emit("help")
-    assert shell.stack.currentIndex() == PAGES.index("help")
+    assert shell.stack.currentIndex() == PAGES.index("support")
 
 
 def test_login_grants_access_to_gated_pages(shell):
@@ -142,62 +143,28 @@ def test_avatar_opens_profile_and_logout_button_logs_out(shell):
     assert fired
 
 
-def test_profile_add_pin_admin_only_and_exit(shell):
-    # Non-admin: Add PIN hidden, Exit App present and wired.
-    shell.login_succeeded("Dr. Vasquez", title="Clinician", is_admin=False)
-    assert not shell.profile._add_pin.isVisibleTo(shell.profile)
+def test_device_shows_versions_and_device_id(shell):
+    shell.device.set_device_id("drx-desktop-sim-01")
+    shell.device.set_firmware("service-test", True)
+    assert shell.device._device_id.text() == "Device ID: drx-desktop-sim-01"
+    assert "service-test" in shell.device._firmware.text()
+    shell.device.set_firmware("service-test", False)
+    assert "disconnected" in shell.device._firmware.text()
 
+
+@pytest.mark.parametrize("admin", [False, True])
+def test_profile_only_has_identity_and_session_actions(shell, admin):
+    from PyQt5.QtWidgets import QPushButton
+    shell.login_succeeded("Operator", is_admin=admin)
+    buttons = {button.text() for button in shell.profile.findChildren(QPushButton)}
+    assert buttons == {"Log Out", "Restart App", "Exit App"}
+    assert not hasattr(shell.profile, "_device_id")
+    assert not hasattr(shell.profile, "_version")
+    assert not hasattr(shell, "add_pin_modal")
     exits = []
     shell.exit_requested.connect(lambda: exits.append(True))
     shell.profile._exit.click()
-    assert exits
-
-    # Admin: Add PIN visible; clicking opens the Add PIN modal.
-    shell.login_succeeded("Administrator", title="Administrator", is_admin=True)
-    assert shell.profile._add_pin.isVisibleTo(shell.profile)
-    shell.profile._add_pin.click()
-    assert not shell.add_pin_modal.isHidden()
-    shell.add_pin_modal.close_overlay()
-
-    # Logged out again: Add PIN hides.
-    shell.set_user(None)
-    assert not shell.profile._add_pin.isVisibleTo(shell.profile)
-
-
-def test_add_pin_modal_two_step_flow(shell):
-    m = shell.add_pin_modal
-    submitted = []
-    shell.add_pin_submitted.connect(lambda name, pin: submitted.append((name, pin)))
-
-    shell.show_add_pin()
-    assert not m.isHidden()
-    m._name.setText("Dr. New")
-
-    # Step 1: enter — no submission yet, keypad flips to confirm.
-    m._keypad.set_value("")
-    m._keypad._press("4"); m._keypad._press("3"); m._keypad._press("2"); m._keypad._press("1")
-    assert submitted == []
-    assert m._keypad._title.text() == "Confirm New PIN"
-
-    # Mismatched confirm restarts the flow with an error.
-    for d in "9999":
-        m._keypad._press(d)
-    assert submitted == []
-    assert "did not match" in m._error.text()
-    assert m._keypad._title.text() == "Enter New PIN"
-
-    # Matching enter + confirm emits (username, pin).
-    for d in "4321" + "4321":
-        m._keypad._press(d)
-    assert submitted == [("Dr. New", "4321")]
-
-    # Controller error feedback restarts entry inside the modal…
-    shell.add_pin_failed("That PIN is already in use. Choose another.")
-    assert "already in use" in m._error.text()
-    assert not m.isHidden()
-    # …and success dismisses it.
-    shell.add_pin_succeeded()
-    assert m.isHidden()
+    assert exits == [True]
 
 
 # ----- treatment run-state model -----
@@ -212,7 +179,9 @@ def test_treatment_run_state_button_gating(shell):
     assert not t._start_btn.isEnabled() and t._pause_btn.isEnabled()
     assert all(not tile.isEnabled() for tile in t._proto_buttons.values())
     assert not t._patient_button.isEnabled()        # patient PIN is a pre-run input
-    assert t._settings["max_pressure"].isEnabled()  # live settings stay reachable
+    assert not t._settings["max_pressure"].isEnabled()
+    t._edit_treatment_button.click()
+    assert t._settings["max_pressure"].isEnabled()  # explicit live adjustment entry
 
     t.set_run_state(running=True, paused=True)
     assert t._start_btn.isEnabled() and not t._pause_btn.isEnabled()
@@ -248,7 +217,7 @@ def test_treatment_duration_slider_locks_during_run(shell):
 
 
 def test_treatment_stop_button_uses_concise_label(shell):
-    assert shell.treatment._estop_btn.text() == "STOP/RESET"
+    assert shell.treatment._estop_btn.text() == "Stop"
 
 
 def test_treatment_protocol_select_and_settings(shell):
@@ -279,9 +248,11 @@ def test_treatment_telemetry_setters(shell):
     assert abs(t._progress_fraction - 0.5) < 1e-6
     assert t._time_stat._value == "0:15"
     t.set_pressure(72)
+    assert t._pressure_stat._value == "—"  # a number alone does not establish validity
+    t.set_pressure_state("Pressure live")
     assert t._pressure_stat._value == "72.0"
     t.set_angle(-12)
-    assert t._angle_stat._value == "-12°"
+    assert t._angle_stat._value == "-12.0°"
 
 
 def test_treatment_patient_keypad_round_trip(shell):
@@ -308,17 +279,22 @@ def test_treatment_patient_keypad_round_trip(shell):
 
 
 # ----- setup -----
-def test_setup_jog_adjusts_slider_and_updates_live(shell):
+def test_setup_jog_waits_for_feedback_without_fabricating_a_position(shell):
     s = shell.setup
     jogs = []
     s.jog_requested.connect(lambda k, a: jogs.append((k, a)))
     row = s._rows["axial"]
     start = row.value()
     row._on_jog("rev", -row._step)
-    assert row.value() == pytest.approx(start - row._step)
+    assert row.value() == start
     assert ("axial", "rev") in jogs
-    # Live position mirrors the slider.
-    assert s._pos["axial"]._value.text()  # rendered something
+    assert s._pos["axial"]._value.text() == "—"
+    s.set_position("axial", 1.5)
+    assert row.value() == 1.5
+    assert s._pos["axial"]._value.text() == "—"
+    s.set_measured_position("axial", 1.2)
+    assert s._pos["axial"]._value.text() == "1.2 in"
+    assert row.value() == 1.5
 
 
 def test_setup_action_signals(shell):
@@ -333,12 +309,13 @@ def test_setup_action_signals(shell):
     assert seen == {"mark": 1, "reset": 1, "estop": 1}
 
 
-def test_setup_arduino_badge_toggle(shell):
+def test_setup_disconnect_clears_measurements_until_new_feedback(shell):
     s = shell.setup
+    s.set_measured_position("axial", 1.2)
     s.set_arduino_connected(False)
-    assert s._arduino_badge._label.text() == "Arduino offline"
+    assert s._pos["axial"]._value.text() == "—"
     s.set_arduino_connected(True)
-    assert s._arduino_badge._label.text() == "Arduino connected"
+    assert s._pos["axial"]._value.text() == "—"
 
 
 def test_setup_stop_controls_are_never_in_motion_lock_group(shell):
@@ -349,10 +326,32 @@ def test_setup_stop_controls_are_never_in_motion_lock_group(shell):
         assert all(button in locked for button in row.motion_buttons)
 
 
-def test_leg_length_go_is_disabled(shell):
+def test_leg_length_has_target_controls_separate_from_its_estimate(shell):
     row = shell.setup._rows["leg_length"]
-    go = next(button for button in row.motion_buttons if button.text() == "Go")
-    assert not go.isEnabled()
+    assert any(button.text() == "Go" for button in row.motion_buttons)
+    assert not row.slider.isHidden()
+    moved = MagicMock()
+    row.go.connect(moved)
+    row.slider._right_btn.click()
+    assert row.value() == 0.25
+    moved.assert_not_called()
+    row.motion_buttons[-1].click()
+    moved.assert_called_once_with("leg_length")
+    assert row.readout._caption.text() == "Estimated"
+    assert row.readout._value.text() == "—"
+
+
+def test_leg_estimate_keeps_quarter_inches_and_requires_explicit_zero(shell):
+    setup = shell.setup
+    setup.set_leg_length_estimate(0.25, "From retracted zero")
+    assert setup._pos["leg_length"]._value.text() == "0.25 in"
+    setup.set_position("leg_length", 0)
+    assert setup._pos["leg_length"]._value.text() == "0.25 in"
+    setup.set_measured_position("leg_length", 6)
+    assert setup._pos["leg_length"]._value.text() == "0.25 in"
+    setup.set_leg_length_estimate(None, "Zero required")
+    assert setup._pos["leg_length"]._value.text() == "—"
+    assert setup._pos["leg_length"]._value.accessibleDescription() == "Zero required"
 
 
 # ----- support -----
@@ -361,10 +360,9 @@ def test_support_accordion_and_signals(shell):
     from ui.theme import GLYPH
 
     sup = shell.support
-    activated, assist, ticket = [], [], []
+    activated, ticket = [], []
     sup.issue_activated.connect(activated.append)
-    sup.request_assistance.connect(lambda: assist.append(1))
-    sup.submit_ticket_requested.connect(lambda: ticket.append(1))
+    sup.submit_ticket_requested.connect(ticket.append)
 
     item = sup.findChild(_FailureItem)
     assert item is not None
@@ -374,9 +372,13 @@ def test_support_accordion_and_signals(shell):
     assert item._indicator.text() == GLYPH["accordion_open"]
     assert activated  # issue_activated fired
 
-    sup.request_assistance.emit()
-    sup.submit_ticket_requested.emit()
-    assert assist == [1] and ticket == [1]
+    sup.contact_name.setText("Operator")
+    sup.contact_email.setText("operator@example.test")
+    sup.description.setPlainText("The controller disconnects after reset.")
+    sup.ticket_button.click()
+    assert len(ticket) == 1
+    assert ticket[0]["issue"] == activated[0]
+    assert ticket[0]["email"] == "operator@example.test"
 
 
 # ----- modals -----
@@ -398,6 +400,61 @@ def test_login_modal_submit_and_close(shell):
 
     shell.login_modal.close_overlay()
     assert shell.login_modal.isHidden() and closes == [1]
+
+
+def test_video_library_opens_without_playing_and_lists_added_videos(shell):
+    shell.show_video()
+    modal = shell.video_modal
+    assert modal._pages.currentWidget() is modal._library_page
+    assert not modal._playing and not modal._poll.isActive()
+    assert modal._video_list.count() == 9
+    assert "Hip Educational" in modal._engine.titles()
+    assert "Shoulder Educational" in modal._engine.titles()
+    assert "Next Level Integrative Medicine HCT P Details" in modal._engine.titles()
+    assert modal._fs_btn.isHidden() and modal._library_btn.isHidden()
+
+
+def test_video_selection_starts_chosen_clip_then_advances(shell, qtbot, monkeypatch):
+    from PyQt5.QtCore import Qt
+
+    qtbot.addWidget(shell)
+    shell.show()
+    shell.show_video()
+    modal = shell.video_modal
+    listing = modal._video_list
+    item = listing.item(7)
+    listing.scrollToItem(item)
+    qtbot.waitUntil(lambda: listing.visualItemRect(item).intersects(listing.viewport().rect()))
+    qtbot.mouseClick(listing.viewport(), Qt.LeftButton,
+                     pos=listing.visualItemRect(item).center())
+    assert modal._pages.currentWidget() is modal._player_page
+    assert modal._engine.index() == 7 and modal._playing
+    assert modal._current_title.text() == "Next Level Integrative Medicine HCT P Details"
+    monkeypatch.setattr(modal._engine, "playback_state", lambda: "ended")
+    modal._on_poll()
+    assert modal._engine.index() == 8 and modal._playing
+    assert modal._current_title.text() == "Shoulder Educational"
+    modal._on_poll()
+    assert modal._pages.currentWidget() is modal._library_page
+    assert not modal._playing and not modal._poll.isActive()
+    modal.cleanup()
+
+
+def test_video_returns_to_list_and_reopens_without_autoplay(shell):
+    shell.show_video()
+    modal = shell.video_modal
+    modal._select_video(modal._video_list.item(5))
+    modal._toggle_fullscreen()
+    assert modal._playing and modal._fullscreen
+    modal._library_btn.click()
+    assert not modal._fullscreen and not modal._playing and not modal._poll.isActive()
+    assert modal._pages.currentWidget() is modal._library_page
+    modal._select_video(modal._video_list.item(8))
+    assert modal._engine.index() == 8 and modal._playing
+    modal.close_overlay()
+    shell.show_video()
+    assert modal._pages.currentWidget() is modal._library_page
+    assert not modal._playing and not modal._poll.isActive()
 
 
 def test_video_modal_play_toggle(shell):
@@ -437,7 +494,7 @@ def test_video_modal_stops_playback_on_close(shell):
 
 
 def test_video_modal_degrades_without_vlc(app, monkeypatch):
-    """No VLC → engine unavailable, but the modal still toggles + never crashes."""
+    """No VLC leaves the poster visible and never claims playback started."""
     import ui.modals.video_modal as vm
 
     monkeypatch.setattr(vm, "vlc", None)
@@ -446,14 +503,50 @@ def test_video_modal_degrades_without_vlc(app, monkeypatch):
         assert modal._engine.available is False
         states = []
         modal.play_toggled.connect(states.append)
-        modal._toggle()  # "play" — engine is a no-op
+        modal._toggle()
         # Degrades to the static frame: surface stays hidden, the poster
         # (watermark) stays visible, and no idle poll is left running.
         assert not modal._surface.isVisibleTo(modal)
         assert modal._watermark.isVisibleTo(modal)
         assert not modal._poll.isActive()
-        modal._toggle()  # "pause"
-        assert states == [True, False]
+        assert not modal._playing
+        assert modal._small_play.toolTip() == "Play video"
+        assert modal._playback_message.isVisibleTo(modal)
+        assert "unavailable" in modal._playback_message.text()
+        modal._toggle()  # Retrying still must not claim to be playing.
+        assert states == []
+    finally:
+        modal.cleanup()
+        modal.deleteLater()
+
+
+def test_video_modal_reports_native_vlc_initialization_failure(app, monkeypatch):
+    """An importable binding does not guarantee a working native VLC runtime."""
+    import ui.modals.video_modal as vm
+
+    monkeypatch.setattr(vm.vlc.Instance, "side_effect", OSError("missing VLC plugins"))
+    modal = vm.VideoModal()
+    try:
+        modal._toggle()
+        assert not modal._playing and not modal._poll.isActive()
+        assert not modal._surface.isVisibleTo(modal)
+        assert modal._playback_message.isVisibleTo(modal)
+        assert "unavailable" in modal._playback_message.text()
+    finally:
+        modal.cleanup()
+        modal.deleteLater()
+
+
+def test_video_modal_reports_missing_clips(app, monkeypatch, tmp_path):
+    import ui.modals.video_modal as vm
+
+    monkeypatch.setitem(vm.UI_PATHS, "VIDEOS", str(tmp_path))
+    modal = vm.VideoModal()
+    try:
+        modal._toggle()
+        assert not modal._playing and not modal._poll.isActive()
+        assert "No demo videos" in modal._playback_message.text()
+        assert modal._playback_message.isVisibleTo(modal)
     finally:
         modal.cleanup()
         modal.deleteLater()
@@ -462,17 +555,18 @@ def test_video_modal_degrades_without_vlc(app, monkeypatch):
 def test_video_modal_skip_next_prev(shell):
     m = shell.video_modal
     eng = m._engine
-    assert eng.count() == 3  # 1.mp4 / 2.mp4 / 3.mp4 ship in media/videos
+    count = eng.count()
+    assert count >= 3
     shell.show_video()
-    assert m._clip_label.text() == "1 / 3"
+    assert m._clip_label.text() == f"1 / {count}"
     m._toggle()  # play
     m._skip(+1)
-    assert eng.index() == 1 and m._clip_label.text() == "2 / 3"
+    assert eng.index() == 1 and m._clip_label.text() == f"2 / {count}"
     assert m._playing and m._poll.isActive()  # skip keeps playing
     m._skip(-1)
     assert eng.index() == 0
     m._skip(-1)  # wraps to the last clip
-    assert eng.index() == 2 and m._clip_label.text() == "3 / 3"
+    assert eng.index() == count - 1 and m._clip_label.text() == f"{count} / {count}"
     m.close_overlay()
     assert m.isHidden()
     assert eng.index() == 0  # close rewinds to the first clip
@@ -490,10 +584,11 @@ def test_video_modal_advances_through_playlist_on_clip_end(shell, monkeypatch):
     assert m._engine.index() == 2
     states = []
     m.play_toggled.connect(states.append)
-    m._on_poll()  # last clip ended → poster restored, rewound to clip 1
+    for _ in range(m._engine.count() - 2):
+        m._on_poll()  # Finish every remaining clip, then return to the library.
     assert not m._playing and not m._poll.isActive()
     assert m._engine.index() == 0
-    assert m._watermark.isVisibleTo(m)
+    assert m._pages.currentWidget() is m._library_page
     assert states == [False]
 
 
