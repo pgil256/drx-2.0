@@ -147,7 +147,8 @@ def test_avatar_opens_profile_and_logout_button_logs_out(shell):
 def test_device_shows_versions_and_device_id(shell):
     shell.device.set_device_id("drx-desktop-sim-01")
     shell.device.set_firmware("service-test", True)
-    assert shell.device._device_id.text() == "Device ID: drx-desktop-sim-01"
+    # The row label reads "Device ID"; its value carries no repeated prefix.
+    assert shell.device._device_id.text() == "drx-desktop-sim-01"
     assert "service-test" in shell.device._firmware.text()
     shell.device.set_firmware("service-test", False)
     assert "disconnected" in shell.device._firmware.text()
@@ -158,7 +159,7 @@ def test_profile_only_has_identity_and_session_actions(shell, admin):
     from PyQt5.QtWidgets import QPushButton
     shell.login_succeeded("Operator", is_admin=admin)
     buttons = {button.text() for button in shell.profile.findChildren(QPushButton)}
-    assert buttons == {"Log Out", "Restart App", "Exit App"}
+    assert buttons == {"Log out", "Restart app", "Exit app"}
     assert not hasattr(shell.profile, "_device_id")
     assert not hasattr(shell.profile, "_version")
     assert not hasattr(shell, "add_pin_modal")
@@ -416,7 +417,7 @@ def test_support_accordion_and_signals(shell):
     assert not item._body.isVisibleTo(item)
     item._toggle()
     assert item._body.isVisibleTo(item)
-    assert item._indicator.text() == GLYPH["accordion_open"]
+    assert item.is_open() and not item._indicator.pixmap().isNull()
     assert activated  # issue_activated fired
 
     sup.contact_name.setText("Operator")

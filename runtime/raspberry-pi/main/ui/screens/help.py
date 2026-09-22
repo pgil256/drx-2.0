@@ -15,7 +15,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ui.theme import GLYPH
-from ui.widgets.ds import DSButton, DSCard
+from ui.widgets.ds import DSCard, DSSegmentedTabs
 from ui.widgets.ds._common import mono_font, resolve, sans_font
 
 from .content import HELP_CONTROLS, HELP_PROTOCOLS, SAFETY_LIMITS
@@ -95,17 +95,11 @@ class HelpScreen(QWidget):
         outer = QVBoxLayout(self)
         outer.setContentsMargins(_PAD, _PAD, _PAD, _PAD)
         outer.setSpacing(_GAP)
-        tabs = QHBoxLayout()
-        tabs.setSpacing(_GAP)
         self._sections = QStackedWidget()
-        self._section_buttons = []
-        for index, title in enumerate(section_titles or ("Protocols", "Controls")):
-            button = DSButton(title, variant="secondary", full_width=True)
-            button.setCheckable(True)
-            button.clicked.connect(lambda _checked, i=index: self._select_section(i))
-            tabs.addWidget(button)
-            self._section_buttons.append(button)
-        outer.addLayout(tabs)
+        self._tabs = DSSegmentedTabs(section_titles or ("Protocols", "Controls"))
+        self._tabs.tab_requested.connect(self._select_section)
+        self._section_buttons = self._tabs.buttons()
+        outer.addWidget(self._tabs)
         outer.addWidget(self._sections, 1)
         lay = self._add_section()
 
@@ -152,12 +146,10 @@ class HelpScreen(QWidget):
     def _select_section(self, index: int) -> None:
         """Keep the selected section and its visible button state in sync."""
         self._sections.setCurrentIndex(index)
-        for i, button in enumerate(self._section_buttons):
-            button.setChecked(i == index)
-            button.set_variant("primary" if i == index else "secondary")
+        self._tabs.set_current(index)
 
     def _controls_card(self):
-        card = DSCard("Treatment Controls", padded=False)
+        card = DSCard("Treatment controls", padded=False)
         host = QWidget()
         rows = QVBoxLayout(host)
         rows.setContentsMargins(20, 10, 20, 10)

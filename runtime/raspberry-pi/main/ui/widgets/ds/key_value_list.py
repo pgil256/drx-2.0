@@ -13,7 +13,7 @@ Rows created with ``status=True`` show a dot whose tone follows the value
 from typing import Dict, Iterable, Optional, Sequence
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QFrame, QGridLayout, QLabel, QSizePolicy, QWidget
+from PyQt5.QtWidgets import QFrame, QGridLayout, QHBoxLayout, QLabel, QSizePolicy, QWidget
 
 from ._common import resolve, sans_font
 
@@ -74,15 +74,16 @@ class DSKeyValueList(QWidget):
         self._grid.setContentsMargins(0, 0, 0, 0)
         self._grid.setHorizontalSpacing(16)
         self._grid.setVerticalSpacing(0)
-        self._grid.setColumnStretch(2, 1)
+        self._grid.setColumnStretch(1, 1)
         if label_width:
-            self._grid.setColumnMinimumWidth(1, label_width)
+            self._grid.setColumnMinimumWidth(0, label_width)
         self._dividers = dividers
         self._row = 0
         self._values: Dict[str, _ValueLabel] = {}
         self._labels: Dict[str, QLabel] = {}
         self._dots: Dict[str, QFrame] = {}
         self._rules: Dict[str, QFrame] = {}
+        self._cells: Dict[str, QWidget] = {}
         self._status_keys = set()
 
     def add_row(self, key: str, label: str, value: str = "",
@@ -93,24 +94,29 @@ class DSKeyValueList(QWidget):
             rule = QFrame(self)
             rule.setFixedHeight(1)
             rule.setStyleSheet(f"background: {resolve('--border-divider')}; border: none;")
-            self._grid.addWidget(rule, self._row, 0, 1, 3)
+            self._grid.addWidget(rule, self._row, 0, 1, 2)
             self._rules[key] = rule
             self._row += 1
 
-        dot = QFrame(self)
+        # The dot shares the label cell, so lists without status rows stay flush.
+        cell = QWidget(self)
+        cell_row = QHBoxLayout(cell)
+        cell_row.setContentsMargins(0, 0, 0, 0)
+        cell_row.setSpacing(12)
+        dot = QFrame(cell)
         dot.setFixedSize(10, 10)
         dot.setVisible(status)
+        cell_row.addWidget(dot, 0, Qt.AlignVCenter)
         if status:
-            # Only status rows occupy the dot column, so plain lists stay flush.
-            self._grid.addWidget(dot, self._row, 0, Qt.AlignVCenter)
             self._status_keys.add(key)
 
-        caption = QLabel(label, self)
+        caption = QLabel(label, cell)
         caption.setFont(sans_font(size="--text-sm"))
         caption.setStyleSheet(f"color: {resolve('--text-muted')}; background: transparent;")
         caption.setMinimumHeight(ROW_HEIGHT)
         caption.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        self._grid.addWidget(caption, self._row, 1)
+        cell_row.addWidget(caption, 1)
+        self._grid.addWidget(cell, self._row, 0)
 
         prefixes = [label] + list(strip or [])
         value_label = _ValueLabel(
@@ -124,9 +130,10 @@ class DSKeyValueList(QWidget):
         value_label.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Preferred)
         if selectable:
             value_label.setTextInteractionFlags(Qt.TextSelectableByMouse)
-        self._grid.addWidget(value_label, self._row, 2)
+        self._grid.addWidget(value_label, self._row, 1)
         self._row += 1
 
+        self._cells[key] = cell
         self._values[key] = value_label
         self._labels[key] = caption
         self._dots[key] = dot
@@ -149,10 +156,9 @@ class DSKeyValueList(QWidget):
         self._values[key].setText(text)
 
     def set_row_visible(self, key: str, visible: bool) -> None:
-        for widget in (self._values[key], self._labels[key], self._rules.get(key)):
+        for widget in (self._values[key], self._cells[key], self._rules.get(key)):
             if widget is not None:
                 widget.setVisible(visible)
-        self._dots[key].setVisible(visible and key in self._status_keys)
 
     def keys(self):
         return list(self._values)
