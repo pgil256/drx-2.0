@@ -36,9 +36,7 @@ _QT_SINGLE_SHOT = QTimer.singleShot
 
 def test_device_uses_cloud_dashboard_device_id(window_run: SimpleNamespace) -> None:
     assert window_run.window.config.device_id != window_run.cloud.device_id
-    assert window_run.window.shell.device._device_id.text() == (
-        "Device ID: drx-test-device-01"
-    )
+    assert window_run.window.shell.device._device_id.text() == "drx-test-device-01"
 
 
 def test_operator_login_leaves_patient_entry_to_the_operator(window_run: SimpleNamespace) -> None:

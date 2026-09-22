@@ -53,7 +53,8 @@ class DSSegmentedTabs(QFrame):
             button.clicked.connect(lambda _checked, i=index: self._on_clicked(i))
             lay.addWidget(button, 1)
             self._buttons.append(button)
-        self.setFixedHeight(segment_h + 2 * pad)
+        # Group padding on both sides plus its 1px border.
+        self.setFixedHeight(segment_h + 2 * pad + 2)
 
         primary = resolve("--color-primary")
         radius = int(resolve("--radius-md").replace("px", ""))
@@ -62,7 +63,9 @@ class DSSegmentedTabs(QFrame):
             f" border: 1px solid {resolve('--border-control')};"
             f" border-radius: {radius + pad // 2}px; }}"
             f"#DSSegment {{ background: transparent; color: {resolve('--ink-700')};"
-            f" border: none; border-radius: {radius - 2}px; padding: 0 12px; min-height: 0; }}"
+            f" border: none; border-radius: {radius - 2}px; padding: 0 12px;"
+            # QSS min/max-height replace setFixedHeight's bounds; restate them.
+            f" min-height: {segment_h}px; max-height: {segment_h}px; }}"
             f"#DSSegment:hover {{ background: {resolve('--gray-050')}; }}"
             f"#DSSegment:pressed {{ background: {resolve('--gray-200')}; }}"
             f"#DSSegment:checked {{ background: {primary}; color: {resolve('--white')}; }}"

@@ -3,6 +3,8 @@
 Rounded white surface (--radius-lg) with a quiet divider edge,
 optional tinted header (title left, `header_right` widget right), and a body whose
 padding follows `padded`. Screens add content via `add_widget` / `body_layout`.
+Card actions go in a left-aligned footer row via `add_action`; a card with a
+footer keeps its body top-aligned so a short body never floats mid-card.
 """
 
 from PyQt5.QtCore import Qt
@@ -67,6 +69,10 @@ class DSCard(QFrame):
         pad = px("--space-6") if padded else 0
         self.body_layout.setContentsMargins(pad, pad, pad, pad)
         outer.addWidget(self.body, 1)
+        self._outer = outer
+        self._radius = radius
+        self.footer = None
+        self.footer_layout = None
 
         # Flat edges avoid nested graphics-effect repaint artifacts in Qt and
         # keep the treatment display inexpensive to redraw on the Pi.
@@ -82,3 +88,22 @@ class DSCard(QFrame):
 
     def add_layout(self, layout, stretch=0):
         self.body_layout.addLayout(layout, stretch)
+
+    def add_action(self, widget):
+        """Append a left-aligned footer action below a divider."""
+        if self.footer is None:
+            self.body_layout.addStretch(1)
+            self.footer = QFrame(self)
+            self.footer.setObjectName("DSCardFooter")
+            self.footer.setAttribute(Qt.WA_StyledBackground, True)
+            self.footer.setStyleSheet(
+                f"#DSCardFooter {{ background: transparent;"
+                f" border-top: 1px solid {resolve('--gray-300')}; }}"
+            )
+            self.footer_layout = QHBoxLayout(self.footer)
+            self.footer_layout.setContentsMargins(20, 12, 20, 12)
+            self.footer_layout.setSpacing(12)
+            self.footer_layout.addStretch(1)
+            self._outer.addWidget(self.footer)
+        self.footer_layout.insertWidget(self.footer_layout.count() - 1, widget)
+        return widget

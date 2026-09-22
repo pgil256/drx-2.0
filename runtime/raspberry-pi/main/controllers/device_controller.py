@@ -604,7 +604,7 @@ class DeviceController(QObject):
         self.refresh()
 
     def _power(self, action: str, user: dict) -> None:
-        labels = {"restart_app": "Restart App", "reboot": "Restart Device", "poweroff": "Shut Down"}
+        labels = {"restart_app": "Restart app", "reboot": "Restart device", "poweroff": "Shut down"}
         if not self._owned_idle(user):
             return
         answer = QMessageBox.question(
