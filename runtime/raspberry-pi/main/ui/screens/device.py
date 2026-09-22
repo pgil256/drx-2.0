@@ -27,6 +27,7 @@ class DeviceScreen(QWidget):
     action_requested = pyqtSignal(str, object)
     service_access_requested = pyqtSignal()
     service_locked = pyqtSignal()
+    details_changed = pyqtSignal(dict)
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -336,6 +337,7 @@ class DeviceScreen(QWidget):
         self._firmware.setText(f"Firmware version: {value}")
         self.values["controller"].setText(
             "Arduino: " + ("Connected" if connected else "Disconnected"))
+        self.details_changed.emit({"controller": self.values["controller"].text()})
 
     def set_status(self, message: str) -> None:
         self.status.setText(message)
@@ -344,6 +346,7 @@ class DeviceScreen(QWidget):
         for key, value in details.items():
             if key in self.values:
                 self.values[key].setText(value)
+        self.details_changed.emit(dict(details))
 
     @staticmethod
     def local_date(value: str) -> str:

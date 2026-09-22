@@ -95,6 +95,12 @@ class AppShell(QWidget):
         self.nav_rail.video_requested.connect(self.show_video)
 
         self.home.login_requested.connect(self.show_login)
+        self.home.navigate_requested.connect(self._on_nav)
+        self.home.video_requested.connect(self.show_video)
+        # Home's status card mirrors what the other screens already receive.
+        self.treatment.cloud_status_changed.connect(self.home.set_cloud_status)
+        self.treatment.outcome_recorded.connect(self.home.set_last_treatment)
+        self.device.details_changed.connect(self.home.set_details)
 
         self.login_modal.submitted.connect(self.login_attempted)
 
@@ -155,6 +161,7 @@ class AppShell(QWidget):
     def set_device_status(self, label: str, detail: str, can_start: bool = False) -> None:
         """Fan out one controller-derived status without mixing in cloud state."""
         self.top_bar.set_device_status(label)
+        self.home.set_device_status(label, detail)
         self.treatment.set_device_status(label, detail, can_start)
 
     def set_user(self, username, title="Clinician", is_admin=False):
@@ -166,7 +173,7 @@ class AppShell(QWidget):
             self.set_access_role(None)
         self.top_bar.set_user(username, title)
         self.profile.set_user(username, title, is_admin)
-        self.home.set_logged_in(bool(username))
+        self.home.set_logged_in(bool(username), username or "")
         self.device.hardware_button.setEnabled(bool(username))
         self.device.calibration_button.setEnabled(bool(username))
         self.device.lock_service()

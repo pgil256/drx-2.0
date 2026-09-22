@@ -92,6 +92,8 @@ class TreatmentScreen(QWidget):
     pause_requested = pyqtSignal()
     estop_requested = pyqtSignal()
     setting_changed = pyqtSignal(str, float)
+    cloud_status_changed = pyqtSignal(str)
+    outcome_recorded = pyqtSignal(str, int)
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -549,6 +551,7 @@ class TreatmentScreen(QWidget):
         self._next_button.setEnabled(self._can_start and not self._running and not self._busy)
         for stat in (self._time_stat, self._pressure_stat):
             stat.set_size("sm")
+        self.outcome_recorded.emit(outcome, int(duration_seconds))
 
     def clear_outcome(self) -> None:
         self._outcome = None
@@ -669,6 +672,7 @@ class TreatmentScreen(QWidget):
 
     def set_cloud_status(self, message: str) -> None:
         self._cloud_status.setText(message)
+        self.cloud_status_changed.emit(message)
         if message == "Treatments synced":
             self._upload_error_button.hide()
 

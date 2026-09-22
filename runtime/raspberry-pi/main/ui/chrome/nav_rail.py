@@ -1,20 +1,21 @@
-"""NavRail — persistent 108px dark left rail.
+"""NavRail — persistent 108px slate left rail.
 
-Mirrors `NavRail` in `bundle.jsx` (dark chrome): five exclusive nav items
-(Home · Setup · Treatment · Support · Device), with Video above Support and Device.
-Active item paints cyan with a 4px cyan left border. The rail only reports the
-intent; ``app_shell`` applies login gating and the actual page switch.
+Pages (Home · Setup · Treatment · Support) sit top-aligned as fixed 88px items;
+a hairline separates the Video launcher, which opens a modal rather than a
+page; Device is pinned to the bottom. The active item paints cyan with a 4px
+cyan left edge. The rail only reports the intent; ``app_shell`` applies login
+gating and the actual page switch.
 
 Signals:
     navigate(str)     — a nav item ('home'|'setup'|'protocols'|'support'|'device')
     video_requested   — the Video launcher
 """
 
-from PyQt5.QtCore import QSize, Qt, pyqtSignal
-from PyQt5.QtWidgets import QButtonGroup, QFrame, QSizePolicy, QToolButton, QVBoxLayout
+from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtWidgets import QButtonGroup, QFrame, QVBoxLayout
 
 from ui.theme import nav_icon
-from ui.widgets.ds._common import px, resolve, sans_font
+from ui.widgets.ds._common import px, resolve
 from ui.widgets.ds.nav_rail_button import DSNavRailButton
 
 NAV_ITEMS = [
@@ -24,6 +25,7 @@ NAV_ITEMS = [
     ("support", "Support", "support"),
     ("device", "Device", "device"),
 ]
+PINNED_BOTTOM = {"device"}
 
 
 def _icon_factory(name):
@@ -45,43 +47,50 @@ class NavRail(QFrame):
         )
 
         lay = QVBoxLayout(self)
-        lay.setContentsMargins(0, 0, 0, 0)
+        lay.setContentsMargins(0, 4, 0, 4)
         lay.setSpacing(0)
 
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
         self._buttons = {}
+        pinned = []
         for key, label, icon_name in NAV_ITEMS:
-            btn = DSNavRailButton(label, icon_factory=_icon_factory(icon_name), fill_height=True)
+            btn = DSNavRailButton(label, icon_factory=_icon_factory(icon_name))
             btn.clicked.connect(lambda _checked, k=key: self.navigate.emit(k))
             self._group.addButton(btn)
             self._buttons[key] = btn
-            lay.addWidget(btn)
+            if key in PINNED_BOTTOM:
+                pinned.append(btn)
+            else:
+                lay.addWidget(btn)
 
-        self._video = self._make_video_button(rail)
-        lay.insertWidget(3, self._video)
+        # Video is a launcher, not a page: a hairline sets it apart.
+        lay.addSpacing(8)
+        lay.addWidget(self._hairline(rail))
+        lay.addSpacing(8)
+        self._video = DSNavRailButton(
+            "Video", icon_factory=_icon_factory("play"), checkable=False)
+        self._video.setToolTip("Demo videos")
+        self._video.clicked.connect(self.video_requested)
+        lay.addWidget(self._video)
+
+        lay.addStretch(1)
+        for btn in pinned:
+            lay.addWidget(btn)
 
         self._buttons["home"].setChecked(True)
 
-    def _make_video_button(self, rail):
-        btn = QToolButton(self)
-        btn.setCursor(Qt.PointingHandCursor)
-        btn.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
-        btn.setText("Video")
-        btn.setToolTip("Demo video")
-        btn.setFont(sans_font(size=19, weight=700))
-        btn.setIcon(nav_icon("play", "#ffffff", 28))
-        btn.setIconSize(QSize(28, 28))
-        btn.setFixedWidth(rail)
-        btn.setMinimumHeight(80)
-        btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
-        btn.setStyleSheet(
-            "QToolButton { color: #ffffff; background: %s; border: none;"
-            " padding: 18px 0; }"
-            " QToolButton:hover { background: #2a2a2a; }" % resolve("--surface-chrome")
-        )
-        btn.clicked.connect(self.video_requested)
-        return btn
+    @staticmethod
+    def _hairline(rail):
+        line = QFrame()
+        line.setFixedSize(rail - 32, 1)
+        line.setStyleSheet(f"background: {resolve('--surface-chrome-divider')}; border: none;")
+        wrapper = QFrame()
+        wrapper.setFixedHeight(1)
+        box = QVBoxLayout(wrapper)
+        box.setContentsMargins(16, 0, 16, 0)
+        box.addWidget(line)
+        return wrapper
 
     def set_active(self, key):
         """Sync the checked nav item to the current page (no signal emitted).
