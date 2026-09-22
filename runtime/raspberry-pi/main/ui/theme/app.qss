@@ -6,11 +6,77 @@
  * transition, text-transform, letter-spacing) are applied in Python
  * (QGraphicsDropShadowEffect, manual uppercasing, property animations).
  *
- * Buttons read a dynamic `variant` (primary/success/danger/secondary/ghost) and
+ * Buttons read a dynamic `variant` (dark/primary/success/danger/secondary/ghost) and
  * `size` (sm/md/lg) property — set via widget.setProperty(...) then re-polished —
  * mirroring the design-system Button component. Bare controls get sensible
  * neutral styling so the legacy screens look coherent until each is rebuilt.
  */
+
+/* ---- Dialogs: share the app's surfaces and touch controls with Qt popups. ---- */
+QDialog {
+  background-color: var(--surface-card);
+  color: var(--text-body);
+}
+QDialog QLabel { color: var(--text-body); }
+QMessageBox, QInputDialog, QProgressDialog {
+  background-color: var(--surface-card);
+  padding: var(--space-6);
+}
+QMessageBox QLabel#qt_msgbox_label {
+  color: var(--text-strong);
+  font-size: var(--text-base);
+  min-width: 360px;
+  max-width: 560px;
+  padding: var(--space-2) 0;
+}
+QMessageBox QLabel#qt_msgbox_informativelabel {
+  color: var(--text-body);
+  font-size: var(--text-base);
+  max-width: 560px;
+  padding: var(--space-2) 0 var(--space-4) 0;
+}
+QInputDialog, QProgressDialog { min-width: 440px; }
+QInputDialog QLabel, QProgressDialog QLabel {
+  font-size: var(--text-base);
+  padding: var(--space-2) 0 var(--space-4) 0;
+}
+QDialog QComboBox {
+  min-height: 28px;
+  padding: 8px 12px;
+  color: var(--text-strong);
+  background-color: var(--white);
+  border: var(--border-thick) solid var(--border-control);
+  border-radius: var(--radius-md);
+  font-size: var(--text-base);
+}
+QDialog QComboBox:focus { border-color: var(--border-focus); }
+QDialog QComboBox QAbstractItemView {
+  color: var(--text-strong);
+  background-color: var(--white);
+  selection-background-color: var(--color-primary);
+  selection-color: var(--white);
+  font-size: var(--text-base);
+}
+QDialog QPlainTextEdit, QDialog QTextEdit {
+  background-color: var(--surface-page);
+  color: var(--text-body);
+  border: var(--border-thin) solid var(--border-divider);
+  border-radius: var(--radius-md);
+  padding: var(--space-3);
+  font-size: var(--text-base);
+}
+QDialog QProgressBar {
+  min-height: 16px;
+  color: var(--text-strong);
+  background-color: var(--surface-page);
+  border: none;
+  border-radius: var(--radius-sm);
+  text-align: center;
+}
+QDialog QProgressBar::chunk {
+  background-color: var(--color-primary);
+  border-radius: var(--radius-sm);
+}
 
 /* ---- Tooltips ---- */
 QToolTip {
@@ -24,9 +90,10 @@ QToolTip {
 
 /* ---- Buttons ---- */
 QPushButton {
+  outline: none;
   background-color: var(--surface-card);
   color: var(--ink-800);
-  border: var(--border-thick) solid var(--gray-300);
+  border: var(--border-thick) solid var(--border-control);
   border-radius: var(--radius-md);
   padding: 12px 24px;
   font-size: var(--text-base);
@@ -36,16 +103,20 @@ QPushButton:hover { background-color: var(--blue-050); border-color: var(--color
 QPushButton:pressed { background-color: var(--gray-200); }
 QPushButton:disabled { background-color: var(--gray-300); color: var(--gray-600); border-color: var(--gray-300); }
 
-QPushButton[variant="primary"] { background-color: var(--color-primary); color: var(--text-on-accent); border-color: var(--color-primary); }
-QPushButton[variant="primary"]:hover { background-color: var(--color-primary-hover); border-color: var(--color-primary-hover); }
+/* Action rows use dark / secondary / primary, with one blue action per group.
+ * The legacy danger variant also uses blue, including hover and press states. */
+QPushButton[variant="dark"] { background-color: var(--color-dark); color: var(--white); border-color: var(--color-dark); }
+QPushButton[variant="dark"]:hover { background-color: var(--color-dark-hover); border-color: var(--color-dark-hover); }
+
+QPushButton[variant="primary"],
+QPushButton[variant="danger"] { background-color: var(--color-primary); color: var(--text-on-accent); border-color: var(--color-primary); }
+QPushButton[variant="primary"]:hover,
+QPushButton[variant="danger"]:hover { background-color: var(--color-primary-hover); border-color: var(--color-primary-hover); }
 
 QPushButton[variant="success"] { background-color: var(--color-success); color: var(--white); border-color: var(--color-success); }
 QPushButton[variant="success"]:hover { background-color: var(--color-success-hover); border-color: var(--color-success-hover); }
 
-QPushButton[variant="danger"] { background-color: var(--color-danger); color: var(--white); border-color: var(--color-danger); }
-QPushButton[variant="danger"]:hover { background-color: var(--color-danger-hover); border-color: var(--color-danger-hover); }
-
-QPushButton[variant="secondary"] { background-color: var(--gray-200); color: var(--ink-800); border-color: var(--gray-400); }
+QPushButton[variant="secondary"] { background-color: var(--white); color: var(--ink-800); border-color: var(--border-control); }
 QPushButton[variant="secondary"]:hover { background-color: #e0e6e8; }
 
 QPushButton[variant="ghost"] { background-color: transparent; color: var(--color-primary); border-color: transparent; }
@@ -54,13 +125,15 @@ QPushButton[variant="ghost"]:hover { background-color: var(--gray-100); }
 /* Pressed feedback — Qt QSS can't scale a sub-control, so the DS's press
  * transform (scale 0.97) is substituted with a consistent per-variant darken
  * (the device is touch-only: a visible press state matters more than parity). */
-QPushButton[variant="primary"]:pressed { background-color: var(--color-primary-active); border-color: var(--color-primary-active); }
+QPushButton[variant="dark"]:pressed { background-color: var(--color-dark-active); border-color: var(--color-dark-active); }
+QPushButton[variant="primary"]:pressed,
+QPushButton[variant="danger"]:pressed { background-color: var(--color-primary-active); border-color: var(--color-primary-active); }
 QPushButton[variant="success"]:pressed { background-color: var(--color-success-hover); border-color: var(--color-success-hover); }
-QPushButton[variant="danger"]:pressed { background-color: var(--color-danger-hover); border-color: var(--color-danger-hover); }
 QPushButton[variant="secondary"]:pressed { background-color: var(--gray-300); }
 QPushButton[variant="ghost"]:pressed { background-color: var(--gray-200); }
 
-/* Disabled wins across variants (keep traffic-light buttons greyed when locked). */
+/* Disabled wins across variants so locked controls remain visibly unavailable. */
+QPushButton[variant="dark"]:disabled,
 QPushButton[variant="primary"]:disabled,
 QPushButton[variant="success"]:disabled,
 QPushButton[variant="danger"]:disabled,
@@ -72,12 +145,41 @@ QPushButton[variant="ghost"]:disabled {
 /* Touch sizes (from Button.jsx SIZES). Property is "dsSize" — "size" collides
  * with QWidget's built-in size property and would never match.
  * NB: QSS min-height is the CONTENT box — padding and the 2px border add on
- * top — while the DS CSS values (40/44/72) are border-box totals. Each
- * min-height below is the DS total minus vertical padding and border so the
- * rendered button matches the design height (md ≈ 44-49px, not 72px). */
-QPushButton[dsSize="sm"] { padding: 8px 16px; font-size: var(--text-sm); min-height: 20px; border-radius: var(--radius-md); }
-QPushButton[dsSize="md"] { padding: 12px 24px; font-size: var(--text-base); min-height: 16px; border-radius: var(--radius-md); }
+ * top. These content minima produce outer heights of at least 48/56/72 px. */
+QPushButton[dsSize="sm"] { padding: 8px 16px; font-size: var(--text-base); min-height: 28px; border-radius: var(--radius-md); }
+QPushButton[dsSize="md"] { padding: 12px 24px; font-size: var(--text-base); min-height: 28px; border-radius: var(--radius-md); }
 QPushButton[dsSize="lg"] { padding: 18px 32px; font-size: var(--text-lg); min-height: 32px; border-radius: var(--radius-lg); }
+
+QPushButton:focus { border: 3px solid var(--ink-900); }
+QPushButton[variant="dark"]:focus { border: 3px solid var(--border-control); }
+/* Fixed-color section buttons indicate selection without changing their fill. */
+QPushButton[sectionTab="true"]:checked { border: 3px solid var(--brand-cyan); }
+/* Standard Qt dialogs create plain QPushButtons rather than DSButtons. */
+QDialogButtonBox QPushButton, QProgressDialog QPushButton {
+  min-width: 112px;
+  min-height: 28px;
+}
+QDialogButtonBox QPushButton:default {
+  background-color: var(--color-primary);
+  color: var(--text-on-accent);
+  border-color: var(--color-primary);
+}
+QDialogButtonBox QPushButton:default:hover {
+  background-color: var(--color-primary-hover);
+  border-color: var(--color-primary-hover);
+}
+QDialogButtonBox QPushButton:default:pressed {
+  background-color: var(--color-primary-active);
+  border-color: var(--color-primary-active);
+}
+QDialogButtonBox QPushButton:disabled {
+  background-color: var(--gray-300);
+  color: var(--gray-600);
+  border-color: var(--gray-300);
+}
+QToolButton { outline: none; }
+QToolButton:focus { border: 3px solid var(--color-primary); }
+QSlider:focus { border: 2px solid var(--border-focus); border-radius: 8px; }
 
 /* ---- Sliders (two-tone filled track via sub-page/add-page; 8px groove, 24px handle) ----
  * Handle is a WHITE disc with a primary ring. NB: this follows the rendered
@@ -95,6 +197,7 @@ QSlider::handle:horizontal:disabled { border-color: var(--gray-400); }
 
 /* ---- Text inputs ---- */
 QLineEdit {
+  min-height: 28px;
   background: var(--white); color: var(--ink-900);
   border: var(--border-thick) solid var(--border-control);
   border-radius: var(--radius-xs);
@@ -106,24 +209,39 @@ QLineEdit {
 QLineEdit:focus { border-color: var(--border-focus); }
 QLineEdit:disabled { background: var(--gray-100); color: var(--gray-600); }
 
+/* Full-height, side-by-side step buttons avoid two tiny stacked touch targets. */
+QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {
+  subcontrol-origin: border; subcontrol-position: center right;
+  width: 48px; height: 48px;
+  background: var(--gray-200); border: 1px solid var(--border-control);
+  border-radius: var(--radius-sm);
+}
+QAbstractSpinBox::down-button { right: 50px; }
+QAbstractSpinBox::up-button:pressed, QAbstractSpinBox::down-button:pressed {
+  background: var(--blue-100);
+}
+QComboBox QAbstractItemView::item { min-height: 48px; }
+
 /* ---- Checkboxes ---- */
-QCheckBox { spacing: var(--space-3); font-size: var(--text-base); color: var(--ink-800); }
+QCheckBox { min-height: 48px; spacing: var(--space-3); font-size: var(--text-base); color: var(--ink-800); }
 QCheckBox::indicator {
   width: 24px; height: 24px;
-  border: var(--border-heavy) solid var(--gray-400);
+  border: var(--border-heavy) solid var(--border-control);
   border-radius: var(--radius-xs); background: var(--white);
 }
 QCheckBox::indicator:hover { border-color: var(--color-primary); }
 QCheckBox::indicator:checked { background: var(--color-primary); border-color: var(--color-primary); }
 QCheckBox:disabled { color: var(--gray-600); }
 
-/* ---- Scrollbars (thin, unobtrusive) ---- */
-QScrollBar:vertical { width: 8px; background: transparent; margin: 0; }
-QScrollBar::handle:vertical { background: var(--gray-400); border-radius: 4px; min-height: 24px; }
+/* Drag-to-scroll is available on reference pages; the rail is also a touch target. */
+QScrollBar:vertical { width: 48px; background: var(--surface-page); margin: 0; }
+QScrollBar::handle:vertical { background: var(--border-control); border: 16px solid var(--surface-page); border-radius: 22px; min-height: 48px; }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; background: none; }
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
-QScrollBar:horizontal { height: 8px; background: transparent; margin: 0; }
-QScrollBar::handle:horizontal { background: var(--gray-400); border-radius: 4px; min-width: 24px; }
+QScrollBar:horizontal { height: 48px; background: var(--surface-page); margin: 0; }
+QScrollBar::handle:horizontal { background: var(--border-control); border: 16px solid var(--surface-page); border-radius: 22px; min-width: 48px; }
+
+QScrollArea { background: var(--surface-page); border: none; }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; background: none; }
 QScrollBar::add-page:horizontal, QScrollBar::sub-page:horizontal { background: none; }
 

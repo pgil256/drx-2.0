@@ -5,13 +5,12 @@ dot per expected digit, and reports edits via ``valueChanged(str)``. When the
 value reaches ``length`` it also emits ``submitted(str)`` (the login modal can
 verify the PIN there). Fixes the legacy keypad's missing-`0` bug by design.
 
-``compact=True`` is the in-page variant (Protocols → Patient card): 44px keys
-in a 216px grid. Pass ``label=None`` to omit the title in either size.
+``compact=True`` uses 56px keys in a 264px grid, for patient and service PINs.
+Pass ``label=None`` to omit the title in either size.
 """
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QGraphicsOpacityEffect,
     QGridLayout,
     QHBoxLayout,
     QLabel,
@@ -35,7 +34,7 @@ BACKSPACE = "←"
 #              dot px, dot gap, gap below dots, grid gap)
 _METRICS = {
     False: (None, 300, "--text-lg", 20, 14, 18, 10),
-    True: (44, 216, "--text-md", 16, 10, 12, 8),
+    True: (56, 264, "--text-md", 16, 10, 12, 8),
 }
 
 
@@ -109,18 +108,25 @@ class DSKeypad(QWidget):
         if muted:
             css = _KEY_CSS.format(
                 bg=resolve("--gray-200"), fg=resolve("--ink-700"),
-                border=resolve("--gray-300"), radius=resolve("--radius-md"),
+                border=resolve("--border-control"), radius=resolve("--radius-md"),
                 hover=resolve("--gray-300"),
             )
         else:
             css = _KEY_CSS.format(
                 bg="#ffffff", fg=resolve("--ink-900"),
-                border=resolve("--gray-300"), radius=resolve("--radius-md"),
+                border=resolve("--border-control"), radius=resolve("--radius-md"),
                 hover=resolve("--blue-050"),
             )
-        if self._compact:
-            css += "QPushButton { padding: 0 2px; }"  # "Clear" fits a 66px key
+        font_size = 18 if text == "Clear" else (24 if self._compact else 30)
+        css += f"QPushButton {{ padding: 0 2px; font-size: {font_size}px; }}"
+        css += (
+            f"QPushButton:focus {{ border: 3px solid {resolve('--ink-900')}; }}"
+            f"QPushButton:pressed {{ background: {resolve('--blue-100')}; }}"
+            f"QPushButton:disabled {{ background: {resolve('--gray-300')};"
+            f" color: {resolve('--gray-600')}; border-color: {resolve('--gray-400')}; }}"
+        )
         btn.setStyleSheet(css)
+        btn.setAccessibleName("Backspace" if text == BACKSPACE else text)
         return btn
 
     def _press_factory(self, digit):
@@ -149,17 +155,6 @@ class DSKeypad(QWidget):
 
     def value(self):
         return self._value
-
-    def setEnabled(self, enabled):
-        """Dim the whole pad when disabled — the key QSS has no ``:disabled``
-        state, so a locked pad would otherwise look live."""
-        super().setEnabled(enabled)
-        if enabled:
-            self.setGraphicsEffect(None)
-        else:
-            effect = QGraphicsOpacityEffect(self)
-            effect.setOpacity(0.45)
-            self.setGraphicsEffect(effect)
 
     def _refresh_dots(self):
         primary = resolve("--color-primary")

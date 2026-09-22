@@ -98,7 +98,7 @@ def _poly(p, pts):
 def nav_icon(name, color="#ffffff", size=26):
     """A 24-space Lucide-style line icon as a recolorable QIcon.
 
-    Names: home · setup · protocols · help · support · play.
+    Names: home · setup · protocols · help · support · device · play.
     """
     pm = _pixmap(size)
     p = QPainter(pm)
@@ -144,6 +144,20 @@ def nav_icon(name, color="#ffffff", size=26):
         _line(p, 14.4, 14.4, 18.4, 18.4)
         _line(p, 18.4, 5.6, 14.4, 9.6)
         _line(p, 9.6, 14.4, 5.6, 18.4)
+    elif name == "device":
+        wrench = QPainterPath()
+        wrench.moveTo(14, 3)
+        wrench.cubicTo(11, 3, 9, 6, 10, 9)
+        wrench.lineTo(3.5, 15.5)
+        wrench.cubicTo(1, 18, 5, 22, 7.5, 19.5)
+        wrench.lineTo(14, 13)
+        wrench.cubicTo(18, 14, 22, 11, 21, 7)
+        wrench.lineTo(17.5, 10.5)
+        wrench.lineTo(13.5, 6.5)
+        wrench.lineTo(17, 3)
+        wrench.closeSubpath()
+        p.drawPath(wrench)
+        p.drawEllipse(QPointF(5.5, 17.5), 0.65, 0.65)
     elif name == "play":
         p.drawEllipse(QPointF(12, 12), 9, 9)
         p.setBrush(QColor(color))

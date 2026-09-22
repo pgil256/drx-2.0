@@ -13,7 +13,7 @@ from ._common import mono_font, px, resolve, sans_font
 # tone -> value color token (from StatReadout.jsx TONES)
 TONES = {
     "default": "--ink-900",
-    "cyan": "--brand-cyan",
+    "cyan": "--color-primary",
     "success": "--green-600",
     "warning": "--amber-500",
     "danger": "--red-500",
@@ -56,11 +56,11 @@ class DSStatReadout(QWidget):
         muted = resolve("--gray-600")
         html = f"<span style='font-size:{vpx}px; color:{color};'>{self._value}</span>"
         if self._unit:
-            # Fixed 4px gap (matches the DS marginLeft:4) rather than a unit-sized
-            # &nbsp; that would scale with the value size.
+            # Keep a visible gap without scaling it with the numeric readout.
             html += (
-                f"<span style='font-size:{int(round(vpx * 0.45))}px; color:{muted};'>"
-                f"<span style='font-size:4px;'> </span>{self._unit}</span>"
+                "<span style='font-size:16px;'>&nbsp;</span>"
+                f"<span style='font-size:{max(16, int(round(vpx * 0.45)))}px; color:{muted};'>"
+                f"{self._unit}</span>"
             )
         self._value_label.setText(html)
 
@@ -80,5 +80,5 @@ class DSStatReadout(QWidget):
 
     def set_label(self, label: str) -> None:
         if self._caption is not None:
-            self._caption.setText(label)
+            self._caption.setText(label.upper())
             self._caption.setWordWrap(True)

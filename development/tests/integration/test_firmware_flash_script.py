@@ -52,13 +52,19 @@ elif name == "fuser":
 elif name == "pio":
     if args[:2] == ["device", "list"]:
         print(json.dumps(json.loads(os.environ.get("USB_PORTS", "[]"))))
+    elif args == ["system", "info", "--json-output"]:
+        print(json.dumps({"python_exe": {"value": os.environ["FLASH_PIO_PYTHON"]}}))
     elif "clean" not in args:
         if os.environ.get("FAIL_BUILD"):
             sys.exit(1)
         output = pathlib.Path(os.environ["PLATFORMIO_BUILD_DIR"]) / "mega/firmware.hex"
         output.parent.mkdir(parents=True, exist_ok=True)
         output.write_text(":00000001FF\\n")
+elif name == "pio-python":
+    environment = dict(os.environ, PYTHONPATH=os.environ["FLASH_PIO_MODULES"])
+    sys.exit(subprocess.call([sys.executable, *args], env=environment))
 elif name == "avrdude":
+    assert pathlib.Path(args[args.index("-C") + 1]).is_file()
     operation = args[args.index("-U") + 1]
     _, action, path, _ = operation.split(":")
     if action == "r":
@@ -76,28 +82,73 @@ elif name == "zenity":
 elif name == "apt-get":
     raise AssertionError("Unexpected package installation")
 '''
-    for name in ("pio", "sudo", "systemctl", "fuser", "zenity", "apt-get"):
+    for name in ("pio", "pio-python", "avrdude", "sudo", "systemctl", "fuser", "zenity",
+                 "apt-get"):
         executable = commands / name
         executable.write_text(f"#!{sys.executable}\n{mock}", encoding="utf-8")
         executable.chmod(0o755)
-    uploader = core / "packages/tool-avrdude/avrdude"
-    uploader.parent.mkdir(parents=True)
-    uploader.write_text(f"#!{sys.executable}\n{mock}", encoding="utf-8")
-    uploader.chmod(0o755)
-    uploader.with_name("avrdude.conf").write_text("mock config", encoding="utf-8")
+    # A fresh PlatformIO build has no optional uploader. Only the interpreter
+    # reported by `pio system info` can import this isolated PlatformIO fixture.
+    modules = tmp_path / "pio modules"
+    platform = modules / "platformio/platform"
+    platform.mkdir(parents=True)
+    (platform.parent / "__init__.py").touch()
+    (platform / "__init__.py").touch()
+    (platform / "factory.py").write_text('''import json, os, pathlib, shutil
+
+def record(*event):
+    with open(os.environ["FLASH_TRACE"], "a") as stream:
+        stream.write(json.dumps(event) + "\\n")
+
+class PlatformFactory:
+    @classmethod
+    def from_env(cls, environment, targets=None):
+        assert environment == "mega" and targets == ["upload"]
+        assert pathlib.Path.cwd() == pathlib.Path(os.environ["KNEESPA_APP_DIR"]) / \\
+            "runtime/arduino/motor"
+        record("prepare-uploader")
+        return cls()
+
+    def get_package_dir(self, name):
+        assert name == "tool-avrdude"
+        return os.environ["FLASH_UPLOADER_DIR"]
+
+    def install_package(self, name):
+        directory = pathlib.Path(self.get_package_dir(name))
+        if directory.is_dir():
+            return
+        record("install-uploader", str(directory))
+        if os.environ.get("FAIL_INSTALL"):
+            raise SystemExit("Upload tool download failed")
+        directory.mkdir(parents=True)
+        binary = directory / os.environ.get("UPLOADER_BINARY", "avrdude")
+        config = directory / os.environ.get("UPLOADER_CONFIG", "avrdude.conf")
+        if not os.environ.get("MISSING_BINARY"):
+            binary.parent.mkdir(parents=True, exist_ok=True)
+            shutil.copy2(os.environ["FLASH_MOCK_UPLOADER"], binary)
+        if not os.environ.get("MISSING_CONFIG"):
+            config.parent.mkdir(parents=True, exist_ok=True)
+            config.write_text("mock config", encoding="utf-8")
+''', encoding="utf-8")
     master, slave = os.openpty()
     port = os.ttyname(slave)
     for name in ("KNEESPA_DEVICE_DIR", "FAIL_STOP", "PORT_BUSY", "FAIL_BUILD", "FAIL_BACKUP",
-                 "FAIL_UPLOAD", "CANCEL_PICKER", "USB_PORTS"):
+                 "FAIL_UPLOAD", "CANCEL_PICKER", "USB_PORTS", "FAIL_INSTALL",
+                 "MISSING_BINARY", "MISSING_CONFIG", "UPLOADER_BINARY", "UPLOADER_CONFIG",
+                 "PYTHONPATH"):
         monkeypatch.delenv(name, raising=False)
     for name, value in {
         "PATH": f"{commands}:{os.environ['PATH']}", "KNEESPA_APP_DIR": str(app),
         "KNEESPA_PIO": str(commands / "pio"), "PLATFORMIO_CORE_DIR": str(core),
         "KNEESPA_SERVICE": "kneespa-fixture.service", "FLASH_TRACE": str(trace),
         "FLASH_SERVICE": str(service), "FLASH_PORT": port,
+        "FLASH_PIO_PYTHON": str(commands / "pio-python"), "FLASH_PIO_MODULES": str(modules),
+        "FLASH_UPLOADER_DIR": str(core / "packages/tool-avrdude"),
+        "FLASH_MOCK_UPLOADER": str(commands / "avrdude"),
     }.items():
         monkeypatch.setenv(name, value)
-    yield SimpleNamespace(app=app, trace=trace, service=service, port=port)
+    yield SimpleNamespace(app=app, trace=trace, service=service, port=port, core=core,
+                          commands=commands)
     os.close(master)
     os.close(slave)
 
@@ -126,12 +177,15 @@ def test_build_backup_upload_and_leave_service_stopped(flash_fixture: SimpleName
     assert result.returncode == 0, result.stdout + result.stderr
     trace = events(flash_fixture)
     build = next(i for i, event in enumerate(trace) if event[0] == "pio" and "clean" not in event)
+    install = next(i for i, event in enumerate(trace) if event[0] == "install-uploader")
     stop = next(i for i, event in enumerate(trace) if event[:2] == ["systemctl", "stop"])
     backup = next(i for i, event in enumerate(trace)
                   if any(arg.startswith("flash:r:") for arg in event))
     write = next(i for i, event in enumerate(trace)
                  if any(arg.startswith("flash:w:") for arg in event))
-    assert build < stop < backup < write
+    assert build < install < stop < backup < write
+    assert any(event[0] == "pio-python" for event in trace)
+    assert not any(event[0] == "pio" and "upload" in event for event in trace)
     assert flash_fixture.service.read_text() == "inactive"
     assert not any(event[:2] == ["systemctl", "start"] for event in trace)
     assert "-V" not in uploads(flash_fixture)[0]  # Readback verification must stay enabled.
@@ -143,7 +197,10 @@ def test_build_backup_upload_and_leave_service_stopped(flash_fixture: SimpleName
     assert (records[0] / "sha256.txt").is_file()
 
 
-@pytest.mark.parametrize("failure", ["FAIL_BUILD", "FAIL_STOP", "PORT_BUSY", "FAIL_BACKUP"])
+@pytest.mark.parametrize("failure", [
+    "FAIL_BUILD", "FAIL_INSTALL", "MISSING_BINARY", "MISSING_CONFIG", "FAIL_STOP",
+    "PORT_BUSY", "FAIL_BACKUP",
+])
 def test_failures_prevent_flash(
     flash_fixture: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, failure: str,
 ) -> None:
@@ -151,10 +208,46 @@ def test_failures_prevent_flash(
     result = run_flash(flash_fixture)
     assert result.returncode != 0
     assert not uploads(flash_fixture)
-    if failure in ("FAIL_BUILD", "FAIL_STOP"):
+    if failure in ("FAIL_BUILD", "FAIL_INSTALL", "MISSING_BINARY", "MISSING_CONFIG", "FAIL_STOP"):
         assert flash_fixture.service.read_text() == "active"
     else:
         assert flash_fixture.service.read_text() == "inactive"
+
+
+@pytest.mark.parametrize("binary, config", [
+    ("avrdude", "avrdude.conf"),
+    ("bin/avrdude", "avrdude.conf"),
+    ("bin/avrdude", "etc/avrdude.conf"),
+])
+def test_resolved_package_location_and_layout(
+    flash_fixture: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, binary: str, config: str,
+) -> None:
+    """Use the selected package even when it lives outside the default core directory."""
+    directory = flash_fixture.app / "custom packages/tool-avrdude@selected-version"
+    monkeypatch.setenv("FLASH_UPLOADER_DIR", str(directory))
+    monkeypatch.setenv("UPLOADER_BINARY", binary)
+    monkeypatch.setenv("UPLOADER_CONFIG", config)
+    result = run_flash(flash_fixture)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"Upload tool: {directory / binary}" in result.stdout
+    upload = uploads(flash_fixture)[0]
+    assert upload[upload.index("-C") + 1] == str(directory / config)
+
+
+def test_existing_upload_tool_needs_no_download(
+    flash_fixture: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """An already installed uploader can be used without downloading it again."""
+    import shutil
+
+    directory = flash_fixture.core / "packages/tool-avrdude"
+    directory.mkdir(parents=True)
+    shutil.copy2(flash_fixture.commands / "avrdude", directory / "avrdude")
+    (directory / "avrdude.conf").write_text("mock config", encoding="utf-8")
+    monkeypatch.setenv("FAIL_INSTALL", "1")
+    result = run_flash(flash_fixture)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert not any(event[0] == "install-uploader" for event in events(flash_fixture))
 
 
 def test_upload_failure_leaves_backup_and_service_stopped(

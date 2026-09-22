@@ -7,7 +7,7 @@ import time
 import traceback
 from collections import deque
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, TextIO
 
 from config.constants import (
     APP_NAME,
@@ -145,7 +145,15 @@ class DiagnosticFileHandler(logging.FileHandler):
         self.max_bytes = max_bytes
         self.retention = retention
         self._part = 0
-        super().__init__(filename, encoding=encoding, errors="backslashreplace")
+        self._encoding_errors = "backslashreplace"
+        # FileHandler only accepts errors= on Python 3.9 and later.
+        super().__init__(filename, encoding=encoding)
+
+    def _open(self) -> TextIO:
+        """Preserve encoding error handling on older Pi Python versions and rollover."""
+        return open(
+            self.baseFilename, self.mode, encoding=self.encoding, errors=self._encoding_errors,
+        )
 
     def emit(self, record: logging.LogRecord) -> None:
         """Keep records intact; only a single oversized record can exceed the target."""
@@ -153,7 +161,9 @@ class DiagnosticFileHandler(logging.FileHandler):
             if self._closed:
                 return
             message = self.format(record) + self.terminator
-            size = len(message.replace("\n", os.linesep).encode(self.encoding, self.errors))
+            size = len(
+                message.replace("\n", os.linesep).encode(self.encoding, self._encoding_errors)
+            )
             current_size = self.stream.tell()
             rotated = current_size > 0 and current_size + size > self.max_bytes
             if rotated:

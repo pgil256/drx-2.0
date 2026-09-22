@@ -4,6 +4,10 @@
 and `development/` stays on the PC. Within each deployable area, the hardware
 target is explicit: `raspberry-pi/` or `arduino/`.
 
+For installation and maintenance entry points, use the
+[Pi setup script reference](rpi/setup-and-maintenance.md). Its examples target
+the reported `/home/pi/drx` installation; the sync defaults below remain `/home/pi/drx-2.0`.
+
 ```text
 runtime/
   raspberry-pi/

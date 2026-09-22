@@ -7,6 +7,7 @@ from pathlib import Path
 import subprocess
 import sys
 import tracemalloc
+from typing import Optional
 from unittest.mock import MagicMock
 
 import pytest
@@ -50,6 +51,36 @@ def test_rotation_preserves_records_in_ascending_segments(tmp_path: Path) -> Non
     assert all(part.stat().st_size <= 64 for part in parts)
     assert "".join(part.read_text(encoding="utf-8") for part in parts).splitlines() == messages
     assert read_recent_log_lines(str(path), 4) == [message + "\n" for message in messages[-4:]]
+
+
+@pytest.mark.parametrize("legacy_api", [False, True], ids=["current", "pre-python39"])
+def test_encoding_errors_are_escaped_before_and_after_rotation(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, legacy_api: bool,
+) -> None:
+    """Older FileHandlers accept no errors keyword and expose no errors attribute."""
+    if legacy_api:
+        original_init = logging.FileHandler.__init__
+
+        def legacy_init(
+            self: logging.FileHandler, filename: str, mode: str = "a",
+            encoding: Optional[str] = None, delay: bool = False,
+        ) -> None:
+            original_init(self, filename, mode=mode, encoding=encoding, delay=delay)
+            if hasattr(self, "errors"):
+                del self.errors
+
+        monkeypatch.setattr(logging.FileHandler, "__init__", legacy_init)
+
+    path = tmp_path / "encoding.log"
+    handler = DiagnosticFileHandler(str(path), max_bytes=16)
+    try:
+        handler.handle(_record("first \udcff"))
+        handler.handle(_record("next \udcff"))
+        assert handler.level <= logging.CRITICAL
+    finally:
+        handler.close()
+    assert Path(f"{path}.1").read_text(encoding="utf-8") == "first \\udcff\n"
+    assert path.read_text(encoding="utf-8") == "next \\udcff\n"
 
 
 def test_single_oversized_record_is_kept_intact(tmp_path: Path) -> None:

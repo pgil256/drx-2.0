@@ -274,6 +274,9 @@ class TestLegLengthBounds:
         stub.LEG_LENGTH_MIN = 0.0
         stub.LEG_LENGTH_MAX = 6.0
         stub.arduino.send.return_value = True
+        from controllers.leg_length_controller import LegLengthController
+        stub.leg = LegLengthController(stub)
+        stub.leg.position = position
         return stub
 
     def test_forward_at_max_sends_nothing(self):
@@ -298,10 +301,11 @@ class TestLegLengthBounds:
     def test_failed_leg_send_keeps_estimate(self):
         stub = self._stub(2.0)
         stub.arduino.send.return_value = False
+        stub.arduino.send_tracked.return_value = None
         with patch.object(kneespa.GPIO, "output") as gpio_output:
             assert KneeSpa.forward_button_clicked(stub) is False
         assert stub.leg_length == 2.0
-        gpio_output.assert_not_called()
+        assert all(call.args[1] == kneespa.GPIO.LOW for call in gpio_output.call_args_list)
 
     def test_position_rounded_to_increment(self):
         """The new position is snapped to the nearest 2.5-degree increment."""

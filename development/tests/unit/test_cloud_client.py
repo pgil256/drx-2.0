@@ -100,6 +100,41 @@ def receipt(record, status=201):
             "received_at": "2026-09-15T14:12:00Z"}
 
 
+def test_sync_status_only_records_success_with_matching_receipt(tmp_path, monkeypatch):
+    client = make_client()
+    path = tmp_path / "pending.json"
+    record = {"client_record_id": str(uuid4())}
+    client._queue_pending(record, str(path))
+    monkeypatch.setattr(client, "post_treatment", lambda record: {"ok": True})
+    client.retry_pending(str(path))
+    summary = client.sync_summary(str(path))
+    assert summary["pending"] == 1
+    assert summary["last_sync"] == "Not recorded yet"
+    # Retry backoff must expire before the next attempt.
+    path.write_text(json.dumps([record]), encoding="utf-8")
+    monkeypatch.setattr(client, "post_treatment", receipt)
+    client.retry_pending(str(path))
+    summary = client.sync_summary(str(path))
+    assert summary["pending"] == 0
+    assert summary["last_sync"] != "Not recorded yet"
+    stamp = summary["last_sync"]
+    client.retry_pending(str(path))
+    assert client.sync_summary(str(path))["last_sync"] == stamp
+    client.close()
+
+
+def test_sync_status_does_not_mutate_or_hide_corrupt_queue(tmp_path):
+    client = make_client()
+    path = tmp_path / "pending.json"
+    path.write_text("corrupt", encoding="utf-8")
+    assert client.sync_summary(str(path))["pending"] is None
+    assert path.read_text() == "corrupt"
+    client._read_pending(str(path))  # Normal outbox processing quarantines it.
+    assert not path.exists()
+    assert client.sync_summary(str(path))["pending"] is None
+    client.close()
+
+
 @pytest.mark.parametrize("status,body,error", [
     (404, {"error": "unknown_pin"}, "unknown_pin"),
     (409, {"error": "settings_not_supported", "detail": "Fix saved settings"},

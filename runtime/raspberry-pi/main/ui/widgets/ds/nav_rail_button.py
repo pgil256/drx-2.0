@@ -18,11 +18,11 @@ class DSNavRailButton(QToolButton):
         self.setCursor(Qt.PointingHandCursor)
         self.setToolButtonStyle(Qt.ToolButtonTextUnderIcon)
         self.setText(label)
-        self.setFont(sans_font(size="--text-md", weight=700))
+        self.setFont(sans_font(size=19, weight=700))
         # icon_factory(color, size) -> QIcon lets the icon recolor with the
         # active label (cyan when checked); a static icon stays as given.
         self._icon_factory = icon_factory
-        self.setIconSize(QSize(26, 26))
+        self.setIconSize(QSize(28, 28))
         if icon is not None:
             self.setIcon(icon)
         rail = px("--rail-width")
@@ -40,14 +40,17 @@ class DSNavRailButton(QToolButton):
     def _render(self):
         active = self.isChecked()
         fg = resolve("--brand-cyan") if active else "#ffffff"
-        bg = "#000000" if active else resolve("--ink-900")
+        bg = "#000000" if active else resolve("--surface-chrome")
         hover = "#000000" if active else "#2a2a2a"
         left = resolve("--brand-cyan") if active else "transparent"
         if self._icon_factory is not None:
-            self.setIcon(self._icon_factory(fg, 26))
+            self.setIcon(self._icon_factory(fg, 28))
         self.setStyleSheet(
             f"QToolButton {{ color: {fg}; background: {bg}; border: none;"
-            f" border-left: 4px solid {left}; }}"
+            f" border-left: 4px solid {left}; padding: 18px 0; }}"
             f" QToolButton:hover {{ background: {hover}; }}"
+            f" QToolButton:pressed {{ background: #333333; }}"
+            f" QToolButton:focus {{ border: 3px solid #ffffff;"
+            f" border-left: 4px solid {left}; }}"
         )
         repolish(self)

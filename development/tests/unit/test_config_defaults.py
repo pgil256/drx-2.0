@@ -30,7 +30,7 @@ def test_protocol_defaults_fallbacks(tmp_path):
         "duration": 12.0,
         "axial_speed": 50,
         "lateral_speed": 50,
-        "pulse_speed": 100,
+        "pulse_speed": 50,
     }
 
 

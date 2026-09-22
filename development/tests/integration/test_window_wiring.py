@@ -21,7 +21,9 @@ from pytestqt.qtbot import QtBot
 import kneespa
 from config.config import Configuration
 from config.constants import DATA_PATHS
-from controllers import connection_manager, hardware_service_controller, protocol_controller
+from controllers import (
+    connection_manager, device_controller, hardware_service_controller, protocol_controller,
+)
 from helpers.arduino import Arduino
 from helpers.protocols import WorkerSignals
 from helpers.reset_worker import ResetWorkerSignals
@@ -32,14 +34,27 @@ pytestmark = pytest.mark.integration
 _QT_SINGLE_SHOT = QTimer.singleShot
 
 
-def test_operator_login_opens_distinct_patient_modal(window_run: SimpleNamespace) -> None:
+def test_device_uses_cloud_dashboard_device_id(window_run: SimpleNamespace) -> None:
+    assert window_run.window.config.device_id != window_run.cloud.device_id
+    assert window_run.window.shell.device._device_id.text() == (
+        "Device ID: drx-test-device-01"
+    )
+
+
+def test_operator_login_leaves_patient_entry_to_the_operator(window_run: SimpleNamespace) -> None:
     run = window_run
     run.window.cloud_patient = {"patient_id": str(uuid4())}
     run.window.update_ui_after_login()
     assert run.window.shell.login_modal.isHidden()
-    assert run.window.shell.patient_modal.isVisible()
+    assert run.window.shell.patient_modal.isHidden()
     assert run.window.cloud_patient is None
     assert run.window.current_user["username"] == "Test operator"
+    run.window.shell.nav_rail.navigate.emit("home")
+    run.window.shell.nav_rail.navigate.emit("protocols")
+    assert run.window.shell._current == "protocols"
+    assert run.window.shell.patient_modal.isHidden()
+    run.view._patient_button.click()
+    assert run.window.shell.patient_modal.isVisible()
     run.window.shell.patient_modal.close_overlay()
     assert run.window.cloud_patient is None
     assert not run.window._patient_lookup_pending
@@ -91,7 +106,7 @@ def test_modal_patient_success_applies_whole_plan(window_run: SimpleNamespace) -
 
 def test_motor_speed_settings_reach_worker(window_run: SimpleNamespace) -> None:
     run = window_run
-    speeds = {"axial_speed": 75, "lateral_speed": 90, "pulse_speed": 60}
+    speeds = {"motor_speed": 75}
     run.view.set_settings(speeds)
     start(run)
     worker, _args, kwargs = run.workers[-1]
@@ -135,11 +150,16 @@ def window_run(themed_app: QApplication, tmp_path: Path,
         monkeypatch.delenv(key, raising=False)
     monkeypatch.delenv("KNEESPA_SERVICE_PIN_HASH", raising=False)
     monkeypatch.setattr(hardware_service_controller, "DEVICE_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(device_controller, "DEVICE_STATE_DIR", str(tmp_path))
     monkeypatch.setattr(hardware_service_controller, "ServiceAccess", lambda: ServiceAccess(
         str(tmp_path / "service-pin.json")
     ))
 
     cloud = MagicMock(enabled=False)
+    cloud.cloud_url = "https://cloud.example"
+    cloud.sync_summary.return_value = {"pending": 0, "blocked": 0,
+                                       "last_sync": "Not recorded yet", "message": "Test cloud"}
+    cloud.device_id = "drx-test-device-01"
     monkeypatch.setattr(kneespa, "CloudClient", lambda **kwargs: cloud)
     smtp = MagicMock(side_effect=AssertionError("Unexpected SMTP connection"))
     monkeypatch.setattr(kneespa.smtplib, "SMTP_SSL", smtp)
@@ -158,6 +178,10 @@ def window_run(themed_app: QApplication, tmp_path: Path,
                 auto_reset: bool = True) -> bool:
         manager.window.arduino = arduino
         manager.window.initial_setup_complete = True
+        # This fixture starts after hardware initialization, including FIT home.
+        manager.window.leg.boot_home_pending = False
+        manager.window.leg.position = 0.0
+        manager.window.shell.setup.set_leg_length_estimate(0.0, "From retracted zero")
         return True
 
     monkeypatch.setattr(connection_manager.ConnectionManager, "setup_arduino", connect)
@@ -191,7 +215,7 @@ def window_run(themed_app: QApplication, tmp_path: Path,
     # Native message-box rendering is a separate UI contract; keep alerts
     # observable without opening platform dialogs inside simulated races.
     monkeypatch.setattr(window, "_show_safety_alert", MagicMock())
-    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.Yes)
+    monkeypatch.setattr(protocol_controller.TreatmentReviewDialog, "confirm", lambda *args: True)
 
     def construct(*args: object, **kwargs: object) -> MagicMock:
         events.append("worker")
@@ -236,28 +260,28 @@ def window_run(themed_app: QApplication, tmp_path: Path,
     smtp.assert_not_called()
 
 
-@pytest.mark.parametrize("page", ["setup", "profile"])
+@pytest.mark.parametrize("page", ["device"])
 def test_calibration_button_opens_shared_session(
     window_run: SimpleNamespace, page: str, qtbot: QtBot,
 ) -> None:
-    """Both entry points demand the separate PIN before acquiring the shared link."""
+    """The calibration entry point demands the separate PIN before acquiring the shared link."""
     w = window_run.window
     w.shell.navigate(page)
-    button = getattr(w.shell, page)._calibration
+    w.calibration_controller.access.provision("654321", "654321", is_admin=True)
+    w.shell.device._select_section(2)
+    assert w.device_controller._auth_dialog.isVisible()
+    w.device_controller._auth_dialog.submit("111111")
+    assert not w.shell.device.service_unlocked
+    w.device_controller._auth_dialog.submit("654321")
+    assert w.shell.device.service_unlocked
+    button = getattr(w.shell, page).calibration_button
     assert button.isVisible()
     assert button.isEnabled()
     window_run.arduino.send.reset_mock()
     controller = w.calibration_controller
-    controller.access.provision("654321", "654321", is_admin=True)
 
     button.click()
 
-    assert controller.dialog is None
-    assert controller.pin_dialog.isVisible()
-    window_run.arduino.send.assert_not_called()
-    controller.pin_dialog.submit("111111")
-    assert controller.dialog is None
-    controller.pin_dialog.submit("654321")
     assert controller.dialog.isVisible()
     assert w._calibration_active
     assert not controller.ready()
@@ -271,9 +295,10 @@ def test_calibration_button_opens_shared_session(
     qtbot.waitUntil(w.shell.setup._rows["horizontal"].motion_buttons[0].isEnabled)
 
 
-@pytest.mark.parametrize("page", ["setup", "profile"])
+@pytest.mark.parametrize("page", ["device"])
 @pytest.mark.parametrize("busy_flag", [
     "protocol_running", "reset_in_progress", "actuator_command_in_progress",
+    "_device_maintenance_active",
 ])
 def test_calibration_entry_refuses_busy_device(
     window_run: SimpleNamespace, page: str, busy_flag: str,
@@ -284,7 +309,7 @@ def test_calibration_entry_refuses_busy_device(
     setattr(w, busy_flag, True)
     window_run.arduino.send.reset_mock()
     try:
-        getattr(w.shell, page)._calibration.click()
+        getattr(w.shell, page).calibration_button.click()
 
         assert w.calibration_controller.dialog is None
         assert not w._calibration_active
@@ -297,6 +322,32 @@ def test_calibration_entry_refuses_busy_device(
 def phase(run: SimpleNamespace) -> str:
     """Read the badge text displayed to the operator."""
     return run.view._phase_badge._label.text()
+
+
+def test_protected_device_work_blocks_treatment_reset_and_manual_motion(window_run):
+    run = window_run
+    w = run.window
+    w._device_maintenance_active = True
+    run.arduino.send.reset_mock()
+    try:
+        w.protocol.start_protocol()
+        w.connection.reset_arduino()
+        assert not w._send_motion_command("K1200", "test device guard")
+        assert not run.workers
+        run.arduino.send.assert_not_called()
+    finally:
+        w._device_maintenance_active = False
+
+
+def test_calibration_restore_requires_explicit_recovery(window_run, monkeypatch, tmp_path):
+    w = window_run.window
+    monkeypatch.setattr(w.device_controller, "_queue", MagicMock())
+    w.device_controller._restore_done(tmp_path / "previous-calibration.json")
+    assert not w.initial_setup_complete
+    assert w._no_automatic_recovery
+    assert w.protocol_state == "fault"
+    w.protocol.start_protocol()
+    assert not window_run.workers
 
 
 def start(run: SimpleNamespace) -> MagicMock:
@@ -335,7 +386,7 @@ def test_constructor_timer_wiring_and_cleanup(window_run: SimpleNamespace,
     assert [c.args[0] for c in run.arduino.send.call_args_list][-3:] == ["X", "P0", "HF0"]
 
 
-@pytest.mark.parametrize("answer", [QMessageBox.No, QMessageBox.Yes])
+@pytest.mark.parametrize("answer", [False, True])
 @pytest.mark.parametrize("during", ["confirmation", "connection"])
 def test_confirmation_reads_inputs_after_nested_edits(window_run: SimpleNamespace,
                                                       monkeypatch: pytest.MonkeyPatch,
@@ -354,12 +405,12 @@ def test_confirmation_reads_inputs_after_nested_edits(window_run: SimpleNamespac
             nested_event(edit)
         return answer
 
-    monkeypatch.setattr(QMessageBox, "question", confirm)
+    monkeypatch.setattr(protocol_controller.TreatmentReviewDialog, "confirm", confirm)
     if during == "connection":
         run.arduino.verify_connection.side_effect = lambda: nested_event(edit) or True
     run.view._start_btn.click()
-    assert "Max pressure: 40" in summaries[0]
-    if answer == QMessageBox.No:
+    assert summaries[0]["max_pressure"] == 40
+    if not answer:
         assert not run.workers and not run.window.protocol_timer.isActive()
         assert run.view._start_btn.isEnabled()
     else:
@@ -384,7 +435,8 @@ def test_nested_state_change_prevents_dispatch(window_run: SimpleNamespace,
 
     if during == "confirmation":
         monkeypatch.setattr(
-            QMessageBox, "question", lambda *args: nested_event(change) or QMessageBox.Yes
+            protocol_controller.TreatmentReviewDialog, "confirm",
+            lambda *args: nested_event(change) or True
         )
     else:
         run.arduino.verify_connection.side_effect = lambda: nested_event(change) or True
@@ -411,7 +463,7 @@ def test_immediate_completion_cannot_be_promoted_to_running(window_run: SimpleNa
     assert not run.window.protocol_timer.isActive()
     assert run.view._start_btn.isEnabled() == success
     assert not run.view._pause_btn.isEnabled()
-    assert phase(run) == PHASES["complete" if success else "stopped"][0]
+    assert phase(run) == PHASES["complete" if success else "fault"][0]
 
 
 @pytest.mark.parametrize("pulse,expected", [(True, "pulsing"), (False, "holding")])
@@ -573,8 +625,9 @@ def test_pressure_notice_actions_keep_recovery_explicit(window_run, action, qtbo
         assert [c.args[0] for c in run.arduino.send.call_args_list] == ["X", "X", "HF1"]
 
 
-def test_restart_button_requests_cleanup_once(window_run):
+def test_restart_button_requests_cleanup_once(window_run, monkeypatch):
     run = window_run
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.Yes)
     run.window.shell.navigate("profile")
     run.window.shell.profile._restart.click()
     assert run.window.restart_requested and run.window._closing
@@ -586,6 +639,207 @@ def test_pressure_caption_and_decimal_render_in_existing_panel(window_run, tmp_p
     run = window_run
     run.window.on_sensor_diagnostics({"valid": True, "age_ms": 0})
     run.window.on_baseline_changed(True)
-    run.view.set_pressure(40.25)
+    run.window.status_emit(0, 0, 1200, 40.25)
+    run.window._refresh_measurement_display()
     assert run.view._pressure_stat._value == "40.2"
     assert run.view._pressure_stat.grab().save(str(tmp_path / "pressure-panel.png"))
+
+
+def test_next_treatment_requires_recovery_and_an_explicit_patient_choice(window_run):
+    run = window_run
+    run.window.cloud_patient = {"patient_id": str(uuid4()), "display_name": "Previous patient"}
+    run.view.set_outcome("completed", 720)
+    run.view.set_cloud_status("Upload failed · record retained")
+    run.view.set_busy(True)
+    assert not run.view._next_button.isEnabled()
+    run.view._next_button.click()
+    assert run.window.cloud_patient is not None
+    run.view.set_busy(False)
+    run.window._refresh_device_presentation()
+    run.view._next_button.click()
+    assert run.window.shell.patient_modal.isVisible()
+    assert run.window.cloud_patient is None
+    assert run.view._outcome is None
+    assert "Upload failed" in run.view._cloud_status.text()
+
+
+def test_start_closes_an_already_open_nonessential_overlay(window_run):
+    run = window_run
+    run.window.shell.show_video()
+    assert run.window.shell.video_modal.isVisible()
+    run.window.set_protocol_state("starting")
+    assert run.window.shell.video_modal.isHidden()
+    assert run.view._estop_btn.isEnabled()
+
+
+def test_upload_failure_opens_nonblocking_window_and_sync_clears_it(window_run):
+    run = window_run
+    run.window._cloud_bridge.upload_failed.emit("Saved on this device; retrying automatically", False)
+    dialog = run.window._upload_error_dialog
+    assert dialog.isVisible() and not dialog.isModal()
+    assert dialog._retry.isHidden()
+    assert run.view._upload_error_button.isVisible()
+    dialog.close()
+    run.view._upload_error_button.click()
+    assert dialog.isVisible()
+    run.window._cloud_bridge.status_changed.emit("Treatments synced")
+    assert not dialog.isVisible()
+    assert not run.view._upload_error_button.isVisible()
+
+
+def test_permanent_upload_failure_can_retry_from_error_window(window_run):
+    run = window_run
+    run.window._cloud_bridge.upload_failed.emit("Correct cloud credentials, then retry", True)
+    run.window._upload_error_dialog._retry.click()
+    run.cloud.retry_pending_async.assert_called_with(DATA_PATHS["PENDING_UPLOADS"], retry_blocked=True)
+
+
+@pytest.fixture
+def patient_flow(window_run, monkeypatch):
+    """Run the real dialogs/controller with synthetic staff and device transports."""
+    from controllers import patient_controller
+    from helpers.staff_client import StaffError
+
+    run = window_run
+    run.cloud.enabled = True
+    jobs = []
+    monkeypatch.setattr(kneespa.threading, "Thread", lambda **kw: SimpleNamespace(
+        start=lambda: jobs.append(kw["target"])
+    ))
+    identity, clinic_id = str(uuid4()), str(uuid4())
+    context = {"email": "test@example.com", "clinic": {"id": clinic_id, "name": "Test Clinic"},
+               "clinics": [{"id": clinic_id, "name": "Test Clinic"}],
+               "permissions": ["patients.edit", "plans.approve"]}
+    staff = MagicMock(context={}, cookies=[])
+    staff.login.return_value = {"mfa_required": True}
+    staff.verify_mfa.return_value = context
+    staff.check_context.return_value = context
+
+    def select(clinic):
+        assert clinic == clinic_id
+        staff.context = context
+        return context
+
+    staff.select_clinic.side_effect = select
+    staff.request.return_value = {"id": identity, "display_name": "Test Patient",
+                                  "status": "active", "version": 3, "plan": {"current": None}}
+    monkeypatch.setattr(patient_controller, "StaffClient", lambda _url: staff)
+    monkeypatch.delenv("KNEESPA_PATIENT_PORTAL_URL", raising=False)
+    response = {"patient_id": identity, "display_name": "Test Patient", "settings": {
+        "protocol_number": 4, "duration_min": 12, "max_pressure_lb": 60,
+        "max_left_deg": 10, "max_right_deg": 0, "pulse_rate_hz": 2.4,
+    }}
+    run.cloud.lookup_pin.return_value = response
+    controller = run.window.patients
+    run.window._show_patient_modal()
+    modal = run.window.shell.patient_modal
+    assert modal._add.y() < modal._manual.y()
+    modal._add.click()
+    assert controller.portal.isVisible() and not controller.editor.isVisible()
+    assert controller.portal._address.text() == "https://cloud.example/patients/new"
+    assert run.window.cloud_patient is None and not jobs
+    controller.portal._back.click()
+    for digit in "0123":
+        modal._keypad._press(digit)
+    jobs.pop(0)()
+    run.cloud.lookup_pin.assert_called_once_with("0123")
+    assert run.window.cloud_patient["patient_id"] == identity
+    staff.request.assert_not_called()
+    run.view._edit_patient_button.click()
+    editor = controller.editor
+    assert not editor._save.isEnabled()
+    editor._name.setText("Test Patient")
+    editor._sign_in.click()
+    login = controller.login
+    login._email.setText("test@example.com")
+    login._password.setText("test-password")
+    login._next.click()
+    assert not login._password.text()
+    jobs.pop(0)()
+    assert login._stage == "mfa"
+    login._code.setText("123456")
+    login._next.click()
+    jobs.pop(0)()
+    assert login._stage == "clinic"
+    assert login._clinics.currentData() is None
+    login._clinics.setCurrentIndex(1)
+    login._next.click()
+    jobs.pop(0)()
+    jobs.pop(0)()  # Load the existing cloud profile after clinic selection.
+    assert editor._save.isEnabled() and login.isHidden()
+    return SimpleNamespace(run=run, controller=controller, editor=editor, login=login,
+                           staff=staff, jobs=jobs, response=response, error=StaffError)
+
+
+def test_qr_registration_pin_lookup_then_staff_mfa_edit_and_cancel(patient_flow):
+    flow = patient_flow
+    editor, run, staff = flow.editor, flow.run, flow.staff
+    assert run.window.cloud_patient["patient_id"] == flow.response["patient_id"]
+    assert run.view._patient_label.text() == "Test Patient"
+    assert run.view._patient_detail.text() == "Patient linked"
+    staff.request.assert_called_once()
+    assert staff.request.call_args.args[0] == "GET"
+    editor._name.setText("Cancelled edit")
+    editor.reject()
+    assert run.window.cloud_patient["display_name"] == "Test Patient"
+    run.view._edit_patient_button.click()
+    flow.jobs.pop(0)()
+    editor._name.setText("Updated Patient")
+    editor._settings["max_pressure"].set_value(65)
+    staff.request.return_value = {"ok": True, "version": 4}
+    editor._save.click()
+    editor._save.click()
+    assert len(flow.jobs) == 1 and not run.view._start_btn.isEnabled()
+    flow.jobs.pop(0)()
+    assert run.window.cloud_patient["display_name"] == "Updated Patient"
+    assert run.view.settings_values()["max_pressure"] == 65
+    start(run)
+    assert not run.view._edit_patient_button.isEnabled()
+
+
+def test_uncertain_profile_edit_requires_reload_before_retry(patient_flow):
+    flow = patient_flow
+    flow.editor._name.setText("Updated Patient")
+    flow.staff.request.side_effect = flow.error("unavailable", "Lost response", uncertain=True)
+    flow.editor._save.click()
+    flow.jobs.pop(0)()
+    assert flow.controller.flow.needs_reload
+    assert not flow.editor._save.isEnabled()
+    assert flow.editor._reload.isVisible()
+    flow.staff.request.side_effect = None
+    flow.editor._reload.click()
+    flow.jobs.pop(0)()
+    assert flow.editor._save.isEnabled()
+    assert [call.args[0] for call in flow.staff.request.call_args_list] == ["GET", "PATCH", "GET"]
+
+
+def test_unapproved_cloud_patient_stays_unlinked_after_qr_handoff(patient_flow):
+    flow = patient_flow
+    flow.editor.reject()
+    flow.run.window._show_patient_modal()
+    modal = flow.run.window.shell.patient_modal
+    modal._add.click()
+    flow.controller.portal._back.click()
+    flow.staff.request.reset_mock()
+    flow.run.cloud.lookup_pin.return_value = {
+        "error": "settings_not_supported", "reason": "plan_review_required",
+    }
+    for _ in range(2):
+        for digit in "0123":
+            modal._keypad._press(digit)
+        flow.jobs.pop(0)()
+        assert modal.isVisible()
+        assert "correction" in modal._status.text()
+    flow.staff.request.assert_not_called()
+    assert flow.run.window.cloud_patient is None
+
+
+def test_logout_discards_staff_session_and_late_patient_result(patient_flow):
+    flow = patient_flow
+    old = flow.controller.staff
+    flow.editor._save.click()
+    flow.run.window._on_logout()
+    flow.jobs.pop(0)()
+    assert flow.run.window.cloud_patient is None
+    assert flow.editor.isHidden()
+    assert flow.run.window.current_user is None

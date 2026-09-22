@@ -138,13 +138,46 @@ cp -- "$CURRENT_HEX" "$RECORD_DIR/current.hex"
 sha256sum "$FIRMWARE_DIR/motor.ino" "$FIRMWARE_DIR/hx711_sampler.h" \
     "$FIRMWARE_DIR/platformio.ini" "$RECORD_DIR/current.hex" > "$RECORD_DIR/sha256.txt"
 
-# Use the same uploader, protocol and speed as PlatformIO's megaatmega2560 board.
-AVRDUDE_DIR="$PLATFORMIO_CORE_DIR/packages/tool-avrdude"
+# A build alone does not install optional upload tools. Use PlatformIO's own
+# interpreter and package resolver so virtualenvs, versioned package directories
+# and custom package storage all select the same avrdude as the mega environment.
+echo "Preparing PlatformIO's avrdude upload tool..."
+"$PIO" system info --json-output > "$RECORD_DIR/platformio-system.json"
+PIO_PYTHON="$(python3 - "$RECORD_DIR/platformio-system.json" <<'PY'
+import json
+import sys
+
+with open(sys.argv[1], encoding="utf-8") as stream:
+    print(json.load(stream)["python_exe"]["value"])
+PY
+)"
+[[ -x "$PIO_PYTHON" && ! -d "$PIO_PYTHON" ]] ||
+    fail "Cannot run PlatformIO's Python interpreter: $PIO_PYTHON"
+"$PIO_PYTHON" - "$FIRMWARE_DIR" "$RECORD_DIR/avrdude-dir.txt" <<'PY'
+import os
+from pathlib import Path
+import sys
+
+from platformio.platform.factory import PlatformFactory
+
+os.chdir(sys.argv[1])
+platform = PlatformFactory.from_env("mega", targets=["upload"])
+platform.install_package("tool-avrdude")
+directory = platform.get_package_dir("tool-avrdude")
+if not directory:
+    raise SystemExit("PlatformIO could not resolve its installed avrdude package.")
+Path(sys.argv[2]).write_text(directory, encoding="utf-8")
+PY
+AVRDUDE_DIR="$(cat -- "$RECORD_DIR/avrdude-dir.txt")"
 AVRDUDE="$AVRDUDE_DIR/avrdude"
 [[ -x "$AVRDUDE" ]] || AVRDUDE="$AVRDUDE_DIR/bin/avrdude"
-[[ -x "$AVRDUDE" && -f "$AVRDUDE_DIR/avrdude.conf" ]] ||
-    fail "Cannot find PlatformIO's avrdude package in $AVRDUDE_DIR."
-UPLOAD=("$AVRDUDE" -C "$AVRDUDE_DIR/avrdude.conf" -p atmega2560 \
+AVRDUDE_CONFIG="$AVRDUDE_DIR/avrdude.conf"
+[[ -f "$AVRDUDE_CONFIG" ]] || AVRDUDE_CONFIG="$AVRDUDE_DIR/etc/avrdude.conf"
+[[ -x "$AVRDUDE" && ! -d "$AVRDUDE" && -f "$AVRDUDE_CONFIG" ]] ||
+    fail "PlatformIO's avrdude package is incomplete in $AVRDUDE_DIR."
+printf 'Upload tool: %s\nUpload configuration: %s\n' "$AVRDUDE" "$AVRDUDE_CONFIG"
+# Use the same protocol and speed as PlatformIO's megaatmega2560 board.
+UPLOAD=("$AVRDUDE" -C "$AVRDUDE_CONFIG" -p atmega2560 \
     -c wiring -P "$PORT" -b 115200 -D)
 
 # Compile before stopping the service; leave it stopped for the hardware checkout.

@@ -2,3 +2,4 @@
 # Raspberry Pi) even when the repo is checked out on Windows with autocrlf.
 *.sh text eol=lf
 *.desktop text eol=lf
+runtime/raspberry-pi/main/ui/media/videos/Next[[:space:]]Level[[:space:]]Integrative[[:space:]]Medicine[[:space:]]HCT_P[[:space:]]Details.mp4 filter=lfs diff=lfs merge=lfs -text

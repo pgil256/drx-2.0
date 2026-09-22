@@ -1,68 +1,45 @@
-"""HomeScreen — splash page (full logo + login).
+"""A simple welcome screen with the KneeSpa logo and login."""
 
-Mirrors `HomeScreen` in `bundle.jsx`: the full KneeSpa DRx logo centered on
-white, with a primary Login button when logged out, or a quiet hint to
-pick a protocol when logged in.
-
-Signal:
-    login_requested — the Login button (logged-out state)
-"""
+from typing import Optional
 
 from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from ui.widgets.ds import DSButton
-from ui.widgets.ds._common import image_path, resolve, sans_font
+from ui.widgets.ds._common import image_path
 
 
 class HomeScreen(QWidget):
     login_requested = pyqtSignal()
 
-    def __init__(self, parent=None):
+    def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("HomeScreen")
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet("#HomeScreen { background: #ffffff; }")
 
-        lay = QVBoxLayout(self)
-        lay.setContentsMargins(40, 24, 40, 24)
-        lay.setSpacing(0)
-
-        lay.addStretch(1)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(24)
+        layout.addStretch(1)
 
         self._logo = QLabel()
         self._logo.setAlignment(Qt.AlignCenter)
         self._logo.setStyleSheet("background: transparent;")
-        pix = QPixmap(image_path("logos", "kneespa-logo-full.png"))
-        if not pix.isNull():
-            # Bound by width AND height so the logo never crowds the footer
-            # (the DS caps it at maxWidth 1100 / maxHeight 92%).
+        pixmap = QPixmap(image_path("logos", "kneespa-logo-full.png"))
+        if not pixmap.isNull():
             self._logo.setPixmap(
-                pix.scaled(QSize(960, 470), Qt.KeepAspectRatio, Qt.SmoothTransformation)
+                pixmap.scaled(QSize(1080, 540), Qt.KeepAspectRatio, Qt.SmoothTransformation)
             )
-        lay.addWidget(self._logo, 0, Qt.AlignCenter)
+        layout.addWidget(self._logo, 0, Qt.AlignCenter)
 
-        lay.addStretch(1)
-
-        # Footer area: Login button (logged out) or hint text (logged in).
         self._login_btn = DSButton("Login", variant="primary", size="md")
+        self._login_btn.setFixedWidth(240)
         self._login_btn.clicked.connect(self.login_requested)
+        layout.addWidget(self._login_btn, 0, Qt.AlignCenter)
+        layout.addStretch(1)
 
-        self._hint = QLabel("Select Protocols to begin a treatment.")
-        self._hint.setAlignment(Qt.AlignCenter)
-        self._hint.setFont(sans_font(size="--text-sm"))
-        self._hint.setStyleSheet(f"color: {resolve('--gray-600')}; background: transparent;")
-        self._hint.setVisible(False)
-
-        footer = QWidget()
-        flay = QVBoxLayout(footer)
-        flay.setContentsMargins(0, 0, 0, 0)
-        flay.setSpacing(0)
-        flay.addWidget(self._login_btn, 0, Qt.AlignCenter)
-        flay.addWidget(self._hint, 0, Qt.AlignCenter)
-        lay.addWidget(footer, 0, Qt.AlignCenter)
-
-    def set_logged_in(self, logged_in):
+    def set_logged_in(self, logged_in: bool) -> None:
+        """Show login only when there is no active clinician session."""
         self._login_btn.setVisible(not logged_in)
-        self._hint.setVisible(logged_in)

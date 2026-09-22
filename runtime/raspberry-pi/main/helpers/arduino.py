@@ -6,7 +6,7 @@ import threading
 from collections import deque
 from dataclasses import dataclass, field
 from datetime import datetime
-from typing import Optional
+from typing import Callable, Optional
 
 import serial
 from PyQt5.QtCore import QObject, pyqtSignal, pyqtSlot
@@ -120,7 +120,9 @@ class Arduino(QObject):
     RX_SILENCE_LIMIT_S = 15.0
     PROBE_TIMEOUT_S = 5.0
 
-    def __init__(self):
+    def __init__(self, transport_factory: Optional[Callable[..., object]] = None,
+                 port: Optional[str] = None) -> None:
+        """Create a hardware link, or an explicitly injected development transport."""
         super().__init__()
         self.logger = setup_logger(component="Arduino Communication")
         self.serial_com = None
@@ -129,7 +131,10 @@ class Arduino(QObject):
         self._queue_condition = threading.Condition(self._lock)
         self._running = False
         self._connect_cancel = threading.Event()
-        self.ARDUINO_PORT = ARDUINO_SETTINGS["ARDUINO_PORT"]
+        self.ARDUINO_PORT = port if port is not None else ARDUINO_SETTINGS["ARDUINO_PORT"]
+        # Development transports may use a local socket instead of a device file.
+        # Keep the real queue, parser, tracking, and I/O thread for either transport.
+        self._transport_factory = transport_factory
         self.ok_event = threading.Event()
         self.ready_event = threading.Event()  # set on firmware "Ready to Go"
         self._reader_ready = threading.Event()
@@ -268,7 +273,7 @@ class Arduino(QObject):
                 "Connection attempt %d/%d to %s", attempt, max_retries, self.ARDUINO_PORT
             )
 
-            if not os.path.exists(self.ARDUINO_PORT):
+            if self._transport_factory is None and not os.path.exists(self.ARDUINO_PORT):
                 last_error = f"Port {self.ARDUINO_PORT} not found"
                 self.logger.error(last_error)
                 self._connect_cancel.wait(retry_delay)
@@ -279,7 +284,8 @@ class Arduino(QObject):
 
                 # Short read timeout keeps the I/O loop responsive: a
                 # partial line can no longer pin the thread for 10 s
-                self.serial_com = serial.Serial(
+                factory = self._transport_factory or serial.Serial
+                self.serial_com = factory(
                     self.ARDUINO_PORT, 115200, timeout=1, write_timeout=1
                 )
                 # Boot grace: USB-serial Arduinos auto-reset on open

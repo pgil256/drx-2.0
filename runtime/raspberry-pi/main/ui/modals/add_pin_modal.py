@@ -47,15 +47,16 @@ class AddPinModal(Overlay):
         # Close — floats at the top-right corner (matches LoginModal).
         close = QPushButton(GLYPH["close"], card)
         close.setCursor(Qt.PointingHandCursor)
-        close.setFixedSize(38, 38)
+        close.setFixedSize(48, 48)
+        close.setAccessibleName("Close add user")
         close.setFont(sans_font(size="--text-md", weight=600))
         close.setStyleSheet(
-            "QPushButton { border-radius: 19px; border: none;"
+            "QPushButton { border-radius: 24px; border: none; padding: 0; font-size: 24px;"
             f" background: {resolve('--gray-200')}; color: {resolve('--ink-700')}; }}"
             f" QPushButton:hover {{ background: {resolve('--gray-300')}; }}"
         )
         close.clicked.connect(self.close_overlay)
-        close.move(408 - 14 - 38, 14)
+        close.move(408 - 14 - 48, 14)
         close.raise_()
 
         title = QLabel("Add User PIN")

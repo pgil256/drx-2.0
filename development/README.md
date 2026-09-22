@@ -4,9 +4,14 @@ This directory stays on the PC/CI during routine device updates. It contains
 documentation, Python tests, the firmware native-test harness, validation scripts,
 GUI previews and hardware diagnostic tools, and the PC-side sync scripts.
 
+The [3D desktop simulator](simulator/README.md) launches the real GUI with mock
+hardware and a Blender-authored model. Start it with `python development/tools/run_simulator.py`.
+
 Run `python -m pytest` from the repository root. Firmware tests run with
 `bash development/tests/firmware/run_native_tests.sh`. See
 [deployment.md](docs/deployment.md) for the device layout and sync workflow.
+The [Pi setup and maintenance guide](docs/rpi/setup-and-maintenance.md) collects
+the desktop installer, diagnostics, Buster updater, firmware tools and their commands.
 
 Diagnostic tools can be copied temporarily for a maintenance session; they are
 not part of the normal device release.

@@ -1,0 +1,49 @@
+{
+  "schema": 1,
+  "model_sha256": "7b8e7663bacdc9a510577f4ced7ec69e816a1a05f7134e924a6ea68aabf694dd",
+  "units": "meters",
+  "coordinate_frame": "glTF Y-up",
+  "patient_lateral": "negative=left, positive=right",
+  "joints": {
+    "fit": {
+      "node": "fit_slider",
+      "axis": [
+        0.0,
+        0.0,
+        1.0
+      ],
+      "sign": 1
+    },
+    "axial": {
+      "node": "axial_slider",
+      "axis": [
+        0.0,
+        0.15864800476753874,
+        0.9873352067982176
+      ],
+      "sign": 1
+    },
+    "horizontal": {
+      "node": "horizontal_pivot",
+      "axis": [
+        0.9999630913683105,
+        -0.0022065700030193844,
+        -0.00830343001136209
+      ],
+      "sign": -1
+    },
+    "lateral": {
+      "node": "lateral_pivot",
+      "axis": [
+        0.0008605299997160069,
+        0.9873201996741635,
+        -0.15873903994761276
+      ],
+      "sign": -1
+    }
+  },
+  "fidelity": "CAD-derived geometry; unmeasured synthetic mechanism",
+  "fit": "Front leg-support assembly slides away from chair; travel is estimated",
+  "source_blender": "4.5.7 LTS",
+  "source_sha256": "abead10e967a690edcced752af091d79ab7cff8ce2b26b3ded437aa6ffd9b8db"
+}

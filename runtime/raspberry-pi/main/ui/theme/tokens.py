@@ -1,14 +1,12 @@
 """Design tokens for the KneeSpa DRx modern UI.
 
-This is a 1:1 Python mirror of the design-system token files
-``_ds/kneespa-drx-design-system-3c820074.../tokens/{colors,typography,spacing,effects}.css``
-so the PyQt5 app has a single source of truth for colors, type, spacing, radii
-and effects.
+The PyQt5 app's source of truth for colors, type, spacing, radii and effects.
+The original design palette has been adjusted for readable controls and touch use.
 
 Values may reference other tokens with CSS ``var(--x)`` syntax (e.g.
 ``"--color-primary": "var(--blue-500)"``). Qt's QSS has no ``var()``;
 ``ui.theme.qss`` resolves these references both for stylesheet rendering and for
-direct lookups from Python (``resolve("--color-primary") -> "#3498db"``).
+direct lookups from Python (``resolve("--color-primary") -> "#176b9a"``).
 
 Pure data — this module imports nothing, so unit tests can use it without Qt.
 """
@@ -24,38 +22,41 @@ TOKENS = {
     "--brand-alert": "#d83a2c",         # "PAIN" red in tagline
 
     # ── Primitive palette ───────────────────────────────────────────────
-    "--blue-500": "#3498db",            # primary interactive (buttons, sliders)
-    "--blue-600": "#2980b9",
-    "--blue-700": "#2472a4",
+    "--blue-500": "#176b9a",            # readable white action labels
+    "--blue-600": "#125b84",
+    "--blue-700": "#0e496c",
     "--blue-100": "#e6f3ff",
     "--blue-050": "#f0f9ff",
 
-    "--green-500": "#00c800",           # START / go / safe
-    "--green-600": "#00a000",
+    "--green-500": "#15803d",           # START / positive state
+    "--green-600": "#116530",
     "--green-100": "#e4f8e4",
 
-    "--red-500": "#c80000",             # STOP / emergency
+    "--red-500": "#c80000",             # faults / emergency status
     "--red-600": "#a00000",
     "--red-400": "#e74c3c",             # destructive secondary (exit)
     "--red-100": "#fdecea",
 
-    "--amber-500": "#f39c12",           # ramping / caution
+    "--amber-500": "#975d05",           # readable advisory text
     "--amber-100": "#fef5e7",
 
     # ── Neutrals ────────────────────────────────────────────────────────
-    "--ink-900": "#1e1e1e",             # nav rail, top bar, dark surfaces
+    "--ink-900": "#172f42",             # slate chrome and strong text
     "--ink-800": "#2c3e50",
     "--ink-700": "#34495e",
     "--ink-500": "#555555",
-    "--gray-600": "#666666",
+    "--gray-600": "#626262",            # readable on disabled gray-300 fill
     "--gray-400": "#bdc3c7",            # control borders
     "--gray-300": "#e0e0e0",            # dividers / gridlines
     "--gray-200": "#ecf0f1",            # control fill / chips
     "--gray-100": "#f7f7f7",            # zebra rows
-    "--gray-050": "#f8f9fa",            # page wash
+    "--gray-050": "#edf3f7",            # cool page wash
     "--white": "#ffffff",
 
     # ── Semantic aliases ────────────────────────────────────────────────
+    "--color-dark": "#000000",
+    "--color-dark-hover": "#242424",
+    "--color-dark-active": "#3a3a3a",
     "--color-primary": "var(--blue-500)",
     "--color-primary-hover": "var(--blue-600)",
     "--color-primary-active": "var(--blue-700)",
@@ -71,6 +72,7 @@ TOKENS = {
     "--surface-card": "var(--white)",
     "--surface-sunken": "var(--gray-200)",
     "--surface-dark": "var(--ink-900)",
+    "--surface-chrome": "#1e1e1e",
 
     "--text-strong": "var(--ink-900)",
     "--text-body": "var(--ink-700)",
@@ -78,7 +80,7 @@ TOKENS = {
     "--text-on-dark": "var(--white)",
     "--text-on-accent": "var(--white)",
 
-    "--border-control": "var(--gray-400)",
+    "--border-control": "#78858e",
     "--border-divider": "var(--gray-300)",
     "--border-focus": "var(--color-primary)",
 
@@ -98,10 +100,10 @@ TOKENS = {
     "--weight-semibold": "600",
     "--weight-bold": "700",
 
-    "--text-2xs": "12px",   # dense table meta
-    "--text-xs": "13px",    # eyebrow labels
-    "--text-sm": "15px",    # secondary copy
-    "--text-base": "17px",  # body, control labels
+    "--text-2xs": "16px",   # minimum readable metadata
+    "--text-xs": "16px",    # captions and status labels
+    "--text-sm": "16px",    # secondary copy
+    "--text-base": "18px",  # body, control labels
     "--text-md": "20px",    # emphasized labels
     "--text-lg": "24px",    # section titles
     "--text-xl": "30px",    # page titles
@@ -116,7 +118,7 @@ TOKENS = {
     "--tracking-wide": "0.03em",
     "--tracking-tight": "-0.01em",
 
-    # ── Spacing & sizing (4px grid; 44px min touch target) ──────────────
+    # ── Spacing & sizing (4px grid; 48px min touch target) ──────────────
     "--space-0": "0",
     "--space-1": "4px",
     "--space-2": "8px",
@@ -129,10 +131,10 @@ TOKENS = {
     "--space-12": "48px",
     "--space-16": "64px",
 
-    "--touch-min": "44px",          # minimum hit target
+    "--touch-min": "48px",          # minimum hit target
     "--touch-comfortable": "56px",
     "--touch-large": "72px",        # primary START/STOP, keypad keys
-    "--rail-width": "120px",        # left nav rail on device
+    "--rail-width": "108px",        # balances the 84px top bar visually
 
     # ── Effects: radii ──────────────────────────────────────────────────
     "--radius-xs": "4px",    # inputs, chips, table

@@ -1,5 +1,8 @@
 # Device state and provisioning
 
+Start with the [setup and maintenance command reference](../development/docs/rpi/setup-and-maintenance.md)
+for all Pi setup scripts, bundles, update steps and report locations.
+
 - `local/raspberry-pi/`: active device state on a Pi.
 - `profiles/<device-name>/raspberry-pi/`: separate PC copies for individual devices.
 - `development/raspberry-pi/`: isolated state for the desktop simulator.
@@ -17,6 +20,20 @@ then double-click **Install KneeSpa** in the `devices` folder.
 
 [`flash_firmware.sh`](flash_firmware.sh) builds and flashes the current Mega firmware
 over USB. See [firmware flashing](maintenance/raspberry-pi/firmware.md) for the flow.
+
+Run `bash devices/collect_pi_info.sh` from the project root on the Pi to collect
+OS, hardware, Python package, and firmware-tool versions for update planning.
+The script prints its report without installing packages, changing services, reading
+credentials, or opening serial ports. Run it as the normal desktop user, without sudo.
+See the [reported Pi baseline and proposed OS migration](maintenance/raspberry-pi/system-baseline.md)
+for the September 2026 installation and the candidate replacement environment.
+
+For the selected Buster maintenance path, run
+`bash devices/update_buster.sh --use-legacy-repository` to preview, then add
+`--apply` while KneeSpa is closed. This backs up and repairs retired Buster mirror
+URLs, updates system packages/Python and installs the runtime requirements.
+Read [Buster maintenance](maintenance/raspberry-pi/buster-updates.md) for preparation,
+interpreter selection, logs, and recovery limits.
 
 Live state, profiles, and simulator state are ignored by Git. Shared software
 updates never sync this directory. Do not copy one device's identity or calibration

@@ -22,17 +22,17 @@ _VAR_RE = re.compile(r"var\(\s*(--[A-Za-z0-9_-]+)\s*\)")
 
 def test_raw_token_returns_literal():
     assert resolve("--brand-cyan") == "#29abe2"
-    assert resolve("--text-base") == "17px"
+    assert resolve("--text-base") == "18px"
     assert resolve("--radius-lg") == "12px"
 
 
 def test_semantic_aliases_resolve_through_var_chain():
-    # --color-primary -> var(--blue-500) -> #3498db
-    assert resolve("--color-primary") == "#3498db"
-    assert resolve("--surface-page") == "#f8f9fa"
-    assert resolve("--surface-dark") == "#1e1e1e"
+    # --color-primary -> var(--blue-500) -> #176b9a
+    assert resolve("--color-primary") == "#176b9a"
+    assert resolve("--surface-page") == "#edf3f7"
+    assert resolve("--surface-dark") == "#172f42"
     # two hops: --border-focus -> --color-primary -> --blue-500
-    assert resolve("--border-focus") == "#3498db"
+    assert resolve("--border-focus") == "#176b9a"
 
 
 def test_resolve_inline_var_inside_string():
@@ -96,4 +96,4 @@ def test_rendered_app_qss_has_no_unresolved_vars():
     rendered = load_app_qss()
     assert "var(" not in rendered, "app.qss still contains unresolved var() refs"
     # sanity: the primary interactive blue made it into the stylesheet
-    assert "#3498db" in rendered
+    assert "#176b9a" in rendered

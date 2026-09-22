@@ -351,15 +351,17 @@ def session(qtbot, config, monkeypatch):
     controller.shutdown()
 
 
-def test_profile_exposes_calibration_after_login(qtbot):
+def test_device_exposes_calibration_after_login(qtbot):
     shell = AppShell()
     qtbot.addWidget(shell)
-    assert not shell.profile._calibration.isEnabled()
-    shell.login_succeeded("Technician", goto="profile")
-    assert shell.profile._calibration.isEnabled()
-    assert shell.profile._calibration.isVisibleTo(shell.profile)
+    assert not shell.device.calibration_button.isEnabled()
+    shell.login_succeeded("Technician", goto="device")
+    assert shell.device.calibration_button.isEnabled()
+    assert not shell.device.calibration_button.isVisibleTo(shell.device)
+    shell.device.unlock_service()
+    assert shell.device.calibration_button.isVisibleTo(shell.device)
     shell.logout()
-    assert not shell.profile._calibration.isEnabled()
+    assert not shell.device.calibration_button.isEnabled()
 
 
 def test_record_requires_fresh_settled_feedback_and_never_moves(session):

@@ -55,8 +55,16 @@ class HardwareServiceDialog(QDialog):
     leaving = pyqtSignal()
     step_changed = pyqtSignal(str)
 
-    def __init__(self, draft: Any, parent: Optional[QWidget] = None) -> None:
+    def __init__(self, draft: Any, parent: Optional[QWidget] = None,
+                 mode: str = "calibration") -> None:
         super().__init__(parent)
+        if mode not in ("tests", "calibration"):
+            raise ValueError("Unknown service mode")
+        self.mode = mode
+        self._steps = tuple(
+            (key, "Review results" if mode == "tests" and key == "review" else name)
+            for key, name in _STEPS if mode == "tests" or key not in ("leg", "stops")
+        )
         self.draft = draft
         self._ready = False
         self._busy = False
@@ -76,7 +84,7 @@ class HardwareServiceDialog(QDialog):
         self._notes: Dict[str, QPlainTextEdit] = {}
         self._result_labels: Dict[str, QLabel] = {}
         self._recorded: Dict[str, set] = {axis: set() for axis in _AXES}
-        self.setWindowTitle("Hardware Tests & Calibration")
+        self.setWindowTitle("Hardware Tests" if mode == "tests" else "Calibration")
         self.setWindowModality(Qt.ApplicationModal)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.resize(1080, 700)
@@ -90,9 +98,8 @@ class HardwareServiceDialog(QDialog):
             " border-radius: 10px; padding: 4px; }"
             "QListWidget::item { min-height: 36px; padding: 4px 8px; }"
             "QListWidget::item:selected { background: #e1f5fb; color: #075970; }"
-            "QDoubleSpinBox, QComboBox { min-height: 44px; padding: 0 10px;"
-            " background: white; }"
-            "QAbstractSpinBox::up-button, QAbstractSpinBox::down-button { width: 36px; }"
+            "QComboBox { min-height: 48px; padding: 0 10px; background: white; }"
+            "QDoubleSpinBox { min-height: 48px; padding: 0 112px 0 12px; background: white; }"
             "QPlainTextEdit, QTableWidget { background: white; border: 1px solid #ccd8df; }"
             "QCheckBox { spacing: 12px; padding: 6px 0; }"
             "QCheckBox::indicator { width: 24px; height: 24px; }"
@@ -102,7 +109,7 @@ class HardwareServiceDialog(QDialog):
         root.setContentsMargins(20, 16, 20, 16)
         root.setSpacing(10)
         heading = QHBoxLayout()
-        title = QLabel("Hardware Tests & Calibration")
+        title = QLabel(self.windowTitle())
         title.setFont(sans_font(size="--text-xl", weight=700))
         heading.addWidget(title, 1)
         self.stop_button = DSButton("STOP", variant="danger", size="lg")
@@ -119,10 +126,13 @@ class HardwareServiceDialog(QDialog):
         body.setSpacing(18)
         self.steps = QListWidget()
         self.steps.setFixedWidth(240)
-        for index, (key, name) in enumerate(_STEPS):
+        self.steps.setWordWrap(True)
+        self.steps.setHorizontalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        QScroller.grabGesture(self.steps.viewport(), QScroller.TouchGesture)
+        for index, (key, name) in enumerate(self._steps):
             item = QListWidgetItem(f"{index + 1}. {name}")
             item.setData(Qt.UserRole, key)
-            item.setSizeHint(QSize(220, 44))
+            item.setSizeHint(QSize(220, 64))
             self.steps.addItem(item)
         body.addWidget(self.steps)
         self.pages = QStackedWidget()
@@ -132,26 +142,28 @@ class HardwareServiceDialog(QDialog):
         self._build_communication()
         for axis in _AXES:
             self._build_axis(axis)
-        self._build_leg()
+        if self.mode == "tests":
+            self._build_leg()
         self._build_loadcell()
-        self._build_stops()
+        if self.mode == "tests":
+            self._build_stops()
         self._build_review()
 
         self.message = self._label("Complete the preparation checklist to begin.")
         self.message.setMinimumHeight(42)
         root.addWidget(self.message)
         footer = QHBoxLayout()
-        self.close_button = DSButton("Close service", variant="ghost")
-        self.close_button.setMinimumHeight(44)
+        self.close_button = DSButton("Close service", variant="dark")
+        self.close_button.setMinimumHeight(48)
         self.close_button.clicked.connect(self.reject)
         footer.addWidget(self.close_button)
         footer.addStretch()
         self.previous_button = DSButton("Back", variant="secondary")
-        self.previous_button.setMinimumHeight(44)
+        self.previous_button.setMinimumHeight(48)
         self.previous_button.clicked.connect(lambda: self._navigate(-1))
         footer.addWidget(self.previous_button)
         self.next_button = DSButton("Next step", variant="primary")
-        self.next_button.setMinimumHeight(44)
+        self.next_button.setMinimumHeight(48)
         self.next_button.clicked.connect(lambda: self._navigate(1))
         footer.addWidget(self.next_button)
         root.addLayout(footer)
@@ -187,7 +199,7 @@ class HardwareServiceDialog(QDialog):
     def _button(self, text: str, action: str, payload: Any = None,
                 movement: bool = False, variant: str = "secondary") -> DSButton:
         button = DSButton(text, variant=variant)
-        button.setMinimumHeight(44)
+        button.setMinimumHeight(48)
         button.clicked.connect(
             lambda _checked=False: self._request(action, payload, movement)
         )
@@ -210,7 +222,7 @@ class HardwareServiceDialog(QDialog):
     def _build_preparation(self) -> None:
         layout = self._page(
             "Prepare the device",
-            "Technician access is active. This wizard sends real movement commands. "
+            "This wizard sends real movement commands. "
             "Use an unloaded device on a stable bench and remain at the controls.",
         )
         self.preflight_checks = []
@@ -235,7 +247,7 @@ class HardwareServiceDialog(QDialog):
             "sensors, switches or accessories in the inspection notes."
         ))
         self.begin_button = DSButton("Confirm preparation & begin", variant="primary")
-        self.begin_button.setMinimumHeight(44)
+        self.begin_button.setMinimumHeight(48)
         self.begin_button.clicked.connect(lambda: self._request("begin"))
         layout.addWidget(self.begin_button)
         layout.addStretch()
@@ -264,13 +276,17 @@ class HardwareServiceDialog(QDialog):
         title = axis.title()
         unit = "inches" if axis == "axial" else "degrees"
         layout = self._page(
-            f"Check and calibrate the {axis} actuator",
-            "Start with a small jog. Observe direction and smooth motion, then reverse and "
+            f"{'Test' if self.mode == 'tests' else 'Calibrate'} the {axis} actuator",
+            ("Start with a small jog. Observe direction and smooth motion, then reverse and "
             "check that the position reading follows movement. Approach measured points "
             "from both directions to assess repeatability. Stop before any obstruction or "
-            "mechanical end stop; do not drive into an end stop to find travel limits.",
+            "mechanical end stop; do not drive into an end stop to find travel limits.")
+            if self.mode == "tests" else
+            "Move to a physically measured position, record its sensor count, and review the "
+            "position table. Use only points that can be reached safely. Hardware Tests "
+            "contains direction, smoothness and repeatability checks.",
         )
-        if axis == "axial":
+        if axis == "axial" and self.mode == "calibration":
             layout.addWidget(self._label(
                 "Axial calibration needs physically measured 0.0 and 4.0 inch positions. "
                 "Existing table values are unverified until recorded during this session. "
@@ -284,6 +300,10 @@ class HardwareServiceDialog(QDialog):
             "Jog sizes are position counts. Each jog requires confirmation; the controller "
             "checks the travel envelope and fresh sensor readings."
         ))
+        if self.mode == "tests":
+            self._add_result(layout, axis)
+            layout.addStretch()
+            return
         measured = QDoubleSpinBox()
         measured.setDecimals(1)
         measured.setRange(*ACTUATORS[axis.upper()]["LIMITS"])
@@ -301,10 +321,10 @@ class HardwareServiceDialog(QDialog):
         layout.addWidget(table)
         row = QHBoxLayout()
         move = DSButton("Move to selected point", variant="secondary")
-        move.setMinimumHeight(44)
+        move.setMinimumHeight(48)
         move.clicked.connect(lambda: self._selected_mark_action(axis, "goto"))
         remove = DSButton("Remove selected point", variant="ghost")
-        remove.setMinimumHeight(44)
+        remove.setMinimumHeight(48)
         remove.clicked.connect(lambda: self._selected_mark_action(axis, "remove"))
         self._actions.extend((move, remove))
         row.addWidget(move)
@@ -357,7 +377,7 @@ class HardwareServiceDialog(QDialog):
 
     def _build_loadcell(self) -> None:
         layout = self._page(
-            "Check and calibrate the load cell",
+            "Test the load cell" if self.mode == "tests" else "Calibrate the load cell",
             "Use an unloaded, stationary device for the zero sample. Apply a known "
             "reference force using a suitable bench fixture, let the reading settle, "
             "then capture the loaded sample. Never use a patient as the reference load.",
@@ -370,6 +390,16 @@ class HardwareServiceDialog(QDialog):
         ))
         self.pressure_loaded = self._label("Loaded sample: not captured")
         layout.addWidget(self.pressure_loaded)
+        self.pressure_factor = self._label("")
+        if self.mode == "tests":
+            layout.addWidget(self._label(
+                "Compare the live force with the known reference. Record the measured force, "
+                "reference force and repeatability in the observation. These captures do not "
+                "change calibration. Use Calibration if adjustment is required."
+            ))
+            self._add_result(layout, "loadcell")
+            layout.addStretch()
+            return
         reference = QDoubleSpinBox()
         reference.setDecimals(2)
         reference.setRange(0.01, float(PRESSURE_MAX))
@@ -381,7 +411,6 @@ class HardwareServiceDialog(QDialog):
         layout.addWidget(self._button(
             "3. Calculate proposed load-cell factor", "pressure_calculate", reference.value
         ))
-        self.pressure_factor = self._label("")
         layout.addWidget(self.pressure_factor)
         layout.addWidget(self._label(
             "Use a reference force below the device limit. The calculated span is only a "
@@ -448,10 +477,13 @@ class HardwareServiceDialog(QDialog):
         layout.addWidget(self.bench_notes)
         self.bench_check.currentIndexChanged.connect(self._change_bench_check)
         row = QHBoxLayout()
-        for status, label in (("pass", "Observed pass"), ("fail", "Observed failure"),
-                              ("skip", "Skip / not tested")):
-            button = DSButton(label, variant="secondary")
-            button.setMinimumHeight(44)
+        for status, label, variant in (
+            ("pass", "Observed pass", "dark"),
+            ("skip", "Skip / not tested", "secondary"),
+            ("fail", "Observed failure", "danger"),
+        ):
+            button = DSButton(label, variant=variant)
+            button.setMinimumHeight(48)
             button.clicked.connect(
                 lambda _checked=False, value=status: self._request("bench_result", {
                     "check": self.bench_check.currentData(), "status": value,
@@ -465,36 +497,42 @@ class HardwareServiceDialog(QDialog):
 
     def _build_review(self) -> None:
         layout = self._page(
-            "Review evidence and proposed configuration",
+            "Review test results" if self.mode == "tests" else "Review proposed calibration",
             "Results below are operator observations. Incomplete, failed and skipped "
-            "checks remain visible in the report. Saving calibration is separate "
-            "from completing or passing the hardware checks.",
+            "checks remain visible in the report.",
         )
         self.results_table = self._table(["Check", "Operator result", "Notes"])
         self.results_table.setMinimumHeight(230)
-        layout.addWidget(self.results_table)
+        self.results_table.setVisible(self.mode == "tests")
+        if self.mode == "tests":
+            layout.addWidget(self.results_table)
         self.bench_review_table = self._table(["Bench check", "Operator result", "Notes"])
         self.bench_review_table.setMinimumHeight(200)
-        layout.addWidget(self.bench_review_table)
+        if self.mode == "tests":
+            layout.addWidget(self.bench_review_table)
         self.changes_table = self._table(["Setting", "Current", "Proposed"])
         self.changes_table.setMinimumHeight(170)
         layout.addWidget(self.changes_table)
         self.change_summary = self._label("")
         layout.addWidget(self.change_summary)
-        layout.addWidget(self._label(
-            "Save writes the reviewed calibration and creates a backup. Device reset "
-            "is required to apply changes. Remove external load before reset and "
-            "independently verify movement, zero and reference loads afterward. "
-            "A saved configuration is not authorization for patient use."
-        ))
+        if self.mode == "calibration":
+            layout.addWidget(self._label(
+                "Save writes the reviewed calibration and creates a backup. Device reset "
+                "is required to apply changes. Remove external load before reset and "
+                "independently verify movement, zero and reference loads afterward. "
+                "A saved configuration is not authorization for patient use."
+            ))
         row = QHBoxLayout()
         self.export_button = DSButton("Export service report", variant="secondary")
-        self.export_button.setMinimumHeight(44)
+        self.export_button.setMinimumHeight(48)
         self.export_button.clicked.connect(lambda: self._request("export"))
         row.addWidget(self.export_button)
         self.save_button = DSButton("Save reviewed calibration", variant="success")
-        self.save_button.setMinimumHeight(44)
+        self.save_button.setMinimumHeight(48)
         self.save_button.clicked.connect(self._confirm_save)
+        self.save_button.setVisible(self.mode == "calibration")
+        self.changes_table.setVisible(self.mode == "calibration")
+        self.change_summary.setVisible(self.mode == "calibration")
         row.addWidget(self.save_button)
         layout.addLayout(row)
         layout.addStretch()
@@ -507,13 +545,15 @@ class HardwareServiceDialog(QDialog):
         table.setSelectionBehavior(QAbstractItemView.SelectRows)
         table.setSelectionMode(QAbstractItemView.SingleSelection)
         table.verticalHeader().setVisible(False)
-        table.verticalHeader().setDefaultSectionSize(38)
-        table.verticalHeader().setMinimumSectionSize(38)
+        table.verticalHeader().setDefaultSectionSize(56)
+        table.verticalHeader().setMinimumSectionSize(48)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         table.setWordWrap(True)
         return table
 
     def _add_result(self, layout: QVBoxLayout, step: str) -> None:
+        if self.mode != "tests":
+            return
         layout.addWidget(self._label("Operator observation (not an automatic test result):"))
         notes = QPlainTextEdit()
         notes.setPlaceholderText(
@@ -525,12 +565,12 @@ class HardwareServiceDialog(QDialog):
         layout.addWidget(notes)
         row = QHBoxLayout()
         for status, label, variant in (
-            ("pass", "Observed pass", "success"),
-            ("fail", "Observed failure", "danger"),
+            ("pass", "Observed pass", "dark"),
             ("skip", "Skip / not tested", "secondary"),
+            ("fail", "Observed failure", "danger"),
         ):
             button = DSButton(label, variant=variant)
-            button.setMinimumHeight(44)
+            button.setMinimumHeight(48)
             button.clicked.connect(
                 lambda _checked=False, value=status, key=step: self._request(
                     "result", {"status": value, "notes": self._notes[key].toPlainText().strip()}
@@ -551,7 +591,7 @@ class HardwareServiceDialog(QDialog):
         self._request(action, table.item(row, 0).text(), movement=action == "goto")
 
     def _confirm_save(self) -> None:
-        if self.current_step() != "review":
+        if self.mode != "calibration" or self.current_step() != "review":
             return
         if QMessageBox.question(
             self, "Save reviewed calibration?",
@@ -562,7 +602,7 @@ class HardwareServiceDialog(QDialog):
             self.action_requested.emit("save", None)
 
     def current_step(self) -> str:
-        return _STEPS[max(0, self.steps.currentRow())][0]
+        return self._steps[max(0, self.steps.currentRow())][0]
 
     def current_axis(self) -> str:
         step = self.current_step()
@@ -570,7 +610,7 @@ class HardwareServiceDialog(QDialog):
 
     def _navigate(self, delta: int) -> None:
         row = self.steps.currentRow() + delta
-        if not self._busy and 0 <= row < len(_STEPS):
+        if not self._busy and 0 <= row < len(self._steps):
             self.steps.setCurrentRow(row)
 
     def _change_step(self, index: int) -> None:
@@ -609,11 +649,12 @@ class HardwareServiceDialog(QDialog):
         self.steps.setEnabled(not self._busy)
         self.previous_button.setEnabled(not self._busy and self.steps.currentRow() > 0)
         self.next_button.setEnabled(
-            not self._busy and self.steps.currentRow() < len(_STEPS) - 1
+            not self._busy and self.steps.currentRow() < len(self._steps) - 1
         )
         self.export_button.setEnabled(not self._busy)
         self.save_button.setEnabled(
-            not self._busy and self.current_step() == "review" and bool(self.draft.changes())
+            self.mode == "calibration" and not self._busy
+            and self.current_step() == "review" and bool(self.draft.changes())
         )
 
     def refresh_draft(self) -> None:
@@ -646,12 +687,13 @@ class HardwareServiceDialog(QDialog):
             if changes else "No configuration changes are staged."
         )
         self._refresh_results()
-        self._refresh_bench_results()
+        if self.mode == "tests":
+            self._refresh_bench_results()
         if hasattr(self, "previous_button"):
             self._update_available()
 
     def _refresh_results(self) -> None:
-        rows = [(key, title) for key, title in _STEPS if key != "review"]
+        rows = [(key, title) for key, title in self._steps if key != "review"]
         self.results_table.setRowCount(len(rows))
         for row, (step, title) in enumerate(rows):
             status, detail = self._results.get(step, ("incomplete", "No observation recorded"))
@@ -694,7 +736,8 @@ class HardwareServiceDialog(QDialog):
 
     def set_bench_result(self, check: str, status: str, notes: str) -> None:
         self._bench_results[check] = (status, notes)
-        self._refresh_bench_results()
+        if self.mode == "tests":
+            self._refresh_bench_results()
 
     def _change_bench_check(self, _index: int) -> None:
         _status, notes = self._bench_results.get(self.bench_check.currentData(), ("", ""))

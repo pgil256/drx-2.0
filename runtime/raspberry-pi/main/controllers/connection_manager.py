@@ -26,6 +26,9 @@ class ConnectionManager:
         """Cancel the producer before Stop discards its queued writes."""
         if self.reset_worker is not None:
             self.reset_worker.cancel()
+        leg = getattr(self.window, "leg", None)
+        if leg is not None:
+            leg.cancel()
 
     def setup_arduino(self, auto_reset=True):
         """Setup Arduino interface."""
@@ -222,8 +225,13 @@ class ConnectionManager:
     def reset_arduino(self, event=None):
         """Reset Arduino and reinitialize actuators using ResetWorker."""
         window = self.window
-        if getattr(window, "_calibration_active", False) is True:
-            window._show_timed_error("Close actuator calibration before resetting Arduino.")
+        if getattr(window, "_firmware_update_recovery", None) == "flashing":
+            window._show_timed_error("Firmware installation needs recovery. Open Device > Service "
+                                     "and flash verified firmware before resetting.")
+            return
+        if (getattr(window, "_calibration_active", False) is True
+                or getattr(window, "_device_maintenance_active", False) is True):
+            window._show_timed_error("Finish device service before resetting Arduino.")
             return
         print("Reset Arduino requested...")
         if getattr(window, "_closing", False) is True:
@@ -287,7 +295,6 @@ class ConnectionManager:
         if worker is not None and worker is not self.reset_worker:
             return
 
-        self.reset_worker = None
         print(f"Reset sequence finished signal received. Success: {success}")
         if getattr(window, "_closing", False) is True:
             return
@@ -296,8 +303,34 @@ class ConnectionManager:
         if getattr(window, "_no_automatic_recovery", False) is True:
             success = False
 
+        # First initialization also establishes the open-loop leg reference.
+        # Keep startup locked until the full retract completes; subsequent
+        # Arduino resets preserve the patient's leg-length setting.
+        leg = getattr(window, "leg", None)
+        if success and leg is not None and leg.boot_home_pending:
+            def finish_leg_home(homed: bool) -> None:
+                self._on_reset_finished(homed, worker)
+
+            if not leg.home(finish_leg_home) and self.reset_worker is worker:
+                self._on_reset_finished(False, worker)
+            return
+
+        self.reset_worker = None
+
         # Clear the reset in progress flag
         window.reset_in_progress = False
+
+        if success and getattr(window, "_firmware_update_recovery", None) == "reset_required":
+            from pathlib import Path
+            from config.paths import DEVICE_STATE_DIR
+            try:
+                (Path(DEVICE_STATE_DIR) / "updates/firmware-recovery.json").unlink()
+                window._firmware_update_recovery = None
+            except OSError:
+                success = False
+                window._no_automatic_recovery = True
+                window._show_timed_error("Unable to clear the firmware recovery record. "
+                                         "Check device storage before use.")
 
         if success:
             # The reset worker has verified these home targets. Rebase normal

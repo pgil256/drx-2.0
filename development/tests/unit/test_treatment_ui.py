@@ -163,6 +163,7 @@ class _StubWindow:
         self.reset_in_progress = False
         self.errors = []
         self.shell = SimpleNamespace(treatment=TreatmentScreen())
+        self.shell.treatment.set_device_status("Ready", "Review settings.", True)
         qtbot.addWidget(self.shell.treatment)
         self.treatment_panel = TreatmentStatusPanel()
         qtbot.addWidget(self.treatment_panel)
@@ -191,8 +192,8 @@ class StateMachineHarness:
     def set_protocol_state(self, state):
         self.controller.set_state(state)
 
-    def _block_nav_during_treatment(self):
-        return self.controller.block_nav()
+    def _block_active_treatment_exit(self):
+        return self.controller.block_active_treatment_exit()
 
 
 @pytest.mark.unit
@@ -233,16 +234,16 @@ class TestProtocolStateMachine:
         assert not h.view._start_btn.isEnabled()
         assert h.protocol_running is False
 
-    def test_nav_blocked_while_active(self, qtbot):
+    def test_logout_and_exit_blocked_while_active(self, qtbot):
         h = StateMachineHarness(qtbot)
         for state in ("starting", "running", "stopping"):
             h.set_protocol_state(state)
-            assert h._block_nav_during_treatment() is True
+            assert h._block_active_treatment_exit() is True
         assert h.errors  # operator was told why
 
-    def test_nav_allowed_when_idle_or_fault(self, qtbot):
+    def test_logout_and_exit_allowed_when_idle_or_fault(self, qtbot):
         h = StateMachineHarness(qtbot)
         h.set_protocol_state("idle")
-        assert h._block_nav_during_treatment() is False
+        assert h._block_active_treatment_exit() is False
         h.set_protocol_state("fault")
-        assert h._block_nav_during_treatment() is False
+        assert h._block_active_treatment_exit() is False

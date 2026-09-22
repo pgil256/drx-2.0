@@ -5,7 +5,8 @@ pytest-qt
 pytest-cov
 pytest-timeout
 pyserial>=3.5
-python-dotenv>=1.0
+python-dotenv==0.21.1  # Match the Buster-compatible runtime pin.
+qrcode==7.4.2
 # PyQt5 is provided by the system apt package on the Raspberry Pi
 # (python3-pyqt5, matched to the Pi's Qt); this pip entry is for the
 # CI/dev environment only, where no system Qt is present. Keep the two

@@ -1,0 +1,16 @@
+{
+  "id": "synthetic-v1",
+  "description": "Synthetic desktop fixture. Geometry, speeds, and load response are not measured device specifications.",
+  "axial_counts_per_inch": 430.0,
+  "axial_max_counts": 1720.0,
+  "horizontal_marks": {"-25": 0, "-20": 380, "-15": 760, "-10": 1140, "-5": 1520, "0": 1900, "5": 2280},
+  "lateral_marks": {"-20": 500, "-17.5": 635, "-15": 770, "-12.5": 905, "-10": 1042, "-7.5": 1203, "-5": 1364, "-2.5": 1526, "0": 1688, "2.5": 1806, "5": 1925, "7.5": 2044, "10": 2162, "12.5": 2223, "15": 2282, "17.5": 2341, "20": 2400},
+  "axis_speed_counts_s": {"a": 215.0, "b": 380.0, "c": 450.0},
+  "contact_inches": 0.35,
+  "stiffness_lb_per_inch": 60.0,
+  "scale_factor": -7050.0,
+  "pressure_noise_lb": 0.02,
+  "sensor_lag_s": 0.08,
+  "fit_speed_inches_s": 0.5,
+  "fit_drive": "combined-firmware-and-pi"
+}

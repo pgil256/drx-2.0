@@ -2,11 +2,11 @@
 
 Mirrors `ProtocolButton`: a checkable tile with a big number and an uppercase
 name. Selected = filled primary; hover (unselected) = primary border; disabled =
-dimmed. Put the four tiles in a QButtonGroup (exclusive) at the screen level.
+neutral fill with readable text. Put the four tiles in an exclusive QButtonGroup.
 """
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QGraphicsOpacityEffect, QLabel, QPushButton, QVBoxLayout
+from PyQt5.QtWidgets import QLabel, QPushButton, QVBoxLayout
 
 from ._common import resolve, sans_font
 
@@ -16,6 +16,7 @@ class DSProtocolButton(QPushButton):
         super().__init__(parent)
         self.setObjectName("DSProtocolButton")
         self.setCheckable(True)
+        self.setAccessibleName(f"Protocol {number}: {name}")
         self.setCursor(Qt.PointingHandCursor)
         self.setMinimumWidth(76)
 
@@ -36,7 +37,6 @@ class DSProtocolButton(QPushButton):
         lay.addWidget(self._num)
         lay.addWidget(self._name)
 
-        self._dim = None  # QGraphicsOpacityEffect applied while disabled
         self.toggled.connect(lambda _checked: self._render())
         self._render()
 
@@ -65,21 +65,16 @@ class DSProtocolButton(QPushButton):
         else:
             bg = resolve("--gray-050")
             fg = resolve("--ink-800")
-            border = resolve("--gray-300")
-        # Disabled = uniform 0.5 opacity on the whole tile (matches the DS, which
-        # dims fill+border+labels together and keeps the selected/unselected text
-        # color — a disabled+selected tile stays white-on-primary, just dimmed).
+            border = resolve("--border-control")
+        # Keep identity readable when editing is locked; avoid nested opacity
+        # effects inside shadowed cards, which can also disrupt Qt repainting.
         if not self.isEnabled():
-            if self._dim is None:
-                self._dim = QGraphicsOpacityEffect(self)
-                self._dim.setOpacity(0.5)
-                self.setGraphicsEffect(self._dim)
-        elif self._dim is not None:
-            self.setGraphicsEffect(None)
-            self._dim = None
+            bg, fg = resolve("--gray-200"), resolve("--ink-800")
         self.setStyleSheet(
             f"#DSProtocolButton {{ background: {bg}; border: 2px solid {border};"
             f" border-radius: {resolve('--radius-md')}; }}"
             f"#DSProtocolButton:hover:enabled {{ border-color: {primary}; }}"
+            f"#DSProtocolButton:focus {{ border: 3px solid {resolve('--ink-900')}; }}"
+            f"#DSProtocolButton:pressed {{ border: 3px solid {resolve('--ink-900')}; }}"
             f" QLabel {{ color: {fg}; background: transparent; }}"
         )

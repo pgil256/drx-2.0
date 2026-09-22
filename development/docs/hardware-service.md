@@ -1,9 +1,11 @@
 # Hardware Tests & Calibration
 
-The GUI provides a technician-only, guided service wizard for the three
-position-feedback actuators, the leg-length actuator, the HX711 load cell,
-communication, and stop inputs. It stages configuration changes for review and
-keeps an evidence report. It does not certify the device or replace the
+The Device page provides separate Hardware Tests and Calibration workflows.
+Hardware Tests covers the three position-feedback actuators, leg-length
+actuator, HX711 load cell, communication, and stop inputs without changing
+calibration. Password-protected Calibration stages actuator and load-cell
+configuration changes for review. Both keep an evidence report and share the
+same movement and stop safeguards. They do not certify the device or replace the
 responsible technician's approved physical bench procedure.
 
 Use an unloaded device with no patient present. Have suitable travel and angle
@@ -16,14 +18,18 @@ checks skipped rather than assuming they passed.
 ## Access and firmware
 
 1. Log in normally. Finish treatment, manual movement and reset operations.
-2. Open **Setup → Hardware Tests & Calibration**, or choose the same item from
-   the profile menu.
-3. Enter the separate six-digit service PIN. On first use, a logged-in
+2. Open **Device** (the wrench), then its third tab, **Service**. Choose
+   **Hardware Tests** for supervised checks, or **Calibration** to adjust settings.
+   Tests cannot record calibration marks, calculate factors, or save
+   calibration, including through the controller action dispatcher.
+3. Service requires the separate six-digit technician PIN. On first use, a logged-in
    administrator creates it and enters it again to confirm. A non-administrator
    cannot perform this initial enrollment.
 
 There is no default service PIN and no fallback to a treatment-login PIN.
-Every new visit requires technician authentication. The salted PBKDF2 hash and
+Every new Service visit requires technician authentication; leaving locks the tab.
+Calibration focuses on measured marks and load-cell factors, while tests contain
+pass/fail observations, leg-length checks and bench inspections. The salted PBKDF2 hash and
 attempt-limit state are stored in
 `devices/local/raspberry-pi/service-pin.json` by default. The selected
 `KNEESPA_DEVICE_DIR` changes the device root; `KNEESPA_SERVICE_PIN_PATH` can

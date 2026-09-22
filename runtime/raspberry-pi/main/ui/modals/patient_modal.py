@@ -13,6 +13,7 @@ from ._overlay import Overlay
 
 class PatientModal(Overlay):
     submitted = pyqtSignal(str)
+    add_requested = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
@@ -34,7 +35,10 @@ class PatientModal(Overlay):
         self._status.setFont(sans_font(size="--text-sm", weight=600))
         self._status.setStyleSheet(f"color: {resolve('--ink-800')}; background: transparent;")
         layout.addWidget(self._status)
-        self._manual = DSButton("Continue without cloud patient", variant="secondary",
+        self._add = DSButton("Add patient in clinician app", full_width=True)
+        self._add.clicked.connect(self.add_requested)
+        layout.addWidget(self._add)
+        self._manual = DSButton("Continue without patient", variant="secondary",
                                 full_width=True)
         self._manual.clicked.connect(self.close_overlay)
         layout.addWidget(self._manual)
@@ -42,6 +46,7 @@ class PatientModal(Overlay):
 
     def set_pending(self, pending: bool) -> None:
         self._keypad.setEnabled(not pending)
+        self._add.setEnabled(not pending)
         if pending:
             self._status.setText("Looking up patient…")
 

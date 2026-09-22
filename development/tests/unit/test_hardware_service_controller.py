@@ -56,7 +56,7 @@ class ServiceArduino(QObject):
 
 
 @pytest.fixture
-def service(qtbot, monkeypatch, tmp_path):
+def service(qtbot, monkeypatch, tmp_path, request):
     clock = [100.0]
     monkeypatch.setattr(module, "time", SimpleNamespace(monotonic=lambda: clock[0]))
     monkeypatch.setattr(module, "DEVICE_STATE_DIR", str(tmp_path))
@@ -85,6 +85,7 @@ def service(qtbot, monkeypatch, tmp_path):
     w._start_service_leg_gpio = MagicMock()
     w.set_protocol_state = lambda value: setattr(w, "protocol_state", value)
     controller = module.HardwareServiceController(w)
+    controller.mode = getattr(request, "param", "calibration")
     controller._start_session()
     controller.timer.stop()
 
@@ -276,6 +277,7 @@ def test_failed_save_retains_draft_and_runtime_config(service, monkeypatch):
     assert not c.saved
 
 
+@pytest.mark.parametrize("service", ["tests"], indirect=True)
 def test_missing_movement_and_missing_stop_evidence_cannot_pass(service):
     c, _, _, feed = service
     prepare(c, feed)
@@ -285,6 +287,38 @@ def test_missing_movement_and_missing_stop_evidence_cannot_pass(service):
         assert step not in c.results
         c.action("result", {"status": "skip", "notes": "No reference tool"})
         assert c.results[step]["status"] == "skip"
+
+
+@pytest.mark.parametrize("service", ["tests"], indirect=True)
+def test_hardware_tests_cannot_mutate_or_save_calibration(service):
+    c, w, _, feed = service
+    prepare(c, feed)
+    select(c, "axial")
+    original = c.draft.changes()
+    for action, value in (("record", 1), ("remove", "0.0"), ("anchor", "start"),
+                          ("factor", 1), ("pressure_calculate", 10), ("save", None)):
+        c.action(action, value)
+    assert c.draft.changes() == original
+    c.draft.factors["horizontal"] = 3720
+    select(c, "review")
+    c.save()
+    assert w.config.b_factor == 1900
+    assert not c.saved
+
+
+def test_tests_and_calibration_both_require_service_pin(service):
+    c, w, _, _ = service
+    c.shutdown()
+    c.open_tests()
+    assert c.dialog is None
+    assert c.pin_dialog is not None
+    c.pin_dialog.submit("654321")
+    c.pin_dialog.submit("654321")
+    assert c.dialog.windowTitle() == "Hardware Tests"
+    c.shutdown()
+    c.open()
+    assert c.dialog is None
+    assert c.pin_dialog is not None
 
 
 def test_authentication_required_on_open_and_each_visit(service):

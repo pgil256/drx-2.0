@@ -43,7 +43,8 @@ class CalibrationDialog(QDialog):
         self.setFont(sans_font(size="--text-base"))
         self.setStyleSheet(
             f"QDialog {{ background: {resolve('--surface-page')}; }}"
-            "QDoubleSpinBox, QSpinBox, QComboBox { min-height: 40px; padding: 0 8px; }"
+            "QComboBox { min-height: 48px; padding: 0 8px; }"
+            "QDoubleSpinBox, QSpinBox { min-height: 48px; padding: 0 8px; }"
             "QAbstractSpinBox::up-button, QAbstractSpinBox::down-button { width: 34px; }"
             "QTabBar::tab { padding: 12px 20px; }"
         )
@@ -86,7 +87,7 @@ class CalibrationDialog(QDialog):
         root.addWidget(self.tabs, 1)
         self.message = QLabel("Waiting for fresh, steady position readings.")
         self.message.setWordWrap(True)
-        self.message.setMinimumHeight(44)
+        self.message.setMinimumHeight(48)
         root.addWidget(self.message)
         footer = QHBoxLayout()
         self.close_button = DSButton("Close", variant="ghost")
@@ -136,7 +137,7 @@ class CalibrationDialog(QDialog):
         self.table.setHorizontalHeaderLabels(["Angle", "Position (counts)", "Source"])
         self.table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
         self.table.verticalHeader().hide()
-        self.table.verticalHeader().setDefaultSectionSize(38)
+        self.table.verticalHeader().setDefaultSectionSize(56)
         self.table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.table.setEditTriggers(QAbstractItemView.NoEditTriggers)
@@ -188,13 +189,13 @@ class CalibrationDialog(QDialog):
     def _number_control(spin: QWidget) -> QWidget:
         """Give numeric entry full-size touch buttons without moving the device."""
         host = QWidget()
-        host.setFixedHeight(48)
+        host.setFixedHeight(56)
         layout = QHBoxLayout(host)
         layout.setContentsMargins(0, 0, 0, 0)
         spin.setButtonSymbols(QSpinBox.NoButtons)
         for label, slot in (("−", spin.stepDown), ("+", spin.stepUp)):
             button = DSButton(label, variant="secondary")
-            button.setFixedSize(52, 44)
+            button.setFixedSize(56, 56)
             button.setStyleSheet("padding: 0; font-size: 24px;")
             button.setAutoRepeat(True)
             button.setAutoRepeatDelay(500)
