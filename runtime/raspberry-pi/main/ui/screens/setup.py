@@ -1,18 +1,28 @@
-"""Manual positioning with independent targets, commands, and sensor readouts."""
+"""Manual positioning with independent targets, commands, and sensor readouts.
+
+Each actuator row reads left to right: name and range │ one segmented jog
+group (drawn « ‹ › » chevrons) │ return/release │ a captioned target stepper │
+the measured (or estimated) reading │ Go │ a quiet per-row stop. A thin,
+non-interactive track under the controls shows the range with a ring at the
+target and a fill to the measured position; targets change only through the
+stepper. The action row keeps the rare "Save defaults" quiet and gives STOP
+the red, widest slot.
+"""
 
 import math
 from typing import Dict, List, Optional
 
-from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
+from PyQt5.QtCore import QRectF, QSize, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QPainter, QPen
+from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from main.config.constants import (
     ACTUATORS, DEFAULT_HORIZONTAL_POSITION, LEG_LENGTH_MAX, LEG_LENGTH_MIN, PRESSURE_MAX,
 )
-from ui.theme import GLYPH
+from ui.theme import control_icon
 from ui.widgets.common import hline
 from ui.widgets.ds import DSButton, DSCard, DSSlider
-from ui.widgets.ds._common import mono_font, resolve, sans_font
+from ui.widgets.ds._common import mark_caption, mono_font, resolve, sans_font
 
 
 ROWS = [
@@ -39,33 +49,91 @@ _READING_REASONS = {
     "Controller fault — last reading stale": "Fault / stale",
 }
 
+_CONTROL_PX = 52
+_NAME_WIDTH = 132
 
-def _label(text: str, size: int = 16, bold: bool = False) -> QLabel:
+
+def _label(text: str, size: str = "--text-sm", bold: bool = False) -> QLabel:
     label = QLabel(text)
     label.setTextFormat(Qt.PlainText)
     label.setFont(sans_font(size=size, weight=600 if bold else 400))
     return label
 
 
+class _PositionTrack(QWidget):
+    """A thin, read-only range track: target ring and a fill to the measurement."""
+
+    def __init__(self, minimum: float, maximum: float, parent=None) -> None:
+        super().__init__(parent)
+        self._min = float(minimum)
+        self._max = float(maximum)
+        self._target: Optional[float] = None
+        self._measured: Optional[float] = None
+        self.setFixedHeight(16)
+        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
+        self.setFocusPolicy(Qt.NoFocus)
+
+    def set_target(self, value: Optional[float]) -> None:
+        self._target = value
+        self.update()
+
+    def set_measured(self, value: Optional[float]) -> None:
+        self._measured = value
+        self.update()
+
+    def _x(self, value: float, left: float, width: float) -> float:
+        span = self._max - self._min or 1.0
+        fraction = max(0.0, min(1.0, (value - self._min) / span))
+        return left + fraction * width
+
+    def paintEvent(self, _event) -> None:
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.Antialiasing, True)
+        ring = 12.0
+        left, width = ring / 2 + 1, self.width() - ring - 2
+        mid = self.height() / 2.0
+        painter.setPen(Qt.NoPen)
+        painter.setBrush(QColor(resolve("--gray-300")))
+        painter.drawRoundedRect(QRectF(left, mid - 2, width, 4), 2, 2)
+        if self._measured is not None:
+            # Bidirectional ranges fill from zero; one-sided ranges from the minimum.
+            origin = 0.0 if self._min < 0 < self._max else self._min
+            a, b = sorted((self._x(origin, left, width), self._x(self._measured, left, width)))
+            painter.setBrush(QColor(resolve("--color-primary")))
+            painter.drawRoundedRect(QRectF(a, mid - 2, max(4.0, b - a), 4), 2, 2)
+        if self._target is not None:
+            x = self._x(self._target, left, width)
+            painter.setBrush(QColor(resolve("--white")))
+            pen = QPen(QColor(resolve("--ink-900")))
+            pen.setWidthF(2.0)
+            painter.setPen(pen)
+            painter.drawEllipse(QRectF(x - ring / 2, mid - ring / 2, ring, ring))
+        painter.end()
+
+
 class _PosRow(QWidget):
     """A sensor reading that can never be populated by target changes."""
 
-    def __init__(self, unit: str, estimated: bool = False, parent=None) -> None:
+    def __init__(self, unit: str, estimated: bool = False, parent=None, on_value=None) -> None:
         super().__init__(parent)
         self.unit = unit
         self.estimated = estimated
+        self._on_value = on_value
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.setAlignment(Qt.AlignVCenter)
-        self._caption = _label("Estimated" if estimated else "Measured", 16)
-        self._value = _label("—", 22, True)
-        self._value.setFont(mono_font(size=22, weight=600))
+        self._caption = _label("Estimated" if estimated else "Measured", "--text-xs", True)
+        self._caption.setStyleSheet(f"color: {resolve('--text-muted')};")
+        mark_caption(self._caption)
+        self._value = _label("—", "--text-md", True)
+        self._value.setFont(mono_font(size="--text-md", weight=600))
+        self._value.setStyleSheet(f"color: {resolve('--text-strong')};")
         for label in (self._caption, self._value):
             label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             label.setMinimumHeight(label.minimumSizeHint().height())
             layout.addWidget(label)
-        self.setFixedWidth(108)
+        self.setFixedWidth(112)
         self.set_value(None, "Zero required" if estimated else "Waiting")
 
     def set_value(self, value: Optional[float], reason: str = "") -> None:
@@ -77,6 +145,44 @@ class _PosRow(QWidget):
         detail = reason or ("Open loop" if self.estimated else "From sensor")
         self.setToolTip(detail)
         self._value.setAccessibleDescription(detail)
+        if self._on_value is not None:
+            self._on_value(value if valid else None)
+
+
+class _JogGroup(QFrame):
+    """Four jog segments in one rounded container, separated by hairlines."""
+
+    def __init__(self, parent=None) -> None:
+        super().__init__(parent)
+        self.setObjectName("JogGroup")
+        self.setAttribute(Qt.WA_StyledBackground, True)
+        self._layout = QHBoxLayout(self)
+        self._layout.setContentsMargins(1, 1, 1, 1)
+        self._layout.setSpacing(0)
+        self.setFixedHeight(_CONTROL_PX + 2)
+        radius = resolve("--radius-md")
+        self.setStyleSheet(
+            f"#JogGroup {{ background: {resolve('--white')};"
+            f" border: 1px solid {resolve('--border-control')}; border-radius: {radius}; }}"
+            "#JogSegment { border: none; border-radius: 0; padding: 0; min-height: 0;"
+            " background: transparent; }"
+            f"#JogSegment:hover {{ background: {resolve('--gray-050')}; }}"
+            f"#JogSegment:pressed {{ background: {resolve('--blue-100')}; }}"
+            f"#JogSegment:disabled {{ background: {resolve('--gray-100')}; }}"
+            f"#JogSegment[keyboardFocus=\"true\"]:focus {{"
+            f" border: 2px solid {resolve('--ink-900')}; }}"
+            f"#JogRule {{ background: {resolve('--border-divider')}; border: none; }}"
+        )
+
+    def add_segment(self, button: QPushButton) -> None:
+        if self._layout.count():
+            rule = QFrame(self)
+            rule.setObjectName("JogRule")
+            rule.setFixedWidth(1)
+            self._layout.addWidget(rule)
+        button.setObjectName("JogSegment")
+        button.setParent(self)
+        self._layout.addWidget(button)
 
 
 class _ActuatorRow(QWidget):
@@ -89,74 +195,113 @@ class _ActuatorRow(QWidget):
         super().__init__(parent)
         self._key = cfg["key"]
         self._step = cfg["step"]
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(0, 6, 0, 6)
+        outer = QVBoxLayout(self)
+        outer.setContentsMargins(0, 8, 0, 6)
+        outer.setSpacing(4)
+        layout = QHBoxLayout()
         layout.setSpacing(12)
+        outer.addLayout(layout)
 
         names = QWidget()
-        names.setFixedWidth(120)
+        names.setFixedWidth(_NAME_WIDTH)
         labels = QVBoxLayout(names)
         labels.setContentsMargins(0, 0, 0, 0)
-        labels.setSpacing(2)
+        labels.setSpacing(0)
         labels.setAlignment(Qt.AlignVCenter)
-        labels.addWidget(_label(cfg["name"], 19, True))
-        labels.addWidget(_label(f"{cfg['min']:g} to {cfg['max']:g}{cfg['unit']}", 16))
+        title = _label(cfg["name"], "--text-md", True)
+        title.setStyleSheet(f"color: {resolve('--text-strong')};")
+        labels.addWidget(title)
+        span = _label(f"{cfg['min']:g} to {cfg['max']:g}{cfg['unit']}")
+        span.setStyleSheet(f"color: {resolve('--text-muted')};")
+        labels.addWidget(span)
         layout.addWidget(names)
 
         self.motion_buttons: List[QWidget] = []
         self.safety_buttons: List[QWidget] = []
-        jogs = QHBoxLayout()
-        jogs.setSpacing(8)
+        ink = resolve("--ink-800")
+        muted = resolve("--gray-400")
+        jogs = _JogGroup()
         specs = [
-            ("jog_rev_fast", "rev_fast", -self._step * 4, "Fast reverse"),
-            ("jog_rev", "rev", -self._step, "Reverse"),
-            ("jog_fwd", "fwd", self._step, "Forward"),
-            ("jog_fwd_fast", "fwd_fast", self._step * 4, "Fast forward"),
-            ("reset", "reset", None, "Return / release"),
+            ("chevrons-left", "rev_fast", -self._step * 4, "Fast reverse"),
+            ("chevron-left", "rev", -self._step, "Reverse"),
+            ("chevron-right", "fwd", self._step, "Forward"),
+            ("chevrons-right", "fwd_fast", self._step * 4, "Fast forward"),
         ]
-        for glyph, action, delta, name in specs:
-            button = QPushButton(GLYPH[glyph])
-            button.setFixedSize(56, 56)
-            button.setFont(sans_font(size=22, weight=600))
-            button.setAccessibleName(f"{cfg['name']}: {name}")
-            button.setToolTip(name)
-            button.setStyleSheet("QPushButton { padding: 0; }")
+        for icon, action, delta, name in specs:
+            button = self._icon_button(icon, ink, muted, f"{cfg['name']}: {name}", name)
             button.clicked.connect(lambda _c, a=action, d=delta: self._on_jog(a, d))
-            jogs.addWidget(button)
+            jogs.add_segment(button)
             self.motion_buttons.append(button)
-        layout.addLayout(jogs)
+        layout.addWidget(jogs)
+
+        reset = self._icon_button("rotate-ccw", ink, muted,
+                                  f"{cfg['name']}: Return / release", "Return / release")
+        reset.setObjectName("ResetButton")
+        reset.setStyleSheet("#ResetButton { padding: 0; min-height: 0; }")
+        reset.clicked.connect(lambda: self._on_jog("reset", None))
+        self.motion_buttons.append(reset)
+        layout.addWidget(reset)
+        layout.addSpacing(8)
 
         self.slider = DSSlider(
             value=cfg["value"], minimum=cfg["min"], maximum=cfg["max"], step=cfg["step"],
-            unit=cfg["unit"], with_steps=True,
+            unit=cfg["unit"], mode="stepper", caption="Target",
         )
         self.slider.set_accessible_label(cfg["name"] + " target")
+        for button in (self.slider._left_btn, self.slider._right_btn):
+            button.setFixedSize(_CONTROL_PX, _CONTROL_PX)
+        self.slider._value_label.setFixedWidth(104)
+        self.slider.layout().setSpacing(6)
         self.slider.valueChanged.connect(self._on_target)
-        self.slider._value_label.setFixedWidth(90)
-        layout.addWidget(self.slider, 1)
+        layout.addWidget(self.slider)
+        layout.addStretch(1)
 
-        self.readout = _PosRow(cfg["unit"], self._key == "leg_length")
+        self.track = _PositionTrack(cfg["min"], cfg["max"])
+        self.readout = _PosRow(cfg["unit"], self._key == "leg_length",
+                               on_value=self.track.set_measured)
         layout.addWidget(self.readout)
+        layout.addSpacing(8)
         go = DSButton("Go", size="sm")
-        go.setFixedSize(56, 56)
-        go.setStyleSheet("QPushButton { padding: 0; }")
+        go.setFixedSize(76, _CONTROL_PX)
         go.setAccessibleName("Move " + cfg["name"] + " to target")
         go.clicked.connect(lambda: self.go.emit(self._key))
-        stop = DSButton("Stop", variant="secondary", size="sm")
-        stop.setAccessibleName("Stop leg" if self._key == "leg_length" else "Stop axes")
-        stop.setMinimumHeight(56)
+        stop = self._icon_button(
+            "stop", resolve("--color-danger"), muted,
+            "Stop leg" if self._key == "leg_length" else "Stop axes", "Stop this movement")
+        stop.setObjectName("RowStop")
+        stop.setStyleSheet("#RowStop { padding: 0; min-height: 0; }")
         stop.clicked.connect(lambda: self.stop.emit(self._key))
         layout.addWidget(go)
         layout.addWidget(stop)
         self.safety_buttons.append(stop)
         self.motion_buttons.append(go)
 
+        track_row = QHBoxLayout()
+        track_row.setContentsMargins(_NAME_WIDTH + 12, 0, 0, 0)
+        track_row.addWidget(self.track)
+        outer.addLayout(track_row)
+        self.track.set_target(self.slider.value())
+
+    @staticmethod
+    def _icon_button(icon: str, color: str, disabled: str, name: str, tip: str) -> QPushButton:
+        button = QPushButton()
+        button.setFixedSize(_CONTROL_PX, _CONTROL_PX)
+        button.setIcon(control_icon(icon, color, 24, disabled_color=disabled))
+        button.setIconSize(QSize(24, 24))
+        button.setCursor(Qt.PointingHandCursor)
+        button.setFocusPolicy(Qt.TabFocus)
+        button.setAccessibleName(name)
+        button.setToolTip(tip)
+        return button
+
     def _on_target(self, value: float) -> None:
+        self.track.set_target(value)
         self.valueChanged.emit(self._key, value)
 
     def set_value(self, value: float) -> None:
         """Reflect a commanded target without changing any sensor reading."""
         self.slider.set_value(value)
+        self.track.set_target(self.slider.value())
 
     def _on_jog(self, action: str, delta: Optional[float]) -> None:
         # Controller feedback owns commanded positions. Pressure arrows edit
@@ -189,7 +334,7 @@ class SetupScreen(QWidget):
         layout.setSpacing(12)
         card = DSCard(padded=False)
         body = card.body_layout
-        body.setContentsMargins(16, 8, 16, 8)
+        body.setContentsMargins(20, 6, 20, 6)
         body.setSpacing(0)
         self._rows = {}
         self._pos = {}
@@ -207,25 +352,25 @@ class SetupScreen(QWidget):
         layout.addWidget(card, 1)
 
         actions = QHBoxLayout()
-        actions.setSpacing(16)
-        self._mark_btn = DSButton(
-            "Save treatment defaults", variant="dark", size="lg", full_width=True,
-        )
+        actions.setSpacing(12)
         self._reset_btn = DSButton(
-            "Reset and home device", variant="secondary", size="lg", full_width=True,
+            "Reset and home", variant="secondary", size="lg",
+            icon=control_icon("rotate-ccw", resolve("--ink-800"), 22,
+                              disabled_color=resolve("--gray-600")),
         )
-        self._reset_btn.setStyleSheet(
-            "QPushButton:disabled {"
-            f" background-color: {resolve('--gray-100')};"
-            f" color: {resolve('--gray-600')};"
-            f" border: 2px solid {resolve('--gray-400')}; }}"
-        )
-        self._estop_btn = DSButton("Stop", variant="danger", size="lg", full_width=True)
+        self._reset_btn.setMinimumWidth(260)
+        self._mark_btn = DSButton("Save defaults", variant="secondary", size="lg")
+        self._mark_btn.setMinimumWidth(220)
+        self._estop_btn = DSButton("STOP", variant="danger", size="lg",
+                                   icon=control_icon("stop", resolve("--white"), 22))
+        self._estop_btn.setMinimumWidth(420)
         self._mark_btn.clicked.connect(self.mark_default_requested)
         self._reset_btn.clicked.connect(self.reset_arduino_requested)
         self._estop_btn.clicked.connect(self.emergency_stop_requested)
-        for button in (self._mark_btn, self._reset_btn, self._estop_btn):
-            actions.addWidget(button, 1)
+        actions.addWidget(self._reset_btn)
+        actions.addWidget(self._mark_btn)
+        actions.addStretch(1)
+        actions.addWidget(self._estop_btn)
         layout.addLayout(actions)
 
     def set_arduino_connected(self, connected: bool) -> None:

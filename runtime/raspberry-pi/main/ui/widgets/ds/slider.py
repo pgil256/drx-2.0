@@ -91,7 +91,7 @@ class DSSlider(QWidget):
 
     def __init__(self, label=None, value=0, minimum=0, maximum=100, step=1,
                  unit="", parent=None, mode="slider", label_width=110, with_steps=False,
-                 hint=None):
+                 hint=None, caption=None):
         super().__init__(parent)
         self._min = float(minimum)
         self._max = float(maximum)
@@ -102,6 +102,7 @@ class DSSlider(QWidget):
         self._mode = mode
         self._with_steps = with_steps
         self._accessible_label = label or "Value"
+        self._caption_text = caption
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(0, 0, 0, 0)
@@ -172,7 +173,25 @@ class DSSlider(QWidget):
         self._value_label.setMinimumWidth(80)
         self._value_label.setAlignment(Qt.AlignCenter)
         self._value_label.setStyleSheet(_LABEL_CSS)
-        lay.addWidget(self._value_label, 1)
+        self._caption = None
+        if self._caption_text:
+            # A small caption over the value names what the number is.
+            column = QVBoxLayout()
+            column.setContentsMargins(0, 0, 0, 0)
+            column.setSpacing(0)
+            column.addStretch(1)
+            self._caption = QLabel(self._caption_text, self)
+            self._caption.setAlignment(Qt.AlignCenter)
+            self._caption.setFont(sans_font(size="--text-xs", weight=600))
+            self._caption.setStyleSheet(
+                f"color: {resolve('--text-muted')}; background: transparent;")
+            mark_caption(self._caption)
+            column.addWidget(self._caption)
+            column.addWidget(self._value_label)
+            column.addStretch(1)
+            lay.addLayout(column, 1)
+        else:
+            lay.addWidget(self._value_label, 1)
 
         self._right_btn = self._arrow_button("plus", self._increment)
         lay.addWidget(self._right_btn)
