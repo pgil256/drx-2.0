@@ -132,7 +132,7 @@ def nested_event(callback: Callable[[], None]) -> None:
 
 @pytest.fixture
 def window_run(themed_app: QApplication, tmp_path: Path,
-               monkeypatch: pytest.MonkeyPatch) -> Iterator[SimpleNamespace]:
+               monkeypatch: pytest.MonkeyPatch, qtbot: QtBot) -> Iterator[SimpleNamespace]:
     """Construct the real window without operator data, serial or network I/O."""
     cfg_path = tmp_path / "kneespa.cfg"
     config = Configuration(str(cfg_path))
@@ -151,6 +151,10 @@ def window_run(themed_app: QApplication, tmp_path: Path,
     monkeypatch.delenv("KNEESPA_SERVICE_PIN_HASH", raising=False)
     monkeypatch.setattr(hardware_service_controller, "DEVICE_STATE_DIR", str(tmp_path))
     monkeypatch.setattr(device_controller, "DEVICE_STATE_DIR", str(tmp_path))
+    monkeypatch.setattr(device_controller.DeviceSettings, "read",
+                        lambda self, key: (None, "Unavailable in tests"))
+    monkeypatch.setattr(device_controller.DeviceSystem, "network", lambda self: {})
+    monkeypatch.setattr(device_controller.DeviceSystem, "clock", lambda self: {})
     monkeypatch.setattr(hardware_service_controller, "ServiceAccess", lambda: ServiceAccess(
         str(tmp_path / "service-pin.json")
     ))
@@ -250,8 +254,14 @@ def window_run(themed_app: QApplication, tmp_path: Path,
     for timer in window.findChildren(QTimer):
         timer.stop()
     window.close()
-    window._cloud_close_thread.join(timeout=1)
-    window.close()
+
+    def finish_cleanup() -> bool:
+        # Single-shot callbacks are held by this fixture; retry close explicitly
+        # while cloud/device workers finish and Qt delivers their completions.
+        window.close()
+        return getattr(window, "_cleanup_complete", False)
+
+    qtbot.waitUntil(finish_cleanup, timeout=3000)
     assert window._cleanup_complete
     assert not window.protocol_timer.isActive()
     window.deleteLater()
