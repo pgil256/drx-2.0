@@ -11,7 +11,10 @@ Typical use in ``main()`` (after ``app.setStyle("Fusion")``)::
 
 from .tokens import TOKENS
 from .qss import apply_theme, load_app_qss, load_fonts, qss, resolve
-from .icons import GLYPH, compress_icon, expand_icon, nav_icon, pause_icon, play_icon
+from .icons import (
+    GLYPH, compress_icon, control_icon, control_pixmap, expand_icon, nav_icon, pause_icon,
+    play_icon,
+)
 
 __all__ = [
     "TOKENS",
@@ -26,4 +29,6 @@ __all__ = [
     "expand_icon",
     "compress_icon",
     "nav_icon",
+    "control_icon",
+    "control_pixmap",
 ]
