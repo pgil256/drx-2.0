@@ -61,7 +61,7 @@ class _ProtocolHelpPanel(QFrame):
         title.setFont(sans_font(size="--text-md", weight=700))
         title.setStyleSheet(f"color: {resolve('--ink-900')};")
         summary = QLabel(p["summary"])
-        summary.setFont(sans_font(size="--text-xs"))
+        summary.setFont(sans_font(size="--text-sm"))
         summary.setStyleSheet(f"color: {resolve('--gray-600')};")
         summary.setWordWrap(True)
         title_box.addWidget(title)

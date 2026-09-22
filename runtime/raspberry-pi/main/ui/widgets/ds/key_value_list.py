@@ -100,8 +100,9 @@ class DSKeyValueList(QWidget):
         dot = QFrame(self)
         dot.setFixedSize(10, 10)
         dot.setVisible(status)
-        self._grid.addWidget(dot, self._row, 0, Qt.AlignVCenter)
         if status:
+            # Only status rows occupy the dot column, so plain lists stay flush.
+            self._grid.addWidget(dot, self._row, 0, Qt.AlignVCenter)
             self._status_keys.add(key)
 
         caption = QLabel(label, self)

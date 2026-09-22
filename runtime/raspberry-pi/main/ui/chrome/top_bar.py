@@ -26,7 +26,7 @@ from PyQt5.QtWidgets import (
 from ui.presentation import device_status_tone
 from ui.widgets.common import ClickableLabel, image_label
 from ui.widgets.ds import DSBadge
-from ui.widgets.ds._common import image_path, resolve, sans_font
+from ui.widgets.ds._common import image_path, mark_caption, resolve, sans_font
 from ui.widgets.press_feedback import install_press_feedback
 
 BAR_HEIGHT = 84
@@ -105,6 +105,7 @@ class TopBar(QFrame):
         self._name.setStyleSheet(f"color: {white}; background: transparent;")
         self._role = QLabel("Clinician")
         self._role.setFont(sans_font(size="--text-xs"))
+        mark_caption(self._role)
         self._role.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self._role.setStyleSheet(
             f"color: {resolve('--text-on-dark-muted')}; background: transparent;")

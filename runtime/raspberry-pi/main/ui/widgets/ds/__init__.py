@@ -9,6 +9,7 @@ deferred (imported-but-unused in `app/bundle.jsx`).
 from .badge import DSBadge
 from .button import DSButton
 from .card import DSCard
+from .dialog import DSDialog
 from .key_value_list import DSKeyValueList
 from .keypad import DSKeypad
 from .nav_rail_button import DSNavRailButton
@@ -21,6 +22,7 @@ __all__ = [
     "DSBadge",
     "DSButton",
     "DSCard",
+    "DSDialog",
     "DSKeyValueList",
     "DSKeypad",
     "DSNavRailButton",

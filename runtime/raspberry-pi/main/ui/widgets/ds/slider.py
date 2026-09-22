@@ -16,12 +16,13 @@ from PyQt5.QtWidgets import (
     QSlider,
     QStyle,
     QStyleOptionSlider,
+    QVBoxLayout,
     QWidget,
 )
 
 from ui.theme import control_icon
 
-from ._common import mono_font, resolve, sans_font
+from ._common import mark_caption, mono_font, resolve, sans_font
 
 _LABEL_CSS = f"color: {resolve('--ink-800')}; background: transparent;"
 
@@ -89,7 +90,8 @@ class DSSlider(QWidget):
     valueChanged = pyqtSignal(float)
 
     def __init__(self, label=None, value=0, minimum=0, maximum=100, step=1,
-                 unit="", parent=None, mode="slider", label_width=110, with_steps=False):
+                 unit="", parent=None, mode="slider", label_width=110, with_steps=False,
+                 hint=None):
         super().__init__(parent)
         self._min = float(minimum)
         self._max = float(maximum)
@@ -105,12 +107,29 @@ class DSSlider(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(14)
 
+        self._hint = None
         if label is not None:
             self._label = QLabel(label, self)
             self._label.setFont(sans_font(size="--text-base"))
             self._label.setMinimumWidth(label_width)
             self._label.setStyleSheet(_LABEL_CSS)
-            lay.addWidget(self._label)
+            if hint:
+                # A caption under the label, e.g. the allowed range "5–30 min".
+                names = QVBoxLayout()
+                names.setContentsMargins(0, 0, 0, 0)
+                names.setSpacing(0)
+                names.addStretch(1)
+                names.addWidget(self._label)
+                self._hint = QLabel(hint, self)
+                self._hint.setFont(sans_font(size="--text-xs"))
+                mark_caption(self._hint)
+                self._hint.setStyleSheet(
+                    f"color: {resolve('--text-muted')}; background: transparent;")
+                names.addWidget(self._hint)
+                names.addStretch(1)
+                lay.addLayout(names)
+            else:
+                lay.addWidget(self._label)
 
         if mode == "stepper":
             self._build_stepper(lay)

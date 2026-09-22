@@ -8,7 +8,7 @@ neutral fill with readable text. Put the four tiles in an exclusive QButtonGroup
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QLabel, QPushButton, QVBoxLayout
 
-from ._common import resolve, sans_font
+from ._common import mark_caption, resolve, sans_font
 
 
 class DSProtocolButton(QPushButton):
@@ -32,6 +32,7 @@ class DSProtocolButton(QPushButton):
 
         self._name = QLabel(str(name).upper(), self)
         self._name.setFont(sans_font(size="--text-2xs", weight=600, tracking=0.03))
+        mark_caption(self._name)
         self._name.setAlignment(Qt.AlignCenter)
         self._name.setAttribute(Qt.WA_TransparentForMouseEvents, True)
 

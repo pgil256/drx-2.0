@@ -10,7 +10,7 @@ from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QFrame, QLabel
 
-from .ds._common import resolve, sans_font
+from .ds._common import mark_caption, resolve, sans_font
 
 
 class ClickableLabel(QLabel):
@@ -44,6 +44,7 @@ def eyebrow(text, parent=None):
     """Uppercase, letter-spaced, muted section caption (the DS T_EYEBROW)."""
     lbl = QLabel(text.upper(), parent)
     lbl.setFont(sans_font(size="--text-xs", weight=600, tracking=0.06))
+    mark_caption(lbl)
     lbl.setStyleSheet(f"color: {resolve('--gray-600')}; background: transparent;")
     return lbl
 

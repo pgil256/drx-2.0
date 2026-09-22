@@ -9,6 +9,7 @@ conftest forces QT_QPA_PLATFORM=offscreen; no backend is involved.
 from unittest.mock import MagicMock
 
 import pytest
+from PyQt5.QtCore import QPoint
 
 pytestmark = pytest.mark.integration
 
@@ -217,7 +218,53 @@ def test_treatment_duration_slider_locks_during_run(shell):
 
 
 def test_treatment_stop_button_uses_concise_label(shell):
-    assert shell.treatment._estop_btn.text() == "Stop"
+    # Run controls are the only uppercase labels, and STOP is red, never blue.
+    t = shell.treatment
+    assert t._estop_btn.text() == "STOP"
+    assert t._estop_btn.variant() == "danger"
+    assert t._start_btn.variant() == "success"
+    assert t._pause_btn.variant() == "secondary"
+
+
+def test_treatment_readouts_keep_one_size_across_outcomes(shell):
+    t = shell.treatment
+    sizes = (t._time_stat._size, t._pressure_stat._size)
+    t.set_outcome("completed", 720)
+    assert (t._time_stat._size, t._pressure_stat._size) == sizes
+    t.clear_outcome()
+    assert (t._time_stat._size, t._pressure_stat._size) == sizes
+
+
+def test_outcome_swaps_start_for_prepare_next_without_moving_stop(shell, qtbot):
+    shell.setFixedSize(1366, 768)
+    shell.navigate("protocols")
+    shell.show()
+    t = shell.treatment
+    qtbot.wait(1)
+    stop = t._estop_btn.geometry()
+    start = t._start_btn.geometry()
+    t.set_outcome("completed", 720)
+    qtbot.wait(1)
+    assert t._next_button.isVisible() and not t._start_btn.isVisible()
+    assert t._next_button.geometry() == start
+    assert t._estop_btn.geometry() == stop
+    t.clear_outcome()
+    qtbot.wait(1)
+    assert t._start_btn.isVisible() and not t._next_button.isVisible()
+
+
+def test_readiness_line_reserves_its_height(shell, qtbot):
+    shell.setFixedSize(1366, 768)
+    shell.navigate("protocols")
+    shell.show()
+    t = shell.treatment
+    t.set_device_status("Ready", "Review settings before starting.", True)
+    qtbot.wait(1)
+    idle = t._pressure_stat.mapTo(shell, QPoint())
+    t.set_device_status("Controller offline", "Commands may not reach the device.", False)
+    qtbot.wait(1)
+    assert not t._readiness.isHidden()
+    assert t._pressure_stat.mapTo(shell, QPoint()) == idle
 
 
 def test_treatment_protocol_select_and_settings(shell):

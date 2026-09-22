@@ -20,6 +20,7 @@ os.environ.setdefault("KNEESPA_DEVICE_DIR", os.path.abspath(os.path.join(
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "runtime", "raspberry-pi", "main"))
 sys.path.insert(0, os.path.dirname(sys.path[0]))
 
+from PyQt5.QtGui import QPainter  # noqa: E402
 from PyQt5.QtWidgets import QApplication  # noqa: E402
 from PyQt5.QtTest import QTest  # noqa: E402
 
@@ -33,15 +34,27 @@ from ui.modals.treatment_review import TreatmentReviewDialog  # noqa: E402
 W, H = 1366, 768
 
 
-def _grab(shell, app, path):
+def _settle(app):
     # Hidden pages and newly closed dialogs may schedule a second layout pass.
     for _ in range(3):
         app.sendPostedEvents()
         app.processEvents()
     QTest.qWait(60)
+
+
+def _grab(shell, app, path, *dialogs):
+    """Save the shell, compositing any open DSDialog windows over their scrim."""
+    _settle(app)
     shell.repaint()
     app.processEvents()
-    shell.grab().save(path)
+    image = shell.grab()
+    if dialogs:
+        painter = QPainter(image)
+        origin = shell.mapToGlobal(shell.rect().topLeft())
+        for dialog in dialogs:
+            painter.drawPixmap(dialog.pos() - origin, dialog.grab())
+        painter.end()
+    image.save(path)
     print(f"  saved {os.path.basename(path)}")
 
 
@@ -83,7 +96,7 @@ def render_all(outdir, width=W, height=H):
     shell.treatment.set_angle(0)
     _grab(shell, app, os.path.join(outdir, "05-treatment.png"))
     shell.treatment.open_treatment_editor()
-    _grab(shell.treatment._editor, app, os.path.join(outdir, "05b-edit-treatment.png"))
+    _grab(shell, app, os.path.join(outdir, "05b-edit-treatment.png"), shell.treatment._editor)
     shell.treatment._editor.accept()
 
     # Treatment mid-run state (exercise the run-state model + telemetry setters).
@@ -167,7 +180,7 @@ def render_all(outdir, width=W, height=H):
 
     review = TreatmentReviewDialog(4, view.settings_values(), "Patient: Demonstration", shell)
     review.show()
-    _grab(review, app, os.path.join(outdir, "12-start-review.png"))
+    _grab(shell, app, os.path.join(outdir, "12-start-review.png"), review)
     review.close()
 
     view.set_run_state(True, False)
@@ -202,6 +215,7 @@ def render_all(outdir, width=W, height=H):
     view.set_pressure_state("Pressure live")
     view.set_angle(0)
     view.set_cloud_status("Upload failed · record retained for retry")
+    view.set_upload_error()
     _grab(shell, app, os.path.join(outdir, "18-completed-upload-failed.png"))
     view.clear_outcome()
     view.set_phase("idle")

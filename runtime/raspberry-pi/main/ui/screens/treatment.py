@@ -1,13 +1,23 @@
 """TreatmentScreen — run a treatment (Protocols page).
 
 Patient identity and records occupy a compact strip above the selected protocol.
-The full-width monitor sits above a compact settings strip and fixed run controls.
+The full-width monitor sits above a one-row settings strip and fixed run controls.
 Protocol choices stay above the read-only settings; Edit treatment opens their controls.
 During treatment, only permitted live settings remain editable. The controller
 supplies readiness and measurement validity.
 
+The monitor is two columns — measured pressure with its limit beneath, time
+remaining with the phase and outcome beneath — then the progress bar. Nothing
+in it changes size between states: the readiness line keeps its height when
+empty and readouts keep one size, so an operator watching for 12 minutes never
+sees the numbers jump.
+
+Run controls follow the action grammar: START/RESUME green, PAUSE outline,
+STOP red. While an outcome is showing, "Prepare next treatment" takes START's
+slot; STOP never moves.
+
 The ``TreatmentStatusPanel`` banner (kneespa.py) stays hidden while a protocol
-runs -- this page's Live Status card and STOP button are the operator's view.
+runs -- this page's monitor and STOP button are the operator's view.
 
 View + signal surface only; the controller drives the setters below.
 
@@ -16,14 +26,13 @@ Signals:
     patient_change_requested / patient_edit_requested / cloud_error_requested
     start_requested / resume_requested / pause_requested / estop_requested
     setting_changed(str, float) — treatment settings and shared motor_speed
+    cloud_status_changed(str) / outcome_recorded(str, int) — mirrored on Home
 """
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QButtonGroup,
-    QBoxLayout,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QSizePolicy,
@@ -43,7 +52,7 @@ except ModuleNotFoundError:
     )
 from helpers.motor_speed import treatment_motor_speed
 from ui.modals.treatment_editor import TreatmentEditorDialog
-from ui.theme import pause_icon, play_icon
+from ui.theme import control_icon, pause_icon, play_icon
 from ui.widgets.common import eyebrow
 from ui.widgets.ds import (
     DSBadge,
@@ -52,7 +61,8 @@ from ui.widgets.ds import (
     DSProtocolButton,
     DSStatReadout,
 )
-from ui.widgets.ds._common import mono_font, resolve, sans_font
+from ui.widgets.ds._common import mark_caption, mono_font, resolve, sans_font
+from ui.widgets.ds.key_value_list import status_tone
 
 from .content import PHASES, PROTOCOLS
 
@@ -74,11 +84,27 @@ TREATMENT_SETTING_SPECS = SETTING_SPECS + [
     ("motor_speed", "Motor Speed", MOTOR_SPEED_DEFAULT,
      MOTOR_SPEED_MIN, MOTOR_SPEED_MAX, MOTOR_SPEED_STEP, "%"),
 ]
+# Chip order in the settings strip (angles hide per protocol).
+_SUMMARY_ORDER = ("duration", "max_pressure", "max_left", "max_right", "pulse_rate",
+                  "motor_speed")
+_SUMMARY_LABELS = {"duration": "Duration", "max_pressure": "Pressure limit",
+                   "max_left": "Left angle", "max_right": "Right angle",
+                   "pulse_rate": "Pulse rate", "motor_speed": "Motor speed"}
+_OUTCOME_TITLES = {"completed": "Treatment completed", "stopped": "Stopped by operator",
+                   "fault": "Ended with a fault"}
+_TONE_COLORS = {"success": "--green-600", "warning": "--amber-500", "danger": "--red-500",
+                "neutral": "--gray-400", "info": "--blue-500"}
 
 
 def _mmss(seconds):
     seconds = max(0, int(seconds))
     return f"{seconds // 60}:{seconds % 60:02d}"
+
+
+def _retain_when_hidden(widget: QWidget) -> None:
+    policy = widget.sizePolicy()
+    policy.setRetainSizeWhenHidden(True)
+    widget.setSizePolicy(policy)
 
 
 class TreatmentScreen(QWidget):
@@ -116,8 +142,8 @@ class TreatmentScreen(QWidget):
         self._outcome = None
 
         root = QVBoxLayout(self)
-        root.setContentsMargins(_PAD, 6, _PAD, 6)
-        root.setSpacing(4)
+        root.setContentsMargins(_PAD, 8, _PAD, 8)
+        root.setSpacing(_GAP)
         root.addWidget(self._patient_card(), 0)
         root.addWidget(self._protocol_card(), 0)
         self._settings_panel = self._settings_card()
@@ -134,7 +160,7 @@ class TreatmentScreen(QWidget):
         card = DSCard(padded=False)
         host = QWidget()
         row = QHBoxLayout(host)
-        row.setContentsMargins(16, 6, 16, 6)
+        row.setContentsMargins(16, 8, 16, 8)
         row.setSpacing(24)
 
         self._protocol_choices = QWidget()
@@ -158,21 +184,21 @@ class TreatmentScreen(QWidget):
 
         rule = QFrame()
         rule.setFixedWidth(1)
-        rule.setStyleSheet(f"background: {resolve('--gray-300')}; border: none;")
+        rule.setStyleSheet(f"background: {resolve('--border-divider')}; border: none;")
         row.addWidget(rule)
 
         copy = QVBoxLayout()
-        copy.setSpacing(4)
+        copy.setSpacing(2)
         self._title = QLabel()
-        self._title.setFont(sans_font(size="--text-lg", weight=700, tracking=-0.01))
-        self._title.setStyleSheet(f"color: {resolve('--ink-900')}; background: transparent;")
+        self._title.setFont(sans_font(size="--text-lg", weight=600, tracking=-0.01))
+        self._title.setStyleSheet(f"color: {resolve('--text-strong')}; background: transparent;")
         self._desc = QLabel()
         self._desc.setWordWrap(True)
         self._desc.setFont(sans_font(size="--text-sm"))
         metrics = self._desc.fontMetrics()
         self._desc.setFixedHeight(metrics.height() + metrics.lineSpacing())
         self._desc.setAlignment(Qt.AlignLeft | Qt.AlignTop)
-        self._desc.setStyleSheet(f"color: {resolve('--gray-600')}; background: transparent;")
+        self._desc.setStyleSheet(f"color: {resolve('--text-muted')}; background: transparent;")
         copy.addStretch(1)
         copy.addWidget(self._title)
         copy.addWidget(self._desc)
@@ -189,7 +215,7 @@ class TreatmentScreen(QWidget):
         body.setContentsMargins(16, 6, 16, 6)
         body.setSpacing(20)
         patient = QVBoxLayout()
-        patient.setSpacing(2)
+        patient.setSpacing(0)
         patient.setAlignment(Qt.AlignVCenter)
         self._patient_label = QLabel(NO_PATIENT)
         self._patient_label.setTextFormat(Qt.PlainText)
@@ -197,7 +223,7 @@ class TreatmentScreen(QWidget):
         self._patient_label.setFont(sans_font(size="--text-base", weight=600))
         patient.addWidget(self._patient_label)
         self._patient_detail = QLabel("This treatment will not upload.")
-        self._patient_detail.setFont(sans_font(size=16))
+        self._patient_detail.setFont(sans_font(size="--text-sm"))
         self._patient_detail.setWordWrap(True)
         self._patient_detail.setStyleSheet(f"color: {resolve('--text-muted')};")
         patient.addWidget(self._patient_detail)
@@ -215,24 +241,31 @@ class TreatmentScreen(QWidget):
         body.addLayout(actions)
 
         records = QVBoxLayout()
-        records.setSpacing(2)
+        records.setSpacing(0)
         records.setAlignment(Qt.AlignVCenter)
         records_heading = QLabel("Treatment records")
         records_heading.setFont(sans_font(size="--text-base", weight=600))
         records.addWidget(records_heading)
+        status_row = QHBoxLayout()
+        status_row.setSpacing(8)
+        self._cloud_dot = QFrame()
+        self._cloud_dot.setFixedSize(8, 8)
+        status_row.addWidget(self._cloud_dot, 0, Qt.AlignVCenter)
         self._cloud_status = QLabel("Cloud not configured")
         self._cloud_status.setTextFormat(Qt.PlainText)
         self._cloud_status.setWordWrap(True)
-        self._cloud_status.setFont(sans_font(size=16))
-        self._cloud_status.setStyleSheet(f"color: {resolve('--text-muted')};")
-        records.addWidget(self._cloud_status)
+        self._cloud_status.setFont(sans_font(size="--text-sm"))
+        status_row.addWidget(self._cloud_status, 1)
+        records.addLayout(status_row)
         body.addLayout(records, 2)
         self._upload_error_button = DSButton("Upload issue", variant="secondary", size="sm")
+        self._upload_error_button.setIcon(control_icon("alert", resolve("--amber-500"), 18))
         self._upload_error_button.clicked.connect(self.cloud_error_requested)
         self._upload_error_button.hide()
         body.addWidget(self._upload_error_button)
         card.add_layout(body)
         self._set_patient_status(NO_PATIENT, "--gray-600")
+        self._render_cloud_status("Cloud not configured")
         return card
 
     # ----- build: settings -----
@@ -241,25 +274,13 @@ class TreatmentScreen(QWidget):
         card.setAccessibleName("Current treatment settings")
         card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         body = card.body_layout
-        body.setContentsMargins(20, 12, 20, 12)
+        body.setContentsMargins(16, 12, 16, 12)
         strip = QHBoxLayout()
-        strip.setSpacing(32)
+        strip.setSpacing(12)
         body.addLayout(strip)
-        summary = QVBoxLayout()
-        summary.setSpacing(8)
-        summary.addWidget(eyebrow("Treatment settings"))
-        grid = QGridLayout()
-        grid.setHorizontalSpacing(32)
-        grid.setVerticalSpacing(10)
-        for column in range(3):
-            grid.setColumnStretch(column, 1)
-        summary.addLayout(grid)
-        strip.addLayout(summary, 1)
-        self._edit_treatment_button = DSButton(
-            "Edit treatment", variant="primary", size="md",
-        )
-        self._edit_treatment_button.setFixedSize(240, 64)
-        self._edit_treatment_button.setStyleSheet("font-size: 20px;")
+
+        self._edit_treatment_button = DSButton("Edit treatment", variant="primary", size="md")
+        self._edit_treatment_button.setFixedSize(220, 64)
         self._edit_treatment_button.clicked.connect(self.open_treatment_editor)
 
         self._editor = TreatmentEditorDialog(TREATMENT_SETTING_SPECS, self)
@@ -269,30 +290,36 @@ class TreatmentScreen(QWidget):
         self._settings = self._editor._settings
         self._summary_rows = {}
         self._summary_values = {}
-        labels = {"max_pressure": "Pressure limit", "max_left": "Left angle",
-                  "max_right": "Right angle", "pulse_rate": "Pulse rate",
-                  "motor_speed": "Motor speed"}
-        positions = {"duration": (0, 0), "max_pressure": (0, 1), "pulse_rate": (0, 2),
-                     "max_left": (1, 0), "max_right": (1, 1), "motor_speed": (1, 2)}
-        for key, label, _value, _low, _high, _step, _unit in TREATMENT_SETTING_SPECS:
-            row = QWidget()
-            policy = row.sizePolicy()
-            policy.setRetainSizeWhenHidden(True)
-            row.setSizePolicy(policy)
-            row_layout = QHBoxLayout(row)
-            row_layout.setContentsMargins(0, 0, 0, 0)
-            row_layout.setSpacing(12)
-            row_layout.setAlignment(Qt.AlignVCenter)
-            caption = QLabel(labels.get(key, label))
-            caption.setFont(sans_font(size=16))
+        chip_style = (
+            f"#SettingChip {{ background: {resolve('--blue-050')};"
+            f" border-radius: {resolve('--radius-md')}; }}"
+            " #SettingChip QLabel { background: transparent; }"
+        )
+        chips = QHBoxLayout()
+        chips.setSpacing(8)
+        for key in _SUMMARY_ORDER:
+            chip = QFrame()
+            chip.setObjectName("SettingChip")
+            chip.setAttribute(Qt.WA_StyledBackground, True)
+            chip.setStyleSheet(chip_style)
+            chip.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
+            chip.setMinimumWidth(96)
+            text = QVBoxLayout(chip)
+            text.setContentsMargins(14, 8, 14, 8)
+            text.setSpacing(0)
+            caption = QLabel(_SUMMARY_LABELS[key])
+            caption.setFont(sans_font(size="--text-xs", weight=600))
+            mark_caption(caption)
+            caption.setStyleSheet(f"color: {resolve('--text-muted')};")
             value = QLabel()
-            value.setFont(mono_font(size=22, weight=600))
-            value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-            row_layout.addWidget(caption, 1)
-            row_layout.addWidget(value)
-            self._summary_rows[key] = row
+            value.setFont(mono_font(size="--text-md", weight=600))
+            value.setStyleSheet(f"color: {resolve('--text-strong')};")
+            text.addWidget(caption)
+            text.addWidget(value)
+            self._summary_rows[key] = chip
             self._summary_values[key] = value
-            grid.addWidget(row, *positions[key])
+            chips.addWidget(chip, 1)
+        strip.addLayout(chips, 1)
         strip.addWidget(self._edit_treatment_button, 0, Qt.AlignVCenter)
         self._update_settings_summary()
         return card
@@ -314,7 +341,6 @@ class TreatmentScreen(QWidget):
         self._editor.show()
         self._editor.raise_()
         self._editor.activateWindow()
-        self._editor.done_button.setFocus()
 
     def _editor_closed(self, _result: int) -> None:
         self._adjusting = False
@@ -348,55 +374,70 @@ class TreatmentScreen(QWidget):
     def _status_card(self):
         card = DSCard(padded=True)
         body = card.body_layout
-        body.setContentsMargins(20, 12, 20, 12)
-        body.setSpacing(8)
+        body.setContentsMargins(24, 14, 24, 16)
+        body.setSpacing(6)
         hdr = QHBoxLayout()
         hdr.setContentsMargins(0, 0, 0, 0)
         hdr.addWidget(eyebrow("Treatment monitor"))
         hdr.addStretch(1)
-        self._phase_badge = DSBadge(PHASES["idle"][0], tone=PHASES["idle"][1], dot=True)
-        hdr.addWidget(self._phase_badge)
+        self._angle_stat = DSStatReadout("—", label="Lateral angle (approx.)", size="sm")
+        self._inline_stat(self._angle_stat)
+        hdr.addWidget(self._angle_stat)
         card.add_layout(hdr)
 
-        # Readouts reserve the width of their widest value ("12:00", "80 lbs",
-        # "-20°") so the row doesn't re-flow every time the digit count changes.
+        # The readiness line keeps its height while empty so the readouts
+        # below it never move between states.
         self._readiness = QLabel()
-        self._readiness.setWordWrap(True)
-        self._readiness.setFont(sans_font(size=16))
+        self._readiness.setWordWrap(False)
+        self._readiness.setFont(sans_font(size="--text-sm"))
+        self._readiness.setStyleSheet(f"color: {resolve('--text-muted')};")
+        self._readiness.setMinimumHeight(self._readiness.fontMetrics().height())
+        _retain_when_hidden(self._readiness)
         body.addWidget(self._readiness)
-        self._outcome_label = QLabel()
-        self._outcome_label.setWordWrap(True)
-        self._outcome_label.setFont(sans_font(size=18, weight=600))
-        self._outcome_label.hide()
-        body.addWidget(self._outcome_label)
-        readouts = QHBoxLayout()
-        readouts.setSpacing(24)
+
+        columns = QHBoxLayout()
+        columns.setSpacing(24)
+        # Left: measured pressure with its limit directly beneath.
+        left = QVBoxLayout()
+        left.setSpacing(8)
+        left.addStretch(1)
+        self._pressure_stat = DSStatReadout("—", unit="lbs", label="Waiting for pressure",
+                                            tone="default", size="lg")
+        self._compact_stat(self._pressure_stat)
+        left.addWidget(self._pressure_stat)
+        self._limit_stat = DSStatReadout("40", unit="lbs", label="Limit", size="sm")
+        self._inline_stat(self._limit_stat)
+        left.addWidget(self._sub_row(self._limit_stat))
+        left.addStretch(1)
+        columns.addLayout(left, 1)
+        # Right: time remaining with the phase (and any outcome) beneath.
+        right = QVBoxLayout()
+        right.setSpacing(8)
+        right.addStretch(1)
         self._time_stat = DSStatReadout(_mmss(DEFAULT_PROTOCOL_MINUTES * 60),
                                        label="Time remaining", tone="default", size="lg")
         self._time_stat.setMinimumWidth(180)
-        self._pressure_stat = DSStatReadout("—", unit="lbs", label="Waiting for pressure",
-                                            tone="default", size="lg")
-        self._angle_stat = DSStatReadout("—", label="Lateral angle (approx.)", size="sm")
-        self._limit_stat = DSStatReadout("40", unit="lbs", label="Selected pressure limit",
-                                         size="sm")
-        for stat in (self._pressure_stat, self._time_stat):
-            stat.layout().setAlignment(Qt.AlignVCenter)
-            stat.layout().setSpacing(4)
-            readouts.addWidget(stat, 1)
-        body.addLayout(readouts, 1)
-
-        details = QHBoxLayout()
-        for stat in (self._limit_stat, self._angle_stat):
-            stat.layout().setDirection(QBoxLayout.LeftToRight)
-            stat.layout().insertWidget(0, stat._caption)
-            stat.layout().setSpacing(12)
-            stat._caption.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-            stat._value_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-            stat.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
-        details.addWidget(self._limit_stat)
-        details.addStretch(1)
-        details.addWidget(self._angle_stat)
-        body.addLayout(details)
+        self._compact_stat(self._time_stat)
+        right.addWidget(self._time_stat)
+        phase_row = QHBoxLayout()
+        phase_row.setContentsMargins(0, 0, 0, 0)
+        phase_row.setSpacing(10)
+        phase_row.addStretch(1)
+        self._phase_badge = DSBadge(PHASES["idle"][0], tone=PHASES["idle"][1], dot=True,
+                                    size="md")
+        phase_row.addWidget(self._phase_badge)
+        self._outcome_label = QLabel()
+        self._outcome_label.setFont(sans_font(size="--text-sm", weight=600))
+        self._outcome_label.setStyleSheet(f"color: {resolve('--text-body')};")
+        self._outcome_label.hide()
+        phase_row.addWidget(self._outcome_label)
+        phase_row.addStretch(1)
+        phase_host = QWidget()
+        phase_host.setLayout(phase_row)
+        right.addWidget(self._sub_row(phase_host))
+        right.addStretch(1)
+        columns.addLayout(right, 1)
+        body.addLayout(columns, 1)
 
         # Progress bar: a fixed-width fill inside a rounded track, re-flowed on
         # resize (QSS cannot animate a sub-control width).
@@ -413,33 +454,63 @@ class TreatmentScreen(QWidget):
         self._fill.setObjectName("ProgFill")
         self._fill.setAttribute(Qt.WA_StyledBackground, True)
         self._fill.setStyleSheet(
-            "#ProgFill { border-radius: 5px; background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-            f" stop:0 {resolve('--blue-500')}, stop:1 {resolve('--blue-600')}); }}"
+            f"#ProgFill {{ border-radius: 5px; background: {resolve('--color-primary')}; }}"
         )
         tlay.addWidget(self._fill, 0)
         tlay.addStretch(1)
         self._track.installEventFilter(self)
         body.addWidget(self._track)
-        self._next_button = DSButton("Prepare next treatment", variant="secondary", size="sm")
-        self._next_button.clicked.connect(self.next_treatment_requested)
-        self._next_button.hide()
-        details.insertWidget(2, self._next_button)
-        details.insertStretch(3, 1)
         return card
+
+    @staticmethod
+    def _compact_stat(stat: DSStatReadout) -> None:
+        """Keep value and caption together so both columns line up exactly."""
+        stat.layout().setSpacing(2)
+        stat.layout().setAlignment(Qt.AlignCenter)
+        stat.setSizePolicy(QSizePolicy.Preferred, QSizePolicy.Fixed)
+
+    @staticmethod
+    def _sub_row(widget: QWidget) -> QWidget:
+        """A fixed-height line under a readout (limit / phase) so columns match."""
+        host = QWidget()
+        host.setFixedHeight(40)
+        row = QHBoxLayout(host)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.addWidget(widget, 0, Qt.AlignCenter)
+        return host
+
+    @staticmethod
+    def _inline_stat(stat: DSStatReadout) -> None:
+        """Lay a small readout out as ``CAPTION value`` on one line."""
+        layout = stat.layout()
+        layout.setDirection(QVBoxLayout.LeftToRight)
+        layout.insertWidget(0, stat._caption)
+        layout.setSpacing(10)
+        stat._caption.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        stat._value_label.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
+        stat.setSizePolicy(QSizePolicy.Maximum, QSizePolicy.Preferred)
 
     # ----- build: run controls -----
     def _run_controls(self):
         row = QHBoxLayout()
         row.setSpacing(_GAP)
-        self._start_btn = DSButton("START", variant="dark", size="lg", full_width=True,
-                                   icon=play_icon("#ffffff", 22))
+        white = resolve("--white")
+        self._start_btn = DSButton("START", variant="success", size="lg", full_width=True,
+                                   icon=play_icon(white, 22))
         self._start_btn.clicked.connect(self._on_start)
+        # After an outcome, preparing the next treatment takes START's slot.
+        self._next_button = DSButton("Prepare next treatment", variant="primary", size="lg",
+                                     full_width=True)
+        self._next_button.clicked.connect(self.next_treatment_requested)
+        self._next_button.hide()
+        pause = pause_icon(resolve("--ink-800"), 22)
         self._pause_btn = DSButton("PAUSE", variant="secondary", size="lg", full_width=True,
-                                   icon=pause_icon(resolve("--ink-800"), 20))
+                                   icon=pause)
         self._pause_btn.clicked.connect(self.pause_requested)
-        self._estop_btn = DSButton("Stop", variant="danger", size="lg", full_width=True)
+        self._estop_btn = DSButton("STOP", variant="danger", size="lg", full_width=True,
+                                   icon=control_icon("stop", white, 22))
         self._estop_btn.clicked.connect(self.estop_requested)
-        for b in (self._start_btn, self._pause_btn, self._estop_btn):
+        for b in (self._start_btn, self._next_button, self._pause_btn, self._estop_btn):
             row.addWidget(b, 1)
         return row
 
@@ -540,25 +611,24 @@ class TreatmentScreen(QWidget):
                 self._outcome, "idle"
             ))
 
+    def _show_next_slot(self, show_next: bool) -> None:
+        self._start_btn.setVisible(not show_next)
+        self._next_button.setVisible(show_next)
+
     def set_outcome(self, outcome: str, duration_seconds: int) -> None:
         """Retain the terminal result independently of reset and cloud delivery."""
         self._outcome = outcome
-        title = {"completed": "Treatment completed", "stopped": "Stopped by operator",
-                 "fault": "Treatment ended with a fault"}.get(outcome, "Treatment ended")
-        self._outcome_label.setText(f"{title} · active time {_mmss(duration_seconds)}")
+        title = _OUTCOME_TITLES.get(outcome, "Treatment ended")
+        self._outcome_label.setText(f"{title} · active {_mmss(duration_seconds)}")
         self._outcome_label.show()
-        self._next_button.show()
+        self._show_next_slot(True)
         self._next_button.setEnabled(self._can_start and not self._running and not self._busy)
-        for stat in (self._time_stat, self._pressure_stat):
-            stat.set_size("sm")
         self.outcome_recorded.emit(outcome, int(duration_seconds))
 
     def clear_outcome(self) -> None:
         self._outcome = None
         self._outcome_label.hide()
-        self._next_button.hide()
-        for stat in (self._time_stat, self._pressure_stat):
-            stat.set_size("lg")
+        self._show_next_slot(False)
 
     def set_busy(self, busy):
         """Lock START/PAUSE while the device is mid-reset / reconnecting."""
@@ -670,11 +740,26 @@ class TreatmentScreen(QWidget):
         self._patient_pending = pending
         self.set_run_state(self._running, self._paused)
 
+    def _render_cloud_status(self, message: str) -> None:
+        tone = status_tone(message)
+        failed = "fail" in message.lower()
+        if failed:
+            tone = "warning"
+        self._cloud_dot.setStyleSheet(
+            f"background: {resolve(_TONE_COLORS[tone])}; border-radius: 4px;")
+        color = resolve("--amber-500") if failed else resolve("--text-muted")
+        weight = "600" if failed else "400"
+        self._cloud_status.setStyleSheet(f"color: {color}; font-weight: {weight};")
+        return failed
+
     def set_cloud_status(self, message: str) -> None:
         self._cloud_status.setText(message)
-        self.cloud_status_changed.emit(message)
+        if self._render_cloud_status(message):
+            # A failure keeps its details one tap away.
+            self._upload_error_button.show()
         if message == "Treatments synced":
             self._upload_error_button.hide()
+        self.cloud_status_changed.emit(message)
 
     def set_upload_error(self) -> None:
         """Keep the failure details accessible after its error window is closed."""

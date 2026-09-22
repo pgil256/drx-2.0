@@ -7,7 +7,7 @@ from tokens. Sizes itself to its content so it can sit in a Card header.
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QLayout
 
-from ._common import resolve, sans_font
+from ._common import mark_caption, resolve, sans_font
 
 # tone -> (background token, foreground token) — from Badge.jsx TONES.
 TONES = {
@@ -37,6 +37,7 @@ class DSBadge(QFrame):
         self._dot.setVisible(dot)
         self._label = QLabel(text, self)
         self._label.setFont(sans_font(size=font, weight=600, tracking=0.03))
+        mark_caption(self._label)
         lay.addWidget(self._dot)
         lay.addWidget(self._label)
         # Qt draws square corners when a radius exceeds half the height, so a

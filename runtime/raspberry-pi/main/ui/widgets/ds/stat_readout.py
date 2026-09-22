@@ -8,7 +8,7 @@ font (sm=30, md=44, lg=56). Used for live pressure / angle / timer.
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget
 
-from ._common import mono_font, px, resolve, sans_font
+from ._common import mark_caption, mono_font, px, resolve, sans_font
 
 # tone -> value color token (from StatReadout.jsx TONES)
 TONES = {
@@ -44,6 +44,7 @@ class DSStatReadout(QWidget):
         if label:  # truthy — empty-string label renders no caption (matches DS)
             self._caption = QLabel(str(label).upper(), self)
             self._caption.setFont(sans_font(size="--text-xs", weight=600, tracking=0.06))
+            mark_caption(self._caption)
             self._caption.setAlignment(Qt.AlignCenter)
             self._caption.setStyleSheet(f"color: {resolve('--gray-600')};")
             lay.addWidget(self._caption)
