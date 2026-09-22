@@ -1,61 +1,64 @@
-"""Touch controls for editing the settings displayed on the treatment screen."""
+"""Touch controls for editing the settings displayed on the treatment screen.
+
+An in-shell DSDialog sheet over a dimmed Treatment page: one row per setting
+(label with its allowed range, − / slider / + and the value), Stop at the left
+of the footer while a treatment runs and Done at the right. Tapping the scrim
+closes the sheet like Done; every change has already been requested.
+"""
 
 from typing import Optional, Sequence
 
-from PyQt5.QtCore import QPoint, Qt, QTimer, pyqtSignal
-from PyQt5.QtGui import QShowEvent
+from PyQt5.QtCore import pyqtSignal
 from PyQt5.QtWidgets import (
-    QDialog, QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
+    QFrame, QHBoxLayout, QLabel, QScrollArea, QSizePolicy, QVBoxLayout, QWidget,
 )
 
 from ui.screens.content import PROTOCOLS
+from ui.theme import control_icon
 from ui.widgets.common import hline
-from ui.widgets.ds import DSButton, DSSlider
+from ui.widgets.ds import DSButton, DSDialog, DSSlider
 from ui.widgets.ds._common import mono_font, resolve, sans_font
 
+EDITOR_SIZE = (1000, 708)
 
-class TreatmentEditorDialog(QDialog):
+
+def _range_hint(low: float, high: float, unit: str) -> str:
+    return f"{low:g}–{high:g}{unit}"
+
+
+class TreatmentEditorDialog(DSDialog):
     """Apply edits through the controller while keeping Stop directly accessible."""
 
     setting_changed = pyqtSignal(str, float)
     estop_requested = pyqtSignal()
 
     def __init__(self, specs: Sequence[tuple], parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
+        super().__init__(parent, title="Edit treatment", dismiss_on_scrim=True)
         self._selected = 1
         self._running = False
         self._editable = True
-        self.setWindowTitle("Edit treatment")
-        self.setObjectName("TreatmentEditorDialog")
-        self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setStyleSheet(
-            f"#TreatmentEditorDialog {{ background: {resolve('--surface-card')}; }}"
-            f"#TreatmentEditorDialog QLabel {{ color: {resolve('--text-body')}; }}"
-        )
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.resize(1000, 708)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 20, 28, 20)
-        layout.setSpacing(12)
-        header = QVBoxLayout()
-        header.setSpacing(4)
-        heading = QHBoxLayout()
-        title = QLabel("Edit treatment")
-        title.setFont(sans_font(size=28, weight=600))
-        heading.addWidget(title)
-        heading.addStretch(1)
+        self.resize(*EDITOR_SIZE)
+        layout = self.body_layout
+        layout.setContentsMargins(28, 14, 28, 8)
+        layout.setSpacing(8)
+
+        header = QHBoxLayout()
+        header.setSpacing(16)
         self._protocol_label = QLabel()
-        self._protocol_label.setFont(sans_font(size=18, weight=600))
-        heading.addWidget(self._protocol_label)
-        header.addLayout(heading)
+        self._protocol_label.setFont(sans_font(size="--text-md", weight=600))
+        self._protocol_label.setStyleSheet(f"color: {resolve('--text-strong')};")
+        header.addWidget(self._protocol_label)
+        header.addStretch(1)
         self._hint = QLabel("Changes apply to the current treatment settings.")
-        self._hint.setFont(sans_font(size=16))
+        self._hint.setFont(sans_font(size="--text-sm"))
+        self._hint.setStyleSheet(f"color: {resolve('--text-muted')};")
         header.addWidget(self._hint)
         layout.addLayout(header)
 
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
         self._scroll.setFrameShape(QFrame.NoFrame)
+        self._scroll.setStyleSheet("QScrollArea { background: transparent; }")
         content = QWidget()
         rows = QVBoxLayout(content)
         rows.setContentsMargins(0, 0, 0, 0)
@@ -63,12 +66,13 @@ class TreatmentEditorDialog(QDialog):
         self._settings = {}
         for index, (key, label, value, low, high, step, unit) in enumerate(specs):
             slider = DSSlider(label=label, value=value, minimum=low, maximum=high,
-                              step=step, unit=unit, with_steps=True, label_width=160)
+                              step=step, unit=unit, with_steps=True, label_width=170,
+                              hint=_range_hint(low, high, unit))
             slider.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
-            slider.layout().setContentsMargins(0, 10, 0, 10)
+            slider.layout().setContentsMargins(0, 6, 0, 6)
             slider.layout().setSpacing(20)
-            slider._label.setFont(sans_font(size=20, weight=600))
-            slider._value_label.setFont(mono_font(size=24, weight=600))
+            slider._label.setFont(sans_font(size="--text-md", weight=600))
+            slider._value_label.setFont(mono_font(size="--text-lg", weight=600))
             for button in (slider._left_btn, slider._right_btn):
                 button.setFixedSize(64, 64)
             slider.set_accessible_label(label)
@@ -88,49 +92,21 @@ class TreatmentEditorDialog(QDialog):
             "One output percentage for axial, lateral, and pulsation movement."
         )
 
-        actions = QHBoxLayout()
-        actions.setSpacing(12)
-        self.stop_button = DSButton("Stop", variant="danger", size="lg", full_width=True)
+        white = resolve("--white")
+        self.stop_button = DSButton("STOP", variant="danger", size="md",
+                                    icon=control_icon("stop", white, 20))
         self.stop_button.setAutoDefault(False)
+        self.stop_button.setMinimumWidth(220)
         self.stop_button.clicked.connect(self._stop)
         self.stop_button.hide()
-        actions.addWidget(self.stop_button)
-        actions.addStretch(1)
-        self.done_button = DSButton("Done", variant="primary", size="lg")
-        self.done_button.setFixedWidth(180)
+        self.add_action(self.stop_button)
+        self.add_action_stretch(1)
+        self.done_button = DSButton("Done", variant="primary", size="md")
+        self.done_button.setMinimumWidth(180)
         self.done_button.setAutoDefault(False)
         self.done_button.clicked.connect(self.accept)
-        actions.addWidget(self.done_button)
-        layout.addLayout(actions)
+        self.add_action(self.done_button)
         self.select_protocol(1)
-
-    def showEvent(self, event: QShowEvent) -> None:
-        """Fit and center the popup over the main GUI each time it opens."""
-        super().showEvent(event)
-        self._fit_over_gui()
-        # Recheck once the window manager has supplied the native frame size.
-        QTimer.singleShot(0, self._fit_over_gui)
-
-    def _fit_over_gui(self) -> None:
-        """Keep the entire window frame inside the GUI with a 20 px inset."""
-        if not self.isVisible():
-            return
-        parent = self.parentWidget()
-        if parent is None:
-            bounds = self.screen().availableGeometry()
-        else:
-            window = parent.window()
-            bounds = window.rect().translated(window.mapToGlobal(QPoint()))
-        frame = self.frameGeometry()
-        frame_width = frame.width() - self.width()
-        frame_height = frame.height() - self.height()
-        self.setFixedSize(
-            max(1, min(1000, bounds.width() - 40 - frame_width)),
-            max(1, min(708, bounds.height() - 40 - frame_height)),
-        )
-        frame = self.frameGeometry()
-        frame.moveCenter(bounds.center())
-        self.move(frame.topLeft())
 
     def _stop(self) -> None:
         self.reject()

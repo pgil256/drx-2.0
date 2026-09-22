@@ -358,7 +358,7 @@ QAbstractSpinBox:disabled {
 }
 QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {
   subcontrol-origin: border; subcontrol-position: center right;
-  width: 48px; height: 44px;
+  width: 48px; height: 48px;
   background: var(--gray-050); border: none;
   border-left: var(--border-thin) solid var(--border-divider);
 }

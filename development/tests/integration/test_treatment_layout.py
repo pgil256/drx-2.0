@@ -48,7 +48,7 @@ def test_settings_are_fully_visible(
             bounds = row.rect().translated(row.mapTo(shell, QPoint()))
             assert shell.rect().contains(bounds), key
             summary_tops.add(bounds.top())
-    assert len(summary_tops) == 2
+    assert len(summary_tops) == 1  # one row of label-over-value chips
     for panel in (view._monitor_panel, view._settings_panel):
         for label in panel.findChildren(QLabel):
             if label.isVisibleTo(panel):
@@ -103,12 +103,18 @@ def test_switching_protocol_keeps_panels_and_run_buttons_in_place(
         qtbot.wait(10)
         widgets = (view._edit_treatment_button, view._readiness, view._pressure_stat,
                    view._start_btn, view._pause_btn, view._estop_btn,
-                   *view._summary_rows.values())
+                   view._settings_panel, view._monitor_panel)
         current = [widget.rect().translated(widget.mapTo(shell, QPoint()))
                    for widget in widgets]
         if geometry is None:
             geometry = current
         assert current == geometry, protocol
+        # Angle chips hide without keeping their space; the rest share one row.
+        chips = [row for row in view._summary_rows.values() if row.isVisible()]
+        assert len({row.mapTo(shell, QPoint()).y() for row in chips}) == 1
+        panel = view._settings_panel.rect().translated(view._settings_panel.mapTo(shell, QPoint()))
+        for row in chips:
+            assert panel.contains(row.rect().translated(row.mapTo(shell, QPoint())))
         assert view._settings["pulse_rate"]._left_btn.height() == 64
 
 

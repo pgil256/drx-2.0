@@ -68,6 +68,16 @@ def mono_font(size=None, weight=400, tracking=None):
     return _font(MONO, size, weight, tracking)
 
 
+def mark_caption(label):
+    """Tag a caption, eyebrow or unit label — the only text allowed below 16px.
+
+    Everything an operator reads at arm's length (readouts, labels, buttons)
+    stays at --text-sm or larger; the presentation tests enforce both rules.
+    """
+    label.setProperty("dsCaption", True)
+    return label
+
+
 def repolish(widget):
     """Re-evaluate QSS after a dynamic property change (variant/size/selected)."""
     widget.style().unpolish(widget)
