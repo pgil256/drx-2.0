@@ -91,7 +91,8 @@ TOKENS = {
     "--on-dark-subtle": "rgba(255, 255, 255, 0.15)",   # pill buttons on slate
     "--on-dark-subtle-hover": "rgba(255, 255, 255, 0.28)",
     "--surface-glass": "rgba(255, 255, 255, 0.92)",    # play disc over video
-    "--surface-frost": "rgba(255, 255, 255, 0.84)",    # Home cards over the logo
+    "--surface-frost": "rgba(255, 255, 255, 0.80)",    # Home cards over the logo
+    "--surface-frost-muted": "rgba(236, 239, 242, 0.86)",  # dimmed Home tiles
     "--surface-video": "#1b2838",
     "--surface-video-edge": "#0d141d",
     "--banner-warning": "var(--amber-600)",

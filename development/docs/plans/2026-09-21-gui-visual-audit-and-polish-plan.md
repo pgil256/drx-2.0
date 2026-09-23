@@ -425,6 +425,7 @@ during treatment), so they supersede those sections:
    (`set_video_guard`). DSDialog alerts are separate top-level windows, so they
    still stack above the embedded VLC surface.
 5. **Home uses the full kneespa.com logo as its backdrop**, like a desktop
-   wallpaper: large, centred between the greeting and a bottom dock, at 50%
-   opacity. The launch tiles (now 112px, icon beside text) and a slim device
-   status bar sit in the dock on frosted `--surface-frost` surfaces.
+   wallpaper: as large as the page allows, centred behind everything, at 50%
+   opacity. The dock overlays its lower half: launch tiles (now 112px, icon
+   beside text) and a slim device status bar on translucent `--surface-frost`
+   surfaces (80% white), so the logo shows faintly through them.
