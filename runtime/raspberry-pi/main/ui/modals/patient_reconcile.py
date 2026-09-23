@@ -4,27 +4,24 @@ from typing import Dict, Optional
 
 from PyQt5.QtCore import QEvent, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QHBoxLayout, QLabel, QLineEdit, QWidget,
 )
 
 from ui.modals.staff_login import open_text_keyboard
-from ui.widgets.ds import DSButton
+from ui.widgets.ds import DSButton, DSDialog
 
 
-class PatientReconcile(QDialog):
+class PatientReconcile(DSDialog):
     search_requested = pyqtSignal(int)
     existing_requested = pyqtSignal(str, str)
     not_created_confirmed = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Check saved patients")
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setFixedWidth(780)
+        super().__init__(parent, title="Check saved patients", width=780)
         self._page = 1
         self._pages = 1
         self._loaded = False
-        layout = QVBoxLayout(self)
+        layout = self.body_layout
         layout.setSpacing(12)
         info = QLabel("The save may have succeeded. Review the cloud patient list before retrying. "
                       "A matching name alone does not identify a patient.")
@@ -67,8 +64,10 @@ class PatientReconcile(QDialog):
         self._status.setWordWrap(True)
         layout.addWidget(self._status)
         self._close = DSButton("Close", variant="secondary")
+        self._close.setMinimumWidth(160)
         self._close.clicked.connect(self.reject)
-        layout.addWidget(self._close)
+        self.add_action_stretch(1)
+        self.add_action(self._close)
         self._results.currentIndexChanged.connect(self._fill_pin)
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:

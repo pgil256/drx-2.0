@@ -22,7 +22,7 @@ from PyQt5.QtWidgets import (
 
 from ui.theme import control_icon
 
-from ._common import mark_caption, mono_font, resolve, sans_font
+from ._common import mark_caption, mono_font, pinned_height, resolve, sans_font
 
 _LABEL_CSS = f"color: {resolve('--ink-800')}; background: transparent;"
 
@@ -70,13 +70,13 @@ class _TouchSlider(QSlider):
         super().mouseReleaseEvent(event)
 
 
-def _arrow_btn_css():
+def _arrow_btn_css(size=_ARROW_PX):
     return (
         "QPushButton {"
         f" background: {resolve('--white')};"
         f" border: 1px solid {resolve('--border-control')};"
         f" border-radius: {resolve('--radius-md')};"
-        " padding: 0; min-height: 0; }"
+        f" padding: 0; {pinned_height(size, border=1)} }}"
         f" QPushButton:hover {{ background: {resolve('--gray-050')}; }}"
         f" QPushButton:pressed {{ background: {resolve('--blue-100')}; }}"
         f" QPushButton[keyboardFocus=\"true\"]:focus {{"
@@ -200,17 +200,27 @@ class DSSlider(QWidget):
         btn = QPushButton(self)
         btn.setCursor(Qt.PointingHandCursor)
         btn.setFocusPolicy(Qt.TabFocus)
-        btn.setFixedSize(_ARROW_PX, _ARROW_PX)
         btn.setIcon(control_icon(icon, resolve("--ink-800"), 24,
                                  disabled_color=resolve("--gray-400")))
         btn.setIconSize(QSize(24, 24))
-        btn.setStyleSheet(_arrow_btn_css())
+        self._size_step_button(btn, _ARROW_PX)
         # Press-and-hold steps repeatedly (touch users expect this on ‹ ›).
         btn.setAutoRepeat(True)
         btn.setAutoRepeatDelay(400)
         btn.setAutoRepeatInterval(120)
         btn.clicked.connect(slot)
         return btn
+
+    @staticmethod
+    def _size_step_button(button, size):
+        button.setFixedSize(size, size)
+        button.setStyleSheet(_arrow_btn_css(size))
+
+    def set_step_size(self, size: int) -> None:
+        """Resize the − / + buttons (fixed size and matching stylesheet)."""
+        for button in (getattr(self, "_left_btn", None), getattr(self, "_right_btn", None)):
+            if button is not None:
+                self._size_step_button(button, size)
 
     def set_accessible_label(self, label: str) -> None:
         """Name the value and its direction controls for assistive technology."""

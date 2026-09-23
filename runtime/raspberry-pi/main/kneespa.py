@@ -113,6 +113,7 @@ from ui.app_shell import AppShell
 from ui.measurements import calibrated_reading
 from ui.presentation import device_presentation
 from ui.widgets.loading_spinner import LoadingSpinner
+from ui.modals.alert_dialog import DSAlertDialog
 from ui.widgets.treatment_status_panel import TreatmentStatusPanel
 
 from controllers.safety_monitor import SafetyMonitor
@@ -1296,22 +1297,22 @@ class KneeSpa(QMainWindow):
             # urgent presentation. A warning added to a critical alert stays
             # critical as well.
             if not warning and existing.property("safetyWarning"):
-                existing.setIcon(QMessageBox.Critical)
-                existing.setWindowTitle("SAFETY STOP")
+                existing.set_severity("critical")
+                existing.set_title("SAFETY STOP")
                 existing.setProperty("safetyWarning", False)
             if message not in existing.text():
                 existing.setText(existing.text() + "\n\n" + message)
             return
-        msg_box = QMessageBox(self)
-        msg_box.setIcon(QMessageBox.Warning if warning else QMessageBox.Critical)
-        msg_box.setWindowTitle("DEVICE SAFETY WARNING" if warning else "SAFETY STOP")
-        msg_box.setText(message)
-        msg_box.setStandardButtons(QMessageBox.Ok)
-        msg_box.setWindowFlags(msg_box.windowFlags() | Qt.WindowStaysOnTopHint)
-        msg_box.setProperty("safetyWarning", warning)
-        msg_box.show()  # non-modal so STOP controls stay reachable
+        # In-app alert: red/amber title strip and one large Acknowledge, docked
+        # under the top bar, non-modal and on top so STOP controls stay reachable.
+        alert = DSAlertDialog(
+            "DEVICE SAFETY WARNING" if warning else "SAFETY STOP", message,
+            "warning" if warning else "critical", self,
+        )
+        alert.setProperty("safetyWarning", warning)
+        alert.show()
         # Keep a reference so it is not garbage-collected
-        self._active_safety_alert = msg_box
+        self._active_safety_alert = alert
 
     ### Backend Methods ###
 
@@ -1869,12 +1870,10 @@ class KneeSpa(QMainWindow):
         """Show error message that automatically closes after a timeout."""
         print(f"Status emit error: {message}")
 
-        # Create the error dialog
-        msg_box = QMessageBox(self)
-        msg_box.setText(message)
-        msg_box.setStandardButtons(QMessageBox.Ok)
-        # Release the box when it closes: a hidden QMessageBox (plus its
-        # timer) per error used to accumulate for the kiosk's uptime.
+        # Create the error notice (in-app, non-modal, docked under the top bar)
+        msg_box = DSAlertDialog("Device notice", message, "warning", self)
+        # Release the notice when it closes: a hidden dialog (plus its timer)
+        # per error used to accumulate for the kiosk's uptime.
         msg_box.setAttribute(Qt.WA_DeleteOnClose, True)
 
         # Auto-close after 5 s. Parenting the timer to the box means it dies

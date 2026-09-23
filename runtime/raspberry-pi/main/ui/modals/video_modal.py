@@ -46,7 +46,7 @@ from PyQt5.QtWidgets import (
 
 from config.constants import UI_PATHS
 from ui.theme import control_icon, pause_icon, play_icon
-from ui.widgets.ds._common import image_path, mono_font, resolve, sans_font
+from ui.widgets.ds._common import image_path, mono_font, pinned_height, resolve, sans_font
 
 from ._overlay import Overlay
 
@@ -60,7 +60,8 @@ _DEFAULT_VOLUME = 100
 _VIDEO_CARD_WIDTH = 800
 # Translucent pills on the slate header (close, All videos, full screen).
 _HEADER_PILL_CSS = (
-    "QPushButton { border: none; border-radius: 16px; padding: 0; min-height: 0;"
+    "QPushButton { border: none; border-radius: 16px; padding: 0;"
+    f" {pinned_height(48)}"
     f" color: {resolve('--text-on-dark')}; background: {resolve('--on-dark-subtle')}; }}"
     f" QPushButton:hover {{ background: {resolve('--on-dark-subtle-hover')}; }}"
     f" QPushButton:pressed {{ background: {resolve('--on-dark-subtle-hover')}; }}"
@@ -816,7 +817,8 @@ class VideoModal(Overlay):
         self._small_play.setIconSize(QSize(19, 19))
         self._small_play.setIcon(play_icon(resolve("--white"), 19))
         self._small_play.setStyleSheet(
-            "QPushButton { border: none; border-radius: 8px; padding: 0; min-height: 0;"
+            "QPushButton { border: none; border-radius: 8px; padding: 0;"
+            f" {pinned_height(_TOUCH_CONTROL_SIZE)}"
             f" background: {resolve('--color-primary')}; }}"
             f" QPushButton:hover {{ background: {resolve('--color-primary-hover')}; }}"
         )
@@ -910,7 +912,7 @@ class VideoModal(Overlay):
         self._mute_btn.setFixedSize(84, _TOUCH_CONTROL_SIZE)
         self._mute_btn.setFont(sans_font(size="--text-sm", weight=600))
         self._mute_btn.setStyleSheet(
-            "QPushButton { padding: 0; min-height: 0; }"
+            f"QPushButton {{ padding: 0; {pinned_height(_TOUCH_CONTROL_SIZE, 1)} }}"
             f" QPushButton:checked {{ color: {resolve('--white')};"
             f" background: {resolve('--ink-700')}; border-color: {resolve('--ink-700')}; }}"
         )
@@ -959,7 +961,8 @@ class VideoModal(Overlay):
         btn.setIcon(control_icon(icon, resolve("--ink-700"), 22))
         btn.setIconSize(QSize(22, 22))
         btn.setStyleSheet(
-            "QPushButton { border: none; border-radius: 8px; min-height: 0;"
+            "QPushButton { border: none; border-radius: 8px;"
+            f" {pinned_height(_TOUCH_CONTROL_SIZE)}"
             f" background: {resolve('--gray-200')}; padding: 0; }}"
             f" QPushButton:hover {{ background: {resolve('--gray-300')}; }}"
             f" QPushButton:pressed {{ background: {resolve('--gray-400')}; }}"

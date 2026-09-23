@@ -5,27 +5,33 @@ from typing import Dict, List, Optional
 
 from PyQt5.QtCore import QEvent, QSize, Qt
 from PyQt5.QtWidgets import (
-    QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QScroller,
-    QVBoxLayout, QWidget,
+    QComboBox, QDialog, QLabel, QLineEdit, QPlainTextEdit, QScroller, QWidget,
 )
 
 from ui.modals.text_keyboard import TextKeyboard
-from ui.widgets.ds import DSButton
+from ui.widgets.ds import DSButton, DSDialog
 from ui.widgets.ds._common import sans_font
 
 
-class WifiDialog(QDialog):
+def _footer(dialog: DSDialog, *buttons: DSButton) -> None:
+    """Right-aligned footer actions, primary last."""
+    dialog.add_action_stretch(1)
+    for button in buttons:
+        button.setMinimumWidth(160)
+        dialog.add_action(button)
+
+
+class WifiDialog(DSDialog):
     """Select a scanned network and pass the password only to the current operation."""
 
     def __init__(self, networks: List[Dict[str, str]], parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Connect to Wi-Fi")
+        super().__init__(parent, title="Connect to Wi-Fi")
         self.setWindowModality(Qt.ApplicationModal)
         self.setMinimumWidth(650)
         self.setFont(sans_font(size="--text-base"))
         self.networks = networks
         self.keyboard = None
-        layout = QVBoxLayout(self)
+        layout = self.body_layout
         label = QLabel("Choose a network. Changing networks may interrupt cloud access.")
         label.setWordWrap(True)
         layout.addWidget(label)
@@ -44,15 +50,12 @@ class WifiDialog(QDialog):
         self.password.setAccessibleName("Wi-Fi password")
         self.password.installEventFilter(self)
         layout.addWidget(self.password)
-        actions = QHBoxLayout()
         cancel = DSButton("Cancel", variant="secondary")
         cancel.clicked.connect(self.reject)
         connect = DSButton("Connect", variant="primary")
         connect.setEnabled(bool(networks))
         connect.clicked.connect(self.accept)
-        actions.addWidget(cancel)
-        actions.addWidget(connect)
-        layout.addLayout(actions)
+        _footer(self, cancel, connect)
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:
         if watched is self.password and event.type() == QEvent.MouseButtonRelease:
@@ -74,15 +77,14 @@ class WifiDialog(QDialog):
         return super().eventFilter(watched, event)
 
 
-class TimezoneDialog(QDialog):
+class TimezoneDialog(DSDialog):
     """Select an installed time zone with touch-sized rows and actions."""
 
     def __init__(self, zones: List[str], current: str, parent: QWidget) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Time zone")
+        super().__init__(parent, title="Time zone")
         self.setFont(sans_font(size="--text-base"))
-        self.resize(680, 240)
-        layout = QVBoxLayout(self)
+        self.resize(680, 260)
+        layout = self.body_layout
         layout.addWidget(QLabel("Select the device's local time zone."))
         self.choice = QComboBox()
         self.choice.setMinimumHeight(52)
@@ -95,23 +97,21 @@ class TimezoneDialog(QDialog):
             self.choice.setCurrentText(current)
         QScroller.grabGesture(self.choice.view().viewport(), QScroller.TouchGesture)
         layout.addWidget(self.choice)
-        actions = QHBoxLayout()
-        for text, callback in (("Cancel", self.reject), ("Save Time Zone", self.accept)):
-            button = DSButton(text, variant="secondary" if text == "Cancel" else "primary")
-            button.clicked.connect(callback)
-            actions.addWidget(button)
-        layout.addLayout(actions)
+        cancel = DSButton("Cancel", variant="secondary")
+        cancel.clicked.connect(self.reject)
+        save = DSButton("Save time zone", variant="primary")
+        save.clicked.connect(self.accept)
+        _footer(self, cancel, save)
 
 
-class CalibrationRestoreDialog(QDialog):
+class CalibrationRestoreDialog(DSDialog):
     """Review a complete backup without squeezing position tables into a message box."""
 
     def __init__(self, data: dict, parent: QWidget) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Review calibration restore")
+        super().__init__(parent, title="Review calibration restore", tone="warning")
         self.resize(950, 620)
         self.setFont(sans_font(size="--text-base"))
-        layout = QVBoxLayout(self)
+        layout = self.body_layout
         summary = QLabel(
             f"Backup by {data['operator']} on {data['created_at']}. "
             "The current calibration will be backed up first. Remove all loads, then reset "
@@ -125,31 +125,27 @@ class CalibrationRestoreDialog(QDialog):
         details.setPlainText(json.dumps(data, indent=2, ensure_ascii=False))
         QScroller.grabGesture(details.viewport(), QScroller.TouchGesture)
         layout.addWidget(details, 1)
-        actions = QHBoxLayout()
         cancel = DSButton("Cancel", variant="secondary")
         cancel.clicked.connect(self.reject)
-        restore = DSButton("Restore This Calibration", variant="danger")
+        restore = DSButton("Restore this calibration", variant="destructive")
         restore.setAutoDefault(False)
         restore.clicked.connect(self.accept)
-        actions.addWidget(cancel)
-        actions.addWidget(restore)
-        layout.addLayout(actions)
+        _footer(self, cancel, restore)
 
 
 def show_report(title: str, record: dict, parent: QWidget) -> QDialog:
     """Show a report as plain text; never execute record contents or open a browser."""
-    dialog = QDialog(parent)
-    dialog.setWindowTitle(title)
+    dialog = DSDialog(parent, title=title)
     dialog.resize(950, 620)
-    layout = QVBoxLayout(dialog)
     text = QPlainTextEdit()
     text.setReadOnly(True)
     text.setFont(sans_font(size="--text-base"))
     text.setPlainText(json.dumps(record, indent=2, ensure_ascii=False))
-    layout.addWidget(text)
+    QScroller.grabGesture(text.viewport(), QScroller.TouchGesture)
+    dialog.body_layout.addWidget(text, 1)
     close = DSButton("Close", variant="secondary")
     close.clicked.connect(dialog.accept)
-    layout.addWidget(close)
+    _footer(dialog, close)
     dialog.setAttribute(Qt.WA_DeleteOnClose)
     dialog.open()
     return dialog

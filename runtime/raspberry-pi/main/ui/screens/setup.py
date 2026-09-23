@@ -22,7 +22,7 @@ from main.config.constants import (
 from ui.theme import control_icon
 from ui.widgets.common import hline
 from ui.widgets.ds import DSButton, DSCard, DSSlider
-from ui.widgets.ds._common import mark_caption, mono_font, resolve, sans_font
+from ui.widgets.ds._common import mark_caption, mono_font, pinned_height, resolve, sans_font
 
 
 ROWS = [
@@ -164,7 +164,8 @@ class _JogGroup(QFrame):
         self.setStyleSheet(
             f"#JogGroup {{ background: {resolve('--white')};"
             f" border: 1px solid {resolve('--border-control')}; border-radius: {radius}; }}"
-            "#JogSegment { border: none; border-radius: 0; padding: 0; min-height: 0;"
+            "#JogSegment { border: none; border-radius: 0; padding: 0;"
+            f" {pinned_height(_CONTROL_PX)}"
             " background: transparent; }"
             f"#JogSegment:hover {{ background: {resolve('--gray-050')}; }}"
             f"#JogSegment:pressed {{ background: {resolve('--blue-100')}; }}"
@@ -237,7 +238,7 @@ class _ActuatorRow(QWidget):
         reset = self._icon_button("rotate-ccw", ink, muted,
                                   f"{cfg['name']}: Return / release", "Return / release")
         reset.setObjectName("ResetButton")
-        reset.setStyleSheet("#ResetButton { padding: 0; min-height: 0; }")
+        reset.setStyleSheet(f"#ResetButton {{ padding: 0; {pinned_height(_CONTROL_PX, 1)} }}")
         reset.clicked.connect(lambda: self._on_jog("reset", None))
         self.motion_buttons.append(reset)
         layout.addWidget(reset)
@@ -248,8 +249,7 @@ class _ActuatorRow(QWidget):
             unit=cfg["unit"], mode="stepper", caption="Target",
         )
         self.slider.set_accessible_label(cfg["name"] + " target")
-        for button in (self.slider._left_btn, self.slider._right_btn):
-            button.setFixedSize(_CONTROL_PX, _CONTROL_PX)
+        self.slider.set_step_size(_CONTROL_PX)
         self.slider._value_label.setFixedWidth(104)
         self.slider.layout().setSpacing(6)
         self.slider.valueChanged.connect(self._on_target)
@@ -269,7 +269,7 @@ class _ActuatorRow(QWidget):
             "stop", resolve("--color-danger"), muted,
             "Stop leg" if self._key == "leg_length" else "Stop axes", "Stop this movement")
         stop.setObjectName("RowStop")
-        stop.setStyleSheet("#RowStop { padding: 0; min-height: 0; }")
+        stop.setStyleSheet(f"#RowStop {{ padding: 0; {pinned_height(_CONTROL_PX, 1)} }}")
         stop.clicked.connect(lambda: self.stop.emit(self._key))
         layout.addWidget(go)
         layout.addWidget(stop)

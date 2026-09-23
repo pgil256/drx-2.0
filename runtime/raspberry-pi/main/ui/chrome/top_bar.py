@@ -26,7 +26,7 @@ from PyQt5.QtWidgets import (
 from ui.presentation import device_status_tone
 from ui.widgets.common import ClickableLabel, image_label
 from ui.widgets.ds import DSBadge
-from ui.widgets.ds._common import image_path, mark_caption, resolve, sans_font
+from ui.widgets.ds._common import image_path, mark_caption, pinned_height, resolve, sans_font
 from ui.widgets.press_feedback import install_press_feedback
 
 BAR_HEIGHT = 84
@@ -134,7 +134,8 @@ class TopBar(QFrame):
         """Plain white disc when signed out; a cyan ring marks an active session."""
         ring = resolve("--brand-cyan") if logged_in else resolve("--white")
         self._avatar.setStyleSheet(
-            f"QPushButton {{ border-radius: {AVATAR_PX // 2}px; padding: 0; min-height: 0;"
+            f"QPushButton {{ border-radius: {AVATAR_PX // 2}px; padding: 0;"
+            f" {pinned_height(AVATAR_PX, border=3)}"
             f" background: {resolve('--white')}; border: 3px solid {ring}; }}"
             f" QPushButton:pressed {{ background: {resolve('--blue-100')}; }}"
             f" QPushButton[keyboardFocus=\"true\"]:focus {{"

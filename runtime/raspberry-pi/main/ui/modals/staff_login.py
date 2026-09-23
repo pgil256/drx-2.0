@@ -4,11 +4,11 @@ from typing import Dict, Optional
 
 from PyQt5.QtCore import QEvent, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget,
+    QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QWidget,
 )
 
 from ui.modals.text_keyboard import TextKeyboard
-from ui.widgets.ds import DSButton
+from ui.widgets.ds import DSButton, DSDialog
 
 
 def open_text_keyboard(field: QLineEdit, parent: QWidget) -> TextKeyboard:
@@ -18,11 +18,13 @@ def open_text_keyboard(field: QLineEdit, parent: QWidget) -> TextKeyboard:
         keyboard.editor.setEchoMode(QLineEdit.Password)
     for symbols in ('#$%&*()=[]{}', '";<>\\|`~^'):
         row = QHBoxLayout()
+        row.setSpacing(6)
         for symbol in symbols:
             button = keyboard._button(symbol)
             button.clicked.connect(lambda _checked, text=symbol: keyboard._insert(text))
             row.addWidget(button)
-        keyboard.layout().insertLayout(keyboard.layout().count() - 1, row)
+        keys = keyboard.key_layout()
+        keys.insertLayout(keys.count() - 1, row)
 
     def finish(result: int) -> None:
         if result == QDialog.Accepted:
@@ -36,21 +38,17 @@ def open_text_keyboard(field: QLineEdit, parent: QWidget) -> TextKeyboard:
     return keyboard
 
 
-class StaffLogin(QDialog):
+class StaffLogin(DSDialog):
     login_requested = pyqtSignal(str, str)
     mfa_requested = pyqtSignal(str, bool)
     clinic_requested = pyqtSignal(str)
 
     def __init__(self, parent: Optional[QWidget] = None, purpose: str = "save patients") -> None:
-        super().__init__(parent)
+        super().__init__(parent, title="Cloud staff sign-in", width=620)
         self._purpose = purpose
-        self.setWindowTitle("Cloud staff sign-in")
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setFixedWidth(620)
         self._stage = "login"
         self._keyboard = None
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 20, 24, 20)
+        layout = self.body_layout
         layout.setSpacing(12)
         self._instructions = QLabel(f"Sign in with your cloud staff account to {purpose}.")
         self._instructions.setWordWrap(True)
@@ -69,15 +67,15 @@ class StaffLogin(QDialog):
         self._status.setTextFormat(Qt.PlainText)
         self._status.setWordWrap(True)
         layout.addWidget(self._status)
-        actions = QHBoxLayout()
         self._cancel = DSButton("Cancel", variant="secondary")
         self._next = DSButton("Sign in")
         self._cancel.clicked.connect(self.reject)
         self._next.clicked.connect(self._submit)
+        self.add_action_stretch(1)
         for button in (self._cancel, self._next):
             button.setAutoDefault(False)
-            actions.addWidget(button)
-        layout.addLayout(actions)
+            button.setMinimumWidth(160)
+            self.add_action(button)
         self.set_stage("login")
 
     def _field(self, title: str, limit: int) -> QLineEdit:

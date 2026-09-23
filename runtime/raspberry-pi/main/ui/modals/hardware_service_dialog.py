@@ -5,13 +5,14 @@ from typing import Any, Dict, Optional
 from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QCloseEvent
 from PyQt5.QtWidgets import (
-    QAbstractItemView, QCheckBox, QComboBox, QDialog, QDoubleSpinBox, QFormLayout,
+    QAbstractItemView, QCheckBox, QComboBox, QDoubleSpinBox, QFormLayout,
     QHBoxLayout, QHeaderView, QLabel, QListWidget, QListWidgetItem, QMessageBox,
     QPlainTextEdit, QScrollArea, QScroller, QStackedWidget, QTableWidget, QTableWidgetItem,
     QVBoxLayout, QWidget,
 )
 
-from ui.widgets.ds import DSButton
+from ui.theme import control_icon
+from ui.widgets.ds import DSButton, DSDialog
 from ui.widgets.ds._common import resolve, sans_font
 
 try:
@@ -43,7 +44,7 @@ _BENCH_CHECKS = (
 )
 
 
-class HardwareServiceDialog(QDialog):
+class HardwareServiceDialog(DSDialog):
     """Display a service draft; the controller owns device access and persistence.
 
     All movement requests require a new operator confirmation. Test outcomes
@@ -57,9 +58,11 @@ class HardwareServiceDialog(QDialog):
 
     def __init__(self, draft: Any, parent: Optional[QWidget] = None,
                  mode: str = "calibration") -> None:
-        super().__init__(parent)
         if mode not in ("tests", "calibration"):
             raise ValueError("Unknown service mode")
+        # "Close service" in the footer is the only exit, so it can confirm.
+        super().__init__(parent, title="Hardware tests" if mode == "tests" else "Calibration",
+                         closable=False)
         self.mode = mode
         self._steps = tuple(
             (key, "Review results" if mode == "tests" and key == "review" else name)
@@ -84,38 +87,35 @@ class HardwareServiceDialog(QDialog):
         self._notes: Dict[str, QPlainTextEdit] = {}
         self._result_labels: Dict[str, QLabel] = {}
         self._recorded: Dict[str, set] = {axis: set() for axis in _AXES}
-        self.setWindowTitle("Hardware Tests" if mode == "tests" else "Calibration")
         self.setWindowModality(Qt.ApplicationModal)
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.resize(1080, 700)
         self.setMinimumSize(900, 620)
         self.setFont(sans_font(size="--text-base"))
         # Lists, tables, combos, spin boxes and checkboxes use the global theme.
-        self.setStyleSheet(
-            "QScrollArea { border: none; background: transparent; }"
-            "QScrollArea > QWidget > QWidget { background: transparent; }"
+        self.add_style(
+            "#DSDialogBody QScrollArea { border: none; background: transparent; }"
+            "#DSDialogBody QScrollArea > QWidget > QWidget { background: transparent; }"
         )
 
-        root = QVBoxLayout(self)
-        root.setContentsMargins(20, 16, 20, 16)
+        root = self.body_layout
+        root.setContentsMargins(20, 14, 20, 12)
         root.setSpacing(10)
         heading = QHBoxLayout()
-        title = QLabel(self.windowTitle())
-        title.setFont(sans_font(size="--text-xl", weight=700))
-        heading.addWidget(title, 1)
-        self.stop_button = DSButton("STOP", variant="danger", size="lg")
-        self.stop_button.setMinimumWidth(140)
+        heading.setSpacing(12)
+        self.live = self._label("Live readings: waiting for the device.")
+        self.live.setMinimumHeight(48)
+        self.live.setStyleSheet(
+            f"background: {resolve('--surface-page')}; padding: 8px 12px;"
+            f" border-radius: {resolve('--radius-md')};"
+        )
+        heading.addWidget(self.live, 1)
+        self.stop_button = DSButton("STOP", variant="danger",
+                                    icon=control_icon("stop", resolve("--white"), 20))
+        self.stop_button.setMinimumWidth(160)
         self.stop_button.setMinimumHeight(48)
         self.stop_button.clicked.connect(self.stop_requested.emit)
         heading.addWidget(self.stop_button)
         root.addLayout(heading)
-        self.live = self._label("Live readings: waiting for the device.")
-        self.live.setMinimumHeight(38)
-        self.live.setStyleSheet(
-            f"background: {resolve('--surface-page')}; padding: 8px;"
-            f" border-radius: {resolve('--radius-sm')};"
-        )
-        root.addWidget(self.live)
         body = QHBoxLayout()
         body.setSpacing(18)
         self.steps = QListWidget()
@@ -146,21 +146,19 @@ class HardwareServiceDialog(QDialog):
         self.message = self._label("Complete the preparation checklist to begin.")
         self.message.setMinimumHeight(42)
         root.addWidget(self.message)
-        footer = QHBoxLayout()
         self.close_button = DSButton("Close service", variant="secondary")
         self.close_button.setMinimumHeight(48)
         self.close_button.clicked.connect(self.reject)
-        footer.addWidget(self.close_button)
-        footer.addStretch()
+        self.add_action(self.close_button)
+        self.add_action_stretch(1)
         self.previous_button = DSButton("Back", variant="secondary")
         self.previous_button.setMinimumHeight(48)
         self.previous_button.clicked.connect(lambda: self._navigate(-1))
-        footer.addWidget(self.previous_button)
+        self.add_action(self.previous_button)
         self.next_button = DSButton("Next step", variant="primary")
         self.next_button.setMinimumHeight(48)
         self.next_button.clicked.connect(lambda: self._navigate(1))
-        footer.addWidget(self.next_button)
-        root.addLayout(footer)
+        self.add_action(self.next_button)
         self.steps.currentRowChanged.connect(self._change_step)
         self.steps.setCurrentRow(0)
         self.refresh_draft()

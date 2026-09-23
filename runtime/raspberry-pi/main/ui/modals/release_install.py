@@ -2,27 +2,34 @@
 
 import threading
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
-from PyQt5.QtWidgets import QDialog, QLabel, QMessageBox, QVBoxLayout
+from PyQt5.QtWidgets import QLabel, QMessageBox
+
+from ui.widgets.ds import DSDialog
+from ui.widgets.ds._common import resolve, sans_font
 
 
-class ReleaseInstallDialog(QDialog):
+class ReleaseInstallDialog(DSDialog):
     progress = pyqtSignal(str)
     completed = pyqtSignal(bool, str)
 
     def __init__(self, installer: object, job: dict) -> None:
-        super().__init__()
+        # Runs after the main window has closed, so it is its own window.
+        super().__init__(None, title="Installing device release", closable=False)
         self.installer, self.job = installer, job
         self.running = True
         self.restart = False
-        self.setWindowTitle("Installing device release")
         self.setWindowFlag(Qt.WindowCloseButtonHint, False)
         self.setMinimumWidth(650)
-        layout = QVBoxLayout(self)
+        layout = self.body_layout
         self.message = QLabel("Device controls are closed. Preparing backup…")
         self.message.setTextFormat(Qt.PlainText)
         self.message.setWordWrap(True)
+        self.message.setFont(sans_font(size="--text-base"))
         layout.addWidget(self.message)
-        layout.addWidget(QLabel("Keep power connected until installation finishes."))
+        power = QLabel("Keep power connected until installation finishes.")
+        power.setFont(sans_font(size="--text-sm", weight=600))
+        power.setStyleSheet(f"color: {resolve('--amber-500')};")
+        layout.addWidget(power)
         self.progress.connect(self.message.setText)
         self.completed.connect(self._done)
         QTimer.singleShot(0, self._start)

@@ -89,7 +89,8 @@ class _FailureItem(QFrame):
 
     def _render_header(self):
         self._header.setStyleSheet(
-            "QPushButton { text-align: left; border: none; padding: 12px 18px; min-height: 0;"
+            "QPushButton { text-align: left; border: none; padding: 12px 18px;"
+            " min-height: 32px;"
             f" background: {resolve('--gray-050') if self._open else 'transparent'}; }}"
             f" QPushButton:hover {{ background: {resolve('--gray-050')}; }}"
             f" QPushButton[keyboardFocus=\"true\"]:focus {{"

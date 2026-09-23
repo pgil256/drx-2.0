@@ -1,45 +1,38 @@
-"""Persistent treatment-upload failure window with optional recovery action."""
+"""Persistent treatment-upload failure notice with optional recovery action."""
 
 from typing import Optional
 
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import QDialog, QHBoxLayout, QLabel, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QLabel, QWidget
 
-from ui.widgets.ds import DSButton
+from ui.widgets.ds import DSButton, DSDialog
 from ui.widgets.ds._common import sans_font
 
 
-class UploadErrorDialog(QDialog):
+class UploadErrorDialog(DSDialog):
     """Nonmodal: an upload problem must never prevent access to device controls."""
 
     retry_requested = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Treatment upload failed")
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        # No scrim: the app underneath, including STOP, stays reachable.
+        super().__init__(parent, title="Treatment upload failed", tone="warning",
+                         scrim=False, width=620)
         self.setWindowModality(Qt.NonModal)
-        self.setFixedWidth(620)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(24, 20, 24, 20)
-        layout.setSpacing(16)
-        title = QLabel("Treatment upload failed")
-        title.setFont(sans_font(size=24, weight=600))
-        layout.addWidget(title)
         self._message = QLabel()
         self._message.setTextFormat(Qt.PlainText)
         self._message.setWordWrap(True)
-        self._message.setFont(sans_font(size=18))
-        layout.addWidget(self._message)
-        actions = QHBoxLayout()
+        self._message.setFont(sans_font(size="--text-base"))
+        self.body_layout.addWidget(self._message)
         self._retry = DSButton("Retry upload", variant="secondary")
         self._close = DSButton("Close")
+        self.add_action_stretch(1)
         for button in (self._retry, self._close):
             button.setAutoDefault(False)
-            actions.addWidget(button)
+            button.setMinimumWidth(160)
+            self.add_action(button)
         self._retry.clicked.connect(self._retry_upload)
         self._close.clicked.connect(self.close)
-        layout.addLayout(actions)
 
     def _retry_upload(self) -> None:
         self.close()

@@ -170,7 +170,9 @@ def test_keypad_entry_submit_clear_back(app):
 
     from ui.widgets.ds.keypad import BACKSPACE
 
-    keys = {b.text(): b for b in kp.findChildren(QPushButton)}
+    # Backspace is a drawn icon; its key keeps the glyph in its "keyText" property.
+    keys = {b.property("keyText") or b.text(): b for b in kp.findChildren(QPushButton)}
+    assert keys[BACKSPACE].accessibleName() == "Backspace"
     for d in "123":
         keys[d].click()
     assert kp.value() == "123"

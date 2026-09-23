@@ -405,7 +405,6 @@ def test_leg_estimate_keeps_quarter_inches_and_requires_explicit_zero(shell):
 # ----- support -----
 def test_support_accordion_and_signals(shell):
     from ui.screens.support import _FailureItem
-    from ui.theme import GLYPH
 
     sup = shell.support
     activated, ticket = [], []
@@ -854,3 +853,65 @@ def test_video_modal_none_run_reset_by_valid_poll(shell, monkeypatch):
     m._on_poll()  # None (1 again)
     assert m._poll.isActive()  # never reached the threshold of 3
     assert m._playing
+
+
+# ----- touch-target lint -----
+def _interactive_types():
+    from PyQt5.QtWidgets import (
+        QAbstractButton, QAbstractSlider, QAbstractSpinBox, QComboBox, QLineEdit,
+    )
+    return (QAbstractButton, QComboBox, QAbstractSlider, QLineEdit, QAbstractSpinBox)
+
+
+def _undersized(root):
+    """Visible interactive widgets under *root* smaller than a 48x48 touch target."""
+    from PyQt5.QtWidgets import QScrollBar
+
+    small = []
+    for widget in root.findChildren(_interactive_types()):
+        if not widget.isVisibleTo(root) or isinstance(widget, QScrollBar):
+            continue
+        if widget.width() < 48 or widget.height() < 48:
+            name = widget.accessibleName() or getattr(widget, "text", lambda: "")() or ""
+            small.append((type(widget).__name__, name, widget.width(), widget.height()))
+    return small
+
+
+@pytest.mark.parametrize("page", ["home", "setup", "protocols", "support", "device", "profile"])
+def test_no_interactive_widget_is_smaller_than_a_touch_target(shell, qtbot, page):
+    shell.setFixedSize(1366, 768)
+    shell.set_user("Lint operator", is_admin=True)
+    shell.navigate(page)
+    shell.show()
+    qtbot.wait(10)
+    screen = shell.stack.currentWidget()
+    sections = getattr(screen, "_sections", None)
+    for index in range(sections.count() if sections is not None else 1):
+        if sections is not None:
+            if page == "device" and index == 2:
+                screen.unlock_service()
+            else:
+                screen._select_section(index)
+            qtbot.wait(10)
+        assert not _undersized(shell.top_bar) and not _undersized(shell.nav_rail)
+        assert not _undersized(screen), (page, index, _undersized(screen))
+
+
+@pytest.mark.parametrize("overlay", ["login", "login_pin", "patient", "video"])
+def test_overlays_keep_touch_targets(shell, qtbot, overlay):
+    shell.setFixedSize(1366, 768)
+    shell.show()
+    if overlay.startswith("login"):
+        shell.set_user(None)
+        shell.show_login()
+        if overlay == "login_pin":
+            shell.login_modal._switch.click()
+        modal = shell.login_modal
+    elif overlay == "patient":
+        shell.patient_modal.open_over(shell)
+        modal = shell.patient_modal
+    else:
+        shell.show_video()
+        modal = shell.video_modal
+    qtbot.wait(10)
+    assert not _undersized(modal), _undersized(modal)

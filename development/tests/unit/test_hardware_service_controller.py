@@ -314,7 +314,7 @@ def test_tests_and_calibration_both_require_service_pin(service):
     assert c.pin_dialog is not None
     c.pin_dialog.submit("654321")
     c.pin_dialog.submit("654321")
-    assert c.dialog.windowTitle() == "Hardware Tests"
+    assert c.dialog.windowTitle() == "Hardware tests"
     c.shutdown()
     c.open()
     assert c.dialog is None
