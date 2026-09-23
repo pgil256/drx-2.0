@@ -332,3 +332,59 @@ changes are needed.
 * `tests/integration/test_screens.py`: assert no interactive widget in the
   shell is smaller than 48×48 and that the Treatment readouts keep one font
   size across `set_outcome` / `clear_outcome`.
+
+---
+
+## 7. Implementation status (2026-09-23, branch `feat/gui-polish`)
+
+Phases 1–6 are implemented as one commit each; Phase 7's automated checks
+landed with them. Regenerate before/after sheets with:
+
+```bash
+QT_QPA_PLATFORM=offscreen python development/tools/screen_gallery.py \
+    --outdir .cache/gallery --baseline .cache/gallery-before
+```
+
+Phase 0 decisions were taken as the recommendations above (no owner input
+was available): START green / STOP red / destructive red outline; Home as a
+device home; Setup keeps a quiet per-row stop and gains the indicator track;
+every `QDialog` becomes a frameless in-shell sheet.
+
+Deviations from the recommendations, and why:
+
+* **Control outline colour.** Secondary buttons use a 1px border, but keep
+  `#78858e` rather than `--gray-400`: `test_gui_ux` enforces a 3:1 contrast
+  floor for control edges, which `--gray-400` (1.7:1) fails.
+* **Destructive text** is `--red-500`, not `--red-400` (3.8:1 fails AA for
+  18px semibold text); the border stays `--red-400`.
+* **Rail labels** use `--text-sm` (16px) semibold rather than a 17px literal,
+  and the wordmark uses `--text-xl` (30px) rather than 28px, to stay on the
+  type scale.
+* **Topic chips** stay 48px tall (the plan's 44px would fail the new
+  touch-target lint); `sm` only shrinks the label and group padding.
+* **Dialogs as overlays.** `DSDialog` stays a real `QDialog` (so `exec_()`,
+  `open()`, modality, `QMessageBox` confirms and the QObject tree are
+  unchanged) but is frameless, masked to rounded corners and paired with an
+  in-host backdrop widget that paints the scrim and shadow — child-widget
+  translucency needs no compositor on the Pi. `QMessageBox` / `QInputDialog` /
+  `QProgressDialog` keep working (tests monkeypatch them) and get the same
+  frameless title strip from `DialogTheme`.
+* **Non-modal notices** (pressure notice, upload error, safety alert) dock
+  under the top bar instead of centring, so they never cover the pressure
+  readout or STOP.
+* **Login card** drops the duplicate logo/wordmark (the brand sits in the
+  top bar behind the scrim) to fit the title strip and QR placeholder in
+  768px; the full kneespa.com logo is not used anywhere now.
+* **"Prepare next treatment"** replaces START while an outcome is showing,
+  as recommended; this means starting again after a completed/stopped run
+  always goes through the prepare step.
+
+Not done / needs hardware:
+
+* On-Pi check of IBM Plex rendering at 13–16px, window masks and dialog
+  stacking under the kiosk window manager, and the VLC modal regression —
+  offscreen renders on Windows and Linux (WSL) only.
+* `development/tools/e2e_touchscreen.py` drives the screen by pixel
+  coordinates that were already stale before this work (e.g. `nav_video`
+  hits Device); re-map them against the new layout before the next
+  on-device e2e run.
