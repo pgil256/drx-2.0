@@ -1,12 +1,13 @@
 """Home — a device home over the full KneeSpa logo.
 
 The full kneespa.com logo is the page's backdrop, like a desktop wallpaper: it
-is drawn large and centred in the open area above the dock, at a reduced
+is drawn as large as the page allows, centred behind everything, at a reduced
 opacity so it reads as the brand without competing with the controls. A
-greeting sits in the top-left corner. The dock along the bottom holds three
-launch tiles (Set up patient → Setup, Start treatment → Treatment, Watch
-videos) above a slim device status bar (status pill, controller, treatment
-records, last sync, calibration, last treatment), all on frosted surfaces.
+greeting sits in the top-left corner. The dock along the bottom overlays the
+logo: three launch tiles (Set up patient → Setup, Start treatment →
+Treatment, Watch videos) above a slim device status bar (status pill,
+controller, treatment records, last sync, calibration, last treatment), on
+translucent frosted surfaces so the logo shows faintly through them.
 Logged out, the gated tiles dim and a prominent Sign in tile leads the row;
 videos stay open.
 
@@ -37,6 +38,7 @@ from ui.widgets.ds.key_value_list import _DOT_TOKENS, _ValueLabel, status_tone
 TILE_HEIGHT = 112
 STATUS_BAR_HEIGHT = 76
 LOGO_OPACITY = 0.5
+LOGO_MARGIN = 16
 _MARGIN_X, _MARGIN_Y = 32, 24
 _OUTCOMES = {"completed": "Completed", "stopped": "Stopped by operator",
              "fault": "Ended with a fault"}
@@ -104,7 +106,7 @@ class _LaunchTile(QPushButton):
             icon = resolve("--color-primary") if enabled else resolve("--gray-600")
             hover, pressed = resolve("--gray-050"), resolve("--gray-200")
         if not enabled:
-            bg = resolve("--gray-100")
+            bg = resolve("--surface-frost-muted")
         self._disc.setPixmap(self._icon_factory(icon, 30).pixmap(30, 30))
         self._disc.setStyleSheet(f"background: {disc_bg}; border-radius: 28px;")
         self._title.setStyleSheet(f"color: {title}; background: transparent;")
@@ -116,7 +118,7 @@ class _LaunchTile(QPushButton):
             f" min-height: {TILE_HEIGHT - 2}px; max-height: {TILE_HEIGHT - 2}px; }}"
             f"#LaunchTile:hover {{ background: {hover}; }}"
             f"#LaunchTile:pressed {{ background: {pressed}; }}"
-            f"#LaunchTile:disabled {{ background: {resolve('--gray-100')};"
+            f"#LaunchTile:disabled {{ background: {resolve('--surface-frost-muted')};"
             f" border-color: {resolve('--border-divider')}; }}"
             f"#LaunchTile[keyboardFocus=\"true\"]:focus {{"
             f" border: 2px solid {resolve('--ink-900')}; }}"
@@ -287,10 +289,8 @@ class HomeScreen(QWidget):
 
     # ----- logo backdrop -----
     def _logo_rect(self) -> QRect:
-        """The largest centred logo rectangle between the greeting and the dock."""
-        top = self._titles.geometry().bottom() + 12
-        bottom = self._dock.geometry().top() - 16
-        area = QRect(_MARGIN_X, top, self.width() - 2 * _MARGIN_X, max(1, bottom - top))
+        """The largest centred logo rectangle on the whole page (a wallpaper)."""
+        area = self.rect().adjusted(LOGO_MARGIN, LOGO_MARGIN, -LOGO_MARGIN, -LOGO_MARGIN)
         size = self._logo.size().scaled(area.size(), Qt.KeepAspectRatio)
         rect = QRect(0, 0, size.width(), size.height())
         rect.moveCenter(area.center())
