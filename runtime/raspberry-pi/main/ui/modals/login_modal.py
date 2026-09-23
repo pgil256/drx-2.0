@@ -1,17 +1,23 @@
-"""Phone-approved patient/staff sign-in with an explicit local staff PIN option.
+"""Staff PIN sign-in, with phone (QR code) approval as the option below it.
+
+The staff PIN keypad is the default. The footer offers "Sign in with a QR
+code", which switches the card to phone approval and only then asks the
+controller for a code; switching back (or closing) cancels that request.
+Flows that re-authenticate an existing phone session (a patient changing, an
+expired phone session) open straight into phone mode with ``phone=True``.
 
 The view renders the complete approval URL locally and emits user intent only;
 the controller owns cloud requests, polling, cancellation and session validation.
 
 The card shares the DSDialog frame (title strip with close, body, footer).
 While no request is active the QR area shows a placeholder frame with the
-next step inside it instead of a blank square; the switch to the local staff
-PIN is a quiet footer link so one action stays primary.
+next step inside it instead of a blank square.
 """
 
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QFrame, QLabel, QStackedLayout, QVBoxLayout, QWidget
 
+from ui.theme import control_icon
 from ui.widgets.ds import DSButton, DSKeypad, DSSheet, DSSpinner
 from ui.widgets.ds._common import drop_shadow, resolve, sans_font
 
@@ -20,6 +26,10 @@ from .patient_portal import portal_qr_pixmap
 
 QR_PX = 320
 PLACEHOLDER_TEXT = "Preparing a sign-in code…"
+PIN_TITLE = "Sign in"
+PHONE_TITLE = "Sign in with your phone"
+TO_PHONE = "Sign in with a QR code"
+TO_PIN = "Use staff PIN"
 
 
 class LoginModal(Overlay):
@@ -29,7 +39,7 @@ class LoginModal(Overlay):
 
     def __init__(self, parent=None, length=4):
         super().__init__(parent)
-        card = DSSheet("Sign in", width=440)
+        card = DSSheet(PIN_TITLE, width=440)
         card.close_requested.connect(self.close_overlay)
         drop_shadow(card, blur=48, dy=8, alpha=51)  # --shadow-lg
         self._card_frame = card
@@ -117,10 +127,11 @@ class LoginModal(Overlay):
         self._error.setStyleSheet(f"color: {resolve('--red-500')}; background: transparent;")
         lay.addWidget(self._error, 0, Qt.AlignCenter)
 
-        self._switch = DSButton("Use local staff PIN", variant="ghost", full_width=True)
+        self._switch = DSButton(TO_PHONE, variant="secondary", full_width=True)
         self._switch.clicked.connect(self._switch_mode)
         card.add_action(self._switch, 1)
-        self._phone_mode = True
+        self._phone_mode = False
+        self._set_phone_mode(False)
         self._refresh_placeholder()
 
         self.set_card(card)
@@ -135,18 +146,23 @@ class LoginModal(Overlay):
         self._error.setText(message)
         self._keypad.set_value("")
 
-    def reset(self):
+    def reset(self, phone: bool = False):
         self._error.setText("")
         self._keypad.set_value("")
-        self._set_phone_mode(True)
+        self._set_phone_mode(phone)
+
+    def phone_mode(self) -> bool:
+        return self._phone_mode
 
     def _set_phone_mode(self, enabled: bool) -> None:
         self._phone_mode = enabled
         self._phone.setVisible(enabled)
         self._keypad.setVisible(not enabled)
         self._error.setVisible(not enabled)
-        self._card_frame.set_title("Sign in" if enabled else "Staff PIN")
-        self._switch.setText("Use local staff PIN" if enabled else "Sign in with your phone")
+        self._card_frame.set_title(PHONE_TITLE if enabled else PIN_TITLE)
+        self._switch.setText(TO_PIN if enabled else TO_PHONE)
+        self._switch.set_icon(control_icon(
+            "keypad" if enabled else "qr", resolve("--ink-800"), 18))
 
     def _switch_mode(self) -> None:
         self._set_phone_mode(not self._phone_mode)
@@ -189,7 +205,9 @@ class LoginModal(Overlay):
     def set_phone_remaining(self, seconds: int) -> None:
         self._remaining.setText(f"Code expires in {seconds // 60}:{seconds % 60:02d}")
 
-    def open_over(self, parent=None):
-        self.reset()
+    def open_over(self, parent=None, phone: bool = False):
+        """Open on the staff PIN keypad, or straight into phone approval."""
+        self.reset(phone)
         super().open_over(parent)
-        self.phone_requested.emit()
+        if phone:
+            self.phone_requested.emit()

@@ -82,14 +82,19 @@ def render_all(outdir, width=W, height=H):
     shell.navigate("home")
     _grab(shell, app, os.path.join(outdir, "01-home-logged-out.png"))
 
-    # Login modal over home: waiting for a code, a failed request, staff PIN.
+    # Login modal over home: staff PIN first, then the QR code option.
     shell.show_login()
+    shell.login_modal._keypad.set_value("12")
     _grab(shell, app, os.path.join(outdir, "02-login-modal.png"))
+    shell.login_modal._switch.click()
+    shell.login_modal.show_phone_request({
+        "verification_url": "https://example.invalid/connect#code=demo",
+        "display_code": "R2QG-63MF",
+    })
+    shell.login_modal.set_phone_remaining(295)
+    _grab(shell, app, os.path.join(outdir, "27-login-qr.png"))
     shell.login_modal.phone_status("Could not reach the cloud. Check the connection.")
     _grab(shell, app, os.path.join(outdir, "26-login-qr-retry.png"))
-    shell.login_modal._switch.click()
-    shell.login_modal._keypad.set_value("12")
-    _grab(shell, app, os.path.join(outdir, "27-login-pin.png"))
     shell.login_modal.close_overlay()
 
     # Logged in → all pages.
@@ -117,6 +122,10 @@ def render_all(outdir, width=W, height=H):
     shell.treatment.set_pressure(40)
     shell.treatment.set_angle(0)
     _grab(shell, app, os.path.join(outdir, "06-treatment-running.png"))
+    # Videos stay available mid-treatment, with live status and STOP.
+    shell.show_video()
+    _grab(shell, app, os.path.join(outdir, "06b-video-during-treatment.png"))
+    shell.video_modal.close_overlay()
     shell.treatment.set_run_state(running=False, paused=False)
     shell.treatment.set_phase("idle")
     shell.set_device_status("Ready", "Review settings and patient positioning.", True)
