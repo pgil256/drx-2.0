@@ -178,7 +178,7 @@ def nav_icon(name, color="#ffffff", size=26):
 CONTROL_ICONS = (
     "chevron-left", "chevron-right", "chevron-up", "chevron-down",
     "chevrons-left", "chevrons-right", "rotate-ccw", "close", "backspace",
-    "stop", "lock", "check", "plus", "minus", "alert", "info",
+    "stop", "lock", "check", "plus", "minus", "alert", "info", "qr", "keypad",
 )
 
 
@@ -253,6 +253,22 @@ def _draw_control(p, name, color):
         p.setBrush(fill)
         p.setPen(Qt.NoPen)
         p.drawEllipse(QPointF(12, 7.8), 1.2, 1.2)
+    elif name == "qr":
+        # Three finder squares and a few data modules.
+        for x, y in ((3.5, 3.5), (13.5, 3.5), (3.5, 13.5)):
+            p.drawRoundedRect(QRectF(x, y, 7, 7), 1.2, 1.2)
+        p.setBrush(fill)
+        p.setPen(Qt.NoPen)
+        for x, y in ((6, 6), (16, 6), (6, 16), (14, 14), (18, 14), (16, 17), (14, 19.5),
+                     (18.5, 19.5)):
+            p.drawRect(QRectF(x, y, 2, 2))
+    elif name == "keypad":
+        p.setBrush(fill)
+        p.setPen(Qt.NoPen)
+        for row in range(3):
+            for col in range(3):
+                p.drawEllipse(QPointF(6 + col * 6, 4.5 + row * 5.5), 1.7, 1.7)
+        p.drawEllipse(QPointF(12, 21), 1.7, 1.7)
     else:
         raise ValueError(f"Unknown control icon {name!r}")
 

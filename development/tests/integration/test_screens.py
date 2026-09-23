@@ -9,7 +9,8 @@ conftest forces QT_QPA_PLATFORM=offscreen; no backend is involved.
 from unittest.mock import MagicMock
 
 import pytest
-from PyQt5.QtCore import QPoint
+from PyQt5.QtCore import QPoint, Qt
+from PyQt5.QtTest import QTest
 
 pytestmark = pytest.mark.integration
 
@@ -380,7 +381,7 @@ def test_leg_length_has_target_controls_separate_from_its_estimate(shell):
     assert not row.slider.isHidden()
     moved = MagicMock()
     row.go.connect(moved)
-    row.slider._right_btn.click()
+    QTest.keyClick(row.slider, Qt.Key_Right)
     assert row.value() == 0.25
     moved.assert_not_called()
     row.motion_buttons[-1].click()

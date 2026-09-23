@@ -396,6 +396,7 @@ class KneeSpa(QMainWindow):
         # explicit caution acknowledgement; the protocol keeps running.
         self.shell.set_nav_confirmation(self._confirm_leave_treatment)
         self.shell.set_overlay_guard(self._block_nonessential_overlay_during_treatment)
+        self.shell.set_video_guard(self._block_video_while_stopping)
 
         # Initialize GPIO setup
         self.setup_gpio()
@@ -675,7 +676,7 @@ class KneeSpa(QMainWindow):
         if self.current_user.get("machine_sign_in"):
             if self.current_user.get("status") == "patient":
                 self._on_logout()
-                self.shell.show_login()
+                self.shell.show_login(phone=True)
                 return
             if not authorize(self, "patients.view", self._show_patient_modal):
                 return
@@ -1269,6 +1270,9 @@ class KneeSpa(QMainWindow):
 
     def _block_nonessential_overlay_during_treatment(self) -> bool:
         return self.protocol.block_nonessential_overlay()
+
+    def _block_video_while_stopping(self) -> bool:
+        return self.protocol.block_video_overlay()
 
     def panel_stop_requested(self):
         self.protocol.panel_stop_requested()

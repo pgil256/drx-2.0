@@ -1,7 +1,8 @@
 """TreatmentScreen — run a treatment (Protocols page).
 
 Patient identity and records occupy a compact strip above the selected protocol.
-The full-width monitor sits above a one-row settings strip and fixed run controls.
+The full-width monitor sits above the labelled "Treatment settings" card (one row
+of setting chips plus Edit treatment) and the fixed run controls.
 Protocol choices stay above the read-only settings; Edit treatment opens their controls.
 During treatment, only permitted live settings remain editable. The controller
 supplies readiness and measurement validity.
@@ -27,6 +28,8 @@ Signals:
     start_requested / resume_requested / pause_requested / estop_requested
     setting_changed(str, float) — treatment settings and shared motor_speed
     cloud_status_changed(str) / outcome_recorded(str, int) — mirrored on Home
+    monitor_changed — run state, phase, time or pressure changed; the video
+        player mirrors ``live_summary()`` so STOP stays one tap away
 """
 
 from PyQt5.QtCore import Qt, pyqtSignal
@@ -61,13 +64,14 @@ from ui.widgets.ds import (
     DSProtocolButton,
     DSStatReadout,
 )
-from ui.widgets.ds._common import mark_caption, mono_font, resolve, sans_font
+from ui.widgets.ds._common import mark_caption, mono_font, pinned_height, resolve, sans_font
 from ui.widgets.ds.key_value_list import status_tone
 
 from .content import PHASES, PROTOCOLS
 
 _PAD = 20
 _GAP = 8
+_SETTINGS_ROW_PX = 72  # settings chips and the Edit treatment button
 _TOTAL = DEFAULT_PROTOCOL_MINUTES * 60
 NO_PATIENT = "No patient linked"
 
@@ -120,6 +124,7 @@ class TreatmentScreen(QWidget):
     setting_changed = pyqtSignal(str, float)
     cloud_status_changed = pyqtSignal(str)
     outcome_recorded = pyqtSignal(str, int)
+    monitor_changed = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -140,6 +145,8 @@ class TreatmentScreen(QWidget):
         self._device_detail = "Waiting for device readiness."
         self._device_label = "Preparing"
         self._outcome = None
+        self._phase = PHASES["idle"]
+        self._time_text = _mmss(_TOTAL)
 
         root = QVBoxLayout(self)
         root.setContentsMargins(_PAD, 8, _PAD, 8)
@@ -274,13 +281,24 @@ class TreatmentScreen(QWidget):
         card.setAccessibleName("Current treatment settings")
         card.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
         body = card.body_layout
-        body.setContentsMargins(16, 12, 16, 12)
+        body.setContentsMargins(24, 12, 24, 14)
+        body.setSpacing(8)
+        # Labelled like the monitor above it, so the strip reads as the
+        # treatment's settings rather than loose numbers.
+        heading = QHBoxLayout()
+        heading.setContentsMargins(0, 0, 0, 0)
+        heading.addWidget(eyebrow("Treatment settings"))
+        heading.addStretch(1)
+        body.addLayout(heading)
         strip = QHBoxLayout()
         strip.setSpacing(12)
         body.addLayout(strip)
 
         self._edit_treatment_button = DSButton("Edit treatment", variant="primary", size="md")
-        self._edit_treatment_button.setFixedSize(220, 64)
+        self._edit_treatment_button.setFixedSize(240, _SETTINGS_ROW_PX)
+        # The theme's min-height would otherwise shrink the button below the chips.
+        self._edit_treatment_button.setStyleSheet(
+            f"QPushButton {{ {pinned_height(_SETTINGS_ROW_PX, 1, 12)} }}")
         self._edit_treatment_button.clicked.connect(self.open_treatment_editor)
 
         self._editor = TreatmentEditorDialog(TREATMENT_SETTING_SPECS, self)
@@ -304,15 +322,17 @@ class TreatmentScreen(QWidget):
             chip.setStyleSheet(chip_style)
             chip.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Fixed)
             chip.setMinimumWidth(96)
+            chip.setFixedHeight(_SETTINGS_ROW_PX)
             text = QVBoxLayout(chip)
-            text.setContentsMargins(14, 8, 14, 8)
-            text.setSpacing(0)
+            text.setContentsMargins(16, 8, 16, 8)
+            text.setSpacing(2)
+            text.setAlignment(Qt.AlignVCenter)
             caption = QLabel(_SUMMARY_LABELS[key])
             caption.setFont(sans_font(size="--text-xs", weight=600))
             mark_caption(caption)
             caption.setStyleSheet(f"color: {resolve('--text-muted')};")
             value = QLabel()
-            value.setFont(mono_font(size="--text-md", weight=600))
+            value.setFont(mono_font(size="--text-lg", weight=600))
             value.setStyleSheet(f"color: {resolve('--text-strong')};")
             text.addWidget(caption)
             text.addWidget(value)
@@ -374,32 +394,31 @@ class TreatmentScreen(QWidget):
     def _status_card(self):
         card = DSCard(padded=True)
         body = card.body_layout
-        body.setContentsMargins(24, 14, 24, 16)
-        body.setSpacing(6)
+        body.setContentsMargins(24, 12, 24, 14)
+        body.setSpacing(4)
         hdr = QHBoxLayout()
         hdr.setContentsMargins(0, 0, 0, 0)
+        hdr.setSpacing(20)
         hdr.addWidget(eyebrow("Treatment monitor"))
-        hdr.addStretch(1)
-        self._angle_stat = DSStatReadout("—", label="Lateral angle (approx.)", size="sm")
-        self._inline_stat(self._angle_stat)
-        hdr.addWidget(self._angle_stat)
-        card.add_layout(hdr)
-
-        # The readiness line keeps its height while empty so the readouts
-        # below it never move between states.
+        # The readiness line shares the header row and keeps its place while
+        # empty, so the readouts below it never move between states.
         self._readiness = QLabel()
         self._readiness.setWordWrap(False)
         self._readiness.setFont(sans_font(size="--text-sm"))
         self._readiness.setStyleSheet(f"color: {resolve('--text-muted')};")
         self._readiness.setMinimumHeight(self._readiness.fontMetrics().height())
         _retain_when_hidden(self._readiness)
-        body.addWidget(self._readiness)
+        hdr.addWidget(self._readiness, 1)
+        self._angle_stat = DSStatReadout("—", label="Lateral angle (approx.)", size="sm")
+        self._inline_stat(self._angle_stat)
+        hdr.addWidget(self._angle_stat)
+        card.add_layout(hdr)
 
         columns = QHBoxLayout()
         columns.setSpacing(24)
         # Left: measured pressure with its limit directly beneath.
         left = QVBoxLayout()
-        left.setSpacing(8)
+        left.setSpacing(4)
         left.addStretch(1)
         self._pressure_stat = DSStatReadout("—", unit="lbs", label="Waiting for pressure",
                                             tone="default", size="lg")
@@ -412,7 +431,7 @@ class TreatmentScreen(QWidget):
         columns.addLayout(left, 1)
         # Right: time remaining with the phase (and any outcome) beneath.
         right = QVBoxLayout()
-        right.setSpacing(8)
+        right.setSpacing(4)
         right.addStretch(1)
         self._time_stat = DSStatReadout(_mmss(DEFAULT_PROTOCOL_MINUTES * 60),
                                        label="Time remaining", tone="default", size="lg")
@@ -567,6 +586,7 @@ class TreatmentScreen(QWidget):
         )
         self._refresh_settings_access()
         self._refresh_readiness()
+        self.monitor_changed.emit()
 
     def set_access_role(self, role) -> None:
         self._access_role = role
@@ -637,15 +657,19 @@ class TreatmentScreen(QWidget):
 
     def set_phase(self, phase):
         label, tone = PHASES.get(phase, PHASES["idle"])
+        self._phase = (label, tone)
         self._phase_badge.set_text(label)
         self._phase_badge.set_tone(tone)
+        self.monitor_changed.emit()
 
     def set_progress(self, elapsed_seconds, total_seconds=_TOTAL):
         remaining = max(0, total_seconds - elapsed_seconds)
         self._progress_fraction = (elapsed_seconds / total_seconds) if total_seconds else 0.0
         self._reflow_progress()
-        self._time_stat.set_value(_mmss(remaining))
+        self._time_text = _mmss(remaining)
+        self._time_stat.set_value(self._time_text)
         self._time_stat.set_tone("default")
+        self.monitor_changed.emit()
 
     def set_pressure(self, lbs):
         import math
@@ -656,6 +680,7 @@ class TreatmentScreen(QWidget):
         except (TypeError, ValueError):
             self._pressure_value = None
             self._pressure_stat.set_value("—", "lbs")
+            self.monitor_changed.emit()
             return
         self._pressure_value = lbs
         self._render_pressure()
@@ -664,6 +689,22 @@ class TreatmentScreen(QWidget):
         live = self._pressure_caption == "Pressure live" and self._pressure_value is not None
         self._pressure_stat.set_value(f"{self._pressure_value:.1f}" if live else "—", "lbs")
         self._pressure_stat.set_tone("default")
+        self.monitor_changed.emit()
+
+    def _pressure_text(self) -> str:
+        live = self._pressure_caption == "Pressure live" and self._pressure_value is not None
+        return f"{self._pressure_value:.1f} lbs" if live else "— lbs"
+
+    def live_summary(self) -> dict:
+        """What another view needs to mirror this monitor (read-only)."""
+        return {
+            "active": self._running,
+            "paused": self._paused,
+            "phase": self._phase[0],
+            "tone": self._phase[1],
+            "time": self._time_text,
+            "pressure": self._pressure_text(),
+        }
 
     def set_pressure_state(self, caption: str) -> None:
         self._pressure_caption = caption

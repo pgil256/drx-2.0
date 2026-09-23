@@ -13,9 +13,18 @@ clips. VLC and the bundled clips are both optional — if either is missing the
 modal shows a static frame with an unavailable message, so it can never block
 the app or claim to be playing on a machine without VLC.
 
+Videos stay available while a treatment runs. Then a treatment strip sits
+under the title bar — phase, time left, measured pressure, a "Treatment"
+button back to the monitor and a red STOP — so stopping never needs the video
+closed first. The stage gives up the strip's height, so the card keeps its
+size (and full screen keeps the strip). The shell feeds the strip from the
+Treatment screen and closes the player when the treatment stops or ends.
+
 Signals:
-    play_toggled(bool)  — play button pressed (True = now playing)
-    closed              — dismissed
+    play_toggled(bool)   — play button pressed (True = now playing)
+    stop_requested       — STOP on the treatment strip
+    treatment_requested  — "Treatment" on the treatment strip
+    closed               — dismissed
 """
 
 import os
@@ -46,7 +55,10 @@ from PyQt5.QtWidgets import (
 
 from config.constants import UI_PATHS
 from ui.theme import control_icon, pause_icon, play_icon
-from ui.widgets.ds._common import image_path, mono_font, pinned_height, resolve, sans_font
+from ui.widgets.ds import DSBadge, DSButton
+from ui.widgets.ds._common import (
+    image_path, mark_caption, mono_font, pinned_height, resolve, sans_font,
+)
 
 from ._overlay import Overlay
 
@@ -58,6 +70,8 @@ except Exception as exc:  # pragma: no cover - exercised only where vlc is missi
 
 _DEFAULT_VOLUME = 100
 _VIDEO_CARD_WIDTH = 800
+_STAGE_HEIGHT = int(_VIDEO_CARD_WIDTH * 9 / 16)  # 16:9
+_TREATMENT_STRIP_PX = 76
 # Translucent pills on the slate header (close, All videos, full screen).
 _HEADER_PILL_CSS = (
     "QPushButton { border: none; border-radius: 16px; padding: 0;"
@@ -502,6 +516,8 @@ class _VlcEngine:
 
 class VideoModal(Overlay):
     play_toggled = pyqtSignal(bool)
+    stop_requested = pyqtSignal()
+    treatment_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent, scrim=resolve("--overlay-scrim"))
@@ -542,6 +558,7 @@ class VideoModal(Overlay):
         lay.setSpacing(0)
 
         lay.addWidget(self._title_bar())
+        lay.addWidget(self._treatment_strip())
         self._pages = QStackedWidget()
         self._player_page = QWidget()
         player_layout = QVBoxLayout(self._player_page)
@@ -711,11 +728,92 @@ class VideoModal(Overlay):
         self._header = bar
         return bar
 
+    def _treatment_strip(self) -> QFrame:
+        """Live treatment status and STOP, shown only while a treatment runs."""
+        strip = QFrame()
+        strip.setObjectName("VideoTreatmentStrip")
+        strip.setAttribute(Qt.WA_StyledBackground, True)
+        strip.setFixedHeight(_TREATMENT_STRIP_PX)
+        strip.setStyleSheet(
+            f"#VideoTreatmentStrip {{ background: {resolve('--surface-page')};"
+            f" border-bottom: 1px solid {resolve('--border-divider')}; }}"
+            " #VideoTreatmentStrip QLabel { background: transparent; }"
+        )
+        row = QHBoxLayout(strip)
+        row.setContentsMargins(18, 8, 18, 8)
+        row.setSpacing(18)
+        self._treatment_phase = DSBadge("Treatment active", tone="success", dot=True,
+                                        size="md")
+        row.addWidget(self._treatment_phase)
+        self._treatment_time = self._strip_readout(row, "Time left")
+        self._treatment_pressure = self._strip_readout(row, "Pressure")
+        row.addStretch(1)
+        self._treatment_btn = DSButton("Treatment", variant="secondary", size="md")
+        self._treatment_btn.setAccessibleName("Back to the treatment monitor")
+        self._treatment_btn.setFixedHeight(56)
+        self._treatment_btn.setStyleSheet(f"QPushButton {{ {pinned_height(56, 1, 12)} }}")
+        self._treatment_btn.clicked.connect(self.treatment_requested)
+        row.addWidget(self._treatment_btn)
+        self._treatment_stop = DSButton(
+            "STOP", variant="danger", size="md",
+            icon=control_icon("stop", resolve("--white"), 20))
+        self._treatment_stop.setAccessibleName("Stop treatment")
+        self._treatment_stop.setFixedSize(150, 56)
+        self._treatment_stop.setStyleSheet(f"QPushButton {{ {pinned_height(56, 1, 12)} }}")
+        self._treatment_stop.clicked.connect(self.stop_requested)
+        row.addWidget(self._treatment_stop)
+        strip.hide()
+        self._treatment_bar = strip
+        return strip
+
+    @staticmethod
+    def _strip_readout(row: QHBoxLayout, caption: str) -> QLabel:
+        column = QVBoxLayout()
+        column.setContentsMargins(0, 0, 0, 0)
+        column.setSpacing(0)
+        column.addStretch(1)
+        title = QLabel(caption)
+        title.setFont(sans_font(size="--text-xs", weight=600))
+        title.setStyleSheet(f"color: {resolve('--text-muted')};")
+        mark_caption(title)
+        column.addWidget(title)
+        value = QLabel("—")
+        value.setFont(mono_font(size="--text-md", weight=600))
+        value.setStyleSheet(f"color: {resolve('--text-strong')};")
+        column.addWidget(value)
+        column.addStretch(1)
+        row.addLayout(column)
+        return value
+
+    def treatment_active(self) -> bool:
+        return not self._treatment_bar.isHidden()
+
+    def set_treatment_status(self, summary: dict) -> None:
+        """Mirror the Treatment monitor; the strip shows only while one is active."""
+        active = bool(summary.get("active"))
+        self._treatment_phase.set_text(summary.get("phase") or "Treatment active")
+        self._treatment_phase.set_tone(summary.get("tone") or "neutral")
+        self._treatment_time.setText(summary.get("time") or "—")
+        self._treatment_pressure.setText(summary.get("pressure") or "—")
+        if active != self.treatment_active():
+            self._treatment_bar.setVisible(active)
+            self._size_stage()
+
+    def _stage_height(self) -> int:
+        strip = _TREATMENT_STRIP_PX if self.treatment_active() else 0
+        return _STAGE_HEIGHT - strip
+
+    def _size_stage(self) -> None:
+        if self._fullscreen:
+            self._apply_fullscreen_size()
+        else:
+            self._stage_frame.setFixedHeight(self._stage_height())
+
     def _stage(self):
         stage = QFrame()
         stage.setObjectName("VideoStage")
         stage.setAttribute(Qt.WA_StyledBackground, True)
-        stage.setFixedHeight(int(_VIDEO_CARD_WIDTH * 9 / 16))  # 16:9
+        stage.setFixedHeight(_STAGE_HEIGHT)
         stage.setStyleSheet(
             "#VideoStage { background: qradialgradient(cx:0.5, cy:0.42, radius:0.75,"
             f" fx:0.5, fy:0.42, stop:0 {resolve('--surface-video')},"
@@ -1230,7 +1328,7 @@ class VideoModal(Overlay):
             self._fs_btn.setToolTip("Exit full screen")
         else:
             self._card.setFixedWidth(_VIDEO_CARD_WIDTH)
-            self._stage_frame.setFixedHeight(int(_VIDEO_CARD_WIDTH * 9 / 16))
+            self._stage_frame.setFixedHeight(self._stage_height())
             self._card.setStyleSheet(
                 f"#VideoCard {{ background: {resolve('--surface-card')}; border-radius: {r}; }}"
             )
@@ -1254,7 +1352,8 @@ class VideoModal(Overlay):
         pw, ph = parent.width(), parent.height()
         header_h = self._header.sizeHint().height()
         transport_h = self._transport_bar.sizeHint().height()
-        stage_h = max(100, ph - header_h - transport_h)
+        strip_h = _TREATMENT_STRIP_PX if self.treatment_active() else 0
+        stage_h = max(100, ph - header_h - strip_h - transport_h)
         self._card.setFixedWidth(pw)
         self._stage_frame.setFixedHeight(stage_h)
 

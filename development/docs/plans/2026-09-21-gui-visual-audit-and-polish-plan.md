@@ -388,3 +388,43 @@ Not done / needs hardware:
   coordinates that were already stale before this work (e.g. `nav_video`
   hits Device); re-map them against the new layout before the next
   on-device e2e run.
+
+## 8. Owner review changes (2026-09-23)
+
+The owner reviewed the polished GUI and asked for five changes. Four of them
+reverse earlier decisions in this plan (§3.1, §3.2, §4 and the video block
+during treatment), so they supersede those sections:
+
+1. **Sign-in opens on the staff PIN keypad.** "Sign in with a QR code" is the
+   footer option (with "Use staff PIN" to switch back). The controller asks for
+   a phone code only when that option is tapped. Flows that re-authenticate an
+   existing phone session (a patient changing, an expired phone session,
+   rejected staff API session) call `show_login(phone=True)` and still open
+   straight to the QR code, since patients have no staff PIN.
+2. **Setup has no −/+ target steppers** (they duplicated the jog arrows). The
+   read-only indicator track became a full-width, 44px touch slider with a
+   36px thumb: tap anywhere or drag to set the target (arrow keys step it).
+   The track still fills to the measured position, and nothing moves until
+   Go. **Horizontal is never commanded above 0°:**
+   `HORIZONTAL_COMMAND_LIMITS = (-25, 0)` drives the Setup range, the Support
+   limits and the host clamps in `kneespa.py` (Go and jog). Calibration and
+   measured readouts keep the full −25…+5° travel (`ACTUATORS["HORIZONTAL"]
+   ["LIMITS"]`). The firmware clamp is still the raw 0–4500 encoder envelope.
+   A firmware ceiling at the 0° mark (`BZERO`) would need reflashing and a
+   bench check.
+3. **Treatment settings card** has a "Treatment settings" label and 72px
+   chips and Edit treatment button. The monitor gives up the space: its
+   readiness line moved into the header row (monitor ≈280px, was ≈318px at
+   1366×768).
+4. **Videos are available during treatment.** The player shows a treatment
+   strip under its title bar: phase, time left, pressure, "Treatment" (back
+   to the monitor) and a red STOP wired to `treatment.estop_requested`. The
+   stage gives up the strip's height, so the card size is unchanged. Starting
+   a treatment keeps an open video. Stopping, a fault or the treatment ending
+   closes it. Videos stay blocked only while the protocol is `stopping`
+   (`set_video_guard`). DSDialog alerts are separate top-level windows, so they
+   still stack above the embedded VLC surface.
+5. **Home uses the full kneespa.com logo as its backdrop**, like a desktop
+   wallpaper: large, centred between the greeting and a bottom dock, at 50%
+   opacity. The launch tiles (now 112px, icon beside text) and a slim device
+   status bar sit in the dock on frosted `--surface-frost` surfaces.

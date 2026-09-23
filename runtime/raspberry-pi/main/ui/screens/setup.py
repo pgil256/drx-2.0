@@ -1,27 +1,32 @@
 """Manual positioning with independent targets, commands, and sensor readouts.
 
 Each actuator row reads left to right: name and range │ one segmented jog
-group (drawn « ‹ › » chevrons) │ return/release │ a captioned target stepper │
-the measured (or estimated) reading │ Go │ a quiet per-row stop. A thin,
-non-interactive track under the controls shows the range with a ring at the
-target and a fill to the measured position; targets change only through the
-stepper. The action row keeps the rare "Save defaults" quiet and gives STOP
-the red, widest slot.
+group (drawn « ‹ › » chevrons) │ return/release │ the captioned target │ the
+measured (or estimated) reading │ Go │ a quiet per-row stop. Under the
+controls, a full-width touch slider sets the target: tap anywhere on it or
+drag the large thumb (arrow keys step it too). Its track fills to the measured
+position, so target and feedback read on one line. Moving the slider only
+edits the target; nothing moves until Go. The action row keeps the rare
+"Save defaults" quiet and gives STOP the red, widest slot.
+
+Horizontal targets stop at 0° (``HORIZONTAL_COMMAND_LIMITS``): the actuator
+is never commanded above 0°, although calibration still spans −25 to +5°.
 """
 
 import math
 from typing import Dict, List, Optional
 
-from PyQt5.QtCore import QRectF, QSize, Qt, pyqtSignal
-from PyQt5.QtGui import QColor, QPainter, QPen
+from PyQt5.QtCore import QPointF, QRectF, QSize, Qt, pyqtSignal
+from PyQt5.QtGui import QColor, QKeyEvent, QMouseEvent, QPainter, QPen
 from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from main.config.constants import (
-    ACTUATORS, DEFAULT_HORIZONTAL_POSITION, LEG_LENGTH_MAX, LEG_LENGTH_MIN, PRESSURE_MAX,
+    ACTUATORS, DEFAULT_HORIZONTAL_POSITION, HORIZONTAL_COMMAND_LIMITS, LEG_LENGTH_MAX,
+    LEG_LENGTH_MIN, PRESSURE_MAX,
 )
 from ui.theme import control_icon
 from ui.widgets.common import hline
-from ui.widgets.ds import DSButton, DSCard, DSSlider
+from ui.widgets.ds import DSButton, DSCard
 from ui.widgets.ds._common import mark_caption, mono_font, pinned_height, resolve, sans_font
 
 
@@ -31,8 +36,8 @@ ROWS = [
     {"key": "lateral", "name": "Lateral", "unit": "°", "step": 2.5, "value": 0,
      "min": ACTUATORS["LATERAL"]["LIMITS"][0], "max": ACTUATORS["LATERAL"]["LIMITS"][1]},
     {"key": "horizontal", "name": "Horizontal", "unit": "°", "step": 2.5,
-     "value": DEFAULT_HORIZONTAL_POSITION, "min": ACTUATORS["HORIZONTAL"]["LIMITS"][0],
-     "max": ACTUATORS["HORIZONTAL"]["LIMITS"][1]},
+     "value": DEFAULT_HORIZONTAL_POSITION, "min": HORIZONTAL_COMMAND_LIMITS[0],
+     "max": HORIZONTAL_COMMAND_LIMITS[1]},
     {"key": "leg_length", "name": "Leg length", "unit": " in", "step": 0.25,
      "value": 0, "min": LEG_LENGTH_MIN, "max": LEG_LENGTH_MAX},
     {"key": "pressure", "name": "Pressure", "unit": " lbs", "step": 5, "value": 0,
@@ -51,6 +56,9 @@ _READING_REASONS = {
 
 _CONTROL_PX = 52
 _NAME_WIDTH = 132
+_SLIDER_PX = 44   # touch lane height of the target slider
+_THUMB_PX = 36    # thumb diameter
+_TRACK_PX = 8
 
 
 def _label(text: str, size: str = "--text-sm", bold: bool = False) -> QLabel:
@@ -60,55 +68,193 @@ def _label(text: str, size: str = "--text-sm", bold: bool = False) -> QLabel:
     return label
 
 
-class _PositionTrack(QWidget):
-    """A thin, read-only range track: target ring and a fill to the measurement."""
+def _fmt(value: float) -> str:
+    if abs(value - round(value)) < 1e-9:
+        return str(int(round(value)))
+    return f"{value:g}"
 
-    def __init__(self, minimum: float, maximum: float, parent=None) -> None:
+
+class _TargetSlider(QWidget):
+    """A large touch slider for one row's target, with the measured fill.
+
+    The whole 44px lane accepts a press: the thumb jumps to the nearest step
+    and follows the finger until release. Values snap to ``step`` within
+    ``minimum..maximum``. ``valueChanged`` reports each new step; it edits the
+    target only. The fill runs from zero (bidirectional ranges) or the minimum
+    to the measured position; small ticks mark each step.
+    """
+
+    valueChanged = pyqtSignal(float)
+
+    def __init__(self, minimum: float, maximum: float, step: float, value: float,
+                 parent=None) -> None:
         super().__init__(parent)
         self._min = float(minimum)
         self._max = float(maximum)
-        self._target: Optional[float] = None
+        self._step = float(step)
+        self._steps = max(1, round((self._max - self._min) / self._step))
+        self._value = self._snap(value)
         self._measured: Optional[float] = None
-        self.setFixedHeight(16)
-        self.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self.setFocusPolicy(Qt.NoFocus)
+        self._dragging = False
+        self.setFixedHeight(_SLIDER_PX)
+        self.setMinimumWidth(240)
+        self.setFocusPolicy(Qt.TabFocus)
+        self.setCursor(Qt.PointingHandCursor)
 
-    def set_target(self, value: Optional[float]) -> None:
-        self._target = value
+    # ----- value -----
+    def _snap(self, value: float) -> float:
+        value = max(self._min, min(self._max, float(value)))
+        position = int(round((value - self._min) / self._step))
+        return round(self._min + position * self._step, 6)
+
+    def value(self) -> float:
+        return self._value
+
+    def set_value(self, value: float) -> None:
+        """Reflect a value without emitting ``valueChanged``."""
+        self._value = self._snap(value)
         self.update()
+
+    def minimum(self) -> float:
+        return self._min
+
+    def maximum(self) -> float:
+        return self._max
+
+    def _commit(self, value: float) -> None:
+        value = self._snap(value)
+        if value != self._value:
+            self._value = value
+            self.update()
+            self.valueChanged.emit(value)
 
     def set_measured(self, value: Optional[float]) -> None:
         self._measured = value
         self.update()
 
-    def _x(self, value: float, left: float, width: float) -> float:
-        span = self._max - self._min or 1.0
-        fraction = max(0.0, min(1.0, (value - self._min) / span))
-        return left + fraction * width
+    # ----- geometry -----
+    def _lane(self):
+        left = _THUMB_PX / 2 + 1
+        return left, max(1.0, self.width() - _THUMB_PX - 2)
 
+    def _x(self, value: float) -> float:
+        left, width = self._lane()
+        span = self._max - self._min or 1.0
+        return left + max(0.0, min(1.0, (value - self._min) / span)) * width
+
+    def _value_at(self, x: float) -> float:
+        left, width = self._lane()
+        fraction = max(0.0, min(1.0, (x - left) / width))
+        return self._min + fraction * (self._max - self._min)
+
+    # ----- input -----
+    def mousePressEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.LeftButton and self.isEnabled():
+            self._dragging = True
+            self._commit(self._value_at(event.x()))
+            self.update()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event: QMouseEvent) -> None:
+        if self._dragging:
+            self._commit(self._value_at(event.x()))
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event: QMouseEvent) -> None:
+        if event.button() == Qt.LeftButton and self._dragging:
+            self._commit(self._value_at(event.x()))
+            self._dragging = False
+            self.update()
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def keyPressEvent(self, event: QKeyEvent) -> None:
+        steps = {Qt.Key_Left: -1, Qt.Key_Down: -1, Qt.Key_Right: 1, Qt.Key_Up: 1}
+        if event.key() in steps:
+            self._commit(self._value + steps[event.key()] * self._step)
+            event.accept()
+            return
+        if event.key() in (Qt.Key_Home, Qt.Key_End):
+            self._commit(self._min if event.key() == Qt.Key_Home else self._max)
+            event.accept()
+            return
+        super().keyPressEvent(event)
+
+    # ----- paint -----
     def paintEvent(self, _event) -> None:
         painter = QPainter(self)
         painter.setRenderHint(QPainter.Antialiasing, True)
-        ring = 12.0
-        left, width = ring / 2 + 1, self.width() - ring - 2
+        enabled = self.isEnabled()
+        left, width = self._lane()
         mid = self.height() / 2.0
+        half = _TRACK_PX / 2.0
         painter.setPen(Qt.NoPen)
         painter.setBrush(QColor(resolve("--gray-300")))
-        painter.drawRoundedRect(QRectF(left, mid - 2, width, 4), 2, 2)
+        painter.drawRoundedRect(QRectF(left, mid - half, width, _TRACK_PX), half, half)
+        # Step ticks below the track (skipped when they would crowd together).
+        if width / self._steps >= 16:
+            painter.setBrush(QColor(resolve("--gray-400")))
+            for index in range(self._steps + 1):
+                x = left + index * width / self._steps
+                painter.drawRect(QRectF(x - 1, mid + half + 4, 2, 6))
         if self._measured is not None:
-            # Bidirectional ranges fill from zero; one-sided ranges from the minimum.
             origin = 0.0 if self._min < 0 < self._max else self._min
-            a, b = sorted((self._x(origin, left, width), self._x(self._measured, left, width)))
-            painter.setBrush(QColor(resolve("--color-primary")))
-            painter.drawRoundedRect(QRectF(a, mid - 2, max(4.0, b - a), 4), 2, 2)
-        if self._target is not None:
-            x = self._x(self._target, left, width)
-            painter.setBrush(QColor(resolve("--white")))
-            pen = QPen(QColor(resolve("--ink-900")))
-            pen.setWidthF(2.0)
-            painter.setPen(pen)
-            painter.drawEllipse(QRectF(x - ring / 2, mid - ring / 2, ring, ring))
+            a, b = sorted((self._x(origin), self._x(self._measured)))
+            painter.setBrush(QColor(resolve("--color-primary") if enabled
+                                    else resolve("--gray-400")))
+            painter.drawRoundedRect(QRectF(a, mid - half, max(_TRACK_PX, b - a), _TRACK_PX),
+                                    half, half)
+        x = self._x(self._value)
+        radius = _THUMB_PX / 2.0 - 1.5
+        if self._dragging:
+            painter.setBrush(QColor(resolve("--blue-100")))
+            painter.drawEllipse(QPointF(x, mid), radius + 5, radius + 5)
+        pen = QPen(QColor(resolve("--ink-900") if enabled else resolve("--gray-400")))
+        pen.setWidthF(3.0)
+        painter.setPen(pen)
+        painter.setBrush(QColor(resolve("--white")))
+        painter.drawEllipse(QPointF(x, mid), radius, radius)
+        if self.hasFocus() and self.property("keyboardFocus"):
+            focus = QPen(QColor(resolve("--color-primary")))
+            focus.setWidthF(2.0)
+            painter.setPen(focus)
+            painter.setBrush(Qt.NoBrush)
+            painter.drawEllipse(QPointF(x, mid), radius + 4, radius + 4)
         painter.end()
+
+
+class _TargetReadout(QWidget):
+    """The selected target as a caption over a mono value."""
+
+    def __init__(self, unit: str, parent=None) -> None:
+        super().__init__(parent)
+        self._unit = unit
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+        layout.setAlignment(Qt.AlignVCenter)
+        caption = _label("Target", "--text-xs", True)
+        caption.setStyleSheet(f"color: {resolve('--text-muted')};")
+        caption.setAlignment(Qt.AlignCenter)
+        mark_caption(caption)
+        layout.addWidget(caption)
+        self._value_label = QLabel()
+        self._value_label.setFont(mono_font(size="--text-md", weight=600))
+        self._value_label.setStyleSheet(f"color: {resolve('--text-strong')};")
+        self._value_label.setAlignment(Qt.AlignCenter)
+        layout.addWidget(self._value_label)
+        self.setFixedWidth(112)
+
+    def set_value(self, value: float) -> None:
+        self._value_label.setText(_fmt(value) + self._unit)
+
+    def text(self) -> str:
+        return self._value_label.text()
 
 
 class _PosRow(QWidget):
@@ -197,8 +343,8 @@ class _ActuatorRow(QWidget):
         self._key = cfg["key"]
         self._step = cfg["step"]
         outer = QVBoxLayout(self)
-        outer.setContentsMargins(0, 8, 0, 6)
-        outer.setSpacing(4)
+        outer.setContentsMargins(0, 6, 0, 2)
+        outer.setSpacing(2)
         layout = QHBoxLayout()
         layout.setSpacing(12)
         outer.addLayout(layout)
@@ -244,21 +390,16 @@ class _ActuatorRow(QWidget):
         layout.addWidget(reset)
         layout.addSpacing(8)
 
-        self.slider = DSSlider(
-            value=cfg["value"], minimum=cfg["min"], maximum=cfg["max"], step=cfg["step"],
-            unit=cfg["unit"], mode="stepper", caption="Target",
-        )
-        self.slider.set_accessible_label(cfg["name"] + " target")
-        self.slider.set_step_size(_CONTROL_PX)
-        self.slider._value_label.setFixedWidth(104)
-        self.slider.layout().setSpacing(6)
-        self.slider.valueChanged.connect(self._on_target)
-        layout.addWidget(self.slider)
+        self.target = _TargetReadout(cfg["unit"])
+        layout.addWidget(self.target)
         layout.addStretch(1)
 
-        self.track = _PositionTrack(cfg["min"], cfg["max"])
+        self.slider = _TargetSlider(cfg["min"], cfg["max"], cfg["step"], cfg["value"])
+        self.slider.setAccessibleName(cfg["name"] + " target")
+        self.slider.setToolTip(f"Drag or tap to set the {cfg['name'].lower()} target")
+        self.slider.valueChanged.connect(self._on_target)
         self.readout = _PosRow(cfg["unit"], self._key == "leg_length",
-                               on_value=self.track.set_measured)
+                               on_value=self.slider.set_measured)
         layout.addWidget(self.readout)
         layout.addSpacing(8)
         go = DSButton("Go", size="sm")
@@ -276,11 +417,14 @@ class _ActuatorRow(QWidget):
         self.safety_buttons.append(stop)
         self.motion_buttons.append(go)
 
-        track_row = QHBoxLayout()
-        track_row.setContentsMargins(_NAME_WIDTH + 12, 0, 0, 0)
-        track_row.addWidget(self.track)
-        outer.addLayout(track_row)
-        self.track.set_target(self.slider.value())
+        # The thumb's centre travels from the jog group's left edge to the
+        # per-row stop's centre, so the lane lines up with the controls above.
+        slider_row = QHBoxLayout()
+        slider_row.setContentsMargins(_NAME_WIDTH + 12 - _THUMB_PX // 2 - 1, 0,
+                                      _CONTROL_PX // 2 - _THUMB_PX // 2 - 1, 0)
+        slider_row.addWidget(self.slider)
+        outer.addLayout(slider_row)
+        self.target.set_value(self.slider.value())
 
     @staticmethod
     def _icon_button(icon: str, color: str, disabled: str, name: str, tip: str) -> QPushButton:
@@ -295,13 +439,13 @@ class _ActuatorRow(QWidget):
         return button
 
     def _on_target(self, value: float) -> None:
-        self.track.set_target(value)
+        self.target.set_value(value)
         self.valueChanged.emit(self._key, value)
 
     def set_value(self, value: float) -> None:
         """Reflect a commanded target without changing any sensor reading."""
         self.slider.set_value(value)
-        self.track.set_target(self.slider.value())
+        self.target.set_value(self.slider.value())
 
     def _on_jog(self, action: str, delta: Optional[float]) -> None:
         # Controller feedback owns commanded positions. Pressure arrows edit

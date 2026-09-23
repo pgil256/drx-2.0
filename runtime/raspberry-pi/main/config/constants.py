@@ -173,8 +173,13 @@ AXIAL_MIN_INCHES = ACTUATORS["AXIAL"]["LIMITS"][0]
 AXIAL_MAX_INCHES = ACTUATORS["AXIAL"]["LIMITS"][1]
 LATERAL_MIN_DEGREES = ACTUATORS["LATERAL"]["LIMITS"][0]
 LATERAL_MAX_DEGREES = ACTUATORS["LATERAL"]["LIMITS"][1]
-HORIZONTAL_MIN_DEGREES = ACTUATORS["HORIZONTAL"]["LIMITS"][0]
-HORIZONTAL_MAX_DEGREES = ACTUATORS["HORIZONTAL"]["LIMITS"][1]
+# The horizontal actuator is NEVER commanded above 0 degrees. Its calibrated
+# travel still spans ACTUATORS["HORIZONTAL"]["LIMITS"] (-25..+5), which the
+# service/calibration tables and measured readouts keep using; every host
+# move (Setup Go and jog) clamps to these command limits instead.
+HORIZONTAL_COMMAND_LIMITS = (ACTUATORS["HORIZONTAL"]["LIMITS"][0], 0)
+HORIZONTAL_MIN_DEGREES = HORIZONTAL_COMMAND_LIMITS[0]
+HORIZONTAL_MAX_DEGREES = HORIZONTAL_COMMAND_LIMITS[1]
 
 # Treatment duration (minutes) — surfaced as the Treatment "Duration" setting.
 DEFAULT_PROTOCOL_MINUTES = 12  # legacy default
