@@ -4,7 +4,7 @@ from typing import Dict, Mapping, Optional
 
 from PyQt5.QtCore import QEvent, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
-    QCheckBox, QComboBox, QDialog, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
+    QCheckBox, QComboBox, QFrame, QGridLayout, QHBoxLayout, QLabel, QLineEdit,
     QScrollArea,
     QVBoxLayout, QWidget,
 )
@@ -13,25 +13,23 @@ from helpers.cloud_contract import SETTING_RULES, validate_patient
 from ui.modals.staff_login import open_text_keyboard
 from ui.screens.content import PROTOCOLS
 from ui.screens.treatment import SETTING_SPECS
-from ui.widgets.ds import DSButton, DSSlider
-from ui.widgets.ds._common import sans_font
+from ui.widgets.ds import DSButton, DSDialog, DSSlider
+from ui.widgets.ds._common import resolve, sans_font
 
 
-class NameKeyboard(QDialog):
+class NameKeyboard(DSDialog):
     """Edit a name without relying on a desktop's optional keyboard service."""
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Patient name")
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setFixedWidth(860)
-        layout = QVBoxLayout(self)
+        super().__init__(parent, title="Patient name", width=860)
+        layout = self.body_layout
+        layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(8)
         self.text = QLineEdit()
         self.text.setMaxLength(200)
         self.text.setAccessibleName("Patient name")
         self.text.setMinimumHeight(52)
-        self.text.setFont(sans_font(size=22))
+        self.text.setFont(sans_font(size="--text-md"))
         self.text.returnPressed.connect(self.accept)
         layout.addWidget(self.text)
         self._letters = []
@@ -50,6 +48,7 @@ class NameKeyboard(QDialog):
                     self._letters.append(key)
             layout.addLayout(row)
         row = QHBoxLayout()
+        row.setSpacing(6)
         for title, action in (("Shift", self._shift), ("Space", lambda: self.text.insert(" ")),
                               ("Backspace", self.text.backspace), ("Cancel", self.reject),
                               ("Done", self.accept)):
@@ -66,7 +65,7 @@ class NameKeyboard(QDialog):
             key.setText(key.text().upper() if self._uppercase else key.text().lower())
 
 
-class PatientEditor(QDialog):
+class PatientEditor(DSDialog):
     """Stage all edits until a complete validated patient is saved successfully."""
 
     submitted = pyqtSignal(object)
@@ -75,16 +74,15 @@ class PatientEditor(QDialog):
     reload_requested = pyqtSignal()
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        super().__init__(parent, title="Add new patient")
         self.setFixedSize(900, 710)
         self._patient: Dict = {}
         self._pending = False
         self._authorized = False
         self._saved = False
         self._editing = False
-        outer = QVBoxLayout(self)
-        outer.setContentsMargins(24, 16, 24, 16)
+        outer = self.body_layout
+        outer.setContentsMargins(24, 12, 12, 12)
         outer.setSpacing(12)
         self._scroll = QScrollArea()
         self._scroll.setWidgetResizable(True)
@@ -96,9 +94,6 @@ class PatientEditor(QDialog):
         layout.setSpacing(8)
         self._scroll.setWidget(content)
         outer.addWidget(self._scroll, 1)
-        self._title = QLabel()
-        self._title.setFont(sans_font(size=24, weight=600))
-        layout.addWidget(self._title)
         account = QHBoxLayout()
         self._account = QLabel("Cloud staff sign-in is required to save patients.")
         self._account.setTextFormat(Qt.PlainText)
@@ -128,7 +123,7 @@ class PatientEditor(QDialog):
             self._protocol.addItem(f"{number} · {protocol['title']}", number)
         for col, (title, widget) in enumerate((("Patient name", self._name),
                                               ("Protocol number", self._protocol))):
-            grid.addWidget(QLabel(title), 0, col)
+            grid.addWidget(self._caption(title), 0, col)
             grid.addWidget(widget, 1, col)
         self._settings = {}
         labels = {"max_left": "Max angle left", "max_right": "Max angle right",
@@ -136,7 +131,7 @@ class PatientEditor(QDialog):
         for index, (key, label, value, low, high, step, unit) in enumerate(SETTING_SPECS):
             row, col = 2 + (index // 2) * 2, index % 2
             label = labels.get(key, label)
-            grid.addWidget(QLabel(label), row, col)
+            grid.addWidget(self._caption(f"{label} · {low:g}–{high:g}{unit}"), row, col)
             control = DSSlider(value=value, minimum=low, maximum=high, step=step,
                                unit=unit, with_steps=True)
             control.set_accessible_label(label)
@@ -170,15 +165,22 @@ class PatientEditor(QDialog):
             button.hide()
             recovery.addWidget(button)
         layout.addLayout(recovery)
-        actions = QHBoxLayout()
         self._cancel = DSButton("Cancel", variant="secondary")
         self._save = DSButton("Save patient")
+        self.add_action_stretch(1)
         for button in (self._cancel, self._save):
             button.setAutoDefault(False)
-            actions.addWidget(button)
+            button.setMinimumWidth(180)
+            self.add_action(button)
         self._cancel.clicked.connect(self.reject)
         self._save.clicked.connect(self._submit)
-        outer.addLayout(actions)
+
+    @staticmethod
+    def _caption(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setFont(sans_font(size="--text-sm", weight=600))
+        label.setStyleSheet(f"color: {resolve('--text-muted')};")
+        return label
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:
         if watched is getattr(self, "_reason", None) and event.type() == QEvent.MouseButtonRelease:
@@ -211,8 +213,7 @@ class PatientEditor(QDialog):
         self._reason.clear()
         self._reason.hide()
         title = "Edit patient and treatment plan" if editing else "Add new patient"
-        self.setWindowTitle(title)
-        self._title.setText(title)
+        self.set_title(title)
         self._name.setText(patient.get("display_name") or "")
         self._protocol.setCurrentIndex(protocol - 1)
         for key, control in self._settings.items():

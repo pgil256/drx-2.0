@@ -9,6 +9,8 @@ conftest forces QT_QPA_PLATFORM=offscreen; no backend is involved.
 from unittest.mock import MagicMock
 
 import pytest
+from PyQt5.QtCore import QPoint, Qt
+from PyQt5.QtTest import QTest
 
 pytestmark = pytest.mark.integration
 
@@ -146,7 +148,8 @@ def test_avatar_opens_profile_and_logout_button_logs_out(shell):
 def test_device_shows_versions_and_device_id(shell):
     shell.device.set_device_id("drx-desktop-sim-01")
     shell.device.set_firmware("service-test", True)
-    assert shell.device._device_id.text() == "Device ID: drx-desktop-sim-01"
+    # The row label reads "Device ID"; its value carries no repeated prefix.
+    assert shell.device._device_id.text() == "drx-desktop-sim-01"
     assert "service-test" in shell.device._firmware.text()
     shell.device.set_firmware("service-test", False)
     assert "disconnected" in shell.device._firmware.text()
@@ -157,7 +160,7 @@ def test_profile_only_has_identity_and_session_actions(shell, admin):
     from PyQt5.QtWidgets import QPushButton
     shell.login_succeeded("Operator", is_admin=admin)
     buttons = {button.text() for button in shell.profile.findChildren(QPushButton)}
-    assert buttons == {"Log Out", "Restart App", "Exit App"}
+    assert buttons == {"Log out", "Restart app", "Exit app"}
     assert not hasattr(shell.profile, "_device_id")
     assert not hasattr(shell.profile, "_version")
     assert not hasattr(shell, "add_pin_modal")
@@ -217,7 +220,53 @@ def test_treatment_duration_slider_locks_during_run(shell):
 
 
 def test_treatment_stop_button_uses_concise_label(shell):
-    assert shell.treatment._estop_btn.text() == "Stop"
+    # Run controls are the only uppercase labels, and STOP is red, never blue.
+    t = shell.treatment
+    assert t._estop_btn.text() == "STOP"
+    assert t._estop_btn.variant() == "danger"
+    assert t._start_btn.variant() == "success"
+    assert t._pause_btn.variant() == "secondary"
+
+
+def test_treatment_readouts_keep_one_size_across_outcomes(shell):
+    t = shell.treatment
+    sizes = (t._time_stat._size, t._pressure_stat._size)
+    t.set_outcome("completed", 720)
+    assert (t._time_stat._size, t._pressure_stat._size) == sizes
+    t.clear_outcome()
+    assert (t._time_stat._size, t._pressure_stat._size) == sizes
+
+
+def test_outcome_swaps_start_for_prepare_next_without_moving_stop(shell, qtbot):
+    shell.setFixedSize(1366, 768)
+    shell.navigate("protocols")
+    shell.show()
+    t = shell.treatment
+    qtbot.wait(1)
+    stop = t._estop_btn.geometry()
+    start = t._start_btn.geometry()
+    t.set_outcome("completed", 720)
+    qtbot.wait(1)
+    assert t._next_button.isVisible() and not t._start_btn.isVisible()
+    assert t._next_button.geometry() == start
+    assert t._estop_btn.geometry() == stop
+    t.clear_outcome()
+    qtbot.wait(1)
+    assert t._start_btn.isVisible() and not t._next_button.isVisible()
+
+
+def test_readiness_line_reserves_its_height(shell, qtbot):
+    shell.setFixedSize(1366, 768)
+    shell.navigate("protocols")
+    shell.show()
+    t = shell.treatment
+    t.set_device_status("Ready", "Review settings before starting.", True)
+    qtbot.wait(1)
+    idle = t._pressure_stat.mapTo(shell, QPoint())
+    t.set_device_status("Controller offline", "Commands may not reach the device.", False)
+    qtbot.wait(1)
+    assert not t._readiness.isHidden()
+    assert t._pressure_stat.mapTo(shell, QPoint()) == idle
 
 
 def test_treatment_protocol_select_and_settings(shell):
@@ -332,7 +381,7 @@ def test_leg_length_has_target_controls_separate_from_its_estimate(shell):
     assert not row.slider.isHidden()
     moved = MagicMock()
     row.go.connect(moved)
-    row.slider._right_btn.click()
+    QTest.keyClick(row.slider, Qt.Key_Right)
     assert row.value() == 0.25
     moved.assert_not_called()
     row.motion_buttons[-1].click()
@@ -357,7 +406,6 @@ def test_leg_estimate_keeps_quarter_inches_and_requires_explicit_zero(shell):
 # ----- support -----
 def test_support_accordion_and_signals(shell):
     from ui.screens.support import _FailureItem
-    from ui.theme import GLYPH
 
     sup = shell.support
     activated, ticket = [], []
@@ -369,7 +417,7 @@ def test_support_accordion_and_signals(shell):
     assert not item._body.isVisibleTo(item)
     item._toggle()
     assert item._body.isVisibleTo(item)
-    assert item._indicator.text() == GLYPH["accordion_open"]
+    assert item.is_open() and not item._indicator.pixmap().isNull()
     assert activated  # issue_activated fired
 
     sup.contact_name.setText("Operator")
@@ -806,3 +854,65 @@ def test_video_modal_none_run_reset_by_valid_poll(shell, monkeypatch):
     m._on_poll()  # None (1 again)
     assert m._poll.isActive()  # never reached the threshold of 3
     assert m._playing
+
+
+# ----- touch-target lint -----
+def _interactive_types():
+    from PyQt5.QtWidgets import (
+        QAbstractButton, QAbstractSlider, QAbstractSpinBox, QComboBox, QLineEdit,
+    )
+    return (QAbstractButton, QComboBox, QAbstractSlider, QLineEdit, QAbstractSpinBox)
+
+
+def _undersized(root):
+    """Visible interactive widgets under *root* smaller than a 48x48 touch target."""
+    from PyQt5.QtWidgets import QScrollBar
+
+    small = []
+    for widget in root.findChildren(_interactive_types()):
+        if not widget.isVisibleTo(root) or isinstance(widget, QScrollBar):
+            continue
+        if widget.width() < 48 or widget.height() < 48:
+            name = widget.accessibleName() or getattr(widget, "text", lambda: "")() or ""
+            small.append((type(widget).__name__, name, widget.width(), widget.height()))
+    return small
+
+
+@pytest.mark.parametrize("page", ["home", "setup", "protocols", "support", "device", "profile"])
+def test_no_interactive_widget_is_smaller_than_a_touch_target(shell, qtbot, page):
+    shell.setFixedSize(1366, 768)
+    shell.set_user("Lint operator", is_admin=True)
+    shell.navigate(page)
+    shell.show()
+    qtbot.wait(10)
+    screen = shell.stack.currentWidget()
+    sections = getattr(screen, "_sections", None)
+    for index in range(sections.count() if sections is not None else 1):
+        if sections is not None:
+            if page == "device" and index == 2:
+                screen.unlock_service()
+            else:
+                screen._select_section(index)
+            qtbot.wait(10)
+        assert not _undersized(shell.top_bar) and not _undersized(shell.nav_rail)
+        assert not _undersized(screen), (page, index, _undersized(screen))
+
+
+@pytest.mark.parametrize("overlay", ["login", "login_pin", "patient", "video"])
+def test_overlays_keep_touch_targets(shell, qtbot, overlay):
+    shell.setFixedSize(1366, 768)
+    shell.show()
+    if overlay.startswith("login"):
+        shell.set_user(None)
+        shell.show_login()
+        if overlay == "login_pin":
+            shell.login_modal._switch.click()
+        modal = shell.login_modal
+    elif overlay == "patient":
+        shell.patient_modal.open_over(shell)
+        modal = shell.patient_modal
+    else:
+        shell.show_video()
+        modal = shell.video_modal
+    qtbot.wait(10)
+    assert not _undersized(modal), _undersized(modal)

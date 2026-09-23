@@ -332,3 +332,100 @@ changes are needed.
 * `tests/integration/test_screens.py`: assert no interactive widget in the
   shell is smaller than 48×48 and that the Treatment readouts keep one font
   size across `set_outcome` / `clear_outcome`.
+
+---
+
+## 7. Implementation status (2026-09-23, branch `feat/gui-polish`)
+
+Phases 1–6 are implemented as one commit each; Phase 7's automated checks
+landed with them. Regenerate before/after sheets with:
+
+```bash
+QT_QPA_PLATFORM=offscreen python development/tools/screen_gallery.py \
+    --outdir .cache/gallery --baseline .cache/gallery-before
+```
+
+Phase 0 decisions were taken as the recommendations above (no owner input
+was available): START green / STOP red / destructive red outline; Home as a
+device home; Setup keeps a quiet per-row stop and gains the indicator track;
+every `QDialog` becomes a frameless in-shell sheet.
+
+Deviations from the recommendations, and why:
+
+* **Control outline colour.** Secondary buttons use a 1px border, but keep
+  `#78858e` rather than `--gray-400`: `test_gui_ux` enforces a 3:1 contrast
+  floor for control edges, which `--gray-400` (1.7:1) fails.
+* **Destructive text** is `--red-500`, not `--red-400` (3.8:1 fails AA for
+  18px semibold text); the border stays `--red-400`.
+* **Rail labels** use `--text-sm` (16px) semibold rather than a 17px literal,
+  and the wordmark uses `--text-xl` (30px) rather than 28px, to stay on the
+  type scale.
+* **Topic chips** stay 48px tall (the plan's 44px would fail the new
+  touch-target lint); `sm` only shrinks the label and group padding.
+* **Dialogs as overlays.** `DSDialog` stays a real `QDialog` (so `exec_()`,
+  `open()`, modality, `QMessageBox` confirms and the QObject tree are
+  unchanged) but is frameless, masked to rounded corners and paired with an
+  in-host backdrop widget that paints the scrim and shadow — child-widget
+  translucency needs no compositor on the Pi. `QMessageBox` / `QInputDialog` /
+  `QProgressDialog` keep working (tests monkeypatch them) and get the same
+  frameless title strip from `DialogTheme`.
+* **Non-modal notices** (pressure notice, upload error, safety alert) dock
+  under the top bar instead of centring, so they never cover the pressure
+  readout or STOP.
+* **Login card** drops the duplicate logo/wordmark (the brand sits in the
+  top bar behind the scrim) to fit the title strip and QR placeholder in
+  768px; the full kneespa.com logo is not used anywhere now.
+* **"Prepare next treatment"** replaces START while an outcome is showing,
+  as recommended; this means starting again after a completed/stopped run
+  always goes through the prepare step.
+
+Not done / needs hardware:
+
+* On-Pi check of IBM Plex rendering at 13–16px, window masks and dialog
+  stacking under the kiosk window manager, and the VLC modal regression —
+  offscreen renders on Windows and Linux (WSL) only.
+* `development/tools/e2e_touchscreen.py` drives the screen by pixel
+  coordinates that were already stale before this work (e.g. `nav_video`
+  hits Device); re-map them against the new layout before the next
+  on-device e2e run.
+
+## 8. Owner review changes (2026-09-23)
+
+The owner reviewed the polished GUI and asked for five changes. Four of them
+reverse earlier decisions in this plan (§3.1, §3.2, §4 and the video block
+during treatment), so they supersede those sections:
+
+1. **Sign-in opens on the staff PIN keypad.** "Sign in with a QR code" is the
+   footer option (with "Use staff PIN" to switch back). The controller asks for
+   a phone code only when that option is tapped. Flows that re-authenticate an
+   existing phone session (a patient changing, an expired phone session,
+   rejected staff API session) call `show_login(phone=True)` and still open
+   straight to the QR code, since patients have no staff PIN.
+2. **Setup has no −/+ target steppers** (they duplicated the jog arrows). The
+   read-only indicator track became a full-width, 44px touch slider with a
+   36px thumb: tap anywhere or drag to set the target (arrow keys step it).
+   The track still fills to the measured position, and nothing moves until
+   Go. **Horizontal is never commanded above 0°:**
+   `HORIZONTAL_COMMAND_LIMITS = (-25, 0)` drives the Setup range, the Support
+   limits and the host clamps in `kneespa.py` (Go and jog). Calibration and
+   measured readouts keep the full −25…+5° travel (`ACTUATORS["HORIZONTAL"]
+   ["LIMITS"]`). The firmware clamp is still the raw 0–4500 encoder envelope.
+   A firmware ceiling at the 0° mark (`BZERO`) would need reflashing and a
+   bench check.
+3. **Treatment settings card** has a "Treatment settings" label and 72px
+   chips and Edit treatment button. The monitor gives up the space: its
+   readiness line moved into the header row (monitor ≈280px, was ≈318px at
+   1366×768).
+4. **Videos are available during treatment.** The player shows a treatment
+   strip under its title bar: phase, time left, pressure, "Treatment" (back
+   to the monitor) and a red STOP wired to `treatment.estop_requested`. The
+   stage gives up the strip's height, so the card size is unchanged. Starting
+   a treatment keeps an open video. Stopping, a fault or the treatment ending
+   closes it. Videos stay blocked only while the protocol is `stopping`
+   (`set_video_guard`). DSDialog alerts are separate top-level windows, so they
+   still stack above the embedded VLC surface.
+5. **Home uses the full kneespa.com logo as its backdrop**, like a desktop
+   wallpaper: as large as the page allows, centred behind everything, at 50%
+   opacity. The dock overlays its lower half: launch tiles (now 112px, icon
+   beside text) and a slim device status bar on translucent `--surface-frost`
+   surfaces (80% white), so the logo shows faintly through them.

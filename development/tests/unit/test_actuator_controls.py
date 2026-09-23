@@ -167,11 +167,11 @@ class TestMoveActuatorHorizontal:
 
     def test_in_range_sends_expected_command(self):
         """In-range move sends the calibrated absolute BMarks position."""
-        # Start at 0; slow step (speed_factor <= 4) is 5, direction +1 -> 5 deg.
-        stub = make_kneespa_stub(horizontal=0)
+        # Start at -5; slow step (speed_factor <= 4) is 5, direction +1 -> 0 deg.
+        stub = make_kneespa_stub(horizontal=-5)
         KneeSpa.move_actuator(stub, ACTUATOR_B, None, "1", 1)
-        stub.arduino.send.assert_called_once_with("I132280")
-        assert stub.horizontal_flexion_position == 5
+        stub.arduino.send.assert_called_once_with("I131900")
+        assert stub.horizontal_flexion_position == 0
 
     def test_fast_speed_uses_larger_step(self):
         """speed_factor > 4 uses a step of 10 degrees."""
@@ -183,12 +183,21 @@ class TestMoveActuatorHorizontal:
 
     def test_at_max_boundary_is_inclusive(self):
         """new_position exactly == max is allowed (limit check is strict >)."""
-        # Start at 0, slow step 5 -> new_position 5 == HORIZONTAL_MAX_DEGREES.
-        assert HORIZONTAL_MAX_DEGREES == 5
-        stub = make_kneespa_stub(horizontal=0)
+        # Start at -5, slow step 5 -> new_position 0 == HORIZONTAL_MAX_DEGREES.
+        assert HORIZONTAL_MAX_DEGREES == 0
+        stub = make_kneespa_stub(horizontal=-5)
         KneeSpa.move_actuator(stub, ACTUATOR_B, None, "1", 1)
         stub.arduino.send.assert_called_once()
         assert stub.horizontal_flexion_position == HORIZONTAL_MAX_DEGREES
+
+    @pytest.mark.parametrize("start,speed", [(0, "1"), (-5, "5"), (-2.5, "1")])
+    def test_never_commanded_above_zero_degrees(self, start, speed):
+        """Horizontal jogs that would pass 0 deg are refused with no command,
+        even though calibration still spans -25..+5 deg."""
+        stub = make_kneespa_stub(horizontal=start)
+        KneeSpa.move_actuator(stub, ACTUATOR_B, None, speed, 1)
+        stub.arduino.send.assert_not_called()
+        assert stub.horizontal_flexion_position == start
 
     def test_failed_send_does_not_change_displayed_position(self):
         stub = make_kneespa_stub(horizontal=-10)

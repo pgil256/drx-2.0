@@ -12,16 +12,15 @@ Signals:
 """
 
 from PyQt5.QtCore import Qt, pyqtSignal
-from PyQt5.QtWidgets import QLabel, QLineEdit, QPushButton, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QLabel, QLineEdit
 
-from ui.theme import GLYPH
-from ui.widgets.ds import DSKeypad
+from ui.widgets.ds import DSKeypad, DSSheet
 from ui.widgets.ds._common import drop_shadow, resolve, sans_font
 
 from ._overlay import Overlay
 
-_ENTER = "Enter New PIN"
-_CONFIRM = "Confirm New PIN"
+_ENTER = "Enter new PIN"
+_CONFIRM = "Confirm new PIN"
 
 
 class AddPinModal(Overlay):
@@ -31,52 +30,18 @@ class AddPinModal(Overlay):
         super().__init__(parent)
         self._first_pin = None
 
-        card = QWidget()
-        card.setObjectName("AddPinCard")
-        card.setAttribute(Qt.WA_StyledBackground, True)
-        card.setFixedWidth(408)
-        card.setStyleSheet(
-            f"#AddPinCard {{ background: #ffffff; border-radius: {resolve('--radius-lg')}; }}"
-        )
+        card = DSSheet("Add user PIN", width=440)
+        card.close_requested.connect(self.close_overlay)
         drop_shadow(card, blur=48, dy=8, alpha=51)  # --shadow-lg
-
-        lay = QVBoxLayout(card)
-        lay.setContentsMargins(44, 36, 44, 36)
+        lay = card.body_layout
+        lay.setContentsMargins(40, 24, 40, 24)
         lay.setSpacing(0)
-
-        # Close — floats at the top-right corner (matches LoginModal).
-        close = QPushButton(GLYPH["close"], card)
-        close.setCursor(Qt.PointingHandCursor)
-        close.setFixedSize(48, 48)
-        close.setAccessibleName("Close add user")
-        close.setFont(sans_font(size="--text-md", weight=600))
-        close.setStyleSheet(
-            "QPushButton { border-radius: 24px; border: none; padding: 0; font-size: 24px;"
-            f" background: {resolve('--gray-200')}; color: {resolve('--ink-700')}; }}"
-            f" QPushButton:hover {{ background: {resolve('--gray-300')}; }}"
-        )
-        close.clicked.connect(self.close_overlay)
-        close.move(408 - 14 - 48, 14)
-        close.raise_()
-
-        title = QLabel("Add User PIN")
-        title.setAlignment(Qt.AlignCenter)
-        title.setFont(sans_font(size="--text-lg", weight=700))
-        title.setStyleSheet(f"color: {resolve('--ink-900')}; background: transparent;")
-        lay.addWidget(title, 0, Qt.AlignCenter)
-        lay.addSpacing(18)
 
         self._name = QLineEdit()
         self._name.setPlaceholderText("New user name (optional)")
         self._name.setAlignment(Qt.AlignCenter)
         self._name.setFont(sans_font(size="--text-md"))
         self._name.setFixedHeight(48)
-        self._name.setStyleSheet(
-            f"QLineEdit {{ border: 2px solid {resolve('--gray-300')};"
-            f" border-radius: {resolve('--radius-md')};"
-            f" color: {resolve('--ink-900')}; background: #ffffff; }}"
-            f" QLineEdit:focus {{ border-color: {resolve('--brand-cyan')}; }}"
-        )
         lay.addWidget(self._name)
         lay.addSpacing(20)
 

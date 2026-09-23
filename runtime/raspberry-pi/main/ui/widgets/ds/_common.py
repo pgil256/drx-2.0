@@ -68,6 +68,27 @@ def mono_font(size=None, weight=400, tracking=None):
     return _font(MONO, size, weight, tracking)
 
 
+def pinned_height(height, border=0, padding=0):
+    """QSS that keeps a fixed-height control at *height* (content-box maths).
+
+    Qt applies a stylesheet's min/max-height after ``setFixedHeight`` and
+    measures only the content box, so a rule such as ``min-height: 0`` lets a
+    layout squeeze a 48px touch target. Restate the real height instead.
+    """
+    content = height - 2 * (border + padding)
+    return f"min-height: {content}px; max-height: {content}px;"
+
+
+def mark_caption(label):
+    """Tag a caption, eyebrow or unit label — the only text allowed below 16px.
+
+    Everything an operator reads at arm's length (readouts, labels, buttons)
+    stays at --text-sm or larger; the presentation tests enforce both rules.
+    """
+    label.setProperty("dsCaption", True)
+    return label
+
+
 def repolish(widget):
     """Re-evaluate QSS after a dynamic property change (variant/size/selected)."""
     widget.style().unpolish(widget)

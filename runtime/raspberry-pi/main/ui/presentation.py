@@ -36,3 +36,22 @@ def device_presentation(
     if not initialized:
         return DevicePresentation("Preparing", "Waiting for device initialization.")
     return DevicePresentation("Ready", "Review settings and patient positioning before starting.", True)
+
+
+# Device status label -> DSBadge tone for the top-bar / Home status pill.
+_STATUS_TONES = {
+    "Ready": "success",
+    "Preparing": "info",
+    "Treatment active": "info",
+    "Resetting": "warning",
+    "Stopping / recovering": "warning",
+    "Calibration required": "warning",
+    "Recovery required": "danger",
+    "Controller offline": "danger",
+    "Physical stop active": "danger",
+}
+
+
+def device_status_tone(label: str) -> str:
+    """Pill tone for a controller-derived device label (unknown labels stay neutral)."""
+    return _STATUS_TONES.get(label, "neutral")

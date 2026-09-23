@@ -41,7 +41,7 @@ def test_support_tabs_fit_display(shell, qtbot, section):
     shell.navigate("support")
     screen = shell.support
     assert [b.text() for b in screen._section_buttons] == [
-        "Protocols", "Controls", "Troubleshooting", "Contact Support",
+        "Protocols", "Controls", "Troubleshooting", "Contact support",
     ]
     qtbot.mouseClick(screen._section_buttons[section], Qt.LeftButton)
     qtbot.wait(10)

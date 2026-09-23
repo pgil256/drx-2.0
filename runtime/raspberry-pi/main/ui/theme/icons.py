@@ -12,6 +12,9 @@ Two strategies cover them:
 * :func:`play_icon` / :func:`pause_icon` — crisp, recolorable ``QIcon``s drawn
   with ``QPainter`` for the prominent START / PAUSE / video transport controls,
   where a real triangle/bars pair carries more weight than a substitute glyph.
+* :func:`control_icon` — the same drawn treatment for every control glyph
+  (jog chevrons, reset, close, backspace, stop, lock …). Text substitutes read
+  as punctuation; controls should look like controls.
 
 All of this is font-independent, so the device renders identically regardless of
 which fonts happen to be installed.
@@ -166,3 +169,130 @@ def nav_icon(name, color="#ffffff", size=26):
 
     p.end()
     return QIcon(pm)
+
+
+# ── Control icons ────────────────────────────────────────────────────────────
+# Drawn in the same 24-unit space as the rail icons. Each entry is a painter
+# routine; ``control_icon`` wraps it in a recolorable QIcon.
+
+CONTROL_ICONS = (
+    "chevron-left", "chevron-right", "chevron-up", "chevron-down",
+    "chevrons-left", "chevrons-right", "rotate-ccw", "close", "backspace",
+    "stop", "lock", "check", "plus", "minus", "alert", "info", "qr", "keypad",
+)
+
+
+def _draw_control(p, name, color):
+    fill = QColor(color)
+    if name == "chevron-left":
+        _poly(p, [(15, 5.5), (8.5, 12), (15, 18.5)])
+    elif name == "chevron-right":
+        _poly(p, [(9, 5.5), (15.5, 12), (9, 18.5)])
+    elif name == "chevron-up":
+        _poly(p, [(5.5, 15), (12, 8.5), (18.5, 15)])
+    elif name == "chevron-down":
+        _poly(p, [(5.5, 9), (12, 15.5), (18.5, 9)])
+    elif name == "chevrons-left":
+        _poly(p, [(12, 5.5), (5.5, 12), (12, 18.5)])
+        _poly(p, [(19, 5.5), (12.5, 12), (19, 18.5)])
+    elif name == "chevrons-right":
+        _poly(p, [(5, 5.5), (11.5, 12), (5, 18.5)])
+        _poly(p, [(12, 5.5), (18.5, 12), (12, 18.5)])
+    elif name == "rotate-ccw":
+        # 300° arc with an arrowhead at its start (top-left).
+        p.drawArc(QRectF(4, 4, 16, 16), 150 * 16, -300 * 16)
+        _poly(p, [(3.2, 5.2), (4.9, 9.9), (9.6, 8.3)])
+    elif name == "close":
+        _line(p, 6, 6, 18, 18)
+        _line(p, 18, 6, 6, 18)
+    elif name == "backspace":
+        body = QPainterPath()
+        body.moveTo(9, 5)
+        body.lineTo(20, 5)
+        body.quadTo(21.5, 5, 21.5, 6.5)
+        body.lineTo(21.5, 17.5)
+        body.quadTo(21.5, 19, 20, 19)
+        body.lineTo(9, 19)
+        body.lineTo(2.5, 12)
+        body.closeSubpath()
+        p.drawPath(body)
+        _line(p, 11.5, 9, 17.5, 15)
+        _line(p, 17.5, 9, 11.5, 15)
+    elif name == "stop":
+        p.setBrush(fill)
+        p.drawRoundedRect(QRectF(6, 6, 12, 12), 2, 2)
+    elif name == "lock":
+        p.drawRoundedRect(QRectF(5, 11, 14, 10), 2, 2)
+        arc = QPainterPath()
+        arc.moveTo(8, 11)
+        arc.lineTo(8, 7.5)
+        arc.cubicTo(8, 2.5, 16, 2.5, 16, 7.5)
+        arc.lineTo(16, 11)
+        p.drawPath(arc)
+    elif name == "check":
+        _poly(p, [(5, 12.5), (10, 17.5), (19.5, 7)])
+    elif name == "plus":
+        _line(p, 12, 5, 12, 19)
+        _line(p, 5, 12, 19, 12)
+    elif name == "minus":
+        _line(p, 5, 12, 19, 12)
+    elif name == "alert":
+        tri = QPainterPath()
+        tri.moveTo(12, 3.5)
+        tri.lineTo(21.5, 20)
+        tri.lineTo(2.5, 20)
+        tri.closeSubpath()
+        p.drawPath(tri)
+        _line(p, 12, 9.5, 12, 14)
+        p.setBrush(fill)
+        p.setPen(Qt.NoPen)
+        p.drawEllipse(QPointF(12, 17), 1.2, 1.2)
+    elif name == "info":
+        p.drawEllipse(QPointF(12, 12), 9, 9)
+        _line(p, 12, 11, 12, 16.5)
+        p.setBrush(fill)
+        p.setPen(Qt.NoPen)
+        p.drawEllipse(QPointF(12, 7.8), 1.2, 1.2)
+    elif name == "qr":
+        # Three finder squares and a few data modules.
+        for x, y in ((3.5, 3.5), (13.5, 3.5), (3.5, 13.5)):
+            p.drawRoundedRect(QRectF(x, y, 7, 7), 1.2, 1.2)
+        p.setBrush(fill)
+        p.setPen(Qt.NoPen)
+        for x, y in ((6, 6), (16, 6), (6, 16), (14, 14), (18, 14), (16, 17), (14, 19.5),
+                     (18.5, 19.5)):
+            p.drawRect(QRectF(x, y, 2, 2))
+    elif name == "keypad":
+        p.setBrush(fill)
+        p.setPen(Qt.NoPen)
+        for row in range(3):
+            for col in range(3):
+                p.drawEllipse(QPointF(6 + col * 6, 4.5 + row * 5.5), 1.7, 1.7)
+        p.drawEllipse(QPointF(12, 21), 1.7, 1.7)
+    else:
+        raise ValueError(f"Unknown control icon {name!r}")
+
+
+def control_pixmap(name, color="#ffffff", size=24, stroke=2.0):
+    """Render a control icon to a transparent pixmap (also used for QSS assets)."""
+    pm = _pixmap(size)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    p.scale(size / 24.0, size / 24.0)
+    pen = QPen(QColor(color))
+    pen.setWidthF(stroke)
+    pen.setCapStyle(Qt.RoundCap)
+    pen.setJoinStyle(Qt.RoundJoin)
+    p.setPen(pen)
+    p.setBrush(Qt.NoBrush)
+    _draw_control(p, name, color)
+    p.end()
+    return pm
+
+
+def control_icon(name, color="#ffffff", size=24, stroke=2.0, disabled_color=None):
+    """A recolorable control icon; ``disabled_color`` adds a Disabled-mode pixmap."""
+    icon = QIcon(control_pixmap(name, color, size, stroke))
+    if disabled_color is not None:
+        icon.addPixmap(control_pixmap(name, disabled_color, size, stroke), QIcon.Disabled)
+    return icon

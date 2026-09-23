@@ -36,9 +36,7 @@ _QT_SINGLE_SHOT = QTimer.singleShot
 
 def test_device_uses_cloud_dashboard_device_id(window_run: SimpleNamespace) -> None:
     assert window_run.window.config.device_id != window_run.cloud.device_id
-    assert window_run.window.shell.device._device_id.text() == (
-        "Device ID: drx-test-device-01"
-    )
+    assert window_run.window.shell.device._device_id.text() == "drx-test-device-01"
 
 
 def test_operator_login_leaves_patient_entry_to_the_operator(window_run: SimpleNamespace) -> None:
@@ -675,11 +673,61 @@ def test_next_treatment_requires_recovery_and_an_explicit_patient_choice(window_
 
 def test_start_closes_an_already_open_nonessential_overlay(window_run):
     run = window_run
-    run.window.shell.show_video()
-    assert run.window.shell.video_modal.isVisible()
+    shell = run.window.shell
+    shell.patient_modal.open_over(shell)
+    assert shell.patient_modal.isVisible()
     run.window.set_protocol_state("starting")
-    assert run.window.shell.video_modal.isHidden()
+    assert shell.patient_modal.isHidden()
     assert run.view._estop_btn.isEnabled()
+    run.window.set_protocol_state("idle")
+
+
+def test_video_stays_available_during_treatment_with_live_status_and_stop(window_run):
+    run = window_run
+    shell, modal = run.window.shell, run.window.shell.video_modal
+    shell.show_video()
+    assert not modal.treatment_active()
+    run.window.set_protocol_state("starting")
+    run.window.set_protocol_state("running")
+    assert modal.isVisible()  # starting a treatment keeps an open video
+    shell.close_video()
+    shell.show_video()  # and videos can be opened mid-treatment
+    assert modal.isVisible() and modal.treatment_active()
+    run.view.set_phase("holding")
+    run.view.set_progress(180, 720)
+    run.view.set_pressure_state("Pressure live")
+    run.view.set_pressure(40)
+    assert modal._treatment_phase.text() == "Holding…"
+    assert modal._treatment_time.text() == "9:00"
+    assert modal._treatment_pressure.text() == "40.0 lbs"
+    stops = []
+    run.view.estop_requested.connect(lambda: stops.append(True))
+    modal._treatment_stop.click()
+    assert stops == [True]
+    run.window.set_protocol_state("stopping")
+    assert modal.isHidden()  # a stop returns the operator to the treatment view
+    shell.show_video()
+    assert modal.isHidden()  # not while the device is stopping
+    run.window.set_protocol_state("idle")
+    assert not modal.treatment_active()
+    shell.show_video()
+    assert modal.isVisible()
+    modal.close_overlay()
+
+
+def test_video_back_to_treatment_and_finish_close_the_player(window_run):
+    run = window_run
+    shell, modal = run.window.shell, run.window.shell.video_modal
+    shell.set_user("Operator")
+    shell.navigate("home")
+    run.window.set_protocol_state("starting")
+    run.window.set_protocol_state("running")
+    shell.show_video()
+    modal._treatment_btn.click()
+    assert modal.isHidden() and shell._current == "protocols"
+    shell.show_video()
+    run.window.set_protocol_state("idle")  # finished without a stop
+    assert modal.isHidden()
 
 
 def test_upload_failure_opens_nonblocking_window_and_sync_clears_it(window_run):

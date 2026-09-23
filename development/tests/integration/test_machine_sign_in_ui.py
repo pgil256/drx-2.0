@@ -65,7 +65,26 @@ def sign_in(window_run, monkeypatch):
 def show_qr(sign_in, qtbot):
     w, controller, _data = sign_in
     w.shell.show_login()
+    w.shell.login_modal._switch.click()  # "Sign in with a QR code"
     qtbot.waitUntil(lambda: bool(controller._request) and not controller._busy)
+
+
+def test_sign_in_opens_on_staff_pin_and_requests_qr_only_on_demand(sign_in, qtbot):
+    w, controller, data = sign_in
+    modal = w.shell.login_modal
+    w.shell.show_login()
+    assert modal.isVisible() and not modal.phone_mode()
+    assert modal._keypad.isVisible() and modal._phone.isHidden()
+    assert modal._switch.text() == "Sign in with a QR code"
+    qtbot.wait(20)
+    assert not controller._request and not data["calls"]
+    modal._switch.click()
+    qtbot.waitUntil(lambda: bool(controller._request) and not controller._busy)
+    assert modal.phone_mode() and modal._keypad.isHidden()
+    assert modal._switch.text() == "Use staff PIN"
+    modal.close_overlay()
+    w.shell.show_login()
+    assert not modal.phone_mode()  # every opening starts on the PIN again
 
 
 def approve(sign_in, qtbot):

@@ -7,6 +7,9 @@ show/hide. It exposes every screen + modal as attributes and surfaces auth as
 signals so the Phase-3 controller can wire the Arduino / Protocols backend and
 the real ``SecureAuthHelper`` without this shell knowing any of it.
 
+The video player stays available during a treatment: it mirrors the Treatment
+monitor and its STOP routes to the same ``treatment.estop_requested`` signal.
+
 Signals:
     login_attempted(str)        — a PIN was entered in the login modal
     logout_requested            — Log Out was tapped on the Profile screen
@@ -45,6 +48,7 @@ class AppShell(QWidget):
         self._username = None
         self._nav_confirmation = None  # optional callable: True -> allow user nav
         self._overlay_guard = None  # optional callable: True -> block overlays
+        self._video_guard = None  # optional callable: True -> block the video player
         self._login_destination = None
         self._access_role = None
 
@@ -95,6 +99,17 @@ class AppShell(QWidget):
         self.nav_rail.video_requested.connect(self.show_video)
 
         self.home.login_requested.connect(self.show_login)
+        self.home.navigate_requested.connect(self._on_nav)
+        self.home.video_requested.connect(self.show_video)
+        # Home's status card mirrors what the other screens already receive.
+        self.treatment.cloud_status_changed.connect(self.home.set_cloud_status)
+        self.treatment.outcome_recorded.connect(self.home.set_last_treatment)
+        self.device.details_changed.connect(self.home.set_details)
+        # The video player shows live treatment status and a working STOP.
+        self.treatment.monitor_changed.connect(self._sync_video_treatment)
+        self.video_modal.stop_requested.connect(self.treatment.estop_requested)
+        self.video_modal.treatment_requested.connect(self._video_to_treatment)
+        self._sync_video_treatment()
 
         self.login_modal.submitted.connect(self.login_attempted)
 
@@ -142,6 +157,12 @@ class AppShell(QWidget):
         """Register a callable returning True to block nonessential overlays."""
         self._overlay_guard = guard
 
+    def set_video_guard(self, guard):
+        """Register a callable returning True to block the video player.
+
+        Without one, the general overlay guard applies to video as well."""
+        self._video_guard = guard
+
     def set_nav_guard(self, guard):
         """Backward-compatible alias for the former overlay/navigation guard."""
         self.set_overlay_guard(guard)
@@ -155,6 +176,7 @@ class AppShell(QWidget):
     def set_device_status(self, label: str, detail: str, can_start: bool = False) -> None:
         """Fan out one controller-derived status without mixing in cloud state."""
         self.top_bar.set_device_status(label)
+        self.home.set_device_status(label, detail)
         self.treatment.set_device_status(label, detail, can_start)
 
     def set_user(self, username, title="Clinician", is_admin=False):
@@ -166,7 +188,7 @@ class AppShell(QWidget):
             self.set_access_role(None)
         self.top_bar.set_user(username, title)
         self.profile.set_user(username, title, is_admin)
-        self.home.set_logged_in(bool(username))
+        self.home.set_logged_in(bool(username), username or "")
         self.device.hardware_button.setEnabled(bool(username))
         self.device.calibration_button.setEnabled(bool(username))
         self.device.lock_service()
@@ -180,25 +202,45 @@ class AppShell(QWidget):
         self.nav_rail.set_page_enabled("protocols", role != "service_technician")
         self.treatment.set_access_role(role)
 
-    def close_nonessential_overlays(self) -> None:
-        """Clear already-open overlays when treatment takes control of the screen."""
-        for modal in (self.login_modal, self.patient_modal, self.video_modal):
+    def close_nonessential_overlays(self, keep_video: bool = False) -> None:
+        """Clear already-open overlays when treatment takes control of the screen.
+
+        ``keep_video`` leaves the video player open: it carries its own STOP."""
+        modals = [self.login_modal, self.patient_modal]
+        if not keep_video:
+            modals.append(self.video_modal)
+        for modal in modals:
             if modal.isVisible():
                 modal.close_overlay()
 
-    def show_login(self, destination=None):
+    def close_video(self) -> None:
+        if self.video_modal.isVisible():
+            self.video_modal.close_overlay()
+
+    def show_login(self, destination=None, phone=False):
+        """Open sign-in on the staff PIN keypad (``phone=True``: QR approval)."""
         if self._overlay_guard is not None and self._overlay_guard():
             return
         if not self._navigation_confirmed("home"):
             return
         self._login_destination = destination if destination in GATED else "protocols"
         self._go("home")
-        self.login_modal.open_over(self)
+        self.login_modal.open_over(self, phone=phone)
 
     def show_video(self):
-        if self._overlay_guard is not None and self._overlay_guard():
+        guard = self._video_guard or self._overlay_guard
+        if guard is not None and guard():
             return
+        self._sync_video_treatment()
         self.video_modal.open_over(self)
+
+    def _sync_video_treatment(self) -> None:
+        self.video_modal.set_treatment_status(self.treatment.live_summary())
+
+    def _video_to_treatment(self) -> None:
+        """Leave the video for the Treatment monitor."""
+        self.video_modal.close_overlay()
+        self._on_nav("protocols")
 
     def login_succeeded(self, username, goto=None, title="Clinician",
                         is_admin=False):

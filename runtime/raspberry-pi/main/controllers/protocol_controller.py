@@ -52,6 +52,7 @@ class ProtocolController:
         running, or vice versa).
         """
         window = self.window
+        previous = window.protocol_state
         if state == "fault":
             self.latch_session_outcome("fault")
             self.finalize_session()
@@ -77,11 +78,18 @@ class ProtocolController:
             # A fault is not treatment-ready. Recovery reset is the only path
             # back to idle.
             self.set_busy(True)
-        if state in ("starting", "running", "stopping"):
-            try:
+        # Videos may stay open while treatment runs (the player has its own
+        # STOP). A stop, fault or finish closes it so the operator sees the
+        # Treatment page and any recovery prompts.
+        try:
+            if state in ("starting", "running"):
+                window.shell.close_nonessential_overlays(keep_video=True)
+            elif state == "stopping":
                 window.shell.close_nonessential_overlays()
-            except Exception:
-                pass
+            elif previous in ("starting", "running", "stopping"):
+                window.shell.close_video()
+        except Exception:
+            pass
         refresh = getattr(window, "_refresh_device_presentation", None)
         if callable(refresh):
             try:
@@ -135,6 +143,16 @@ class ProtocolController:
         if window.protocol_state in ("starting", "running", "stopping"):
             window._show_timed_error(
                 "Treatment in progress - press STOP before logging out or exiting."
+            )
+            return True
+        return False
+
+    def block_video_overlay(self) -> bool:
+        """Videos stay available during treatment, but not while it is stopping."""
+        window = self.window
+        if window.protocol_state == "stopping":
+            window._show_timed_error(
+                "Treatment is stopping - videos are available again once it has stopped."
             )
             return True
         return False

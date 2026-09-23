@@ -1,8 +1,10 @@
-"""TopBar — persistent 84px header with device status and clinician identity.
+"""TopBar — persistent 84px slate header with device status and clinician identity.
 
-Mirrors `TopBar` in `bundle.jsx` (baked to dark chrome): the knee mark and the
-"KneeSpa DRx" wordmark both navigate Home; the right side shows a login avatar
-when logged out, or the clinician identity + avatar when logged in.
+The knee mark and the "KneeSpa DRx" wordmark both navigate Home. The centre
+shows the controller-derived device status as a pill with a dot (green Ready,
+blue Preparing/Active, amber Stopping/Resetting, red Recovery/Offline). The
+right side shows a login avatar when logged out, or the clinician identity +
+avatar (cyan ring) when logged in.
 
 Signals (wired to the controller in Phase 3):
     home_clicked      — logo / wordmark tapped
@@ -21,10 +23,14 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
+from ui.presentation import device_status_tone
 from ui.widgets.common import ClickableLabel, image_label
-from ui.widgets.ds._common import image_path, mono_font, resolve, sans_font
+from ui.widgets.ds import DSBadge
+from ui.widgets.ds._common import image_path, mark_caption, pinned_height, resolve, sans_font
+from ui.widgets.press_feedback import install_press_feedback
 
 BAR_HEIGHT = 84
+AVATAR_PX = 54
 
 
 class TopBar(QFrame):
@@ -38,57 +44,71 @@ class TopBar(QFrame):
         self.setAttribute(Qt.WA_StyledBackground, True)
         self.setFixedHeight(BAR_HEIGHT)
         self.setStyleSheet(
-            f"#TopBar {{ background: {resolve('--surface-chrome')}; border: none; }}"
+            f"#TopBar {{ background: {resolve('--surface-chrome')};"
+            f" border: none; border-bottom: 1px solid {resolve('--surface-chrome-divider')}; }}"
         )
 
         lay = QHBoxLayout(self)
         lay.setContentsMargins(24, 0, 24, 0)
         lay.setSpacing(16)
 
-        logo = image_label(image_path("logos", "knee.png"), 60, 60, clickable=True)
+        logo = image_label(image_path("logos", "knee.png"), 56, 56, clickable=True)
         logo.setToolTip("Home")
+        logo.setAccessibleName("Home")
         logo.clicked.connect(self.home_clicked)
         lay.addWidget(logo)
 
+        white = resolve("--text-on-dark")
         self._wordmark = ClickableLabel()
         self._wordmark.setMinimumHeight(48)
         self._wordmark.setToolTip("Home")
         self._wordmark.setTextFormat(Qt.RichText)
-        self._wordmark.setFont(sans_font(size=34, weight=700, tracking=-0.01))
+        self._wordmark.setFont(sans_font(size="--text-xl", weight=600, tracking=-0.01))
         self._wordmark.setText(
-            "<span style='color:#ffffff'>Knee</span>"
+            f"<span style='color:{white}'>Knee</span>"
             f"<span style='color:{resolve('--brand-cyan')}'>Spa</span>"
-            "<span style='color:#ffffff'> DRx</span>"
+            f"<span style='color:{white}'> DRx</span>"
         )
         self._wordmark.setStyleSheet("background: transparent;")
         self._wordmark.clicked.connect(self.home_clicked)
         lay.addWidget(self._wordmark)
+        self._press_feedback = install_press_feedback(logo, self._wordmark)
 
         lay.addStretch(1)
 
-        self._device_status = QLabel("Device · connecting")
-        self._device_status.setTextFormat(Qt.PlainText)
-        self._device_status.setFont(sans_font(size=18, weight=600))
-        self._device_status.setStyleSheet("color: white; background: transparent;")
-        lay.addWidget(self._device_status)
+        status = QWidget()
+        status_row = QHBoxLayout(status)
+        status_row.setContentsMargins(0, 0, 0, 0)
+        status_row.setSpacing(10)
+        caption = QLabel("Device")
+        caption.setFont(sans_font(size="--text-sm", weight=600))
+        caption.setStyleSheet(
+            f"color: {resolve('--text-on-dark-muted')}; background: transparent;")
+        status_row.addWidget(caption)
+        self._device_status = DSBadge("Connecting", tone="neutral", dot=True, size="md")
+        self._device_status.setAccessibleName("Device status: Connecting")
+        status_row.addWidget(self._device_status)
+        lay.addWidget(status)
         lay.addStretch(1)
 
         # Identity block (name + role), shown only when logged in.
         self._identity = QWidget()
         idlay = QVBoxLayout(self._identity)
         idlay.setContentsMargins(0, 0, 0, 0)
-        idlay.setSpacing(2)
+        idlay.setSpacing(0)
         idlay.setAlignment(Qt.AlignVCenter)
         self._name = QLabel()
         self._name.setTextFormat(Qt.PlainText)
         self._name.setMaximumWidth(280)
-        self._name.setFont(sans_font(size="--text-base", weight=700))
+        self._name.setFont(sans_font(size="--text-base", weight=600))
         self._name.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self._name.setStyleSheet("color: #ffffff; background: transparent;")
+        self._name.setStyleSheet(f"color: {white}; background: transparent;")
         self._role = QLabel("Clinician")
-        self._role.setFont(mono_font(size="--text-2xs"))
+        self._role.setFont(sans_font(size="--text-xs"))
+        mark_caption(self._role)
         self._role.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self._role.setStyleSheet("color: #c6ced3; background: transparent;")
+        self._role.setStyleSheet(
+            f"color: {resolve('--text-on-dark-muted')}; background: transparent;")
         idlay.addWidget(self._name)
         idlay.addWidget(self._role)
         self._identity.setVisible(False)
@@ -98,26 +118,38 @@ class TopBar(QFrame):
         self._avatar = QPushButton()
         self._avatar.setAccessibleName("Clinician login or profile")
         self._avatar.setCursor(Qt.PointingHandCursor)
-        self._avatar.setFixedSize(54, 54)
-        self._avatar.setIconSize(QSize(34, 34))
+        self._avatar.setFocusPolicy(Qt.TabFocus)
+        self._avatar.setFixedSize(AVATAR_PX, AVATAR_PX)
+        self._avatar.setIconSize(QSize(30, 30))
         pix = QPixmap(image_path("buttons", "user-profile.png"))
         if not pix.isNull():
             self._avatar.setIcon(QIcon(pix))
-        # Border is #000 — the bar is always dark (DS dark-chrome branch).
-        self._avatar.setStyleSheet(
-            "QPushButton { border-radius: 27px; background: #ffffff;"
-            " border: 2px solid #000; }"
-            " QPushButton:focus { border: 3px solid #176b9a; }"
-            " QPushButton:pressed { background: #e6f3ff; }"
-        )
         self._avatar.clicked.connect(self._on_avatar)
         lay.addWidget(self._avatar)
 
         self._username = None
+        self._style_avatar(False)
+
+    def _style_avatar(self, logged_in: bool) -> None:
+        """Plain white disc when signed out; a cyan ring marks an active session."""
+        ring = resolve("--brand-cyan") if logged_in else resolve("--white")
+        self._avatar.setStyleSheet(
+            f"QPushButton {{ border-radius: {AVATAR_PX // 2}px; padding: 0;"
+            f" {pinned_height(AVATAR_PX, border=3)}"
+            f" background: {resolve('--white')}; border: 3px solid {ring}; }}"
+            f" QPushButton:pressed {{ background: {resolve('--blue-100')}; }}"
+            f" QPushButton[keyboardFocus=\"true\"]:focus {{"
+            f" border: 3px solid {resolve('--brand-cyan')}; }}"
+        )
 
     def set_device_status(self, text: str) -> None:
         """Present controller-derived status independently of the signed-in user."""
-        self._device_status.setText("Device · " + text)
+        self._device_status.set_text(text)
+        self._device_status.set_tone(device_status_tone(text))
+        self._device_status.setAccessibleName("Device status: " + text)
+
+    def device_status(self) -> str:
+        return self._device_status.text()
 
     def _on_avatar(self):
         if self._username:
@@ -136,3 +168,4 @@ class TopBar(QFrame):
         else:
             self._identity.setVisible(False)
             self._avatar.setToolTip("Login")
+        self._style_avatar(bool(username))

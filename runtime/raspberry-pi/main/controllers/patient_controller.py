@@ -102,7 +102,7 @@ class PatientController(QObject):
             return
         if self.window.current_user.get("machine_sign_in"):
             self.window._on_logout()
-            self.window.shell.show_login()
+            self.window.shell.show_login(phone=True)
             return
         self._replace_staff()
         if self.flow is not None:

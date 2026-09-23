@@ -9,7 +9,7 @@ verify the PIN there). Fixes the legacy keypad's missing-`0` bug by design.
 Pass ``label=None`` to omit the title in either size.
 """
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
@@ -19,11 +19,13 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from ._common import px, resolve, sans_font
+from ui.theme import control_icon
+
+from ._common import pinned_height, px, resolve, sans_font
 
 _KEY_CSS = (
     "QPushButton {{ background: {bg}; color: {fg};"
-    " border: 2px solid {border}; border-radius: {radius}; }}"
+    " border: 1px solid {border}; border-radius: {radius}; {height} }}"
     "QPushButton:hover {{ background: {hover}; }}"
 )
 
@@ -100,33 +102,42 @@ class DSKeypad(QWidget):
 
     # -- keys ----------------------------------------------------------
     def _make_key(self, text, slot, muted=False):
-        btn = QPushButton(text, self)
+        btn = QPushButton(self)
         btn.setCursor(Qt.PointingHandCursor)
+        btn.setFocusPolicy(Qt.TabFocus)
         btn.setFixedHeight(self._key_h)
         btn.setFont(sans_font(size=self._key_font, weight=600))
         btn.clicked.connect(slot)
-        if muted:
-            css = _KEY_CSS.format(
-                bg=resolve("--gray-200"), fg=resolve("--ink-700"),
-                border=resolve("--border-control"), radius=resolve("--radius-md"),
-                hover=resolve("--gray-300"),
-            )
-        else:
-            css = _KEY_CSS.format(
-                bg="#ffffff", fg=resolve("--ink-900"),
-                border=resolve("--border-control"), radius=resolve("--radius-md"),
-                hover=resolve("--blue-050"),
-            )
+        # Digits and the muted Clear / backspace keys share a white face; the
+        # muted keys only use quieter text. Disabled keys keep that face and
+        # fade their label, so a pending lookup never looks broken.
+        fg = resolve("--text-muted") if muted else resolve("--ink-900")
+        css = _KEY_CSS.format(
+            bg=resolve("--white"), fg=fg, border=resolve("--border-control"),
+            radius=resolve("--radius-md"), hover=resolve("--blue-050"),
+            height=pinned_height(self._key_h, border=1),
+        )
         font_size = 18 if text == "Clear" else (24 if self._compact else 30)
         css += f"QPushButton {{ padding: 0 2px; font-size: {font_size}px; }}"
         css += (
-            f"QPushButton:focus {{ border: 3px solid {resolve('--ink-900')}; }}"
+            f"QPushButton[keyboardFocus=\"true\"]:focus {{"
+            f" border: 2px solid {resolve('--ink-900')}; }}"
             f"QPushButton:pressed {{ background: {resolve('--blue-100')}; }}"
-            f"QPushButton:disabled {{ background: {resolve('--gray-300')};"
-            f" color: {resolve('--gray-600')}; border-color: {resolve('--gray-400')}; }}"
+            f"QPushButton:disabled {{ background: {resolve('--white')};"
+            f" color: rgba(23, 47, 66, 0.4); border-color: {resolve('--gray-300')}; }}"
         )
         btn.setStyleSheet(css)
-        btn.setAccessibleName("Backspace" if text == BACKSPACE else text)
+        if text == BACKSPACE:
+            # A drawn backspace glyph; the key keeps "←" as its text for callers.
+            btn.setIcon(control_icon("backspace", fg, 28,
+                                     disabled_color="rgba(23, 47, 66, 0.4)"))
+            btn.setIconSize(QSize(28, 28))
+            btn.setProperty("keyText", BACKSPACE)
+            btn.setText("")
+            btn.setAccessibleName("Backspace")
+        else:
+            btn.setText(text)
+            btn.setAccessibleName(text)
         return btn
 
     def _press_factory(self, digit):

@@ -8,7 +8,7 @@ neutral fill with readable text. Put the four tiles in an exclusive QButtonGroup
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import QLabel, QPushButton, QVBoxLayout
 
-from ._common import resolve, sans_font
+from ._common import mark_caption, resolve, sans_font
 
 
 class DSProtocolButton(QPushButton):
@@ -18,6 +18,7 @@ class DSProtocolButton(QPushButton):
         self.setCheckable(True)
         self.setAccessibleName(f"Protocol {number}: {name}")
         self.setCursor(Qt.PointingHandCursor)
+        self.setFocusPolicy(Qt.TabFocus)
         self.setMinimumWidth(76)
 
         lay = QVBoxLayout(self)
@@ -31,6 +32,7 @@ class DSProtocolButton(QPushButton):
 
         self._name = QLabel(str(name).upper(), self)
         self._name.setFont(sans_font(size="--text-2xs", weight=600, tracking=0.03))
+        mark_caption(self._name)
         self._name.setAlignment(Qt.AlignCenter)
         self._name.setAttribute(Qt.WA_TransparentForMouseEvents, True)
 
@@ -61,20 +63,22 @@ class DSProtocolButton(QPushButton):
         selected = self.isChecked()
         primary = resolve("--color-primary")
         if selected:
-            bg, fg, border = primary, "#ffffff", primary
+            bg, fg, border = primary, resolve("--white"), primary
         else:
-            bg = resolve("--gray-050")
+            bg = resolve("--white")
             fg = resolve("--ink-800")
             border = resolve("--border-control")
         # Keep identity readable when editing is locked; avoid nested opacity
         # effects inside shadowed cards, which can also disrupt Qt repainting.
         if not self.isEnabled():
             bg, fg = resolve("--gray-200"), resolve("--ink-800")
+        pressed = resolve("--color-primary-active") if selected else resolve("--gray-200")
         self.setStyleSheet(
-            f"#DSProtocolButton {{ background: {bg}; border: 2px solid {border};"
-            f" border-radius: {resolve('--radius-md')}; }}"
-            f"#DSProtocolButton:hover:enabled {{ border-color: {primary}; }}"
-            f"#DSProtocolButton:focus {{ border: 3px solid {resolve('--ink-900')}; }}"
-            f"#DSProtocolButton:pressed {{ border: 3px solid {resolve('--ink-900')}; }}"
+            f"#DSProtocolButton {{ background: {bg}; border: 1px solid {border};"
+            f" border-radius: {resolve('--radius-md')}; padding: 0; min-height: 0; }}"
+            f"#DSProtocolButton:hover:enabled:!checked {{ background: {resolve('--gray-050')}; }}"
+            f"#DSProtocolButton:pressed {{ background: {pressed}; }}"
+            f"#DSProtocolButton[keyboardFocus=\"true\"]:focus {{"
+            f" border: 2px solid {resolve('--ink-900')}; }}"
             f" QLabel {{ color: {fg}; background: transparent; }}"
         )

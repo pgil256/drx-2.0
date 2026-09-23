@@ -1,74 +1,78 @@
 # ui/widgets/treatment_status_panel.py
-"""Always-visible treatment banner with a permanent emergency-stop control.
+"""Device warning / fault banner with a permanent emergency-stop control.
 
 Live measured pressure, target, phase, and time remaining used to be
 opt-in floating dialogs (off by default), so an operator could run a
 traction protocol completely blind; the on-screen emergency stop only
-existed on the Setup page. This panel overlays the top of the main
-window for device warnings and faults raised while no protocol is active
-(e.g. a jog on the Setup page tripping a limit).
+existed on the Setup page. This banner docks under the top bar (so the
+brand and device status stay visible) for device warnings and faults
+raised while no protocol is active (e.g. a jog on the Setup page tripping
+a limit).
 
 While a protocol is active the banner stays hidden: navigation is locked
 to the Protocols page, which already shows phase, pressure and time
 remaining inline with its own STOP control, and safety events are raised
-through the acknowledged safety-alert dialog. The extra red/orange strip
-across the top of the page was distracting during runs, so
-``suppress_when`` (a callable) gates every ``show()``.
+through the acknowledged safety alert. ``suppress_when`` (a callable)
+gates every ``show()``.
+
+Tones come from the design tokens (``--banner-warning`` / ``--banner-fault``);
+the pressure readout only shows when the banner carries a live reading, and
+the advisory dismiss control is a drawn close icon. ``DSBanner`` is the
+design-system name for this widget.
 """
 from typing import Callable, Optional
 
-from PyQt5.QtCore import Qt, QEvent, pyqtSignal
+from PyQt5.QtCore import QEvent, QSize, Qt, pyqtSignal
 from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QWidget
+
+from ui.theme import control_icon, resolve
+from ui.widgets.ds._common import mono_font, pinned_height, px, sans_font
+
+PANEL_HEIGHT = 72
+TOP_OFFSET = 84  # docks under the top bar (ui.chrome.top_bar.BAR_HEIGHT)
+NO_READING = "-- lbs"
+
+COLOR_RUNNING = resolve("--blue-600")
+COLOR_STOPPING = resolve("--banner-warning")
+COLOR_WARNING = resolve("--banner-warning")
+COLOR_FAULT = resolve("--banner-fault")
 
 _BASE_STYLE = """
 QFrame#treatmentPanel {{
     background-color: {bg};
     border: none;
+    border-bottom: 1px solid rgba(0, 0, 0, 0.18);
 }}
 QLabel {{
-    color: white;
+    color: {fg};
     background: transparent;
 }}
 """
 
-_STOP_STYLE = """
-QPushButton {
-    background-color: rgb(200, 0, 0);
-    color: white;
-    border: 3px solid white;
-    border-radius: 10px;
-    font-size: 26px;
-    font-weight: bold;
-}
-QPushButton:pressed {
-    background-color: rgb(140, 0, 0);
-}
-"""
 
-_DISMISS_STYLE = """
-QPushButton {
-    background-color: rgba(255, 255, 255, 35);
-    color: white;
-    border: 2px solid white;
-    border-radius: 8px;
-    font-size: 30px;
-    font-weight: bold;
-}
-QPushButton:pressed {
-    background-color: rgba(255, 255, 255, 80);
-}
-"""
+def _stop_style(inverse: bool) -> str:
+    """Red on light banners; a white face on the red fault banner so it still reads."""
+    bg, fg, border = ((resolve("--white"), resolve("--red-600"), resolve("--white")) if inverse
+                      else (resolve("--red-600"), resolve("--white"), resolve("--white")))
+    return (
+        f"QPushButton {{ background-color: {bg}; color: {fg}; border: 2px solid {border};"
+        f" border-radius: {resolve('--radius-md')}; padding: 0 20px; min-height: 44px;"
+        f" font-size: {resolve('--text-base')}; font-weight: 700; }}"
+        f"QPushButton:pressed {{ background-color: {resolve('--red-800')};"
+        f" color: {resolve('--white')}; }}"
+    )
 
-PANEL_HEIGHT = 76
 
-COLOR_RUNNING = "rgb(0, 90, 160)"
-COLOR_STOPPING = "rgb(180, 120, 0)"
-COLOR_WARNING = "rgb(196, 112, 0)"
-COLOR_FAULT = "rgb(170, 0, 0)"
+_DISMISS_STYLE = (
+    "QPushButton { border: none; border-radius: 12px; padding: 0;"
+    f" {pinned_height(48)}"
+    f" background: {resolve('--on-dark-subtle')}; }}"
+    f"QPushButton:pressed {{ background: {resolve('--on-dark-subtle-hover')}; }}"
+)
 
 
 class TreatmentStatusPanel(QFrame):
-    """Top banner: phase, pressure, target, time, and emergency stop."""
+    """Docked banner: message, optional pressure/target/time, and emergency stop."""
 
     stop_requested = pyqtSignal()
 
@@ -79,47 +83,54 @@ class TreatmentStatusPanel(QFrame):
     ) -> None:
         super().__init__(parent)
         self.setObjectName("treatmentPanel")
+        self.setAttribute(Qt.WA_StyledBackground, True)
         # Callable returning True while the banner must stay off-screen.
         # State (mode, labels, colours) keeps tracking normally so nothing
         # is lost; only the overlay is withheld.
         self._suppress_when = suppress_when
 
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(16, 6, 16, 6)
-        layout.setSpacing(20)
+        layout.setContentsMargins(20, 8, 12, 8)
+        layout.setSpacing(16)
+
+        self.icon_label = QLabel()
+        self.icon_label.setFixedSize(28, 28)
 
         self.phase_label = QLabel("")
-        self.phase_label.setStyleSheet("font-size: 22px; font-weight: bold;")
+        self.phase_label.setFont(sans_font(size="--text-base", weight=600))
+        self.phase_label.setWordWrap(True)
 
-        self.pressure_label = QLabel("-- lbs")
-        self.pressure_label.setStyleSheet("font-size: 30px; font-weight: bold;")
+        self.pressure_label = QLabel(NO_READING)
+        self.pressure_label.setFont(mono_font(size="--text-lg", weight=600))
 
         self.target_label = QLabel("")
-        self.target_label.setStyleSheet("font-size: 18px;")
+        self.target_label.setFont(sans_font(size="--text-sm"))
 
         self.time_label = QLabel("")
-        self.time_label.setStyleSheet("font-size: 26px; font-weight: bold;")
+        self.time_label.setFont(mono_font(size="--text-md", weight=600))
 
         self.stop_button = QPushButton("EMERGENCY STOP")
-        self.stop_button.setMinimumSize(220, 60)
-        self.stop_button.setStyleSheet(_STOP_STYLE)
+        self.stop_button.setMinimumSize(220, 52)
+        self.stop_button.setIcon(control_icon("stop", resolve("--white"), 20))
+        self.stop_button.setIconSize(QSize(20, 20))
         self.stop_button.clicked.connect(self.stop_requested.emit)
 
-        self.dismiss_button = QPushButton("×")
+        self.dismiss_button = QPushButton()
         self.dismiss_button.setObjectName("dismissWarningButton")
         self.dismiss_button.setFixedSize(48, 48)
         self.dismiss_button.setCursor(Qt.PointingHandCursor)
+        self.dismiss_button.setIcon(control_icon("close", resolve("--white"), 22))
+        self.dismiss_button.setIconSize(QSize(22, 22))
         self.dismiss_button.setToolTip("Dismiss this advisory warning")
         self.dismiss_button.setAccessibleName("Dismiss safety warning")
         self.dismiss_button.setStyleSheet(_DISMISS_STYLE)
         self.dismiss_button.clicked.connect(self.dismiss_warning)
         self.dismiss_button.hide()
 
-        layout.addWidget(self.phase_label)
-        layout.addStretch(1)
+        layout.addWidget(self.icon_label)
+        layout.addWidget(self.phase_label, 1)
         layout.addWidget(self.pressure_label)
         layout.addWidget(self.target_label)
-        layout.addStretch(1)
         layout.addWidget(self.time_label)
         layout.addWidget(self.stop_button)
         layout.addWidget(self.dismiss_button)
@@ -128,6 +139,7 @@ class TreatmentStatusPanel(QFrame):
         self._warning_return_mode = "idle"
         self._warning_return_phase = ""
         self._warning_return_time = ""
+        self._apply_color(COLOR_RUNNING)
 
         if parent is not None:
             parent.installEventFilter(self)
@@ -223,10 +235,11 @@ class TreatmentStatusPanel(QFrame):
         self._clear_warning_context()
         self.hide()
         self.phase_label.setText("")
-        self.pressure_label.setText("-- lbs")
+        self.pressure_label.setText(NO_READING)
         self.target_label.setText("")
         self.time_label.setText("")
         self.stop_button.setEnabled(True)
+        self._refresh_readouts()
 
     # ------------------------------------------------------------------
     # Live values
@@ -238,6 +251,7 @@ class TreatmentStatusPanel(QFrame):
             self.pressure_label.setText(f"{float(pressure):.1f} lbs")
         except (TypeError, ValueError):
             pass
+        self._refresh_readouts()
 
     def update_remaining(self, seconds_left) -> None:
         try:
@@ -249,21 +263,40 @@ class TreatmentStatusPanel(QFrame):
         self.time_label.setText(remaining)
         if self._mode == "warning" and self._warning_return_mode == "running":
             self._warning_return_time = remaining
+        self._refresh_readouts()
 
     def _clear_warning_context(self) -> None:
         self._warning_return_mode = "idle"
         self._warning_return_phase = ""
         self._warning_return_time = ""
 
+    def _refresh_readouts(self) -> None:
+        """Show pressure, target and time only while they describe a treatment."""
+        treatment = self._mode in ("running", "stopping")
+        has_reading = self.pressure_label.text() != NO_READING
+        self.pressure_label.setVisible(treatment and has_reading)
+        self.target_label.setVisible(treatment and bool(self.target_label.text()))
+        self.time_label.setVisible(bool(self.time_label.text()))
+
     # ------------------------------------------------------------------
     # Geometry
     # ------------------------------------------------------------------
 
     def _apply_color(self, bg: str) -> None:
-        self.setStyleSheet(_BASE_STYLE.format(bg=bg))
+        fault = bg == COLOR_FAULT
+        self.setStyleSheet(_BASE_STYLE.format(bg=bg, fg=resolve("--white")))
+        self.stop_button.setStyleSheet(_stop_style(inverse=fault))
+        self.stop_button.setIcon(control_icon(
+            "stop", resolve("--red-600") if fault else resolve("--white"), 20))
+        icon = "info" if bg == COLOR_RUNNING else "alert"
+        self.icon_label.setPixmap(control_icon(icon, resolve("--white"), 28).pixmap(28, 28))
+        self._refresh_readouts()
 
     def _fit_to_parent(self, parent: QWidget) -> None:
-        self.setGeometry(0, 0, parent.width(), PANEL_HEIGHT)
+        # Dock under the top bar and beside the rail, so the brand, device
+        # status and navigation all stay visible while the banner is up.
+        left = px("--rail-width") if parent.width() > 4 * px("--rail-width") else 0
+        self.setGeometry(left, TOP_OFFSET, max(0, parent.width() - left), PANEL_HEIGHT)
 
     def set_suppressed_when(self, predicate: Optional[Callable[[], bool]]) -> None:
         """Install (or clear) the predicate that keeps the banner hidden."""
@@ -283,6 +316,7 @@ class TreatmentStatusPanel(QFrame):
             # into a run either.
             super().hide()
             return
+        self._refresh_readouts()
         super().show()
         self.raise_()
 
@@ -290,3 +324,7 @@ class TreatmentStatusPanel(QFrame):
         if watched is self.parent() and event.type() == QEvent.Resize:
             self._fit_to_parent(watched)
         return super().eventFilter(watched, event)
+
+
+#: Design-system name for the docked warning / fault banner.
+DSBanner = TreatmentStatusPanel

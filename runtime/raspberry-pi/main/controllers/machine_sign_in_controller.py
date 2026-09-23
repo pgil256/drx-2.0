@@ -358,7 +358,7 @@ class MachineSignInController(QObject):
             )
         else:
             self.window._on_logout()
-            self.window.shell.show_login()
+            self.window.shell.show_login(phone=True)
 
     def _tick(self) -> None:
         if self.window._closing:

@@ -15,9 +15,9 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from ui.theme import GLYPH
+from ui.theme import control_icon
 from ui.modals.text_keyboard import TextKeyboard
-from ui.widgets.ds import DSButton, DSCard
+from ui.widgets.ds import DSButton, DSCard, DSSegmentedTabs
 from ui.widgets.ds._common import resolve, sans_font
 
 from helpers.support_ticket import validate_ticket
@@ -51,26 +51,21 @@ class _FailureItem(QFrame):
         self._header.setAccessibleName(question)
         self._header.setCursor(Qt.PointingHandCursor)
         self._header.setLayoutDirection(Qt.LeftToRight)
-        self._header.setStyleSheet(
-            "QPushButton { text-align: left; border: none; background: transparent;"
-            " padding: 12px 18px; }"
-            f" QPushButton:hover {{ background: {resolve('--gray-050')}; }}"
-            f" QPushButton:focus {{ border: 3px solid {resolve('--border-focus')}; }}"
-        )
+        self._render_header()
         hlay = QHBoxLayout(self._header)
         hlay.setContentsMargins(18, 12, 18, 12)
         hlay.setSpacing(12)
         self._q = QLabel(question)
-        self._q.setFont(sans_font(size="--text-base", weight=700))
+        self._q.setFont(sans_font(size="--text-base", weight=600))
         self._q.setStyleSheet(f"color: {resolve('--ink-900')}; background: transparent;")
         self._q.setWordWrap(True)
         self._q.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self._indicator = QLabel(GLYPH["accordion_closed"])
+        # A drawn chevron reads as a control; "+" / "×" read as punctuation.
+        self._indicator = QLabel()
         self._indicator.setAttribute(Qt.WA_TransparentForMouseEvents, True)
-        self._indicator.setFont(sans_font(size="--text-lg", weight=600))
-        self._indicator.setStyleSheet(
-            f"color: {resolve('--color-primary')}; background: transparent;"
-        )
+        self._indicator.setFixedSize(24, 24)
+        self._indicator.setStyleSheet("background: transparent;")
+        self._render_indicator()
         hlay.addWidget(self._q, 1)
         hlay.addWidget(self._indicator, 0, Qt.AlignVCenter)
         self._header.clicked.connect(self._toggle)
@@ -84,18 +79,29 @@ class _FailureItem(QFrame):
         self._body.setVisible(False)
         lay.addWidget(self._body)
 
+    def is_open(self) -> bool:
+        return self._open
+
+    def _render_indicator(self):
+        icon = "chevron-up" if self._open else "chevron-down"
+        self._indicator.setPixmap(
+            control_icon(icon, resolve("--color-primary"), 24).pixmap(24, 24))
+
+    def _render_header(self):
+        self._header.setStyleSheet(
+            "QPushButton { text-align: left; border: none; padding: 12px 18px;"
+            " min-height: 32px;"
+            f" background: {resolve('--gray-050') if self._open else 'transparent'}; }}"
+            f" QPushButton:hover {{ background: {resolve('--gray-050')}; }}"
+            f" QPushButton[keyboardFocus=\"true\"]:focus {{"
+            f" border: 2px solid {resolve('--border-focus')}; }}"
+        )
+
     def _toggle(self):
         self._open = not self._open
         self._body.setVisible(self._open)
-        self._indicator.setText(
-            GLYPH["accordion_open"] if self._open else GLYPH["accordion_closed"]
-        )
-        self._header.setStyleSheet(
-            "QPushButton { text-align: left; border: none; padding: 12px 18px;"
-            f" background: {resolve('--gray-050') if self._open else 'transparent'}; }}"
-            f" QPushButton:hover {{ background: {resolve('--gray-050')}; }}"
-            f" QPushButton:focus {{ border: 3px solid {resolve('--border-focus')}; }}"
-        )
+        self._render_indicator()
+        self._render_header()
         if self._open:
             self.activated.emit(self._question)
 
@@ -106,9 +112,11 @@ class SupportScreen(HelpScreen):
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent, section_titles=(
-            "Protocols", "Controls", "Troubleshooting", "Contact Support",
+            "Protocols", "Controls", "Troubleshooting", "Contact support",
         ))
         self.setObjectName("SupportScreen")
+        # Renamed after HelpScreen styled itself; restate the page wash.
+        self.setStyleSheet(f"#SupportScreen {{ background: {resolve('--surface-page')}; }}")
         self._sending = False
         self._keyboard = None
         self._keyboard_targets = {}
@@ -128,14 +136,11 @@ class SupportScreen(HelpScreen):
         intro.setFont(sans_font(size="--text-base"))
         intro.setStyleSheet(f"color: {resolve('--ink-700')}; background: transparent;")
         vlay.addWidget(intro)
-        topics = QHBoxLayout()
         self._trouble_pages = QStackedWidget()
-        self._trouble_buttons = []
-        for index, (topic, entries) in enumerate(TROUBLESHOOTING.items()):
-            button = DSButton(topic.replace("&", "&&"), variant="secondary", full_width=True)
-            button.clicked.connect(lambda _checked, i=index: self._select_topic(i))
-            topics.addWidget(button)
-            self._trouble_buttons.append(button)
+        self._topics = DSSegmentedTabs(list(TROUBLESHOOTING), size="sm")
+        self._topics.tab_requested.connect(self._select_topic)
+        self._trouble_buttons = self._topics.buttons()
+        for entries in TROUBLESHOOTING.values():
             page = QWidget()
             rows = QVBoxLayout(page)
             rows.setContentsMargins(0, 0, 0, 0)
@@ -146,7 +151,7 @@ class SupportScreen(HelpScreen):
                 rows.addWidget(item)
             rows.addStretch(1)
             self._trouble_pages.addWidget(page)
-        vlay.addLayout(topics)
+        vlay.addWidget(self._topics)
         vlay.addWidget(self._trouble_pages)
         self._select_topic(0)
         card.add_widget(host)
@@ -154,11 +159,10 @@ class SupportScreen(HelpScreen):
 
     def _select_topic(self, index: int) -> None:
         self._trouble_pages.setCurrentIndex(index)
-        for i, button in enumerate(self._trouble_buttons):
-            button.set_variant("primary" if i == index else "secondary")
+        self._topics.set_current(index)
 
     def _contact_card(self) -> DSCard:
-        card = DSCard("Contact Support", padded=False)
+        card = DSCard("Contact support", padded=False)
         host = QWidget()
         form = QVBoxLayout(host)
         form.setContentsMargins(20, 16, 20, 16)
@@ -216,7 +220,7 @@ class SupportScreen(HelpScreen):
         self._delivery_status.setWordWrap(True)
         self._delivery_status.setFont(sans_font(size="--text-base"))
         form.addWidget(self._delivery_status)
-        self.ticket_button = DSButton("Submit Ticket", variant="primary")
+        self.ticket_button = DSButton("Submit ticket", variant="primary")
         self.ticket_button.clicked.connect(self._submit)
         self._send_buttons = (self.ticket_button,)
         form.addWidget(self.ticket_button, 0, Qt.AlignRight)
@@ -299,7 +303,7 @@ class SupportScreen(HelpScreen):
         for field in self._fields:
             field.setEnabled(not self._sending)
         self.ticket_button.setEnabled(not self._sending)
-        self.ticket_button.setText("Retry Ticket" if state == "failed" else "Submit Ticket")
+        self.ticket_button.setText("Retry ticket" if state == "failed" else "Submit ticket")
         if state == "sent":
             self.subject.clear()
             self.description.clear()

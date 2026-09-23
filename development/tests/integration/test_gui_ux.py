@@ -29,15 +29,15 @@ def shell(themed_app, qtbot):
     return window
 
 
-def test_pending_target_survives_sensor_updates_and_commands_are_not_measurements(shell):
+def test_pending_target_survives_sensor_updates_and_commands_are_not_measurements(shell, qtbot):
     setup = shell.setup
     setup.set_position("lateral", 5)
-    setup._rows["lateral"].slider._increment()
+    qtbot.keyClick(setup._rows["lateral"].slider, Qt.Key_Right)
     target = setup.row_value("lateral")
     setup.set_measured_position("lateral", 2.2)
     assert setup.row_value("lateral") == target
     assert setup._pos["lateral"]._value.text() == "2.2°"
-    setup._rows["lateral"].slider._increment()
+    qtbot.keyClick(setup._rows["lateral"].slider, Qt.Key_Right)
     assert setup._pos["lateral"]._value.text() == "2.2°"
     setup.set_arduino_connected(False)
     assert setup._pos["lateral"]._value.text() == "—"
@@ -122,16 +122,52 @@ def test_ready_clears_recovery_phase_without_losing_outcome(shell, outcome, expe
     assert view._readiness.isHidden()
 
 
-def test_slider_responds_across_its_touch_height_without_moving_device(shell, qtbot):
+def test_target_slider_tap_and_drag_set_target_without_moving_device(shell, qtbot):
+    # The big slider under each Setup row is the target control: a tap jumps
+    # the thumb, a drag follows the finger, and nothing moves until Go.
     shell.navigate("setup")
-    control = shell.setup._rows["pressure"].slider
+    qtbot.wait(1)
+    row = shell.setup._rows["pressure"]
+    control = row.slider
+    assert not control.testAttribute(Qt.WA_TransparentForMouseEvents)
+    assert control.height() >= 44 and control.width() >= 600
+    assert not any(isinstance(child, QAbstractButton) and child.accessibleName().startswith(
+        ("Increase", "Decrease")) for child in row.findChildren(QAbstractButton))
     control.set_value(0)
-    track = control._slider
-    go = Mock()
+    go, edited = Mock(), Mock()
     shell.setup.go_requested.connect(go)
-    qtbot.mouseClick(track, Qt.LeftButton, pos=QPoint(track.width() * 3 // 4, 3))
-    assert control.value() > 0
+    shell.setup.value_changed.connect(edited)
+    middle = QPoint(control.width() // 2, control.height() // 2)
+    qtbot.mouseClick(control, Qt.LeftButton, pos=middle)
+    assert control.value() == 40
+    assert row.target.text() == "40 lbs"
+    edited.assert_called_with("pressure", 40.0)
+    # Drag from the thumb to the right end (a finger slide on the touchscreen).
+    qtbot.mousePress(control, Qt.LeftButton, pos=middle)
+    qtbot.mouseMove(control, QPoint(control.width() - 2, middle.y()))
+    qtbot.mouseRelease(control, Qt.LeftButton, pos=QPoint(control.width() - 2, middle.y()))
+    assert control.value() == 80
+    assert shell.setup.row_value("pressure") == 80
+    # A measurement fills the track without touching the target.
+    shell.setup.set_measured_position("pressure", 12)
+    assert control._measured == 12 and control.value() == 80
     go.assert_not_called()
+
+
+def test_horizontal_target_never_exceeds_zero_degrees(shell, qtbot):
+    from main.config.constants import ACTUATORS, CALIBRATION_AXES, HORIZONTAL_MAX_DEGREES
+    shell.navigate("setup")
+    qtbot.wait(1)
+    control = shell.setup._rows["horizontal"].slider
+    assert control.maximum() == 0 == HORIZONTAL_MAX_DEGREES
+    control.set_value(5)
+    assert control.value() == 0
+    qtbot.mouseClick(control, Qt.LeftButton, pos=QPoint(control.width() - 1, 20))
+    qtbot.keyClick(control, Qt.Key_Right)
+    assert shell.setup.row_value("horizontal") == 0
+    # Calibration still records the full mechanical travel.
+    assert ACTUATORS["HORIZONTAL"]["LIMITS"] == (-25, 5)
+    assert CALIBRATION_AXES["horizontal"]["angle_limits"] == (-25, 5)
 
 
 def test_motor_speed_touch_drag_commits_only_on_release(shell, qtbot):

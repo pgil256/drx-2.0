@@ -3,39 +3,37 @@
 from typing import Optional
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import QDialog, QLabel, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QLabel, QWidget
 
 from helpers.service_auth import ServiceAccess
-from ui.widgets.ds import DSButton, DSKeypad
+from ui.widgets.ds import DSButton, DSDialog, DSKeypad
 from ui.widgets.ds._common import sans_font
 
 
-class ServicePinDialog(QDialog):
+class ServicePinDialog(DSDialog):
     """Authenticate each service visit; only an administrator can enroll a PIN."""
 
     def __init__(
         self, access: ServiceAccess, is_admin: bool, parent: Optional[QWidget] = None,
     ) -> None:
-        super().__init__(parent)
+        super().__init__(parent, title="Technician access", width=440)
         self.access = access
         self.is_admin = is_admin
         self.first_pin = None
-        self.setWindowTitle("Technician access")
         self.setWindowModality(Qt.ApplicationModal)
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setFont(sans_font(size="--text-base"))
-        layout = QVBoxLayout(self)
+        layout = self.body_layout
         self.message = QLabel()
         self.message.setWordWrap(True)
-        self.message.setMaximumWidth(400)
+        self.message.setAlignment(Qt.AlignCenter)
         layout.addWidget(self.message)
         self.keypad = DSKeypad(length=6, label="Service PIN", compact=True)
         self.keypad.submitted.connect(self.submit)
         layout.addWidget(self.keypad, 0, Qt.AlignCenter)
-        close = DSButton("Cancel", variant="ghost")
+        close = DSButton("Cancel", variant="secondary", full_width=True)
         close.setAutoDefault(False)
         close.clicked.connect(self.reject)
-        layout.addWidget(close)
+        self.add_action(close, 1)
         if access.configured:
             self.message.setText("Enter the separate six-digit technician PIN.")
         elif is_admin:

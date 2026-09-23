@@ -9,19 +9,28 @@ deferred (imported-but-unused in `app/bundle.jsx`).
 from .badge import DSBadge
 from .button import DSButton
 from .card import DSCard
+from .dialog import DSDialog, DSSheet
+from .key_value_list import DSKeyValueList
 from .keypad import DSKeypad
 from .nav_rail_button import DSNavRailButton
 from .protocol_button import DSProtocolButton
+from .segmented_tabs import DSSegmentedTabs
 from .slider import DSSlider
+from .spinner import DSSpinner
 from .stat_readout import DSStatReadout
 
 __all__ = [
     "DSBadge",
     "DSButton",
     "DSCard",
+    "DSDialog",
+    "DSKeyValueList",
     "DSKeypad",
     "DSNavRailButton",
     "DSProtocolButton",
+    "DSSegmentedTabs",
+    "DSSheet",
     "DSSlider",
+    "DSSpinner",
     "DSStatReadout",
 ]

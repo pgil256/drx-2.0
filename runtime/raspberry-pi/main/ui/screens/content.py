@@ -4,7 +4,7 @@ Single source for the protocol catalog, phase/step labels, and the Help/Support
 reference text so Treatment, Help, and Support stay in sync. Pure data.
 """
 
-from main.config.constants import ACTUATORS, PRESSURE_MAX
+from main.config.constants import ACTUATORS, HORIZONTAL_COMMAND_LIMITS, PRESSURE_MAX
 
 # Treatment protocol catalog (bundle.jsx PROTOCOLS).
 PROTOCOLS = [
@@ -191,5 +191,5 @@ SAFETY_LIMITS = [
     ("Pressure max", f"{PRESSURE_MAX:g}", "lbs"),
     ("Axial range", "–".join(f"{v:g}" for v in ACTUATORS["AXIAL"]["LIMITS"]), "in"),
     ("Lateral range", " to ".join(f"{v:g}" for v in ACTUATORS["LATERAL"]["LIMITS"]), "°"),
-    ("Horizontal", " to ".join(f"{v:g}" for v in ACTUATORS["HORIZONTAL"]["LIMITS"]), "°"),
+    ("Horizontal", " to ".join(f"{v:g}" for v in HORIZONTAL_COMMAND_LIMITS), "°"),
 ]
