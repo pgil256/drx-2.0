@@ -3,12 +3,10 @@
 from typing import Optional, Sequence, Union
 
 from PyQt5.QtCore import Qt
-from PyQt5.QtWidgets import (
-    QDialog, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QVBoxLayout, QWidget,
-)
+from PyQt5.QtWidgets import QDialog, QHBoxLayout, QLabel, QLineEdit, QPlainTextEdit, QWidget
 
-from ui.widgets.ds import DSButton
-from ui.widgets.ds._common import sans_font
+from ui.widgets.ds import DSButton, DSDialog
+from ui.widgets.ds._common import resolve, sans_font
 
 # Rows of keys. Letter keys follow Shift; every other key types its own label.
 TEXT_KEYS = ("1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm", "@._-+/?!,:'")
@@ -18,27 +16,21 @@ ASCII_KEYS = TEXT_KEYS + ('#$%&*()=[]{}', '";<>\\|`~^')
 NAME_KEYS = ("1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm'-")
 
 
-class TextKeyboard(QDialog):
+class TextKeyboard(DSDialog):
     """Stage text until Done; Cancel preserves the original field contents."""
 
     def __init__(self, title: str, value: str, limit: int, multiline: bool = False,
                  parent: Optional[QWidget] = None, secret: bool = False,
                  keys: Sequence[str] = TEXT_KEYS, uppercase: bool = False) -> None:
-        super().__init__(parent)
-        self.setWindowTitle(title)
+        super().__init__(parent, title=title, width=880)
         self.setWindowModality(Qt.ApplicationModal)
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setFixedWidth(880)
         self.limit = limit
         self.multiline = multiline
         self._letters = []
         self._uppercase = False
-        layout = QVBoxLayout(self)
+        layout = self.body_layout
         layout.setContentsMargins(16, 16, 16, 16)
         layout.setSpacing(8)
-        heading = QLabel(title)
-        heading.setFont(sans_font(size="--text-lg", weight=600))
-        layout.addWidget(heading)
         self.editor = QPlainTextEdit() if multiline else QLineEdit()
         self.editor.setAccessibleName(title)
         self.editor.setFont(sans_font(size="--text-md"))
@@ -55,6 +47,7 @@ class TextKeyboard(QDialog):
         layout.addWidget(self.editor)
         self.count = QLabel()
         self.count.setFont(sans_font(size="--text-sm"))
+        self.count.setStyleSheet(f"color: {resolve('--text-muted')};")
         layout.addWidget(self.count)
         for letters in keys:
             row = QHBoxLayout()
@@ -69,11 +62,12 @@ class TextKeyboard(QDialog):
         if uppercase:
             self._shift()
         actions = QHBoxLayout()
-        for title, action in (
+        actions.setSpacing(6)
+        for label, action in (
             ("Shift", self._shift), ("Space", lambda: self._insert(" ")),
             ("Backspace", self._backspace), ("Cancel", self.reject),
         ):
-            key = self._button(title)
+            key = self._button(label)
             key.clicked.connect(action)
             actions.addWidget(key)
         if multiline:
@@ -87,6 +81,10 @@ class TextKeyboard(QDialog):
         layout.addLayout(actions)
         self.editor.textChanged.connect(self._update_count)
         self._update_count()
+
+    def key_layout(self):
+        """The body layout; extra key rows go before its final action row."""
+        return self.body_layout
 
     @staticmethod
     def _button(title: str) -> DSButton:

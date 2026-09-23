@@ -22,7 +22,7 @@ Tones colour the title strip: ``default`` (slate), ``danger`` (red),
 
 from typing import Optional
 
-from PyQt5.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt
+from PyQt5.QtCore import QEvent, QPoint, QRect, QRectF, QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QColor, QGuiApplication, QPainter, QPainterPath, QRegion
 from PyQt5.QtWidgets import (
     QDialog, QFrame, QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget,
@@ -30,10 +30,11 @@ from PyQt5.QtWidgets import (
 
 from ui.theme import control_icon
 
-from ._common import px, resolve, sans_font
+from ._common import pinned_height, px, resolve, sans_font
 
 STRIP_HEIGHT = 60
 HOST_MARGIN = 20
+NOTICE_TOP = 96  # below the 84px top bar
 _TONES = {
     "default": "--surface-dark",
     "danger": "--banner-fault",
@@ -103,27 +104,19 @@ class _Backdrop(QWidget):
             self._on_tap()
 
 
-class DSDialog(QDialog):
-    def __init__(self, parent: Optional[QWidget] = None, title: str = "",
-                 tone: str = "default", closable: bool = True, scrim: bool = True,
-                 width: Optional[int] = None, dismiss_on_scrim: bool = False) -> None:
-        super().__init__(parent)
-        self.setProperty("dsDialog", True)
-        self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setObjectName("DSDialog")
+class _FrameMixin:
+    """Title strip + body + footer shared by the window dialog and the overlay card."""
+
+    _ROUNDED_ROOT = False
+
+    def _build_frame(self, title: str, tone: str, closable: bool, on_close) -> None:
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self._scrim = scrim
-        self._dismiss_on_scrim = dismiss_on_scrim
-        self._backdrop: Optional[_Backdrop] = None
-        self._host: Optional[QWidget] = None
         self._radius = px("--radius-lg")
         self._tone = "default"
+        self._extra_css = ""
         # Style before any child exists: with a styled parent, Qt does not
         # repolish children of an unpolished widget when its sheet changes.
         self._apply_style(tone)
-        if width:
-            self.setFixedWidth(width)
 
         outer = QVBoxLayout(self)
         outer.setContentsMargins(0, 0, 0, 0)
@@ -140,18 +133,18 @@ class DSDialog(QDialog):
         self._title.setTextFormat(Qt.PlainText)
         self._title.setFont(sans_font(size="--text-md", weight=600))
         strip.addWidget(self._title, 1)
-        self.close_button = QPushButton(self._strip)
-        self.close_button.setObjectName("DSDialogClose")
-        self.close_button.setAccessibleName("Close")
-        self.close_button.setCursor(Qt.PointingHandCursor)
-        self.close_button.setFocusPolicy(Qt.TabFocus)
-        self.close_button.setAutoDefault(False)
-        self.close_button.setFixedSize(48, 48)
-        self.close_button.setIcon(control_icon("close", resolve("--white"), 22))
-        self.close_button.setIconSize(QSize(22, 22))
-        self.close_button.clicked.connect(self.reject)
-        self.close_button.setVisible(closable)
-        strip.addWidget(self.close_button)
+        self._close_icon = QPushButton(self._strip)
+        self._close_icon.setObjectName("DSDialogClose")
+        self._close_icon.setAccessibleName("Close")
+        self._close_icon.setCursor(Qt.PointingHandCursor)
+        self._close_icon.setFocusPolicy(Qt.TabFocus)
+        self._close_icon.setAutoDefault(False)
+        self._close_icon.setFixedSize(48, 48)
+        self._close_icon.setIcon(control_icon("close", resolve("--white"), 22))
+        self._close_icon.setIconSize(QSize(22, 22))
+        self._close_icon.clicked.connect(on_close)
+        self._close_icon.setVisible(closable)
+        strip.addWidget(self._close_icon)
         outer.addWidget(self._strip)
 
         self.body = QWidget(self)
@@ -176,10 +169,15 @@ class DSDialog(QDialog):
     def set_title(self, title: str) -> None:
         self._title.setText(title)
         self.setWindowTitle(title)
-        self._strip.setVisible(bool(title) or self.close_button.isVisibleTo(self))
+        self._strip.setVisible(bool(title) or self._close_icon.isVisibleTo(self))
 
     def title(self) -> str:
         return self._title.text()
+
+    def add_style(self, css: str) -> None:
+        """Append rules to the frame's stylesheet (never replace it)."""
+        self._extra_css += css
+        self.set_tone(self._tone)
 
     def set_tone(self, tone: str) -> None:
         self._apply_style(tone)
@@ -192,12 +190,18 @@ class DSDialog(QDialog):
         self._tone = tone if tone in _TONES else "default"
         strip = resolve(_TONES[self._tone])
         radius = f"{self._radius}px"
+        root = self.objectName()
+        # A window dialog is shaped by its mask; a card inside an overlay
+        # rounds its own background.
+        root_radius = radius if self._ROUNDED_ROOT else "0"
         self.setStyleSheet(
-            f"#DSDialog {{ background: {resolve('--surface-card')}; }}"
+            f"#{root} {{ background: {resolve('--surface-card')};"
+            f" border-radius: {root_radius}; }}"
             f"#DSDialogStrip {{ background: {strip}; border: none;"
             f" border-top-left-radius: {radius}; border-top-right-radius: {radius}; }}"
             f"#DSDialogStrip QLabel {{ color: {resolve('--white')}; background: transparent; }}"
-            f"#DSDialogClose {{ border: none; border-radius: 12px; padding: 0; min-height: 0;"
+            f"#DSDialogClose {{ border: none; border-radius: 12px; padding: 0;"
+            f" {pinned_height(48)}"
             f" background: {resolve('--on-dark-subtle')}; }}"
             f"#DSDialogClose:hover, #DSDialogClose:pressed {{"
             f" background: {resolve('--on-dark-subtle-hover')}; }}"
@@ -205,13 +209,14 @@ class DSDialog(QDialog):
             f"#DSDialogFooter {{ background: {resolve('--surface-page')};"
             f" border-top: 1px solid {resolve('--border-divider')};"
             f" border-bottom-left-radius: {radius}; border-bottom-right-radius: {radius}; }}"
+            + self._extra_css
         )
 
     def tone(self) -> str:
         return self._tone
 
     def set_closable(self, closable: bool) -> None:
-        self.close_button.setVisible(closable)
+        self._close_icon.setVisible(closable)
 
     def add_action(self, widget: QWidget, stretch: int = 0) -> QWidget:
         """Append a footer action (primary last, per platform convention)."""
@@ -222,6 +227,43 @@ class DSDialog(QDialog):
     def add_action_stretch(self, stretch: int = 1) -> None:
         self.footer_layout.addStretch(stretch)
         self.footer.show()
+
+
+class DSSheet(QFrame, _FrameMixin):
+    """The DSDialog frame as a plain card, for in-shell ``Overlay`` modals.
+
+    Login, Add PIN and Patient PIN overlays use it so every popup shares one
+    title strip, body and footer. The strip's close emits ``close_requested``.
+    """
+
+    close_requested = pyqtSignal()
+    _ROUNDED_ROOT = True
+
+    def __init__(self, title: str = "", tone: str = "default", closable: bool = True,
+                 width: Optional[int] = None, parent: Optional[QWidget] = None) -> None:
+        super().__init__(parent)
+        self.setObjectName("DSSheet")
+        if width:
+            self.setFixedWidth(width)
+        self._build_frame(title, tone, closable, self.close_requested.emit)
+
+
+class DSDialog(QDialog, _FrameMixin):
+    def __init__(self, parent: Optional[QWidget] = None, title: str = "",
+                 tone: str = "default", closable: bool = True, scrim: bool = True,
+                 width: Optional[int] = None, dismiss_on_scrim: bool = False) -> None:
+        super().__init__(parent)
+        self.setProperty("dsDialog", True)
+        self.setWindowFlags(self.windowFlags() | Qt.FramelessWindowHint)
+        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
+        self.setObjectName("DSDialog")
+        self._scrim = scrim
+        self._dismiss_on_scrim = dismiss_on_scrim
+        self._backdrop: Optional[_Backdrop] = None
+        self._host: Optional[QWidget] = None
+        if width:
+            self.setFixedWidth(width)
+        self._build_frame(title, tone, closable, self.reject)
 
     # ----- hosting -----
     def _resolve_host(self) -> Optional[QWidget]:
@@ -254,7 +296,11 @@ class DSDialog(QDialog):
         return self._backdrop
 
     def _place(self) -> None:
-        """Fit inside the host with a margin and centre over it."""
+        """Fit inside the host with a margin; centre modal sheets over it.
+
+        Non-modal notices dock just under the top bar instead, so they never
+        cover the live readouts (or STOP) they sit beside.
+        """
         host = self._host
         if host is None:
             return
@@ -265,6 +311,8 @@ class DSDialog(QDialog):
             self.resize(size)
         rect = QRect(QPoint(0, 0), size)
         rect.moveCenter(bounds.center())
+        if not self._scrim:
+            rect.moveTop(bounds.top() + NOTICE_TOP)
         self.move(rect.topLeft())
         self._sync_backdrop()
 

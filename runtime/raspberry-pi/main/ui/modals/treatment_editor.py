@@ -73,8 +73,7 @@ class TreatmentEditorDialog(DSDialog):
             slider.layout().setSpacing(20)
             slider._label.setFont(sans_font(size="--text-md", weight=600))
             slider._value_label.setFont(mono_font(size="--text-lg", weight=600))
-            for button in (slider._left_btn, slider._right_btn):
-                button.setFixedSize(64, 64)
+            slider.set_step_size(64)
             slider.set_accessible_label(label)
             slider._slider.setTracking(False)
             slider._slider.setMinimumHeight(64)

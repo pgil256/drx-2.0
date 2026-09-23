@@ -23,7 +23,7 @@ from PyQt5.QtWidgets import (
 from config.constants import APP_VERSION
 from ui.theme import control_icon
 from ui.widgets.ds import DSButton, DSCard, DSKeyValueList, DSSegmentedTabs
-from ui.widgets.ds._common import resolve, sans_font
+from ui.widgets.ds._common import pinned_height, resolve, sans_font
 from ui.widgets.ds.slider import _TouchSlider
 
 READY_STATUS = "Device settings are ready."
@@ -81,7 +81,7 @@ class DeviceScreen(QWidget):
         lock.setFixedSize(56, 56)
         lock.setIcon(control_icon("lock", resolve("--ink-800"), 22))
         lock.setIconSize(QSize(22, 22))
-        lock.setStyleSheet("#LockService { padding: 0; min-height: 0; }")
+        lock.setStyleSheet(f"#LockService {{ padding: 0; {pinned_height(56, 1)} }}")
         lock.clicked.connect(lambda: self.action_requested.emit("lock_service", None))
         lock.hide()
         self.actions["lock_service"] = lock

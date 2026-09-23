@@ -53,7 +53,9 @@ class TestTreatmentStatusPanel:
         assert panel.phase_label.text() == (
             "DEVICE SAFETY WARNING: Pressure limit exceeded"
         )
-        assert "rgb(196, 112, 0)" in panel.styleSheet()
+        from ui.theme import resolve
+        assert resolve("--banner-warning") in panel.styleSheet()
+        assert not panel.pressure_label.isVisibleTo(panel)  # not a pressure event
         assert panel.dismiss_button.isVisible()
 
     def test_suppressed_banner_never_shows_during_protocol(self, qtbot):
