@@ -57,6 +57,14 @@ def parse_define_int(source: str, name: str):
     return int(match.group(1)) if match else None
 
 
+def define_is_used(source: str, name: str) -> bool:
+    """True when firmware code (not just its #define or a comment) reads name."""
+    code = re.sub(r"/\*.*?\*/", "", source, flags=re.DOTALL)
+    code = re.sub(r"//[^\n]*", "", code)
+    code = re.sub(rf"^#define\s+{re.escape(name)}\b[^\n]*", "", code, flags=re.MULTILINE)
+    return re.search(rf"\b{re.escape(name)}\b", code) is not None
+
+
 def check_limits_sync():
     """Return a list of human-readable problems (empty = in sync)."""
     problems = []
@@ -71,6 +79,13 @@ def check_limits_sync():
             problems.append(f"{py_name} not found in {CONSTANTS_PY.name}")
         if ino_val is None:
             problems.append(f"#define {ino_name} not found in {MOTOR_INO.name}")
+        elif not define_is_used(motor_src, ino_name):
+            # A matching but unused #define would hide drift in the value the
+            # firmware actually enforces.
+            problems.append(
+                f"#define {ino_name} is never used by {MOTOR_INO.name}; pair the "
+                f"value the firmware enforces instead"
+            )
         if py_val is not None and ino_val is not None and py_val != ino_val:
             problems.append(
                 f"DRIFT: {py_name}={py_val} (constants.py) != "

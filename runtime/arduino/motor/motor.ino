@@ -131,8 +131,9 @@ const float PRESSURE_HARD_LIMIT = 100.0;
 // Increasing pressure reaches the requested target, not its lower tolerance
 // edge. Keep the 2 lb band for reductions/release and already-satisfied loads
 // at/above target. The separate +10 lb allowance is only an overshoot ceiling.
-const float PRESSURE_TARGET_BAND = 2.0;
-const float PRESSURE_OVERSHOOT_LIMIT = 10.0;
+// Derived from the #defines that check_limits_sync.py pairs with the host.
+const float PRESSURE_TARGET_BAND = PRESSURE_TARGET_TOLERANCE_LBS;
+const float PRESSURE_OVERSHOOT_LIMIT = PRESSURE_OVERSHOOT_ALLOWANCE_LBS;
 const unsigned long PRESSURE_SAMPLE_TIMEOUT = 500; // ms
 const unsigned long PRESSURE_MOVE_DEADLINE = 90000UL; // ms; app allows 5 s for the final reply.
 bool pressureSampleValid = false;
