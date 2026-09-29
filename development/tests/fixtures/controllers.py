@@ -120,7 +120,6 @@ def make_stub() -> SimpleNamespace:
     window.actuator_b = "13"
     window.actuator_c = "14"
     window.auth = SimpleNamespace(handle_login=MagicMock())
-    window.csv = SimpleNamespace(add_user=MagicMock())
     window.safety = SimpleNamespace(on_status=MagicMock())
     window.protocol = MagicMock(spec_set=ProtocolController)
     window._is_admin = MagicMock(return_value=False)
