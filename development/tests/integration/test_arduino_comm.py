@@ -88,8 +88,8 @@ class TestArduinoSend:
         arduino = Arduino()
         arduino.connected = False
         arduino.serial_com = None
-        # Should attempt reconnect and fail gracefully
-        with patch.object(arduino, 'reconnect', return_value=False):
+        # Fails fast without attempting a new connection
+        with patch.object(arduino, 'connect_to_arduino', return_value=False):
             result = arduino.send("T")
         assert result is False
 

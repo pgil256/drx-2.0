@@ -803,12 +803,6 @@ class KneeSpa(QMainWindow):
         """Emergency stop from the modern Setup/Treatment screens."""
         self.protocol.stop_from_view()
 
-    def emergency_stop_clicked(self, event):
-        self.protocol.emergency_stop_clicked(event)
-
-    def _update_status_label(self, text):
-        self.protocol.update_status_label(text)
-
     def _warn_uncalibrated(self):
         reasons = "\n".join(
             self.config.calibration_errors[:4]
@@ -818,9 +812,6 @@ class KneeSpa(QMainWindow):
             f"{reasons}\n\n"
             "Recalibrate and restart before treating patients."
         )
-
-    def _confirm_protocol_start(self):
-        return self.protocol.confirm_start()
 
     # ----- Setup: jog / go / stop / reset -----
     def _on_setup_reset_arduino(self) -> None:
@@ -1604,13 +1595,6 @@ class KneeSpa(QMainWindow):
         self.loading_spinner.hide()
         return True
 
-    @QtCore.pyqtSlot()
-    def set_done(self):
-        self.connection.set_done()
-
-    def ready_to_go(self):
-        self.connection.ready_to_go()
-
     def read_position(self, position, steps, actuator):
         """Read position data from the Arduino with safety checks."""
         print(
@@ -1652,9 +1636,6 @@ class KneeSpa(QMainWindow):
     def ensure_arduino_connection(self):
         return self.connection.ensure_arduino_connection()
 
-    def start_protocol(self):
-        return self.protocol.start_protocol()
-
     def update_protocol_time(self):
         """Protocol countdown (see controllers.protocol_controller), plus the
         Treatment screen's inline progress ring."""
@@ -1665,12 +1646,6 @@ class KneeSpa(QMainWindow):
             except Exception:
                 pass
         self.protocol.update_protocol_time()
-
-    def protocol_completed(self, success=True):
-        self.protocol.protocol_completed(success)
-
-    def stop_protocol(self):
-        self.protocol.stop_protocol()
 
     def _confirm_mid_protocol_change(self) -> bool:
         """
@@ -1788,9 +1763,6 @@ class KneeSpa(QMainWindow):
         self._pressure_notice = box
         box.destroyed.connect(lambda: setattr(self, "_pressure_notice", None))
 
-    def _trigger_safety_stop(self, reason):
-        self.safety.trigger_safety_stop(reason)
-
     def _show_timed_error(self, message):
         """Show error message that automatically closes after a timeout."""
         print(f"Status emit error: {message}")
@@ -1812,9 +1784,6 @@ class KneeSpa(QMainWindow):
 
         # Show the dialog without blocking
         msg_box.show()
-
-    def handle_buffer_warning(self, warning):
-        print(f"Buffer warning: {warning}")
 
     @QtCore.pyqtSlot(str)
     def handle_firmware_error(self, message):
@@ -1860,12 +1829,6 @@ class KneeSpa(QMainWindow):
 
     def reset_arduino(self, event=None):
         self.connection.reset_arduino(event)
-
-    def send_zero_mark(self):
-        self.connection.send_zero_mark()
-
-    def send_calibration(self):
-        self.connection.send_calibration()
 
     def setup_gpio(self):
         """Setup GPIO pins with proper error handling."""

@@ -68,7 +68,6 @@ class ConnectionManager:
             print("Connecting Arduino finished signal to thread quit")
             window.arduino.finished.connect(window.arduino_thread.quit)
             window.arduino.ready_to_go_emit.connect(self.ready_to_go)
-            window.arduino.buffer_warning.connect(window.handle_buffer_warning)
 
             # 5 - Connect Thread started signal to Worker operational slot method
             print("Connecting thread started signal to Arduino run method")
@@ -372,42 +371,6 @@ class ConnectionManager:
         window._show_timed_error(
          f"Could not complete reset sequence:\n{error_message}"
         )
-
-    def send_zero_mark(self):
-        window = self.window
-        print("send_zero_mark")
-        if getattr(window, "arduino", None) is None:
-            window.logger.error("send_zero_mark: no Arduino transport")
-            return
-        a_zero = window.config.AMarks.get("0.0", window.config.AMarks.get("0", 0))
-        b_zero = window.config.BMarks.get("0.0", window.config.BMarks.get("0", 0))
-        # Delimited form: the legacy fixed-width format truncated any
-        # 4-digit zero mark (1900 became 190); the reset worker was
-        # already fixed but this copy still sent the legacy format
-        window.arduino.send(f"L5|{a_zero}|{b_zero}")
-
-    def send_calibration(self):
-        window = self.window
-        print("send_calibration")
-        if getattr(window, "arduino", None) is None:
-            # Also reached 5 s after a reset via QTimer.singleShot, by which
-            # time a reconnect may have torn the transport down
-            window.logger.error("send_calibration: no Arduino transport")
-            return
-        if not window.config.scale_calibrated:
-            # Never push an implausible/default factor: the firmware
-            # would happily produce raw-count "pressure" readings
-            print(
-                f"Refusing to send implausible scale factor "
-                f"{window.config.calibration}"
-            )
-            window.logger.error(
-                "Refusing to send implausible load-cell scale factor %s",
-                window.config.calibration,
-            )
-            return
-        window.arduino.send("L0{}".format(window.config.calibration))
-
 
     def set_done(self):
         """Set the I2C status to done."""

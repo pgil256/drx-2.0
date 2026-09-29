@@ -54,9 +54,9 @@ class TestSendQueuesCommand:
         arduino.serial_com.write.assert_not_called()
 
     def test_send_does_not_reconnect_when_connected(self, arduino):
-        with patch.object(arduino, "reconnect") as mock_reconnect:
+        with patch.object(arduino, "connect_to_arduino") as mock_connect:
             arduino.send("Z")
-        mock_reconnect.assert_not_called()
+        mock_connect.assert_not_called()
 
     def test_emergency_stop_uses_priority_queue(self, arduino):
         """'X' must jump ahead of queued commands, not wait in line."""
@@ -86,21 +86,21 @@ class TestSendNoUsableLink:
 
     def test_send_returns_false_when_serial_none(self, arduino):
         arduino.serial_com = None
-        with patch.object(arduino, "reconnect") as mock_reconnect:
+        with patch.object(arduino, "connect_to_arduino") as mock_connect:
             assert arduino.send("Z") is False
-        mock_reconnect.assert_not_called()
+        mock_connect.assert_not_called()
 
     def test_send_returns_false_when_port_closed(self, arduino):
         arduino.serial_com.is_open = False
-        with patch.object(arduino, "reconnect") as mock_reconnect:
+        with patch.object(arduino, "connect_to_arduino") as mock_connect:
             assert arduino.send("Z") is False
-        mock_reconnect.assert_not_called()
+        mock_connect.assert_not_called()
 
     def test_send_returns_false_when_io_loop_stopped(self, arduino):
         arduino._running = False
-        with patch.object(arduino, "reconnect") as mock_reconnect:
+        with patch.object(arduino, "connect_to_arduino") as mock_connect:
             assert arduino.send("X") is False
-        mock_reconnect.assert_not_called()
+        mock_connect.assert_not_called()
 
     def test_nothing_queued_on_dead_link(self, arduino):
         arduino.serial_com = None

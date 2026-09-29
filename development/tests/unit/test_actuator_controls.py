@@ -319,14 +319,9 @@ class TestLegLengthBounds:
 
 @pytest.mark.unit
 class TestEmergencyStop:
-    """Emergency-stop delegation + the controller's staged shutdown.
+    """The controller's staged emergency-stop shutdown.
 
     The GPIO-line ordering is pinned separately in test_estop_gpio.py."""
-
-    def test_window_delegates_to_controller(self):
-        stub = MagicMock()
-        KneeSpa.emergency_stop_clicked(stub, event=None)
-        stub.protocol.emergency_stop_clicked.assert_called_once_with(None)
 
     def test_sends_stop_command(self):
         """The controller chain must emit the ``X`` (stop-all) serial command

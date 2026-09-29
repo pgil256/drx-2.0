@@ -96,7 +96,6 @@ class Arduino(QObject):
     ready_to_go_emit = pyqtSignal()
     position_emit = pyqtSignal(int, int, str, int)
     status_emit = pyqtSignal(int, int, int, float)
-    buffer_warning = pyqtSignal(str)
     connection_lost = pyqtSignal()  # Signal for connection loss
     display_weight_emit = pyqtSignal(str)  # Added missing signal for weight display
     error_emit = pyqtSignal(str)  # Firmware ERROR:/BUSY command and device errors
@@ -321,11 +320,6 @@ class Arduino(QObject):
         self.connection_ready_event.clear()
         return False
 
-    def reconnect(self, max_retries=3):
-        """Attempt to reestablish the Arduino connection."""
-        self.logger.info("Attempting to reconnect to Arduino...")
-        return self.connect_to_arduino(max_retries=max_retries, emit_connection_failed=False)
-
     def run(self):
         """Connect to Arduino and start reading data."""
         try:
@@ -335,11 +329,6 @@ class Arduino(QObject):
             # signal that its startup slot returned so the Qt event loop can be
             # shut down deterministically instead of leaking across reconnects.
             self.finished.emit()
-
-    # Keeping compatibility with old method name
-    def try_connect(self):
-        """Try to connect to serial0 (compatibility method)."""
-        return self.connect_to_arduino(max_retries=1, emit_connection_failed=False)
 
     def _start_io_thread(self):
         if self._io_thread and self._io_thread.is_alive():
