@@ -126,19 +126,7 @@ LATERAL_MAX = 2400  # Maximum lateral position
 HORIZONTAL_MIN = 0  # Minimum horizontal position (calibrated -25 deg mark)
 HORIZONTAL_MAX = 4500  # Maximum horizontal position (envelope ceiling)
 
-# Guided service calibration uses raw positions before an angle table exists.
-CALIBRATION_AXES = {
-    "horizontal": {
-        "label": "Horizontal", "table": "BMarks", "factor": "b_factor",
-        "prefix": "I13", "position_limits": (HORIZONTAL_MIN, HORIZONTAL_MAX),
-        "angle_limits": ACTUATORS["HORIZONTAL"]["LIMITS"], "angle_step": 5.0,
-    },
-    "lateral": {
-        "label": "Lateral", "table": "CMarks", "factor": "c_factor",
-        "prefix": "K", "position_limits": (LATERAL_MIN, LATERAL_MAX),
-        "angle_limits": ACTUATORS["LATERAL"]["LIMITS"], "angle_step": 2.5,
-    },
-}
+# Hardware service calibration uses raw positions before an angle table exists.
 CALIBRATION_STATUS_MAX_AGE_S = 2.0
 CALIBRATION_MOVE_TIMEOUT_S = 15.0
 CALIBRATION_SETTLE_COUNTS = 8
