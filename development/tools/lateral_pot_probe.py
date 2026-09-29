@@ -24,7 +24,8 @@ Modes (run on the Pi with the KneeSpa app NOT running):
 Safety: X is sent at start (clears any move a previous session left
 running), whenever a commanded move does not acknowledge in time, and on
 Ctrl+C or any error. A pressure move is capped at --pressure-seconds and
-then stopped with X, because the firmware's own 30 s bound is advisory.
+then stopped with X, well before the firmware's own 90 s pressure-move fault.
+The pressure move is skipped if the baseline tare does not complete.
 
 Every raw serial line is timestamped on screen and in the log file.
 """
@@ -128,10 +129,12 @@ class Probe:
                     self.ser.write(b"Q\n")
                 except Exception:
                     pass
-        elif line.startswith(("DONE", "BUSY", "OK", "ERR")):
+        elif line.startswith(("DONE", "BUSY", "OK", "ERR", "COMMAND_REJECTED",
+                              "CALIBRATION|TARE|REJECTED", "CALIBRATION|TARE|CANCELLED")):
+            # Rejections end the wait immediately instead of running out the timeout.
             self.ack_text = line
             self.ack.set()
-            if line.startswith("ERR"):
+            if not line.startswith(("DONE", "BUSY", "OK")):
                 self.notices.append((time.monotonic() - self.t0, self.phase, line))
         elif line.startswith("WARNING"):
             self.notices.append((time.monotonic() - self.t0, self.phase, line))
@@ -365,20 +368,25 @@ def main():
             time.sleep(args.rest)
 
             if args.pressure:
-                # Same sequence the app uses: tare (its L0 step tares too),
-                # then a pressure move on SMC 12 at PRESSURE_SPEED.
+                # Same sequence the app uses: an explicit resting-load baseline
+                # tare, then a pressure move on SMC 12 at PRESSURE_SPEED. The
+                # firmware rejects P with TARE_REQUIRED until a tare succeeds;
+                # it gives up on the tare after 8 s.
                 probe.set_phase("tare")
-                probe.command("L1", 8.0)
-                time.sleep(1.0)
-
-                probe.set_phase("pressure")
-                target = int(args.pressure) if float(args.pressure).is_integer() else args.pressure
-                text = probe.command("P{}".format(target), args.pressure_seconds)
-                if not text.startswith("DONE"):
-                    probe.incomplete.append(("P{}".format(target), text or "no ack within cap"))
-                    probe._out("!! pressure move did not complete within {:.0f}s; sending X".format(args.pressure_seconds))
-                probe.command("X", 3.0)
-                time.sleep(1.0)
+                tare = probe.command("L1|BASELINE", 10.0)
+                if not tare.startswith("DONE"):
+                    probe.incomplete.append(("L1|BASELINE", tare or "no ack"))
+                    probe._out("!! baseline tare failed ({}); skipping the pressure move".format(tare or "no ack"))
+                else:
+                    time.sleep(1.0)
+                    probe.set_phase("pressure")
+                    target = int(args.pressure) if float(args.pressure).is_integer() else args.pressure
+                    text = probe.command("P{}".format(target), args.pressure_seconds)
+                    if not text.startswith("DONE"):
+                        probe.incomplete.append(("P{}".format(target), text or "no ack within cap"))
+                        probe._out("!! pressure move did not complete within {:.0f}s; sending X".format(args.pressure_seconds))
+                    probe.command("X", 3.0)
+                    time.sleep(1.0)
             else:
                 probe.set_phase("move")
                 probe.motion("I12{}".format(args.target), MOVE_TIMEOUT_S)
