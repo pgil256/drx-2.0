@@ -219,7 +219,6 @@ class KneeSpa(QMainWindow):
         self._paused_at = None             # wall-clock pause anchor for the UI timer
         self.last_measured_pressure = None  # latest load-cell reading (status_emit)
         self._prev_settings = {}           # for mid-protocol slider rollback
-        self._selected_issue = None        # last-opened Support troubleshooting item
         self.current_use_pulse_setting = True
         self.current_pulse_rate = None     # pulses/sec from the Settings slider
         self.axial_flexion_pressure = 0
@@ -447,7 +446,6 @@ class KneeSpa(QMainWindow):
 
         # Support screen.
         s.support.submit_ticket_requested.connect(self._on_submit_ticket)
-        s.support.issue_activated.connect(self._on_issue_activated)
         self.support_email_result.connect(self._on_support_email_result)
 
         # Video modal (owns the embedded VLC player).
@@ -1073,10 +1071,6 @@ class KneeSpa(QMainWindow):
             self._on_patient_edit()
 
     # ----- Support -----
-    def _on_issue_activated(self, question):
-        # Remember the last-opened troubleshooting item as ticket context.
-        self._selected_issue = question
-
     def _on_submit_ticket(self, payload: dict) -> None:
         """Validate contact details and send a retryable request with device context."""
         if getattr(self, "_support_mail_busy", False) is True:
@@ -1121,71 +1115,6 @@ class KneeSpa(QMainWindow):
     def _on_video_toggled(self, playing):
         # The VideoModal owns the embedded VLC player; this is just telemetry.
         print(f"Video play toggled: {playing}")
-
-    def handle_assistance_request(self):
-        """Request assistance — emails the admin using the logged-in user's
-        identity (read from current_user, not stale label text)."""
-        print(f"Handle assistance method called")
-        if self.current_user:
-            self.username = self.current_user.get("username", "")
-            self.user_email = self.current_user.get("email", "")
-            self.user_status = self.current_user.get("status", "")
-        else:
-            self.username = self.user_email = self.user_status = ""
-        self.email_admin()
-
-    def email_admin(self) -> None:
-        """Send the assistance-request email from a worker thread.
-
-        Blocking SMTP-over-SSL used to run on the UI thread, freezing the
-        kiosk up to the TCP timeout whenever the network was down -- and
-        the operator never learned whether help was actually summoned.
-        """
-        receiver_email = EMAIL_CONFIG["RECEIVER_EMAIL"]
-
-        subject = "Assistance Request"
-        body = (
-            f"User {self.username} with email {self.user_email} and status "
-            f"{self.user_status} is requesting assistance."
-        )
-        print(body)
-
-        self._send_support_email(
-            subject=subject,
-            body=body,
-            receiver_email=receiver_email,
-            success_message="Assistance request email sent successfully.",
-            failure_prefix="Failed to send assistance email",
-        )
-
-    def submit_ticket(self, issue_text: str) -> None:
-        """Submit a support ticket (§15.5) — SMTP to the TICKET_EMAIL, tagged
-        with the persisted per-device id. Sent from a worker thread like
-        email_admin (blocking SMTP froze the kiosk on a down network)."""
-        receiver_email = EMAIL_CONFIG["TICKET_EMAIL"]
-
-        try:
-            device_id = self.config.ensure_device_id()
-        except Exception:
-            device_id = "unknown"
-
-        user = self.current_user.get("username", "unknown") if self.current_user else "unknown"
-        status = self.current_user.get("status", "") if self.current_user else ""
-
-        subject = f"[KneeSpa {device_id}] Support ticket"
-        body = (
-            f"Device: {device_id}\n"
-            f"User: {user} ({status})\n\n"
-            f"Issue:\n{issue_text}"
-        )
-        self._send_support_email(
-            subject=subject,
-            body=body,
-            receiver_email=receiver_email,
-            success_message="Support ticket sent successfully.",
-            failure_prefix="Failed to send ticket",
-        )
-        self._show_timed_error("Support ticket is being sent.")
 
     def _send_support_email(
         self, *, subject: str, body: str, receiver_email: str,

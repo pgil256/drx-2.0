@@ -108,11 +108,15 @@ class TestEnvironmentOverrides:
         assert values["EMAIL_CONFIG"] == {
             "SENDER_EMAIL": "sender@example.invalid",
             "SENDER_PASSWORD": "synthetic-test-password",
-            "RECEIVER_EMAIL": "help@example.invalid",
             "TICKET_EMAIL": "tickets@example.invalid",
             "SMTP_SERVER": "smtp.example.invalid",
             "SMTP_PORT": 2465,
         }
+
+    def test_ticket_email_falls_back_to_assistance_address(self) -> None:
+        """Devices provisioned before ticket email existed keep receiving tickets."""
+        values = read_isolated_constants({"KNEESPA_ASSISTANCE_EMAIL": "help@example.invalid"})
+        assert values["EMAIL_CONFIG"]["TICKET_EMAIL"] == "help@example.invalid"
 
 
 @pytest.mark.unit

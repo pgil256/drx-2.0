@@ -130,7 +130,6 @@ def make_stub() -> SimpleNamespace:
         "close", "_seed_modern_run_inputs", "_reflect_setup", "_setup_reset", "_leg_jog",
         "move_actuator", "_apply_setup_pressure", "reset_flexion_button_clicked",
         "stop_leg_movement", "stop_position_flexion_button", "emergency_stop_clicked",
-        "email_admin",
         "_show_patient_modal", "_on_patient_edit", "_on_mark_default",
     ):
         setattr(window, name, MagicMock())

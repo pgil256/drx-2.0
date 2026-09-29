@@ -560,25 +560,12 @@ class TestDuration:
 
 # ----- support ticket -----
 class TestSupport:
-    def test_issue_activated_remembers_question(self):
-        stub = make_stub()
-        KneeSpa._on_issue_activated(stub, "Pressure not reaching target")
-        assert stub._selected_issue == "Pressure not reaching target"
-
     def test_empty_ticket_is_rejected_at_controller_boundary(self) -> None:
         stub = make_stub()
         stub._send_support_email = MagicMock()
         KneeSpa._on_submit_ticket(stub, {})
         stub._send_support_email.assert_not_called()
         assert stub.shell.support.set_delivery_state.call_args.args[0] == "invalid"
-
-    def test_assistance_reads_current_user(self):
-        stub = make_stub()
-        stub.current_user = {"username": "Dr", "email": "d@x", "status": "admin"}
-        KneeSpa.handle_assistance_request(stub)
-        assert stub.username == "Dr"
-        assert stub.user_email == "d@x"
-        stub.email_admin.assert_called_once()
 
 
 # ----- live telemetry (medical-device "telemetry updates live") -----

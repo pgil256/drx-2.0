@@ -289,9 +289,8 @@ ARDUINO_SETTINGS = {
 EMAIL_CONFIG = {
     "SENDER_EMAIL": os.environ.get("KNEESPA_SMTP_USERNAME", ""),
     "SENDER_PASSWORD": os.environ.get("KNEESPA_SMTP_PASSWORD", ""),
-    "RECEIVER_EMAIL": os.environ.get("KNEESPA_ASSISTANCE_EMAIL", ""),
     # Support-ticket recipient (Phase 3.5 §15.5) — the drxcode address. Falls
-    # back to the assistance address if unset so tickets still reach support.
+    # back to the older assistance address if unset so tickets still reach support.
     "TICKET_EMAIL": os.environ.get(
         "KNEESPA_TICKET_EMAIL",
         os.environ.get("KNEESPA_ASSISTANCE_EMAIL", ""),
