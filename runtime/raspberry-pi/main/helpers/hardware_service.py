@@ -7,10 +7,7 @@ import shutil
 from datetime import datetime
 from typing import Dict, List, Mapping, Optional, Tuple
 
-try:
-    from main.config.constants import SERVICE_AXES
-except ModuleNotFoundError:  # Direct execution of main/kneespa.py
-    from config.constants import SERVICE_AXES
+from config.constants import SERVICE_AXES
 
 from config.config import MIN_PLAUSIBLE_SCALE_FACTOR
 

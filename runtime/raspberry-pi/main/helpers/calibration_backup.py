@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from main.config.constants import SERVICE_AXES
+from config.constants import SERVICE_AXES
 from helpers.device_records import read_json, write_json
 from helpers.hardware_service import validate_axis_marks, _validate_scale
 

@@ -7,10 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
-try:
-    from main.config.constants import APP_VERSION
-except ModuleNotFoundError:
-    from config.constants import APP_VERSION
+from config.constants import APP_VERSION
 
 
 @dataclass

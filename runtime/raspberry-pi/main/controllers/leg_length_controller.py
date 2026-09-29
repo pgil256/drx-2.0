@@ -7,7 +7,7 @@ from typing import Callable, Optional
 import RPi.GPIO as GPIO
 from PyQt5.QtCore import QObject, QTimer
 
-from main.config.constants import EXTRABACKWARD, EXTRAFORWARD, LEG_LENGTH_MAX, LEG_LENGTH_MIN
+from config.constants import EXTRABACKWARD, EXTRAFORWARD, LEG_LENGTH_MAX, LEG_LENGTH_MIN
 from helpers.logging import setup_logger
 
 

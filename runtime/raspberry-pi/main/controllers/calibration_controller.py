@@ -11,16 +11,10 @@ from helpers.calibration import CalibrationDraft, distance_factor
 from helpers.logging import setup_logger
 from ui.modals.calibration_dialog import CalibrationDialog
 
-try:
-    from main.config.constants import (
-        CALIBRATION_AXES, CALIBRATION_MOVE_TIMEOUT_S, CALIBRATION_POSITION_TOLERANCE,
-        CALIBRATION_SETTLE_COUNTS, CALIBRATION_STATUS_MAX_AGE_S,
-    )
-except ModuleNotFoundError:  # Direct script entry point
-    from config.constants import (
-        CALIBRATION_AXES, CALIBRATION_MOVE_TIMEOUT_S, CALIBRATION_POSITION_TOLERANCE,
-        CALIBRATION_SETTLE_COUNTS, CALIBRATION_STATUS_MAX_AGE_S,
-    )
+from config.constants import (
+    CALIBRATION_AXES, CALIBRATION_MOVE_TIMEOUT_S, CALIBRATION_POSITION_TOLERANCE,
+    CALIBRATION_SETTLE_COUNTS, CALIBRATION_STATUS_MAX_AGE_S,
+)
 
 
 class CalibrationController:

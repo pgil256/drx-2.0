@@ -11,7 +11,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from main.config.constants import APP_VERSION
+from config.constants import APP_VERSION
 from ui.widgets.ds import DSButton, DSCard
 from ui.widgets.ds._common import resolve, sans_font
 from ui.widgets.ds.slider import _TouchSlider

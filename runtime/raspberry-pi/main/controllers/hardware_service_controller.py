@@ -22,16 +22,10 @@ from helpers.service_auth import ServiceAccess
 from ui.modals.hardware_service_dialog import HardwareServiceDialog
 from ui.modals.service_pin_dialog import ServicePinDialog
 
-try:
-    from main.config.constants import (
-        CALIBRATION_MOVE_TIMEOUT_S, CALIBRATION_POSITION_TOLERANCE,
-        CALIBRATION_SETTLE_COUNTS, CALIBRATION_STATUS_MAX_AGE_S, SERVICE_AXES,
-    )
-except ModuleNotFoundError:
-    from config.constants import (
-        CALIBRATION_MOVE_TIMEOUT_S, CALIBRATION_POSITION_TOLERANCE,
-        CALIBRATION_SETTLE_COUNTS, CALIBRATION_STATUS_MAX_AGE_S, SERVICE_AXES,
-    )
+from config.constants import (
+    CALIBRATION_MOVE_TIMEOUT_S, CALIBRATION_POSITION_TOLERANCE,
+    CALIBRATION_SETTLE_COUNTS, CALIBRATION_STATUS_MAX_AGE_S, SERVICE_AXES,
+)
 
 
 class HardwareServiceController:

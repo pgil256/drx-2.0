@@ -10,7 +10,7 @@ from typing import Callable, Optional
 from PyQt5.QtCore import QEvent, QObject, QTimer, pyqtSignal
 from PyQt5.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox
 
-from main.config.constants import APP_VERSION, DATA_PATHS
+from config.constants import APP_VERSION, DATA_PATHS
 from config.paths import DEVICE_STATE_DIR
 from helpers.calibration_backup import CalibrationBackups
 from helpers.device_records import DeviceRecords, write_json

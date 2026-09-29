@@ -5,10 +5,7 @@ from typing import Optional
 
 from PyQt5.QtCore import QObject, QRunnable, pyqtSignal, pyqtSlot
 
-try:
-    from main.config.constants import DEFAULT_HORIZONTAL_POSITION
-except ModuleNotFoundError:
-    from config.constants import DEFAULT_HORIZONTAL_POSITION
+from config.constants import DEFAULT_HORIZONTAL_POSITION
 from helpers.controller_operations import (
     ControllerOperations, OperationCancelled, OperationRejected,
 )

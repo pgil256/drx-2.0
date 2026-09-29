@@ -124,7 +124,11 @@ def test_only_selected_device_environment_is_loaded(tmp_path: Path) -> None:
 
 
 def test_application_import_uses_new_release_with_legacy_tree_present(tmp_path: Path) -> None:
-    """Keeping the previous main/ for rollback must not load its Python constants."""
+    """Keeping the previous main/ for rollback must not load its Python constants.
+
+    The application imports only through its own directory, so no main.* module
+    (which could resolve to that legacy tree) is loaded at all.
+    """
     legacy = tmp_path / "main/config"
     legacy.mkdir(parents=True)
     (legacy / "constants.py").write_text("raise RuntimeError('loaded old release')\n")
@@ -138,7 +142,9 @@ from unittest.mock import MagicMock
 for name in ('RPi', 'RPi.GPIO', 'vlc', 'PyQt5.QtMultimedia', 'PyQt5.QtMultimediaWidgets'):
     sys.modules[name] = MagicMock()
 import kneespa
-from main.config import constants
+loaded = sorted(name for name in sys.modules if name == 'main' or name.startswith('main.'))
+assert not loaded, loaded
+from config import constants
 assert '/runtime/raspberry-pi/' in constants.__file__.replace('\\\\', '/')
 """
     result = subprocess.run(

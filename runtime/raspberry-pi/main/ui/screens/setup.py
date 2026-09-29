@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from main.config.constants import (
+from config.constants import (
     ACTUATORS, DEFAULT_HORIZONTAL_POSITION, LEG_LENGTH_MAX, LEG_LENGTH_MIN, PRESSURE_MAX,
 )
 from ui.theme import GLYPH

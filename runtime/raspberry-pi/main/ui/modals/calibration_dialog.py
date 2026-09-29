@@ -13,10 +13,7 @@ from helpers.calibration import CalibrationDraft
 from ui.widgets.ds import DSButton
 from ui.widgets.ds._common import resolve, sans_font
 
-try:
-    from main.config.constants import CALIBRATION_AXES
-except ModuleNotFoundError:  # Direct script entry point
-    from config.constants import CALIBRATION_AXES
+from config.constants import CALIBRATION_AXES
 
 
 class CalibrationDialog(QDialog):

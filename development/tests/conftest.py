@@ -8,10 +8,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# Add main/ to sys.path so imports like `from config.constants import ...` work
+# Add main/ to sys.path so imports like `from config.constants import ...` work.
+# Its parent is deliberately absent: main.config.constants would be a second copy.
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(REPO_ROOT, 'development'))
-sys.path.insert(0, os.path.join(REPO_ROOT, 'runtime', 'raspberry-pi'))
 sys.path.insert(0, os.path.join(REPO_ROOT, 'runtime', 'raspberry-pi', 'main'))
 
 # Add tests/ to sys.path so `from fixtures.fake_arduino import ...` works

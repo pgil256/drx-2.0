@@ -3,7 +3,7 @@ import threading
 from unittest.mock import MagicMock
 import pytest
 from fixtures.protocols import make_protocol
-from main.config.constants import PRESSURE_BUILD_TIMEOUT_S
+from config.constants import PRESSURE_BUILD_TIMEOUT_S
 
 pytestmark = pytest.mark.unit
 

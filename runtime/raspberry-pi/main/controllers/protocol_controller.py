@@ -22,10 +22,7 @@ from helpers.treatment_session import TreatmentSession
 from controllers.machine_sign_in_controller import authorize
 from ui.modals.treatment_review import TreatmentReviewDialog
 
-try:
-    from main.config.constants import DATA_PATHS, EMERGENCYSTOP
-except ModuleNotFoundError:
-    from config.constants import DATA_PATHS, EMERGENCYSTOP
+from config.constants import DATA_PATHS, EMERGENCYSTOP
 
 
 class ProtocolController:

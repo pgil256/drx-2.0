@@ -9,10 +9,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Tuple
 from uuid import UUID
 
-try:
-    from main.config.constants import PROTOCOL_MINUTES_MAX, PROTOCOL_MINUTES_MIN
-except ModuleNotFoundError:
-    from config.constants import PROTOCOL_MINUTES_MAX, PROTOCOL_MINUTES_MIN
+from config.constants import PROTOCOL_MINUTES_MAX, PROTOCOL_MINUTES_MIN
 
 
 # API field: (control key, minimum, maximum, increment).

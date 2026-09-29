@@ -7,12 +7,7 @@ import shutil
 from datetime import datetime
 from typing import Dict, Optional
 
-try:
-    from main.config.constants import (
-        CALIBRATION_AXES, CALIBRATION_DISTANCE_REFERENCE_INCHES,
-    )
-except ModuleNotFoundError:  # Direct entry point: python runtime/raspberry-pi/main/kneespa.py
-    from config.constants import CALIBRATION_AXES, CALIBRATION_DISTANCE_REFERENCE_INCHES
+from config.constants import CALIBRATION_AXES, CALIBRATION_DISTANCE_REFERENCE_INCHES
 
 
 def angle_key(angle: float) -> str:

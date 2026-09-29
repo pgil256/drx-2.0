@@ -3,10 +3,7 @@
 import math
 from typing import Dict, Mapping, Optional
 
-try:
-    from main.config.constants import MOTOR_SPEED_DEFAULTS, MOTOR_SPEED_MAX, MOTOR_SPEED_MIN
-except ModuleNotFoundError:  # python runtime/raspberry-pi/main/kneespa.py
-    from config.constants import MOTOR_SPEED_DEFAULTS, MOTOR_SPEED_MAX, MOTOR_SPEED_MIN
+from config.constants import MOTOR_SPEED_DEFAULTS, MOTOR_SPEED_MAX, MOTOR_SPEED_MIN
 
 
 def motor_speed_values(values: Optional[Mapping[str, float]] = None) -> Dict[str, int]:

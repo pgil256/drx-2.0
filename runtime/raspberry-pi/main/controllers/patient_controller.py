@@ -7,7 +7,7 @@ from typing import Any, Callable, Dict
 
 from PyQt5.QtCore import QObject, pyqtSignal
 
-from main.config.constants import PATIENT_PORTAL_PATH
+from config.constants import PATIENT_PORTAL_PATH
 from helpers.cloud_contract import validate_patient
 from helpers.patient_registration import PatientRegistration
 from helpers.staff_client import StaffClient, StaffError

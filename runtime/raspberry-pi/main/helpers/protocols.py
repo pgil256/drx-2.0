@@ -25,15 +25,10 @@ from config.constants import (
     PULSE_RATE_FIRMWARE_SUPPORT,
     MIN_JERK_INTERVAL_MS,
     MAX_JERK_INTERVAL_MS,
+    MOTOR_SPEED_ACK_TIMEOUT_S,
+    PRESSURE_TARGET_TOLERANCE,
+    PRESSURE_OVERSHOOT_ALLOWANCE,
 )
-try:
-    from main.config.constants import (
-        MOTOR_SPEED_ACK_TIMEOUT_S, PRESSURE_TARGET_TOLERANCE, PRESSURE_OVERSHOOT_ALLOWANCE,
-    )
-except ModuleNotFoundError:  # Direct entry point: python runtime/raspberry-pi/main/kneespa.py
-    from config.constants import (
-        MOTOR_SPEED_ACK_TIMEOUT_S, PRESSURE_TARGET_TOLERANCE, PRESSURE_OVERSHOOT_ALLOWANCE,
-    )
 
 # Constants
 DEGREES0 = PROTOCOL_DEFAULT_SETTINGS["DEGREES0"]          # Center/neutral position

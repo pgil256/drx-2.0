@@ -38,18 +38,16 @@ from PyQt5.QtWidgets import (
     QMessageBox,
 )
 
-# Resolve main.* imports from this release even while the legacy main/ tree
-# remains beside runtime/ for rollback.
-_SOFTWARE_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-if _SOFTWARE_ROOT not in sys.path:
-    sys.path.insert(0, _SOFTWARE_ROOT)
-
+# Application modules import from this directory only (config.constants, not
+# main.config.constants): two roots load separate copies of the same module,
+# and main.* could resolve to the legacy main/ tree kept for rollback.
 if __name__ == "__main__":
     from config.migrate_state import migrate_default_state
 
     migrate_default_state()
 
 from config.constants import (
+    APP_VERSION,
     WINDOW_TITLE,
     DEGREES,
     ACTUATORS,
@@ -102,7 +100,6 @@ from controllers.device_controller import DeviceController
 from controllers.patient_controller import PatientController
 from controllers.machine_sign_in_controller import MachineSignInController, authorize
 from helpers.support_ticket import create_ticket, validate_ticket
-from main.config.constants import APP_VERSION
 from controllers.leg_length_controller import LegLengthController
 from helpers.hardware_service import axial_position
 
