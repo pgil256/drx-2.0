@@ -48,35 +48,20 @@ TEST_NODES = (
     "development/tests/unit/test_protocol_controller.py::"
     "TestStartGates::test_connection_failure_returns_to_idle",
     "development/tests/unit/test_protocol_controller.py::"
-    "TestStartGates::test_successful_start_reaches_running",
+    "TestStartGates::test_successful_start_waits_for_worker_preparation",
+    # The NB2 pressure rewrite (882782f) replaced TestRunPressureSequence and the
+    # final-retry loop with typed-evidence cases; blind resends no longer exist.
+    "development/tests/unit/test_protocol_pressure.py::test_invalid_target_never_sent",
     "development/tests/unit/test_protocol_pressure.py::"
-    "TestRunPressureSequence::test_rejects_negative_target",
+    "test_ramp_does_not_repeat_completed_waypoints",
     "development/tests/unit/test_protocol_pressure.py::"
-    "TestRunPressureSequence::test_rejects_over_max_safe_target",
+    "test_pressure_cannot_complete_without_matching_evidence_and_ack",
     "development/tests/unit/test_protocol_pressure.py::"
-    "TestRunPressureSequence::test_returns_true_when_target_reached",
+    "test_cancellation_prevents_later_waypoint",
     "development/tests/unit/test_protocol_pressure.py::"
-    "TestRunPressureSequence::test_sends_initial_pressure_command",
+    "test_rejected_send_ends_ramp_immediately",
     "development/tests/unit/test_protocol_pressure.py::"
-    "TestRunPressureSequence::test_sends_final_target_pressure_command",
-    "development/tests/unit/test_protocol_pressure.py::"
-    "TestRunPressureSequence::test_ramps_through_increments_toward_target",
-    "development/tests/unit/test_protocol_pressure.py::"
-    "TestRunPressureSequence::test_returns_false_when_initial_pressure_command_fails",
-    "development/tests/unit/test_protocol_pressure.py::"
-    "TestRunPressureSequence::test_aborts_when_status_never_reaches_target",
-    "development/tests/unit/test_protocol_pressure.py::"
-    "TestRunPressureSequence::test_aborts_when_later_pressure_command_is_rejected",
-    "development/tests/unit/test_protocol_pressure.py::"
-    "TestRunPressureSequence::test_aborts_when_increment_never_stabilizes",
-    "development/tests/unit/test_protocol_pressure.py::"
-    "TestRunPressureSequence::test_aborts_after_final_pressure_retries_exhausted",
-    "development/tests/unit/test_protocol_pressure.py::"
-    "TestRunPressureSequence::test_cancellation_during_wait_aborts_without_escalating",
-    "development/tests/unit/test_protocol_pressure.py::"
-    "TestRunPressureSequence::test_aborts_immediately_when_not_running",
-    "development/tests/unit/test_protocol_pressure.py::"
-    "TestUpdateStatus::test_drives_pressure_loop_to_completion",
+    "test_fault_or_rejection_cancels_even_during_hold",
     "development/tests/unit/test_protocol_logic.py::"
     "TestSetToCDistance::test_rejected_send_does_not_claim_arrival",
     "development/tests/unit/test_protocol_logic.py::"
@@ -100,9 +85,9 @@ TEST_NODES = (
     "development/tests/unit/test_protocol_pause.py::"
     "test_ramp_stops_escalating_when_paused_mid_ramp",
     "development/tests/unit/test_protocol_live_settings.py::"
-    "test_set_to_pressure_waits_for_firmware_done",
+    "test_set_to_pressure_waits_for_typed_reply_and_done",
     "development/tests/unit/test_protocol_live_settings.py::"
-    "test_set_to_pressure_proceeds_if_done_never_arrives",
+    "test_set_to_pressure_fails_if_done_never_arrives",
     "development/tests/unit/test_actuator_controls.py::"
     "TestMoveActuatorHorizontal::test_above_max_does_not_send",
     "development/tests/unit/test_actuator_controls.py::"

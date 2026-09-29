@@ -1,5 +1,6 @@
 """Behavioral tests for the local audit runner and its process exit status."""
 
+import ast
 import importlib.util
 import runpy
 import subprocess
@@ -22,6 +23,30 @@ def runner() -> ModuleType:
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
     return module
+
+
+def test_every_selected_node_exists(runner: ModuleType) -> None:
+    """A renamed or deleted test fails here, not only when the gate is run by hand.
+
+    The other tests replace the pytest child, so they cannot notice a stale node ID.
+    """
+    missing = []
+    for node in runner.TEST_NODES:
+        path, *names = node.split("::")
+        source = runner.ROOT / path
+        if not source.is_file():
+            missing.append(node)
+            continue
+        scope = ast.parse(source.read_text(encoding="utf-8")).body
+        for name in names:
+            name = name.split("[", 1)[0]
+            match = next((item for item in scope if isinstance(item, (
+                ast.ClassDef, ast.FunctionDef, ast.AsyncFunctionDef)) and item.name == name), None)
+            if match is None:
+                missing.append(node)
+                break
+            scope = match.body
+    assert not missing, "Stale validate_fixes.py node IDs:\n" + "\n".join(missing)
 
 
 @pytest.mark.parametrize(
