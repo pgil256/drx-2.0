@@ -98,7 +98,7 @@ class TestActuatorControlGating:
         past the guard would raise AttributeError."""
         h = ControlsHarness(qtbot)
         h.actuator_command_in_progress = True
-        h.move_actuator("12", 0.5, 1, 1)
+        h.move_actuator("12", 1, 1)
 
 
 # ---------------------------------------------------------------------------
@@ -141,7 +141,7 @@ class TestMoveActuatorGuards:
         must warn and send nothing."""
         stub = make_kneespa_stub(horizontal=0)
         stub.config.marks_valid = False
-        KneeSpa.move_actuator(stub, ACTUATOR_B, None, "1", 1)
+        KneeSpa.move_actuator(stub, ACTUATOR_B, "1", 1)
         stub.arduino.send.assert_not_called()
         stub._warn_uncalibrated.assert_called_once()
 
@@ -153,7 +153,7 @@ class TestMoveActuatorHorizontal:
     def test_above_max_does_not_send(self):
         """Moving past HORIZONTAL_MAX_DEGREES is rejected with no command."""
         stub = make_kneespa_stub(horizontal=HORIZONTAL_MAX_DEGREES)
-        KneeSpa.move_actuator(stub, ACTUATOR_B, None, "1", 1)
+        KneeSpa.move_actuator(stub, ACTUATOR_B, "1", 1)
         stub.arduino.send.assert_not_called()
         # Position must be unchanged after a rejected move.
         assert stub.horizontal_flexion_position == HORIZONTAL_MAX_DEGREES
@@ -161,7 +161,7 @@ class TestMoveActuatorHorizontal:
     def test_below_min_does_not_send(self):
         """Moving below HORIZONTAL_MIN_DEGREES is rejected with no command."""
         stub = make_kneespa_stub(horizontal=HORIZONTAL_MIN_DEGREES)
-        KneeSpa.move_actuator(stub, ACTUATOR_B, None, "1", -1)
+        KneeSpa.move_actuator(stub, ACTUATOR_B, "1", -1)
         stub.arduino.send.assert_not_called()
         assert stub.horizontal_flexion_position == HORIZONTAL_MIN_DEGREES
 
@@ -169,14 +169,14 @@ class TestMoveActuatorHorizontal:
         """In-range move sends the calibrated absolute BMarks position."""
         # Start at 0; slow step (speed_factor <= 4) is 5, direction +1 -> 5 deg.
         stub = make_kneespa_stub(horizontal=0)
-        KneeSpa.move_actuator(stub, ACTUATOR_B, None, "1", 1)
+        KneeSpa.move_actuator(stub, ACTUATOR_B, "1", 1)
         stub.arduino.send.assert_called_once_with("I132280")
         assert stub.horizontal_flexion_position == 5
 
     def test_fast_speed_uses_larger_step(self):
         """speed_factor > 4 uses a step of 10 degrees."""
         stub = make_kneespa_stub(horizontal=-25)
-        KneeSpa.move_actuator(stub, ACTUATOR_B, None, "5", 1)
+        KneeSpa.move_actuator(stub, ACTUATOR_B, "5", 1)
         # -25 + 10 = -15 -> calibrated BMarks position 760.
         stub.arduino.send.assert_called_once_with("I13760")
         assert stub.horizontal_flexion_position == -15
@@ -186,14 +186,14 @@ class TestMoveActuatorHorizontal:
         # Start at 0, slow step 5 -> new_position 5 == HORIZONTAL_MAX_DEGREES.
         assert HORIZONTAL_MAX_DEGREES == 5
         stub = make_kneespa_stub(horizontal=0)
-        KneeSpa.move_actuator(stub, ACTUATOR_B, None, "1", 1)
+        KneeSpa.move_actuator(stub, ACTUATOR_B, "1", 1)
         stub.arduino.send.assert_called_once()
         assert stub.horizontal_flexion_position == HORIZONTAL_MAX_DEGREES
 
     def test_failed_send_does_not_change_displayed_position(self):
         stub = make_kneespa_stub(horizontal=-10)
         stub.arduino.send.return_value = False
-        result = KneeSpa.move_actuator(stub, ACTUATOR_B, None, "1", 1)
+        result = KneeSpa.move_actuator(stub, ACTUATOR_B, "1", 1)
         assert result is False
         assert stub.horizontal_flexion_position == -10
         stub._reflect_setup.assert_not_called()
@@ -207,7 +207,7 @@ class TestMoveActuatorAxial:
     def test_above_max_does_not_send(self):
         """Moving past AXIAL_MAX_INCHES errors and sends no command."""
         stub = make_kneespa_stub(axial=AXIAL_MAX_INCHES)
-        KneeSpa.move_actuator(stub, ACTUATOR_A, None, "1", 1)
+        KneeSpa.move_actuator(stub, ACTUATOR_A, "1", 1)
         stub.arduino.send.assert_not_called()
         stub._show_timed_error.assert_called_once()
         assert stub.axial_flexion_position == AXIAL_MAX_INCHES
@@ -215,7 +215,7 @@ class TestMoveActuatorAxial:
     def test_below_min_does_not_send(self):
         """Moving below AXIAL_MIN_INCHES is rejected with no command."""
         stub = make_kneespa_stub(axial=AXIAL_MIN_INCHES)
-        KneeSpa.move_actuator(stub, ACTUATOR_A, None, "1", -1)
+        KneeSpa.move_actuator(stub, ACTUATOR_A, "1", -1)
         stub.arduino.send.assert_not_called()
         assert stub.axial_flexion_position == AXIAL_MIN_INCHES
 
@@ -223,14 +223,14 @@ class TestMoveActuatorAxial:
         """In-range move sends ``A12<pos:.1f>`` and advances the position."""
         # Start at 0; slow step is 0.5, direction +1 -> 0.5 inches.
         stub = make_kneespa_stub(axial=0)
-        KneeSpa.move_actuator(stub, ACTUATOR_A, None, "1", 1)
+        KneeSpa.move_actuator(stub, ACTUATOR_A, "1", 1)
         stub.arduino.send.assert_called_once_with("A120.5")
         assert stub.axial_flexion_position == 0.5
 
     def test_fast_speed_uses_larger_step(self):
         """speed_factor > 4 uses a step of 1.0 inch."""
         stub = make_kneespa_stub(axial=0)
-        KneeSpa.move_actuator(stub, ACTUATOR_A, None, "5", 1)
+        KneeSpa.move_actuator(stub, ACTUATOR_A, "5", 1)
         stub.arduino.send.assert_called_once_with("A121.0")
         assert stub.axial_flexion_position == 1.0
 
@@ -242,7 +242,7 @@ class TestMoveActuatorLateral:
     def test_above_max_does_not_send(self):
         """Moving past LATERAL_MAX_DEGREES errors and sends no command."""
         stub = make_kneespa_stub(lateral=LATERAL_MAX_DEGREES)
-        KneeSpa.move_actuator(stub, ACTUATOR_C, None, "1", 1)
+        KneeSpa.move_actuator(stub, ACTUATOR_C, "1", 1)
         stub.arduino.send.assert_not_called()
         stub._show_timed_error.assert_called_once()
         assert stub.lateral_flexion_position == LATERAL_MAX_DEGREES
@@ -250,7 +250,7 @@ class TestMoveActuatorLateral:
     def test_below_min_does_not_send(self):
         """Moving below LATERAL_MIN_DEGREES errors and sends no command."""
         stub = make_kneespa_stub(lateral=LATERAL_MIN_DEGREES)
-        KneeSpa.move_actuator(stub, ACTUATOR_C, None, "1", -1)
+        KneeSpa.move_actuator(stub, ACTUATOR_C, "1", -1)
         stub.arduino.send.assert_not_called()
         stub._show_timed_error.assert_called_once()
         assert stub.lateral_flexion_position == LATERAL_MIN_DEGREES
@@ -260,7 +260,7 @@ class TestMoveActuatorLateral:
         # Start at 0; slow step is 2.5, direction +1 -> 2.5 deg.
         stub = make_kneespa_stub(lateral=0)
         expected_pos = int(stub.config.CMarks["2.5"])
-        KneeSpa.move_actuator(stub, ACTUATOR_C, None, "1", 1)
+        KneeSpa.move_actuator(stub, ACTUATOR_C, "1", 1)
         stub.arduino.send.assert_called_once_with(f"K{expected_pos}")
         assert stub.lateral_flexion_position == 2.5
 
@@ -312,7 +312,7 @@ class TestLegLengthBounds:
         # Start at 1.0; slow step 2.5 -> 3.5 -> rounds to 2.5 (nearest 2.5).
         stub = make_kneespa_stub(lateral=1.0)
         expected_pos = int(stub.config.CMarks["2.5"])
-        KneeSpa.move_actuator(stub, ACTUATOR_C, None, "1", 1)
+        KneeSpa.move_actuator(stub, ACTUATOR_C, "1", 1)
         stub.arduino.send.assert_called_once_with(f"K{expected_pos}")
         assert stub.lateral_flexion_position == 2.5
 

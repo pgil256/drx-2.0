@@ -413,7 +413,7 @@ def test_normal_motion_cannot_overlap_service_and_leg_requires_rehome(service):
     assert not KneeSpa._send_motion_command(w, "I12550", "test")
     c.move_leg("+")
     assert w._service_leg_position_unknown
-    assert not KneeSpa._move_leg(w, "F+", 0.25, 600, True)
+    assert not KneeSpa._move_leg(w, "F+")
 
 
 def test_diagnostic_snapshot_does_not_automatically_pass_operator_check(service):

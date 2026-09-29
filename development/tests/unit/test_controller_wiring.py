@@ -248,17 +248,17 @@ class TestSetupJog:
     def test_axial_fwd_calls_move_actuator(self):
         stub = make_stub()
         KneeSpa._on_setup_jog(stub, "axial", "fwd")
-        stub.move_actuator.assert_called_once_with("12", None, "04", 1)
+        stub.move_actuator.assert_called_once_with("12", "04", 1)
 
     def test_lateral_rev_fast(self):
         stub = make_stub()
         KneeSpa._on_setup_jog(stub, "lateral", "rev_fast")
-        stub.move_actuator.assert_called_once_with("14", None, "20", -1)
+        stub.move_actuator.assert_called_once_with("14", "20", -1)
 
     def test_horizontal_fwd_fast(self):
         stub = make_stub()
         KneeSpa._on_setup_jog(stub, "horizontal", "fwd_fast")
-        stub.move_actuator.assert_called_once_with("13", None, "20", 1)
+        stub.move_actuator.assert_called_once_with("13", "20", 1)
 
     def test_reset_routes_to_setup_reset(self):
         stub = make_stub()
@@ -337,7 +337,7 @@ class TestSetupGo:
         stub.shell.setup.row_value.return_value = 3.0
         stub.config.a_factor = 1900
         KneeSpa._on_setup_go(stub, "axial")
-        stub.set_to_distance.assert_called_once_with(3.0, "12", 1900)
+        stub.set_to_distance.assert_called_once_with(3.0, "12")
 
     def test_lateral_go_calls_set_to_c_distance(self):
         stub = make_stub()

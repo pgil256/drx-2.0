@@ -1,7 +1,5 @@
-from datetime import datetime
 import time
 import threading
-import logging
 from helpers.logging import setup_logger
 from helpers.controller_operations import (
     ControllerOperations, OperationCancelled, OperationRejected,
@@ -10,14 +8,10 @@ from helpers.conversions import lateral_degrees_to_position
 from helpers.motor_speed import motor_speed_command, motor_speed_values
 from typing import Mapping, Optional, Tuple
 
-from PyQt5 import QtCore, QtGui, QtWidgets, uic
-from PyQt5.QtCore import QUrl, Qt, QObject
+from PyQt5 import QtCore
+from PyQt5.QtCore import Qt, QObject
 
 from config.constants import (
-    PRESSURE_MAX,
-    AXIAL_MAX,
-    LATERAL_MIN,
-    LATERAL_MAX,
     LATERAL_MAX_DEGREES,
     PROTOCOL_DEFAULT_SETTINGS,
     PRESSURE_BUILD_TIMEOUT_S,
@@ -31,13 +25,9 @@ from config.constants import (
 )
 
 # Constants
-DEGREES0 = PROTOCOL_DEFAULT_SETTINGS["DEGREES0"]          # Center/neutral position
 MIN_PRESSURE = PROTOCOL_DEFAULT_SETTINGS["MIN_PRESSURE"]  # Minimum starting pressure in lbs
 MAX_SAFE_PRESSURE = PROTOCOL_DEFAULT_SETTINGS["MAX_SAFE_PRESSURE"]  # Maximum safe pressure in lbs
-HOLD_TIME_SHORT = PROTOCOL_DEFAULT_SETTINGS["HOLD_TIME_SHORT"]
-HOLD_TIME_LONG = PROTOCOL_DEFAULT_SETTINGS["HOLD_TIME_LONG"]        # Default hold duration in seconds
 PRESSURE_INCREMENT = PROTOCOL_DEFAULT_SETTINGS["PRESSURE_INCREMENT"]  # Standard pressure increase step
-ANGLE_INCREMENT = PROTOCOL_DEFAULT_SETTINGS["ANGLE_INCREMENT"]        # Standard angle adjustment step
 
 class WorkerSignals(QObject):
     """Defines the signals available from a running worker thread."""
@@ -46,13 +36,10 @@ class WorkerSignals(QObject):
     baseline_changed = QtCore.pyqtSignal(bool)
     operation_failed = QtCore.pyqtSignal(str)
     stopped = QtCore.pyqtSignal(bool)
-    error = QtCore.pyqtSignal(tuple)
-    result = QtCore.pyqtSignal(object)
     progress = QtCore.pyqtSignal(str)
     pressure_emit = QtCore.pyqtSignal(float)
     status_emit = QtCore.pyqtSignal(int, int, int, float)
     reset_needed = QtCore.pyqtSignal()
-    motor_speed_failed = QtCore.pyqtSignal(str)
 
 class Protocols(QtCore.QRunnable):
     """Main protocol handler for KneeSpa treatment sequences."""

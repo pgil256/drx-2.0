@@ -336,7 +336,7 @@ def test_axial_go_uses_measured_table_only_after_service_opt_in(config, marked, 
     window = MagicMock()
     window.config = config
     window.arduino.send.return_value = True
-    assert KneeSpa.set_to_distance(window, 2, "12", 1900)
+    assert KneeSpa.set_to_distance(window, 2, "12")
     window.arduino.send.assert_called_once_with(command)
 
 
@@ -352,7 +352,7 @@ def test_axial_jog_uses_measured_table_only_after_service_opt_in(config, marked,
     window.actuator_command_in_progress = False
     window.axial_flexion_position = 0
     window.arduino.send.return_value = True
-    KneeSpa.move_actuator(window, "12", None, "1", 1)
+    KneeSpa.move_actuator(window, "12", "1", 1)
     window.arduino.send.assert_called_once_with(command)
     assert window.axial_flexion_position == 0.5
 
@@ -369,9 +369,9 @@ def test_invalid_service_axial_table_never_sends_motion(config, operation):
     window.actuator_command_in_progress = False
     window.axial_flexion_position = 0
     if operation == "go":
-        assert KneeSpa.set_to_distance(window, 2, "12", 1900) is False
+        assert KneeSpa.set_to_distance(window, 2, "12") is False
     else:
-        assert KneeSpa.move_actuator(window, "12", None, "1", 1) is False
+        assert KneeSpa.move_actuator(window, "12", "1", 1) is False
         assert window.axial_flexion_position == 0
     window.arduino.send.assert_not_called()
     window._show_timed_error.assert_called_once()

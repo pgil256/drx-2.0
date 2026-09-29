@@ -109,11 +109,9 @@ def test_motor_speed_settings_reach_worker(window_run: SimpleNamespace) -> None:
     speeds = {"motor_speed": 75}
     run.view.set_settings(speeds)
     start(run)
-    worker, _args, kwargs = run.workers[-1]
+    _worker, _args, kwargs = run.workers[-1]
     assert all(kwargs["motor_speeds"][key] == value for key, value in speeds.items())
     assert all(not run.view._settings[key].isEnabled() for key in speeds)
-    worker.signals.motor_speed_failed.emit("Motor speed setup failed")
-    run.notices.assert_called_with("Motor speed setup failed")
 
 
 def nested_event(callback: Callable[[], None]) -> None:

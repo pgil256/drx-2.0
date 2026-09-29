@@ -370,7 +370,6 @@ class ProtocolController:
                 partial(self.protocol_completed, session=session)
             )
             window.worker.signals.progress.connect(partial(self._session_progress, session=session))
-            window.worker.signals.motor_speed_failed.connect(window._show_timed_error)
             window.worker.signals.prepared.connect(partial(self._on_prepared, session=session))
             window.worker.signals.operation_failed.connect(
                 partial(self._on_operation_failed, session=session)

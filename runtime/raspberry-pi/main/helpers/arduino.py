@@ -90,7 +90,6 @@ class Arduino(QObject):
     connection_ready = pyqtSignal()  # Signal for successful connection
     connection_failed = pyqtSignal(str)  # Signal for connection failure
     finished = pyqtSignal()
-    progress = pyqtSignal(int)
     done_emit = pyqtSignal()
     pressure_emit = pyqtSignal(str)
     ready_to_go_emit = pyqtSignal()

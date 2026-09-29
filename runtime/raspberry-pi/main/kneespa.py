@@ -27,9 +27,7 @@ from PyQt5 import QtWidgets, QtCore
 from PyQt5.QtCore import (
     Qt,
     QTimer,
-    QThread,
     QObject,
-    QTime,
     pyqtSignal,
 )
 from PyQt5.QtWidgets import (
@@ -81,11 +79,7 @@ from config.constants import (
 from ui.modals.pressure_notice import PressureNotice
 from ui.modals.upload_error import UploadErrorDialog
 from config.config import Configuration
-from helpers.arduino import Arduino
 from helpers.csv import CSVHelper
-from helpers.secure_auth import SecureAuthHelper
-from helpers import protocols
-from helpers.reset_worker import ResetWorker, ResetWorkerSignals
 from helpers.measurement_state import DIAGNOSTICS_MAX_AGE_S, MeasurementState
 from helpers.app_restart import restart_app
 from helpers.device_system import DeviceSystem
@@ -147,7 +141,7 @@ class KneeSpa(QMainWindow):
 
     support_email_result = pyqtSignal(bool, str)
 
-    def set_to_distance(self, inches, actuator, factor):
+    def set_to_distance(self, inches, actuator):
         command = "A{}{:.1f}".format(actuator, inches)
         config = getattr(self, "config", None)
         if str(actuator) == "12" and getattr(config, "axial_service_calibrated", False) is True:
@@ -842,7 +836,7 @@ class KneeSpa(QMainWindow):
             "horizontal": self.actuator_b,
         }.get(key)
         if actuator is not None:
-            self.move_actuator(actuator, None, speed, direction)
+            self.move_actuator(actuator, speed, direction)
 
     def _leg_jog(self, action):
         handler = {
@@ -893,7 +887,7 @@ class KneeSpa(QMainWindow):
             if key == "axial":
                 inches = self.shell.setup.row_value("axial")
                 inches = max(AXIAL_MIN_INCHES, min(AXIAL_MAX_INCHES, inches))
-                if not self.set_to_distance(inches, self.actuator_a, self.config.a_factor):
+                if not self.set_to_distance(inches, self.actuator_a):
                     return False
                 self.axial_flexion_position = inches
                 self._reflect_setup("axial", inches)
@@ -1307,7 +1301,7 @@ class KneeSpa(QMainWindow):
             event.ignore()
             QTimer.singleShot(50, self.close)
 
-    def move_actuator(self, actuator, step, speed_factor, direction):
+    def move_actuator(self, actuator, speed_factor, direction):
         """
         Move an actuator in the specified direction.
 
@@ -1539,7 +1533,7 @@ class KneeSpa(QMainWindow):
             )
 
     # ----- leg-length (FIT) jog handlers (open-loop F-commands + GPIO) -----
-    def _move_leg(self, command, delta, duration_ms, forward):
+    def _move_leg(self, command):
         """Delegate timing and estimate updates to the FIT command owner."""
         if getattr(self, "_service_leg_position_unknown", False) is True:
             self._show_timed_error("Use the leg-length Return control to establish zero.")
@@ -1548,19 +1542,19 @@ class KneeSpa(QMainWindow):
 
     def forward_button_clicked(self):
         """Handle forward button press - normal speed."""
-        return KneeSpa._move_leg(self, "F+", 0.25, 600, True)
+        return KneeSpa._move_leg(self, "F+")
 
     def reverse_button_clicked(self):
         """Handle reverse button press - normal speed."""
-        return KneeSpa._move_leg(self, "F-", -0.25, 600, False)
+        return KneeSpa._move_leg(self, "F-")
 
     def forward_fast_button_clicked(self):
         """Handle forward button press - fast speed."""
-        return KneeSpa._move_leg(self, "FF", 3.0, 6100, True)
+        return KneeSpa._move_leg(self, "FF")
 
     def reverse_fast_button_clicked(self):
         """Handle reverse button press - fast speed."""
-        return KneeSpa._move_leg(self, "FR", -3.0, 6100, False)
+        return KneeSpa._move_leg(self, "FR")
 
     def _release_leg_gpio(self):
         """Drop the Pi-side leg-motor direction pins to a safe state."""
