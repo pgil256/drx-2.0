@@ -42,7 +42,6 @@
 #define DIR_FIT_REVERSE    5
 #define DIR_A_FORWARD      30
 #define DIR_A_REVERSE      31
-#define A_ANALOG           A0
 
 // Actuator constants
 #define AFULLINCH          430
@@ -96,10 +95,6 @@ int pulseSpeed = TREATMENT_SPEED_MAX;
 // warning reaches the operator before the host gives up. Raised from
 // 30 s on 2026-09-10 (slow axial load build).
 #define PRESSURE_MOVE_TIMEOUT 80000  // ms before advisory pressure warning
-#define PRESSURE_STALL_MS     5000   // legacy progress-check window
-#define PRESSURE_STALL_DELTA  0.5    // legacy progress-change threshold
-#define PRESSURE_PROGRESS_FAULT_ENABLED 0  // disabled: interferes with live control
-#define HX711_SATURATED       8388607L  // 24-bit ADC saturation magnitude
 #define POSITION_DEADBAND     25     // counts: symmetric close-enough band
 #define POSITION_STALL_MS     20000  // sustained no-progress time before warning
 #define POSITION_PROGRESS_COUNTS 4   // encoder progress that resets stall timer
@@ -122,9 +117,6 @@ float pressure = 0;          // filtered magnitude used by control/safety logic
 float signedPressure = 0;    // filtered signed value (negative = wiring/drift fault)
 
 // Non-blocking load-cell sampling state
-float pressureSamples[3] = {0, 0, 0};
-uint8_t pressureSampleIndex = 0;
-uint8_t pressureSampleCount = 0;
 unsigned long lastScaleReady = 0;    // last time the HX711 had data for us
 
 const float PRESSURE_HARD_LIMIT = 100.0;
@@ -145,10 +137,6 @@ float pressureCeiling = 0;
 float protocolPressureLimit = 0; // Selected protocol target, distinct from a ramp step.
 unsigned long lastPressureSample = 0;
 unsigned long pressureMoveStarted = 0;
-uint16_t cachedPositions[3] = {0, 0, 0};
-const unsigned long AXIAL_QUERY_INTERVAL = 500; // ms during pressure/pulse motion
-const unsigned long MOTOR_I2C_TIMEOUT_US = 25000UL;
-unsigned long lastAxialQuery = 0;
 long lastRawPressure = 0;
 unsigned long maxPressurePollGap = 0, lastPressurePoll = 0, lastPressureReadUs = 0;
 bool pressurePollStarted = false;
@@ -190,15 +178,10 @@ void emergencyStop();
 unsigned long lastHostTraffic = 0;   // last byte received from the Pi
 bool releasingPressure = false;      // autonomous post-fault release active
 unsigned long releaseStart = 0;
-unsigned long pressureMoveStart = 0; // start of current pressure move
-unsigned long pressureProgressTime = 0;
-float pressureProgressValue = 0;
 bool pressureWarningIssued = false;
 bool heartbeatWarningIssued = false;
 bool scaleWarningIssued = false;
-bool axialTravelWarningIssued = false;
 bool pressureTimeoutWarningIssued = false;
-bool pressureProgressWarningIssued = false;
 bool positionStallWarningIssued = false;
 bool positionReadValid = false;      // last readPosition() I2C result ok
 
@@ -260,7 +243,6 @@ unsigned long lastJerkTime = 0;
 // It used to boot at 200 ms while the host UI claimed 2/sec. Host-settable via
 // J<ms> (Phase 3.5 §15.2).
 unsigned long jerkInterval = 500;
-bool jerkDirectionChanged = false;
 
 // Forward declarations (the native test build has no Arduino-IDE
 // prototype generation)

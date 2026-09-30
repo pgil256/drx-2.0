@@ -36,8 +36,6 @@ void setUp(void) {
     pressure = 0;
     desiredPressure = 0;
     signedPressure = 0;
-    pressureSampleIndex = 0;
-    pressureSampleCount = 0;
     pressureDirection = 0;
     pressureSampleValid = true;
     pressureCalibrated = true;
@@ -62,9 +60,7 @@ void setUp(void) {
     pressureWarningIssued = false;
     heartbeatWarningIssued = false;
     scaleWarningIssued = false;
-    axialTravelWarningIssued = false;
     pressureTimeoutWarningIssued = false;
-    pressureProgressWarningIssued = false;
     positionStallWarningIssued = false;
     lastCommandTime = 0;
     AZERO = 0;
@@ -406,8 +402,6 @@ void test_release_bounded_by_travel_limit(void) {
     // Pressure still high but axial is at its travel floor
     scale._raw = 50;
     pressure = 50;
-    pressureSampleCount = 3;
-    pressureSamples[0] = pressureSamples[1] = pressureSamples[2] = 50;
     AZERO = 160;
     Wire.position_12 = 100;  // below AZERO + deadband
     keepAlive();
@@ -466,13 +460,11 @@ void test_pressure_move_timeout_warns_without_stopping(void) {
     keepAlive();
     measurePressure = true;
     pressureDirection = 1;
-    pressureMoveStart = 0;
-    pressureProgressTime = _millis_value;
+    pressureMoveStarted = 0;
     scale._raw = 20;
     desiredPressure = 50;
     _millis_value = PRESSURE_MOVE_TIMEOUT + 1000;
     keepAlive();
-    pressureProgressTime = _millis_value;  // isolate the time-bound check
 
     loop();
 
@@ -489,29 +481,6 @@ void test_invalid_feedback_stops_pressure_move(void) {
     TEST_ASSERT_TRUE(pressureFault);
     TEST_ASSERT_FALSE(measurePressure);
     TEST_ASSERT_TRUE(Serial1.outputContains("POSITION_FEEDBACK_INVALID"));
-}
-
-void test_pressure_progress_fault_is_disabled(void) {
-    keepAlive();
-    measurePressure = true;
-    pressureDirection = 1;
-    desiredPressure = 50;
-    scale._raw = 20;  // frozen well below target
-    pressureMoveStart = _millis_value;
-    pressureProgressTime = 0;
-    pressureProgressValue = 20;
-    pressureSampleCount = 3;
-    pressureSamples[0] = pressureSamples[1] = pressureSamples[2] = 20;
-    pressure = 20;
-    _millis_value = PRESSURE_STALL_MS + 500;
-    keepAlive();
-    pressureMoveStart = _millis_value;  // isolate the stall check
-
-    loop();
-
-    TEST_ASSERT_TRUE(measurePressure);
-    TEST_ASSERT_FALSE(releasingPressure);
-    TEST_ASSERT_FALSE(Serial1.outputContains("ERROR: No pressure progress"));
 }
 
 // A position move that settles within POSITION_DEADBAND of its target has
@@ -649,9 +618,7 @@ void test_release_reaching_zero_with_target_met_completes_done(void) {
     pressureDirection = -1;
     desiredPressure = 0;
     scale._raw = 0;          // load fully cleared
-    pressureMoveStart = _millis_value;
-    pressureProgressTime = _millis_value;
-    pressureProgressValue = 5;
+    pressureMoveStarted = _millis_value;
 
     loop();
 
@@ -681,8 +648,6 @@ static void setMeasuredPressure(float value) {
     pressure = value;
     scale._scale = 100.0;
     scale.setRawForUnits(value);
-    pressureSampleCount = 3;
-    pressureSamples[0] = pressureSamples[1] = pressureSamples[2] = value;
 }
 
 void test_pressure_at_or_above_target_in_band_completes(void) {
@@ -1021,7 +986,7 @@ void test_position_move_tracks_its_own_device_during_pressure_move(void) {
     desiredPressure = 50;
     scale._raw = 20;
     Wire.position_12 = 100;
-    pressureMoveStart = _millis_value;
+    pressureMoveStarted = _millis_value;
 
     loop();
 
@@ -1183,7 +1148,6 @@ int main(int argc, char **argv) {
     RUN_TEST(test_commands_not_merged_under_rate_limit);
     RUN_TEST(test_pressure_move_timeout_warns_without_stopping);
     RUN_TEST(test_invalid_feedback_stops_pressure_move);
-    RUN_TEST(test_pressure_progress_fault_is_disabled);
     RUN_TEST(test_axial_home_within_deadband_not_stalled);
     RUN_TEST(test_genuine_stall_warns_after_sustained_interval_without_stopping);
     RUN_TEST(test_position_progress_restarts_stall_timer);
