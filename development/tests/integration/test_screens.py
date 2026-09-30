@@ -106,6 +106,20 @@ def test_topbar_identity_toggles_with_user(shell):
     assert shell.top_bar._name.text() == "Dr. Vasquez"
 
 
+def test_topbar_home_labels_dim_while_pressed(shell, qtbot):
+    from PyQt5.QtCore import Qt
+
+    wordmark = shell.top_bar._wordmark
+    homes = []
+    shell.top_bar.home_clicked.connect(lambda: homes.append(1))
+    qtbot.mousePress(wordmark, Qt.LeftButton)
+    assert wordmark.graphicsEffect() is not None
+    assert wordmark.graphicsEffect().opacity() == 0.5
+    qtbot.mouseRelease(wordmark, Qt.LeftButton)
+    assert wordmark.graphicsEffect() is None
+    assert homes == [1]  # the filter never swallows the tap
+
+
 def test_login_success_and_logout_flow(shell):
     from ui.app_shell import PAGES
 
