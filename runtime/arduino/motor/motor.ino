@@ -1,16 +1,11 @@
 /*
-  Arduino Motor Controller for KneeSpa - FIXED VERSION
-  Controls axial, horizontal, and lateral actuators
+  Arduino Motor Controller for KneeSpa DRx (Mega 2560)
+  Controls the axial, horizontal and lateral actuators (motor controllers
+  on I2C), the FIT drive and the HX711 load cell for the Pi application.
   Based on DroneBot Workshop 2019 i2c_slave_ard.ino
 
-  Bug fixes applied:
-  - Fixed jerking counter logic
-  - Added break statement in case 'F'
-  - Improved command buffer handling
-  - Fixed Wire communication delays
-  - Added boundary checks
-  - Improved status management
-  - Fixed STOP pin logic (INPUT_PULLUP reads HIGH when not pressed)
+  VERSION identifies the flashed image; the change history is in git.
+  Native unit tests: development/tests/firmware/ (run_native_tests.sh).
 */
 
 #define VERSION "2026-09-30-DRX2-NB2-SERVICE"
@@ -18,7 +13,7 @@
 #include <math.h>
 #ifndef UNIT_TEST
 // Hardware libraries; native unit tests supply mocks and arduino_shim.h
-// (see test/) before including this file
+// (see development/tests/firmware/) before including this file
 #include "hx711_sampler.h"
 #include <elapsedMillis.h>
 #include <Wire.h>
@@ -235,7 +230,7 @@ bool jerking = false;
 int jerkDirection = 1;
 unsigned long lastJerkTime = 0;
 // Boot default = the host default of 2 pulses/sec (DEFAULT_JERK_INTERVAL_MS in
-// constants.py; paired values are checked by scripts/check_limits_sync.py).
+// constants.py; paired values are checked by development/scripts/check_limits_sync.py).
 // It used to boot at 200 ms while the host UI claimed 2/sec. Host-settable via
 // J<ms> (Phase 3.5 §15.2).
 unsigned long jerkInterval = 500;
