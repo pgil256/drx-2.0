@@ -192,7 +192,19 @@ class KneeSpa(QMainWindow):
         print(
             f"Initializing KneeSpa class in {'debug' if debug_mode else 'production'} mode"
         )
+        # The order is load-bearing: controllers need the shell; the patient
+        # and machine-sign-in controllers need cloud_client and the login
+        # modal; _connect_shell runs before setup_timers; GPIO is set up
+        # before the deferred Arduino start.
+        self._init_state(config_path)
+        self._init_window(debug_mode)
+        self._init_controllers()
+        self._init_users()
+        self._init_cloud()
+        self._init_runtime()
 
+    def _init_state(self, config_path) -> None:
+        """Protocol/UI state, the configuration and the hardware flags."""
         # --- protocol / UI state (mirrors the legacy controller) ---
         self.protocol_value = "1"          # selected protocol (Treatment picker)
         self.protocol_running = False
@@ -245,6 +257,8 @@ class KneeSpa(QMainWindow):
         self._physical_stop_active = False
         self.worker = None
 
+    def _init_window(self, debug_mode) -> None:
+        """The shell, kiosk window flags, spinner and safety banner."""
         # --- build the modern view ---
         self.setWindowTitle(WINDOW_TITLE)
         self.shell = AppShell()
@@ -288,6 +302,9 @@ class KneeSpa(QMainWindow):
             parent=self, suppress_when=self._banner_suppressed
         )
         self.treatment_panel.stop_requested.connect(self.panel_stop_requested)
+
+    def _init_controllers(self) -> None:
+        """Behavior controllers that operate on the window and its shell."""
         self.safety = SafetyMonitor(self)
         self.auth = AuthController(self)
         self.protocol = ProtocolController(self)
@@ -299,6 +316,8 @@ class KneeSpa(QMainWindow):
         # Protocol lifecycle state: idle / starting / running / stopping / fault
         self.protocol_state = "idle"
 
+    def _init_users(self) -> None:
+        """Local login users; nobody is signed in at start."""
         # Initialize the CSV helper
         self.csv = CSVHelper()
         try:
@@ -309,8 +328,10 @@ class KneeSpa(QMainWindow):
             self.users = {}
             print(f"Error loading CSV data: {str(e)}")
             self._show_timed_error(f"Failed to load CSV data: {str(e)}")
-
         self.current_user = None
+
+    def _init_cloud(self) -> None:
+        """The cloud client, linked-patient state and cloud-backed controllers."""
         self.cloud_patient = None
         self._patient_lookup_id = 0
         self._patient_lookup_pending = False
@@ -329,6 +350,8 @@ class KneeSpa(QMainWindow):
         self._cloud_retry_timer = QTimer(self)
         self._cloud_retry_timer.timeout.connect(self._retry_pending_uploads)
 
+    def _init_runtime(self) -> None:
+        """Wire the view, start timers and GPIO, then defer hardware and cloud start."""
         # Controls locked while the MCU is busy (jog/Go/Stop/Reset-Arduino) —
         # the same gating group the legacy `actuator_controls` list provided.
         self.actuator_controls = self.shell.setup.control_buttons()
