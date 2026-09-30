@@ -308,8 +308,7 @@ class TestStartProtocolGates:
         w.treatment_panel.set_running.assert_called_once_with(50, 720)
 
     def test_worker_failure_signal_wired_to_fault(self, controller, monkeypatch):
-        """protocols 2/3 emit reset_needed after a failed pulse phase; it
-        must be connected (it used to go nowhere)."""
+        """A failed run reports through operation_failed and finished(False)."""
         pc, w = controller
         worker_cls = MagicMock(return_value=make_worker_double())
         monkeypatch.setattr(protocols_module, "Protocols", worker_cls)
@@ -318,7 +317,6 @@ class TestStartProtocolGates:
         failure = worker.signals.operation_failed.connect.call_args.args[0]
         finished = worker.signals.finished.connect.call_args.args[0]
         assert failure.func == pc._on_operation_failed
-        worker.signals.reset_needed.connect.assert_not_called()
         assert finished.func == pc.protocol_completed
         assert failure.keywords["session"] is pc._session
         assert finished.keywords["session"] is pc._session
@@ -680,6 +678,9 @@ class TestCompletionOutcomes:
         w._show_timed_error.assert_not_called()
         w._show_safety_alert.assert_not_called()
         assert not w.initial_setup_complete
+        # Recovery is the operator's Reset; nothing moves on its own.
+        w.shell.setup.set_reset_enabled.assert_called_once_with(True)
+        w.reset_arduino.assert_not_called()
 
     @pytest.mark.parametrize("success", [False, True])
     def test_user_stop_stays_gated_until_reset_without_fault_alert(self, controller, success):

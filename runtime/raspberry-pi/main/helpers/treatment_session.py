@@ -27,7 +27,6 @@ class TreatmentSession:
     actual_duration_s: Optional[int] = None
     finalized: bool = False
     completion_handled: bool = False
-    reset_requested: bool = False
     record: Optional[Dict[str, Any]] = None
 
     def pause(self) -> None:

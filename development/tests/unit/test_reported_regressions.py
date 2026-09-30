@@ -293,12 +293,11 @@ def test_start_captures_patient_and_invalidates_pending_lookup(
     window.shell.treatment.set_patient.assert_not_called()
 
 
-def test_worker_failure_cannot_automatically_reset_physical_stop() -> None:
+def test_pressure_release_cannot_automatically_reset_physical_stop() -> None:
     window = MagicMock()
     window._physical_stop_active = True
     controller = ProtocolController(window)
 
-    controller._reset_after_failure()
     controller._reset_after_release(0)
 
     window.reset_arduino.assert_not_called()

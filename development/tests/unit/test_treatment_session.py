@@ -150,7 +150,6 @@ def test_finalized_fault_does_not_automatically_release_or_home(monkeypatch, qtb
 def test_failed_worker_requires_explicit_recovery(monkeypatch, qtbot):
     window, controller, worker = dispatch(monkeypatch)
     worker.signals.finished.connect.call_args.args[0](False)
-    worker.signals.reset_needed.connect.assert_not_called()
     window.reset_arduino.assert_not_called()
     assert window.protocol_state == "fault"
     assert window.cloud_client.post_treatment_async.call_count == 1

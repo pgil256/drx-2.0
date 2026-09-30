@@ -39,7 +39,6 @@ class WorkerSignals(QObject):
     progress = QtCore.pyqtSignal(str)
     pressure_emit = QtCore.pyqtSignal(float)
     status_emit = QtCore.pyqtSignal(int, int, int, float)
-    reset_needed = QtCore.pyqtSignal()
 
 class Protocols(QtCore.QRunnable):
     """Main protocol handler for KneeSpa treatment sequences."""
@@ -597,13 +596,13 @@ class Protocols(QtCore.QRunnable):
     # Shared protocol phases
     #
     # protocol_1..4 used to be four ~90%-duplicated copies of the same
-    # sequence; fixes did not propagate between them (the reset_needed
-    # safety emit existed only in 2/3, the post-centering settle only in
-    # 3/4, and a too-short duration exited without emitting finished,
-    # leaving the UI stuck on "Stop").
+    # sequence; fixes did not propagate between them (the post-centering
+    # settle existed only in 3/4, and a too-short duration exited without
+    # emitting finished, leaving the UI stuck on "Stop"). A failure ends in
+    # the fault state; only the operator's Reset moves the actuators again.
     # ------------------------------------------------------------------
 
-    def _fail(self, reason: str, reset_needed: bool = False) -> bool:
+    def _fail(self, reason: str) -> bool:
         """Defer the terminal signal until all worker cleanup has finished."""
         self._failure_reason = self._failure_reason or reason
         self.logger.error("Protocol %s failed: %s", self.protocol, self._failure_reason)
@@ -658,13 +657,10 @@ class Protocols(QtCore.QRunnable):
 
                 ok, pulse_active = self._service_live_motion_updates(pulse_active)
                 if not ok:
-                    return self._fail(
-                        "live treatment setting could not be applied",
-                        reset_needed=True,
-                    )
+                    return self._fail("live treatment setting could not be applied")
                 ok, pulse_active = self._sync_live_pulse(pulse_active)
                 if not ok:
-                    return self._fail("pulse update failed", reset_needed=True)
+                    return self._fail("pulse update failed")
 
                 if time.time() - last_keepalive_time >= 30:
                     if not self._send_command("T"):
@@ -788,14 +784,11 @@ class Protocols(QtCore.QRunnable):
 
                 ok, pulse_active = self._service_live_motion_updates(pulse_active)
                 if not ok:
-                    self._fail(
-                        "live treatment setting could not be applied",
-                        reset_needed=True,
-                    )
+                    self._fail("live treatment setting could not be applied")
                     return
                 ok, pulse_active = self._sync_live_pulse(pulse_active)
                 if not ok:
-                    self._fail("pulse update failed", reset_needed=True)
+                    self._fail("pulse update failed")
                     return
 
                 current_time = time.time()
@@ -828,7 +821,7 @@ class Protocols(QtCore.QRunnable):
 
                 ok, pulse_active = self._sync_live_pulse(pulse_active)
                 if not ok:
-                    self._fail("could not restart pulse", reset_needed=True)
+                    self._fail("could not restart pulse")
                     return
 
                 if current_time - last_keepalive_time >= 30:

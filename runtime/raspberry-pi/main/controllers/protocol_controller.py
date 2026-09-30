@@ -673,24 +673,6 @@ class ProtocolController:
             window.protocol_timer.stop()
             window.protocol_start_time = None
 
-    def _reset_after_failure(self, session: Optional[TreatmentSession] = None) -> None:
-        """Do not let a queued worker failure reset a physical emergency stop."""
-        if getattr(self.window, "_no_automatic_recovery", False) is True:
-            return
-        if session is not None:
-            if session is not self._session or session.reset_requested:
-                return
-            # Workers emit finished(False) BEFORE reset_needed. Completing the
-            # record must not swallow that recovery request for the same run.
-            if session.finalized and session.outcome != "fault":
-                return
-            session.reset_requested = True
-        self.latch_session_outcome("fault")
-        self.finalize_session()
-        if getattr(self.window, "_physical_stop_active", False) is not True:
-            self.window.reset_arduino()
-
-
     def emergency_stop_clicked(self, event, outcome: str = "fault"):
         """Handle emergency stop button press."""
         window = self.window

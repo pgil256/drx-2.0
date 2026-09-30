@@ -238,7 +238,6 @@ def window_run(themed_app: QApplication, tmp_path: Path,
         assert not window.protocol_timer.isActive()
         assert worker.signals.receivers(worker.signals.finished) == 1
         assert worker.signals.receivers(worker.signals.progress) == 1
-        assert worker.signals.receivers(worker.signals.reset_needed) == 0
         worker.signals.prepared.emit(time.time(), time.monotonic())
 
     pool.start.side_effect = dispatch
