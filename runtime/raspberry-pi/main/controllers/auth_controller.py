@@ -79,26 +79,10 @@ class AuthController:
             self.LOCKOUT_MAX_SECONDS,
         )
 
-    # -- PIN entry ----------------------------------------------------
-
-    def append_digit(self, value: str) -> None:
-        """Append a digit to the PIN buffer."""
-        self.window.login_pin += value
-
-    def backspace_digit(self) -> None:
-        """Remove the last entered PIN digit."""
-        window = self.window
-        window.login_pin = window.login_pin[:-1]
-
-    def clear_pin(self) -> None:
-        """Clear the PIN buffer."""
-        window = self.window
-        window.login_pin = ""
-
     # -- login --------------------------------------------------------
 
-    def handle_login(self):
-        """Validate the entered PIN with persistent lockout protection."""
+    def handle_login(self, pin: str):
+        """Validate a submitted PIN with persistent lockout protection."""
         window = self.window
         print("Handling login")
 
@@ -113,12 +97,11 @@ class AuthController:
             window._show_timed_error(
                 f"Too many failed attempts. Try again in {wait_s} seconds."
             )
-            self.clear_pin()
             return
 
         matched_user = None
         for stored_hash, user in window.users.items():
-            if SecureAuthHelper.verify_pin(window.login_pin, stored_hash):
+            if SecureAuthHelper.verify_pin(pin, stored_hash):
                 matched_user = user
                 break
 
@@ -131,9 +114,7 @@ class AuthController:
             self.lockout_count = 0
             self._save_state()
             window.current_user = matched_user
-            window.login_pin = ""
             window.update_ui_after_login()
-            self.clear_pin()
         else:
             print("Login failed: Invalid PIN")
             self.failed_logins += 1
@@ -157,4 +138,3 @@ class AuthController:
             else:
                 window._show_timed_error("Invalid PIN. Please try again.")
             self._save_state()
-            self.clear_pin()

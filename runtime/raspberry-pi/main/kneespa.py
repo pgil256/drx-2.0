@@ -298,8 +298,6 @@ class KneeSpa(QMainWindow):
         # Protocol lifecycle state: idle / starting / running / stopping / fault
         self.protocol_state = "idle"
 
-        self.login_pin = ""
-
         # Initialize the CSV helper
         self.csv = CSVHelper()
         try:
@@ -974,8 +972,7 @@ class KneeSpa(QMainWindow):
         if self.protocol_running:
             return
         self.machine_sign_in.clear()
-        self.login_pin = pin
-        self.auth.handle_login()
+        self.auth.handle_login(pin)
         if self.current_user is None:
             # Specifics (lockout countdown, etc.) arrive via the timed error
             # box; the modal shows the inline generic failure.

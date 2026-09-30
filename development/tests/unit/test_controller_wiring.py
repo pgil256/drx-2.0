@@ -91,7 +91,6 @@ class TestLogin:
             current_user=None,
             protocol_running=False,
             machine_sign_in=SimpleNamespace(clear=MagicMock()),
-            login_pin="",
             users={SecureAuthHelper.hash_pin_secure("7531"): user},
             _show_timed_error=MagicMock(),
             _show_patient_modal=MagicMock(),
@@ -113,7 +112,6 @@ class TestLogin:
         for digit in ("0000" if outcome == "invalid" else "7531"):
             buttons[digit].click()
 
-        assert stub.login_pin == ""
         if outcome == "success":
             assert stub.current_user == user
             assert shell.login_modal.isHidden()
@@ -129,13 +127,12 @@ class TestLogin:
             shell.nav_rail.navigate.emit("setup")
             assert shell.stack.currentIndex() == PAGES.index("home")
 
-    def test_login_attempt_seeds_pin_and_delegates(self):
-        """The modal submits the whole PIN; the window buffers it and hands
-        off to AuthController (salted verify + lockout)."""
+    def test_login_attempt_delegates_pin(self):
+        """The modal submits the whole PIN; the window hands it to
+        AuthController (salted verify + lockout)."""
         stub = make_stub()
         KneeSpa._on_login_attempt(stub, "4242")
-        assert stub.login_pin == "4242"
-        stub.auth.handle_login.assert_called_once()
+        stub.auth.handle_login.assert_called_once_with("4242")
 
     def test_failed_login_shows_modal_error(self):
         """If AuthController did not produce a user, the modal shows the

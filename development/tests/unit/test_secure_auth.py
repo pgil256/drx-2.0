@@ -1,6 +1,4 @@
 # development/tests/unit/test_secure_auth.py
-from pathlib import Path
-
 import pytest
 
 from helpers.secure_auth import SecureAuthHelper
@@ -56,7 +54,6 @@ class StubWindow:
 
     def __init__(self, users):
         self.users = users
-        self.login_pin = ""
         self.current_user = None
         self.errors = []
 
@@ -78,56 +75,28 @@ class TestLoginLockout:
 
     def test_successful_login(self, tmp_path):
         auth, w = self._make(tmp_path)
-        w.login_pin = "7531"
-        auth.handle_login()
+        auth.handle_login("7531")
         assert w.current_user is not None
-        assert w.login_pin == ""
 
     def test_lockout_after_five_failures(self, tmp_path):
         auth, w = self._make(tmp_path)
         for _ in range(5):
-            w.login_pin = "0000"
-            auth.handle_login()
-            assert w.login_pin == ""
+            auth.handle_login("0000")
         assert auth.lockout_until > 0
         assert any("locked" in e.lower() for e in w.errors)
 
         # Even the correct PIN is refused during the lockout window
-        w.login_pin = "7531"
-        auth.handle_login()
+        auth.handle_login("7531")
         assert w.current_user is None
-        assert w.login_pin == ""
 
     def test_success_resets_counter(self, tmp_path):
         auth, w = self._make(tmp_path)
         for _ in range(3):
-            w.login_pin = "0000"
-            auth.handle_login()
-        w.login_pin = "7531"
-        auth.handle_login()
+            auth.handle_login("0000")
+        auth.handle_login("7531")
         assert w.current_user is not None
         assert auth.failed_logins == 0
 
-    def test_backspace_removes_last_digit(self, tmp_path):
-        auth, w = self._make(tmp_path)
-        w.login_pin = "753"
-        auth.backspace_digit()
-        assert w.login_pin == "75"
-
-    def test_backspace_on_empty_pin_is_safe(self, tmp_path):
-        auth, w = self._make(tmp_path)
-        w.login_pin = ""
-        auth.backspace_digit()
-        assert w.login_pin == ""
-
-    def test_append_and_clear_pin_buffer(self, tmp_path: Path) -> None:
-        """Legacy PIN methods retain buffer semantics without fake widgets."""
-        auth, w = self._make(tmp_path)
-        auth.append_digit("7")
-        auth.append_digit("0")
-        assert w.login_pin == "70"
-        auth.clear_pin()
-        assert w.login_pin == ""
 
 
 @pytest.mark.unit
@@ -146,8 +115,7 @@ class TestLockoutPersistence:
 
     def _trip_lockout(self, auth, window):
         for _ in range(AuthController.LOCKOUT_THRESHOLD):
-            window.login_pin = "0000"
-            auth.handle_login()
+            auth.handle_login("0000")
 
     def test_lockout_survives_restart(self, tmp_path):
         auth, w = self._make(tmp_path)
@@ -157,22 +125,19 @@ class TestLockoutPersistence:
         # New controller instance = process restart; same state file.
         auth2, w2 = self._make(tmp_path)
         assert auth2.lockout_until == pytest.approx(auth.lockout_until)
-        w2.login_pin = "7531"
-        auth2.handle_login()
+        auth2.handle_login("7531")
         assert w2.current_user is None  # still locked
 
     def test_failed_count_survives_restart(self, tmp_path):
         auth, w = self._make(tmp_path)
         for _ in range(3):
-            w.login_pin = "0000"
-            auth.handle_login()
+            auth.handle_login("0000")
 
         auth2, w2 = self._make(tmp_path)
         assert auth2.failed_logins == 3
         # Two more failures after "reboot" trip the threshold of five.
         for _ in range(2):
-            w2.login_pin = "0000"
-            auth2.handle_login()
+            auth2.handle_login("0000")
         assert auth2.lockout_until > 0
 
     def test_exponential_backoff_doubles_and_caps(self, tmp_path):
@@ -201,8 +166,7 @@ class TestLockoutPersistence:
     def test_success_resets_backoff(self, tmp_path):
         auth, w = self._make(tmp_path)
         auth.lockout_count = 3
-        w.login_pin = "7531"
-        auth.handle_login()
+        auth.handle_login("7531")
         assert auth.lockout_count == 0
         # And the reset is persisted.
         auth2, _ = self._make(tmp_path)
@@ -213,8 +177,7 @@ class TestLockoutPersistence:
         auth, w = self._make(tmp_path)
         assert auth.failed_logins == 0
         assert auth.lockout_until == 0.0
-        w.login_pin = "7531"
-        auth.handle_login()
+        auth.handle_login("7531")
         assert w.current_user is not None
 
     def test_pin_never_logged(self, tmp_path, caplog):
@@ -223,8 +186,7 @@ class TestLockoutPersistence:
 
         auth, w = self._make(tmp_path)
         with caplog.at_level(_logging.DEBUG):
-            w.login_pin = "13372"
-            auth.handle_login()
+            auth.handle_login("13372")
             self._trip_lockout(auth, w)
         for record in caplog.records:
             assert "13372" not in record.getMessage()
