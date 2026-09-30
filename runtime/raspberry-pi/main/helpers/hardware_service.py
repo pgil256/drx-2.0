@@ -222,11 +222,7 @@ class HardwareServiceDraft:
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
             backup = f"{config.configFile}.{stamp}.bak"
             shutil.copy2(config.configFile, backup)
-        config._atomic_write(candidate)
-        config.config = candidate
-        for attribute, value in changed.items():
-            setattr(config, attribute, value)
-        config._validate_calibration()
+        config.commit(candidate, changed)
         self.original_marks = copy.deepcopy(self.marks)
         self.original_factors = dict(self.factors)
         self.original_scale = self.scale

@@ -327,11 +327,25 @@ class Configuration:
         candidate = copy.deepcopy(self.config)
         self._populate_config(candidate, defaults)
         self._ensure_config_sections(candidate)
+        self.commit(candidate, {
+            **{f"default_{key}": value for key, value in defaults.items()},
+            "protocol_defaults_marked": True,
+        }, revalidate=False)
+
+    def commit(self, candidate: configparser.ConfigParser,
+               attrs: Mapping[str, object], revalidate: bool = True) -> None:
+        """Persist a candidate parser, then publish it and the matching values.
+
+        Live state changes only after the file was written (B1/F7): a write
+        error propagates with the previous parser and attributes untouched.
+        ``revalidate`` recomputes calibration confidence from the new values.
+        """
         self._atomic_write(candidate)
         self.config = candidate
-        for key, value in defaults.items():
-            setattr(self, f"default_{key}", value)
-        self.protocol_defaults_marked = True
+        for name, value in attrs.items():
+            setattr(self, name, value)
+        if revalidate:
+            self._validate_calibration()
 
     def ensure_device_id(self):
         """Return the persisted per-device id, generating + saving one if absent."""
