@@ -843,7 +843,6 @@ def test_unapproved_cloud_patient_stays_unlinked_after_qr_handoff(patient_flow):
 
 def test_logout_discards_staff_session_and_late_patient_result(patient_flow):
     flow = patient_flow
-    old = flow.controller.staff
     flow.editor._save.click()
     flow.run.window._on_logout()
     flow.jobs.pop(0)()

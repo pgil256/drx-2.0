@@ -326,8 +326,6 @@ class TestLoadCsvMalformed:
             tmp_path, ["hash_admin,Administrator,admin@example.com,admin"]
         )
 
-        real_open = csv_module.open if hasattr(csv_module, "open") else open
-
         def boom(*args, **kwargs):
             raise OSError("disk gone")
 
