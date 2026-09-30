@@ -80,7 +80,6 @@ class HardwareServiceDialog(QDialog):
         self._anchor_labels: Dict[str, QLabel] = {}
         self._notes: Dict[str, QPlainTextEdit] = {}
         self._result_labels: Dict[str, QLabel] = {}
-        self._recorded: Dict[str, set] = {axis: set() for axis in _AXES}
         self.setWindowTitle("Hardware Tests" if mode == "tests" else "Calibration")
         self.setWindowModality(Qt.ApplicationModal)
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
@@ -270,7 +269,6 @@ class HardwareServiceDialog(QDialog):
         layout.addStretch()
 
     def _build_axis(self, axis: str) -> None:
-        title = axis.title()
         unit = "inches" if axis == "axial" else "degrees"
         layout = self._page(
             f"{'Test' if self.mode == 'tests' else 'Calibrate'} the {axis} actuator",
@@ -660,7 +658,7 @@ class HardwareServiceDialog(QDialog):
             selection = table.item(table.currentRow(), 0) if table.currentRow() >= 0 else None
             selected_key = selection.text() if selection else None
             marks = self.draft.marks[axis]
-            recorded = getattr(self.draft, "recorded", self._recorded).get(axis, set())
+            recorded = self.draft.recorded.get(axis, set())
             table.setRowCount(len(marks))
             sorted_marks = sorted(marks.items(), key=lambda item: float(item[0]))
             for row, (key, count) in enumerate(sorted_marks):
@@ -753,10 +751,6 @@ class HardwareServiceDialog(QDialog):
         label = self.pressure_zero if kind == "zero" else self.pressure_loaded
         name = "Unloaded" if kind == "zero" else "Known-force"
         label.setText(f"{name} raw sample: {raw}")
-
-    def set_recorded(self, axis: str, key: str) -> None:
-        self._recorded[axis].add(key)
-        self.refresh_draft()
 
     def reject(self) -> None:
         """Stop before even asking whether staged calibration should be discarded."""

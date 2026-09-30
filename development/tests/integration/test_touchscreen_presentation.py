@@ -87,6 +87,7 @@ def test_service_spin_buttons_have_independent_full_size_targets(
         marks={"axial": {"0": 0, "4": 4000}, "horizontal": {"-25": 0, "5": 3000},
                "lateral": {"-20": 500, "20": 2500}},
         factors={"axial": 6000, "horizontal": 6000, "lateral": 6000},
+        recorded={"axial": set(), "horizontal": set(), "lateral": set()},
         scale=10000, changes=lambda: [],
     )
     dialog = HardwareServiceDialog(draft)

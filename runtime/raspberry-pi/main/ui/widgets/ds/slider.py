@@ -25,7 +25,6 @@ from ._common import mono_font, resolve, sans_font
 
 _LABEL_CSS = f"color: {resolve('--ink-800')}; background: transparent;"
 
-_HANDLE_PX = 24
 _ARROW_PX = 56  # frequent stepper controls
 
 

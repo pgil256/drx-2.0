@@ -142,10 +142,6 @@ class AppShell(QWidget):
         """Register a callable returning True to block nonessential overlays."""
         self._overlay_guard = guard
 
-    def set_nav_guard(self, guard):
-        """Backward-compatible alias for the former overlay/navigation guard."""
-        self.set_overlay_guard(guard)
-
     def _navigation_confirmed(self, destination: str) -> bool:
         """Return whether a user-requested page change may continue."""
         if destination == self._current or self._nav_confirmation is None:

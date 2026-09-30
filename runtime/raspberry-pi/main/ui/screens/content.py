@@ -37,9 +37,6 @@ PHASES = {
     "stopped": ("Protocol Stopped", "danger"),
 }
 
-# Treatment stepper (bundle.jsx STEPS).
-STEPS = ["Ramp-Up", "Position", "Therapeutic Hold", "Smooth Reset"]
-
 # Help → "Preset Protocols" (bundle.jsx HELP_PROTOCOLS).
 HELP_PROTOCOLS = [
     {"n": 1, "title": "Axial Decompression",
