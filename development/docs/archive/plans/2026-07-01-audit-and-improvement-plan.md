@@ -121,7 +121,7 @@ Goal: the modern GUI running on the fail-safe backend. Do **not** blind-merge; g
 2. **Firmware:** take `motor.ino` `2026-06-11-FAILSAFE-2` wholesale (resolves C1, C2, C3, C5, H8). Preserve the GUI branch's `J<ms>` pulse-rate parse addition on top; keep it behind the existing `PULSE_RATE_FIRMWARE_SUPPORT` flag.
 3. **Controller:** rebuild the GUI's `AppShell` wiring against the **decomposed** controllers (`SafetyMonitor`/`AuthController`/`ProtocolController`/`ConnectionManager`) instead of the monolith — this resolves C4 (immediate `is_running=False`), the blocking-e-stop, and the god-object debt in one move. The Phase-3 screen-signal seam is a clean interface to graft onto.
 4. **`protocols.py`, `config.py`, `constants.py`, `csv.py`:** merge the GUI additions (duration control, `[ProtocolDefaults]`, `pos_c_to_angle`) into the `improvement-plan` versions; H2 (pulse truncation) disappears because that branch restructured the loop.
-5. **Bring the safety docs across:** `docs/audits/2026-06-11-full-application-audit.md`, the improvement plan, and the **Batch-1 hardware checklist** (needed for the eventual reflash).
+5. **Bring the safety docs across:** `development/docs/archive/audits/2026-06-11-full-application-audit.md`, the improvement plan, and the **Batch-1 hardware checklist** (needed for the eventual reflash).
 6. **Re-run the full suite + firmware native tests; expect the union of both branches' tests to pass.**
 
 ### Phase C — Net-new fixes not covered by reconciliation · ~2–3 days · effort S–M

@@ -1,8 +1,8 @@
 # ADR: Branch reconciliation — GUI rebuild replays onto `improvement-plan`
 
-- **Status:** Accepted (decision delegated by owner 2026-07-02: "do whichever makes sense"; recorded here per the 🛑 Phase-B checkpoint in `docs/plans/2026-07-01-implementation-prompt.md`)
+- **Status:** Accepted (decision delegated by owner 2026-07-02: "do whichever makes sense"; recorded here per the 🛑 Phase-B checkpoint in `development/docs/archive/plans/2026-07-01-implementation-prompt.md`)
 - **Date:** 2026-07-02
-- **Context docs:** `docs/plans/2026-07-01-audit-and-improvement-plan.md` (the audit), `docs/plans/2026-07-02-current-state-and-decisions.md` (state of affairs)
+- **Context docs:** `development/docs/archive/plans/2026-07-01-audit-and-improvement-plan.md` (the audit), `development/docs/archive/plans/2026-07-02-current-state-and-decisions.md` (state of affairs)
 
 ## Context
 

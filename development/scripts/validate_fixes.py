@@ -5,7 +5,7 @@ Requires development/requirements-test.txt. Run from any directory. The first fa
 child's exit status is returned unchanged. CI runs the limit check and full
 pytest suite separately, so it does not repeat this selection.
 
-See docs/plans/2026-09-14-f1-verification-record.md for the coverage inventory.
+See development/docs/archive/plans/2026-09-14-f1-verification-record.md for the coverage inventory.
 Firmware builds and deployment use runtime/arduino/motor/; this Python gate does not build
 firmware or assert the absence of historical firmware paths.
 """

@@ -3,7 +3,7 @@
 > **September 15, 2026 update:** Cloud integration is now implemented in this
 > checkout, including strict patient-plan validation, a separate patient PIN
 > modal, session capture and a durable upload queue. See
-> [Cloud integration](cloud-integration.md) for the current contract,
+> [Cloud integration](../cloud-integration.md) for the current contract,
 > provisioning and verification. The original implementation proposal below
 > describes an older baseline and is retained as historical context.
 

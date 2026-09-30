@@ -257,5 +257,6 @@ gated on still apply, but some items describe behavior later firmware changed:
 pressure-progress and move-timeout problems are now advisory notices, not stops.
 
 Known residual risk: there is no hardware E-stop that cuts motor power
-independently of the MCU; see the audit §8 for the recommended future
-hardware change.
+independently of the MCU; see §8 of the
+[June 2026 audit](development/docs/archive/audits/2026-06-11-full-application-audit.md)
+for the recommended future hardware change.

@@ -5,7 +5,7 @@
 
 > **Implementation status (2026-06-11, branch `improvement-plan`):**
 > - **Phase 0 — DONE.** Firmware tests buildable+green (57 tests), Linux CI workflow, FakeArduino firmware parity, both verified regressions fixed, docs reconciled.
-> - **Phase 1 — DONE (code + tests); awaiting the Batch-1 hardware checkout** ([checklist](2026-06-11-batch1-hardware-checklist.md)) before flashing. Firmware `2026-06-11-FAILSAFE-2`. Session booked Fri 2026-06-12 09:00-12:00 ET.
+> - **Phase 1 — DONE (code + tests); awaiting the Batch-1 hardware checkout** ([checklist](../../plans/2026-06-11-batch1-hardware-checklist.md)) before flashing. Firmware `2026-06-11-FAILSAFE-2`. Session booked Fri 2026-06-12 09:00-12:00 ET.
 > - **Phase 2 — DONE**, including §2.1 protocol v2 framing (seq-echoed acks + XOR checksums both directions); the Pi side ships disabled behind `KNEESPA_PROTOCOL_V2=1` until checklist item D5a passes on hardware.
 > - **Phase 3 — DONE.** Treatment banner + STOP, state machine, persistent alarms, confirmation dialog, UI-thread unblocking.
 > - **Phase 4 — DONE** except items gated on hardware measurements (A-command zero-offset convention, AFULLINCH, B-axis direction — checklist items E1–E3).

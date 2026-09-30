@@ -1,6 +1,6 @@
 # Critique of the incremental refactoring plan
 
-Reviewed: `docs/plans/2026-09-12-incremental-refactoring-plan.md`
+Reviewed: `development/docs/archive/plans/2026-09-12-incremental-refactoring-plan.md`
 Date: 2026-09-12
 Working tree at review: branch `docs/phase-e-on-device-plan` at `fd7ddc2`, 31 modified files (+1794 / -469), 10 untracked files
 

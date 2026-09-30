@@ -8,8 +8,8 @@
 
 *Hand this to a fresh Claude Code session in `C:\Users\patri\Documents\Projects\drx-2.0`. Phase B (branch reconciliation) is **complete and verified**; this session is the post-checkpoint fork. Read these first, in order:*
 
-1. `docs/plans/2026-07-01-implementation-prompt.md` — ground rules (all still in force) + Phase C/D/E/F definitions.
-2. `docs/plans/2026-07-02-phase-b-session2-prompt.md` — the STATUS header at the top is the Phase B completion record; the body below it is retained history.
+1. `development/docs/archive/plans/2026-07-01-implementation-prompt.md` — ground rules (all still in force) + Phase C/D/E/F definitions.
+2. `development/docs/archive/plans/2026-07-02-phase-b-session2-prompt.md` — the STATUS header at the top is the Phase B completion record; the body below it is retained history.
 3. `docs/adr/2026-07-02-branch-reconciliation.md` — the replay strategy that produced this branch.
 4. This file — exact state and the decision fork.
 
