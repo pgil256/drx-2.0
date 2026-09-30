@@ -19,8 +19,22 @@ def app(themed_app):
 
 
 @pytest.fixture
-def shell(app):
+def shell(app, monkeypatch, tmp_path):
+    import os
+
+    from config.constants import UI_PATHS
     from ui.app_shell import AppShell
+
+    # Stand-ins named like the shipped clips: a checkout without `git lfs pull`
+    # (CI, fresh worktrees) holds a pointer stub for the large video, which the
+    # library correctly skips, so the real folder's contents vary by checkout.
+    shipped = UI_PATHS["VIDEOS"]
+    clips = tmp_path / "videos"
+    clips.mkdir()
+    for name in os.listdir(shipped):
+        if name.lower().endswith(".mp4"):
+            (clips / name).write_bytes(b"\x00" * 2048)
+    monkeypatch.setitem(UI_PATHS, "VIDEOS", str(clips))
 
     s = AppShell()
     s.resize(1366, 768)
@@ -567,6 +581,18 @@ def test_video_modal_reports_missing_clips(app, monkeypatch, tmp_path):
     finally:
         modal.cleanup()
         modal.deleteLater()
+
+
+def test_video_discovery_skips_git_lfs_pointer_files(tmp_path, monkeypatch):
+    import ui.modals.vlc_engine as ve
+
+    (tmp_path / "a-real.mp4").write_bytes(b"\x00\x00\x00\x18ftypmp42" + b"\x00" * 2048)
+    (tmp_path / "b-pointer.mp4").write_bytes(
+        b"version https://git-lfs.github.com/spec/v1\n"
+        b"oid sha256:" + b"0" * 64 + b"\nsize 411041792\n"
+    )
+    monkeypatch.setitem(ve.UI_PATHS, "VIDEOS", str(tmp_path))
+    assert ve._VlcEngine._discover_playlist() == [str(tmp_path / "a-real.mp4")]
 
 
 def test_video_modal_skip_next_prev(shell):

@@ -99,6 +99,20 @@ def _discover_alsa_devices() -> List[str]:
     ))
 
 
+_LFS_POINTER_PREFIX = b"version https://git-lfs.github.com/spec/v1"
+
+
+def _is_lfs_pointer(path: str) -> bool:
+    """A checkout without `git lfs pull` leaves a ~130-byte text stub, not a video."""
+    try:
+        if os.path.getsize(path) > 1024:
+            return False
+        with open(path, "rb") as handle:
+            return handle.read(len(_LFS_POINTER_PREFIX)) == _LFS_POINTER_PREFIX
+    except OSError:
+        return False
+
+
 def _friendly_audio_device(device: str) -> str:
     lowered = device.lower()
     if "headphone" in lowered:
@@ -153,11 +167,15 @@ class _VlcEngine:
                 return []
             folder = configured if os.path.isdir(configured) else os.path.dirname(configured)
             if os.path.isdir(folder):
-                return [
+                clips = [
                     os.path.join(folder, f)
                     for f in sorted(os.listdir(folder), key=str.casefold)
                     if f.lower().endswith(".mp4") and os.path.isfile(os.path.join(folder, f))
                 ]
+                pointers = [path for path in clips if _is_lfs_pointer(path)]
+                for path in pointers:
+                    print(f"VideoModal: skipping Git LFS pointer (run git lfs pull): {path}")
+                return [path for path in clips if path not in pointers]
         except Exception:
             pass
         return []

@@ -37,7 +37,8 @@ class VideoVerification(GuiVerification):
         yield self.wait("video modal open", modal.isVisible)
         engine = modal._engine
         assert engine.available, "Install python-vlc and native VLC before verifying playback"
-        assert engine.count() == 9, "Expected three demo clips and six Blahnik videos"
+        assert engine.count() == 9, ("Expected three demo clips and six Blahnik videos; "
+                                     "run git lfs pull if the large clip is a pointer")
         assert isinstance(vlc.libvlc_get_version(), bytes), "Verification requires real libVLC"
         assert modal._pages.currentWidget() is modal._library_page
         assert modal._video_list.count() == engine.count()
