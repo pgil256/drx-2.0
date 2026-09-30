@@ -47,7 +47,6 @@ class Configuration:
         self.marks_valid = False
         self.scale_calibrated = False
         self.calibration_errors = []
-        self.calibration_warnings = []
 
         # Treatment Settings defaults persisted by Setup's "Mark As Default"
         # (Phase 3.5 §15.4). Fallbacks: 40 lbs / 10° / 10° + a 2/sec pulse.
@@ -77,17 +76,12 @@ class Configuration:
         print(f"CALIBRATION: {message}")
         self.calibration_errors.append(message)
 
-    def _flag_warning(self, message: str):
-        print(f"CALIBRATION (warning): {message}")
-        self.calibration_warnings.append(message)
-
     def get_config(self, config_path: Optional[str] = None):
 
         self.config = configparser.ConfigParser(allow_no_value=True)
         if config_path:
             self.configFile = config_path
         self.calibration_errors = []
-        self.calibration_warnings = []
         self.marks_valid = False
         self.scale_calibrated = False
         # Load configuration

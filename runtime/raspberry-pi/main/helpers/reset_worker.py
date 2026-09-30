@@ -32,7 +32,6 @@ class ResetWorker(QRunnable):
         self._cancelled = threading.Event()
         self._command_lock = threading.RLock()
         self.completed = threading.Event()
-        self.step_times = []
 
     def cancel(self) -> None:
         with self._command_lock:

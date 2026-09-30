@@ -6,12 +6,8 @@ from helpers.secure_auth import SecureAuthHelper
 try:
     from PyQt5.QtWidgets import QApplication, QMessageBox
 except ImportError:
-    QApplication = None
-
-    class QMessageBox:
-        @staticmethod
-        def critical(parent, title, message):
-            print(f"{title}: {message}")
+    # Headless import: _report_error only logs without a QApplication.
+    QApplication = QMessageBox = None
 
 
 class CSVHelper:
