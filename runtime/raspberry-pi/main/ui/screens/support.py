@@ -16,7 +16,7 @@ from PyQt5.QtWidgets import (
 )
 
 from ui.theme import GLYPH
-from ui.modals.text_keyboard import TextKeyboard
+from ui.modals.text_keyboard import open_text_keyboard
 from ui.widgets.ds import DSButton, DSCard
 from ui.widgets.ds._common import resolve, sans_font
 
@@ -227,28 +227,14 @@ class SupportScreen(HelpScreen):
         field = self._keyboard_targets.get(watched)
         if field is not None and not self._sending and event.type() == QEvent.MouseButtonRelease:
             if self._keyboard is None:
-                multiline = isinstance(field, QPlainTextEdit)
-                value = field.toPlainText() if multiline else field.text()
-                keyboard = TextKeyboard(
-                    field.accessibleName(), value, 4000 if multiline else field.maxLength(),
-                    multiline=multiline, parent=self,
-                )
-                self._keyboard = keyboard
-
-                def finish(result: int) -> None:
-                    if result == TextKeyboard.Accepted and not self._sending:
-                        if multiline:
-                            field.setPlainText(keyboard.value())
-                        else:
-                            field.setText(keyboard.value())
-                    self._keyboard = None
-                    keyboard.deleteLater()
-
-                keyboard.finished.connect(finish)
-                keyboard.open()
-                keyboard.editor.setFocus()
+                limit = 4000 if isinstance(field, QPlainTextEdit) else None
+                self._keyboard = open_text_keyboard(field, self, limit)
+                self._keyboard.finished.connect(self._keyboard_closed)
             return True
         return super().eventFilter(watched, event)
+
+    def _keyboard_closed(self) -> None:
+        self._keyboard = None
 
     def _select_issue(self, question: str) -> None:
         if not self._sending:
