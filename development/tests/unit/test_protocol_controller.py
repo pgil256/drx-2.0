@@ -355,7 +355,7 @@ class TestTreatmentWiring:
     def test_repeated_starts_preserve_only_active_pressure_receivers(
         self, controller: tuple, monkeypatch: pytest.MonkeyPatch, qtbot: QtBot
     ) -> None:
-        """Starts keep public worker signals and the live safety route intact."""
+        """Repeated starts keep exactly one live status route to the UI and safety."""
         pc, w = controller
         w.pressure_dialog = _RetiredDialog()
         w.arduino = _StatusSource()
@@ -369,12 +369,10 @@ class TestTreatmentWiring:
         qtbot.addWidget(w.treatment_panel)
         w.arduino.status_emit.connect(partial(KneeSpa.status_emit, w))
         workers = []
-        pressures = []
 
         def construct_worker(*args: object, **kwargs: object) -> MagicMock:
             worker = make_worker_double()
             worker.signals = protocols_module.WorkerSignals()
-            worker.signals.pressure_emit.connect(pressures.append)
             workers.append(worker)
             return worker
 
@@ -382,9 +380,7 @@ class TestTreatmentWiring:
         for pressure in (42.0, 43.0, 44.0):
             assert pc.start_protocol() is True
             worker = workers[-1]
-            assert worker.signals.receivers(worker.signals.pressure_emit) == 1
             assert w.arduino.receivers(w.arduino.status_emit) == 1
-            worker.signals.pressure_emit.emit(pressure)
             w.arduino.status_emit.emit(500, 0, 150, pressure)
             assert w.last_measured_pressure == pressure
             w.shell.treatment.set_pressure.assert_called_with(pressure)
@@ -394,7 +390,6 @@ class TestTreatmentWiring:
             assert w.protocol_state == "idle"
             assert w.arduino.receivers(w.arduino.status_emit) == 1
 
-        assert pressures == [42.0, 43.0, 44.0]
         assert w.shell.treatment.set_pressure.call_count == 3
         # The same live route still runs SafetyMonitor's limit handling.
         w.arduino.status_emit.emit(500, 0, 150, 200.0)

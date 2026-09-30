@@ -122,7 +122,6 @@ def test_status_callback_never_queues_extra_pressure_corrections():
     hold loop owns the axial SMC (it stops pulsing first, then applies)."""
     worker = make_worker()
     worker.is_running = True
-    worker._live_phase = True
     worker.arduino.reset_mock()
     before = worker._pressure_revision
 

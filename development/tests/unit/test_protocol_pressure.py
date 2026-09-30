@@ -1,6 +1,5 @@
 """Pressure commands require typed, stopped-motor evidence with no blind resends."""
 import threading
-from unittest.mock import MagicMock
 import pytest
 from fixtures.protocols import make_protocol
 from config.constants import PRESSURE_BUILD_TIMEOUT_S
@@ -95,25 +94,13 @@ class TestStop:
         sent = [c[0][0] for c in p.arduino.send.call_args_list]
         assert sent == ["X", "P0", "HF0"]
 
-    def test_emits_stopped_signal(self):
-        """stop() emits the stopped(True) signal on success."""
-        p = make_protocol()
-        p.is_running = True
-        handler = MagicMock()
-        p.signals.stopped.connect(handler)
-        p.stop()
-        handler.assert_called_once_with(True)
-
     def test_handles_missing_arduino(self):
-        """With no Arduino, stop() still clears state and emits stopped(True)."""
+        """With no Arduino, stop() still clears state."""
         p = make_protocol()
         p.is_running = True
         p.arduino = None
-        handler = MagicMock()
-        p.signals.stopped.connect(handler)
         p.stop()
         assert p.is_running is False
-        handler.assert_called_once_with(True)
 
 
 @pytest.mark.unit
@@ -190,19 +177,3 @@ class TestUpdateStatus:
         assert isinstance(p.current_pos_c, int)
         assert p.current_pressure == 12.0
         assert p.current_pos_c == 999
-
-    def test_emits_pressure_signal(self):
-        """update_status emits pressure_emit with the reported pressure."""
-        p = make_protocol()
-        handler = MagicMock()
-        p.signals.pressure_emit.connect(handler)
-        p.update_status(pos_a=0, pos_b=0, pos_c=0, pressure=25.0)
-        handler.assert_called_once_with(25.0)
-
-    def test_emits_full_status_signal(self):
-        """update_status emits status_emit with all four feedback values."""
-        p = make_protocol()
-        handler = MagicMock()
-        p.signals.status_emit.connect(handler)
-        p.update_status(pos_a=5, pos_b=6, pos_c=7, pressure=8.0)
-        handler.assert_called_once_with(5, 6, 7, 8.0)

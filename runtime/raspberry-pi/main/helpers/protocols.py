@@ -35,10 +35,7 @@ class WorkerSignals(QObject):
     prepared = QtCore.pyqtSignal(float, float)
     baseline_changed = QtCore.pyqtSignal(bool)
     operation_failed = QtCore.pyqtSignal(str)
-    stopped = QtCore.pyqtSignal(bool)
     progress = QtCore.pyqtSignal(str)
-    pressure_emit = QtCore.pyqtSignal(float)
-    status_emit = QtCore.pyqtSignal(int, int, int, float)
 
 class Protocols(QtCore.QRunnable):
     """Main protocol handler for KneeSpa treatment sequences."""
@@ -101,9 +98,7 @@ class Protocols(QtCore.QRunnable):
         self._terminal_failure = threading.Event()
         self._current_pressure = 0.0
         self._current_pos_c = 0
-        self.target_pos_c = None
         self.angle_set = False
-        self._last_overpressure_correction = 0.0
         # Live Treatment-slider requests originate on the Qt UI thread and are
         # consumed by the protocol worker. Revisions coalesce rapid slider
         # movement and ensure a newer request cannot be cleared by an older
@@ -116,7 +111,6 @@ class Protocols(QtCore.QRunnable):
         self._pulse_revision = 0
         self._applied_pulse_revision = 0
         self._active_lateral_side = None
-        self._live_phase = False
         # Firmware pulsing believed active (a J was sent and no JS since).
         # GUI-thread paths (pause, pulse slider -> 0) consult this before
         # sending JS: on pre-FAILSAFE-6 firmware JS zeroes whichever SMC was
@@ -220,13 +214,6 @@ class Protocols(QtCore.QRunnable):
         # Store values with explicit type conversion
         self.current_pressure = float(pressure)
         self.current_pos_c = int(pos_c)
-
-        # Emit separate pressure signal for dialogs and UI updates
-        self.signals.pressure_emit.emit(float(pressure))
-        
-        # Also emit the full status update for other components
-        print(f"Protocol emitting status_emit with all values")
-        self.signals.status_emit.emit(int(pos_a), int(pos_b), int(pos_c), float(pressure))
 
     def check_duration(self) -> bool:
         """Check if protocol duration has expired.
@@ -582,7 +569,6 @@ class Protocols(QtCore.QRunnable):
             return False
         try:
             position, degrees = lateral_degrees_to_position(self.config.CMarks, degrees)
-            self.target_pos_c = position
             self.angle_set = self._perform(
                 f"K{position}", ("motion", "K", position, max(0, position - 100),
                                 min(4095, position + 100)), LATERAL_MOVE_TIMEOUT_S,
@@ -638,7 +624,6 @@ class Protocols(QtCore.QRunnable):
         if not self.is_running:
             return True
 
-        self._live_phase = True
         pulse_active = False
         pulse_stop_failed = False
         last_keepalive_time = time.time()
@@ -668,7 +653,6 @@ class Protocols(QtCore.QRunnable):
                     last_keepalive_time = time.time()
                 time.sleep(0.2)
         finally:
-            self._live_phase = False
             if pulse_active and self.arduino and not self._send_pulse_stop():
                 self.logger.error("Could not stop pulse while leaving hold phase")
                 pulse_stop_failed = True
@@ -760,7 +744,6 @@ class Protocols(QtCore.QRunnable):
         pulse_active = False
         pulse_stop_failed = False
         self._active_lateral_side = "left"
-        self._live_phase = True
 
         try:
             print(
@@ -831,7 +814,6 @@ class Protocols(QtCore.QRunnable):
                     last_keepalive_time = current_time
                 time.sleep(0.1)
         finally:
-            self._live_phase = False
             self._active_lateral_side = None
             if pulse_active and self.arduino and not self._send_pulse_stop():
                 self.logger.error("Could not stop pulse while leaving protocol 4")
@@ -924,12 +906,10 @@ class Protocols(QtCore.QRunnable):
         if self._firmware_stopped:
             # X aborts firmware's autonomous release, and P0 is rejected while
             # the physical button is held. Leave that release in control.
-            self.signals.stopped.emit(True)
             return
 
         if not self.arduino:
             print("Warning: No Arduino connection available for stop sequence")
-            self.signals.stopped.emit(True)
             return
 
         try:
@@ -948,8 +928,5 @@ class Protocols(QtCore.QRunnable):
             # active-motion status path even after HF mode is off
             self.arduino.send("HF0")
 
-            self.signals.stopped.emit(stop_sent and release_sent)
-
         except Exception as e:
             print(f"Error during protocol stop: {e}")
-            self.signals.stopped.emit(False)
