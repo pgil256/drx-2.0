@@ -266,11 +266,13 @@ class ProtocolController:
             window._show_timed_error(f"Could not complete treatment operation: {e}")
 
 
-    def start_protocol(self):
-        """Start protocol execution."""
+    def _preflight(self) -> bool:
+        """Refuse a start, with the reason shown, unless the device may treat now.
+
+        Only guard checks belong here; the treatment settings are read later,
+        in start_protocol.
+        """
         window = self.window
-        if not authorize(window, "treatment", self.start_protocol):
-            return False
         if getattr(window, "_patient_lookup_pending", False) is True:
             window._show_timed_error(
                 "Wait for patient lookup or choose treatment without a patient."
@@ -297,6 +299,15 @@ class ProtocolController:
             # Treating a patient on generated default geometry or a
             # default scale factor is never acceptable
             window._warn_uncalibrated()
+            return False
+        return True
+
+    def start_protocol(self):
+        """Start protocol execution."""
+        window = self.window
+        if not authorize(window, "treatment", self.start_protocol):
+            return False
+        if not self._preflight():
             return False
 
         try:
