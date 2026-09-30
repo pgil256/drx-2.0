@@ -27,12 +27,16 @@ def test_name_keyboard_appears_on_touch_and_cancel_preserves_name(themed_app, qt
     editor._name.setText("Original name")
     qtbot.mouseClick(editor._name, Qt.LeftButton)
     assert editor._keyboard.isVisible()
-    editor._keyboard.text.setText("Cancelled name")
+    keys = {key.text() for key in editor._keyboard.findChildren(QPushButton)}
+    assert {"Q", "'", "-"} <= keys and not keys & {"q", "@", "#"}
+    assert editor._keyboard.editor.text() == "Original name"
+    editor._keyboard.editor.setText("Cancelled name")
     editor._keyboard.reject()
     assert editor._name.text() == "Original name"
+    assert editor._keyboard is None
     qtbot.mouseClick(editor._name, Qt.LeftButton)
     keyboard = editor._keyboard
-    keyboard.text.clear()
+    keyboard.editor.clear()
     next(key for key in keyboard._letters if key.text() == "A").click()
     keyboard._shift()
     next(key for key in keyboard._letters if key.text() == "n").click()
