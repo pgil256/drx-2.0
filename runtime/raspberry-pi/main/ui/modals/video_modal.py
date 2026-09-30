@@ -21,8 +21,8 @@ Signals:
 
 from typing import Optional
 
-from PyQt5.QtCore import QEvent, QObject, QPointF, Qt, QSize, QTimer, pyqtSignal
-from PyQt5.QtGui import QColor, QIcon, QPainter, QPen, QPixmap
+from PyQt5.QtCore import QEvent, QObject, Qt, QSize, QTimer, pyqtSignal
+from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import (
     QComboBox,
     QFrame,
@@ -40,7 +40,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from ui.theme import GLYPH, pause_icon, play_icon
+from ui.theme import GLYPH, compress_icon, expand_icon, pause_icon, play_icon
 from ui.widgets.ds._common import image_path, mono_font, resolve, sans_font
 
 from ._overlay import Overlay
@@ -60,46 +60,6 @@ _TOUCH_CONTROL_SIZE = 48
 def _fmt(seconds):
     seconds = max(0, int(seconds))
     return f"{seconds // 60}:{seconds % 60:02d}"
-
-
-def _expand_icon(color="#ffffff", size=16):
-    """Four outward corner brackets — standard fullscreen icon."""
-    pm = QPixmap(size, size)
-    pm.fill(Qt.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    pen = QPen(QColor(color))
-    pen.setWidthF(1.6)
-    pen.setCapStyle(Qt.RoundCap)
-    p.setPen(pen)
-    o = size * 0.12
-    a = size * 0.32
-    e = size - o
-    for cx, cy, sx, sy in [(o, o, 1, 1), (e, o, -1, 1), (o, e, 1, -1), (e, e, -1, -1)]:
-        p.drawLine(QPointF(cx, cy), QPointF(cx + sx * a, cy))
-        p.drawLine(QPointF(cx, cy), QPointF(cx, cy + sy * a))
-    p.end()
-    return QIcon(pm)
-
-
-def _compress_icon(color="#ffffff", size=16):
-    """Four inward corner brackets — exit fullscreen icon."""
-    pm = QPixmap(size, size)
-    pm.fill(Qt.transparent)
-    p = QPainter(pm)
-    p.setRenderHint(QPainter.Antialiasing)
-    pen = QPen(QColor(color))
-    pen.setWidthF(1.6)
-    pen.setCapStyle(Qt.RoundCap)
-    p.setPen(pen)
-    c = size * 0.40
-    a = size * 0.28
-    ic = size - c
-    for cx, cy, sx, sy in [(c, c, -1, -1), (ic, c, 1, -1), (c, ic, -1, 1), (ic, ic, 1, 1)]:
-        p.drawLine(QPointF(cx, cy), QPointF(cx + sx * a, cy))
-        p.drawLine(QPointF(cx, cy), QPointF(cx, cy + sy * a))
-    p.end()
-    return QIcon(pm)
 
 
 class VideoModal(Overlay):
@@ -315,7 +275,7 @@ class VideoModal(Overlay):
         self._fs_btn.setFixedSize(48, 48)
         self._fs_btn.setAccessibleName("Toggle video fullscreen")
         self._fs_btn.setIconSize(QSize(16, 16))
-        self._fs_btn.setIcon(_expand_icon("#ffffff", 16))
+        self._fs_btn.setIcon(expand_icon("#ffffff", 16))
         self._fs_btn.setToolTip("Full screen")
         self._fs_btn.setStyleSheet(
             "QPushButton { border: none; border-radius: 16px; padding: 0; color: #ffffff;"
@@ -847,7 +807,7 @@ class VideoModal(Overlay):
             self._transport_bar.setStyleSheet(
                 "#VideoTransport { background: #ffffff; border-radius: 0; }"
             )
-            self._fs_btn.setIcon(_compress_icon("#ffffff", 16))
+            self._fs_btn.setIcon(compress_icon("#ffffff", 16))
             self._fs_btn.setToolTip("Exit full screen")
         else:
             self._card.setFixedWidth(_VIDEO_CARD_WIDTH)
@@ -865,7 +825,7 @@ class VideoModal(Overlay):
                 f" border-bottom-left-radius: {r};"
                 f" border-bottom-right-radius: {r}; }}"
             )
-            self._fs_btn.setIcon(_expand_icon("#ffffff", 16))
+            self._fs_btn.setIcon(expand_icon("#ffffff", 16))
             self._fs_btn.setToolTip("Full screen")
 
     def _apply_fullscreen_size(self):
