@@ -172,7 +172,13 @@ class PatientController(QObject):
             except RuntimeError:
                 pass  # The window closed while the bounded request was finishing.
 
-        threading.Thread(target=execute, daemon=True).start()
+        try:
+            threading.Thread(target=execute, daemon=True).start()
+        except RuntimeError as exc:
+            # Without a worker nothing would ever clear the pending state.
+            self.window.logger.error("Could not start patient cloud operation %s: %s", action, exc)
+            self.completed.emit(request_id, action, StaffError(
+                "unavailable", "Cloud request failed. Your form has been kept."))
 
     def _completed(self, request_id: int, action: str, result: object) -> None:
         if (request_id != self._request_id or not self._allowed()

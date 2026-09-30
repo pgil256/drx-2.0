@@ -586,7 +586,12 @@ class KneeSpa(QMainWindow):
             result = self.cloud_client.lookup_pin(pin)
             bridge.lookup_done.emit(request_id, result)
 
-        threading.Thread(target=_lookup, daemon=True).start()
+        try:
+            threading.Thread(target=_lookup, daemon=True).start()
+        except RuntimeError as exc:
+            # Without a worker nothing would ever clear the pending state.
+            self.logger.error("Could not start patient lookup: %s", exc)
+            self._on_cloud_lookup_done(request_id, {"error": "unavailable"})
 
     def _on_cloud_lookup_done(self, request_id: int, result: object) -> None:
         if getattr(self, "_closing", False) or request_id != self._patient_lookup_id:

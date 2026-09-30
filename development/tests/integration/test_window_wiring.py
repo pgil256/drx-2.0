@@ -88,6 +88,57 @@ def test_modal_patient_pin_and_cancel_invalidate_late_result(
     assert run.view._start_btn.isEnabled()
 
 
+class _UnstartableThread:
+    """A thread the OS refuses to start (Thread.start raises RuntimeError)."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        pass
+
+    def start(self) -> None:
+        raise RuntimeError("can't start new thread")
+
+
+def test_patient_lookup_that_cannot_start_is_not_left_pending(
+    window_run: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = window_run
+    run.cloud.enabled = True
+    run.window._show_patient_modal()
+    with monkeypatch.context() as patch:
+        patch.setattr(threading, "Thread", _UnstartableThread)
+        for digit in "0123":
+            run.window.shell.patient_modal._keypad._press(digit)
+    assert not run.window._patient_lookup_pending
+    assert run.window.cloud_patient is None
+    assert run.view._start_btn.isEnabled()
+    run.cloud.lookup_pin.assert_not_called()
+
+
+def test_patient_cloud_operation_that_cannot_start_is_not_left_pending(
+    window_run: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = window_run.window.patients
+    with monkeypatch.context() as patch:
+        patch.setattr(threading, "Thread", _UnstartableThread)
+        controller._login("test@example.com", "not-a-real-password")
+    assert not controller._pending
+    assert not window_run.window._patient_lookup_pending
+
+
+def test_machine_sign_in_that_cannot_start_is_not_left_busy(
+    window_run: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = window_run.window
+    window.current_user = None
+    controller = window.machine_sign_in
+    controller.timer.stop()
+    with monkeypatch.context() as patch:
+        patch.setattr(threading, "Thread", _UnstartableThread)
+        controller.begin()
+    assert not controller._busy
+    assert not controller._request
+
+
 def test_modal_patient_success_applies_whole_plan(window_run: SimpleNamespace) -> None:
     run = window_run
     run.window._show_patient_modal()

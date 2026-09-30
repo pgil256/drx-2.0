@@ -89,7 +89,12 @@ class MachineSignInController(QObject):
             except RuntimeError:
                 client.logout(client.clear())
 
-        threading.Thread(target=execute, daemon=True, name="machine-sign-in").start()
+        try:
+            threading.Thread(target=execute, daemon=True, name="machine-sign-in").start()
+        except RuntimeError as exc:
+            # Without a worker nothing would ever clear _busy.
+            self.logger.warning("Could not start machine sign-in %s: %s", action, exc)
+            self.completed.emit(generation, action, (client, {"error": "unavailable"}))
 
     def clear(self) -> None:
         """Retire callbacks before discarding credentials on logout or user change."""
