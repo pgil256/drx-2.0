@@ -415,6 +415,20 @@ def test_diagnostic_snapshot_does_not_automatically_pass_operator_check(service)
     assert "communication" not in c.results
 
 
+def test_failed_report_write_leaves_no_partial_file(service, tmp_path, monkeypatch):
+    c, _, _, feed = service
+    prepare(c, feed)
+    from helpers import device_records
+
+    def fail(*args):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(device_records.os, "replace", fail)
+    c.export_report()
+    assert c.report_path is None
+    assert not list((tmp_path / "service-reports").glob("*"))
+
+
 def test_report_keeps_reference_and_proposed_unsaved_settings(service):
     c, _, _, feed = service
     prepare(c, feed)

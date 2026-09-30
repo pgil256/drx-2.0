@@ -1,8 +1,6 @@
 """Supervise an authenticated, operator-guided hardware service session."""
 
-import json
 import math
-import os
 import time
 from collections import deque
 from datetime import datetime, timezone
@@ -15,6 +13,7 @@ from PyQt5.QtWidgets import QDialog
 
 from config.paths import DEVICE_STATE_DIR
 from helpers.calibration import distance_factor
+from helpers.device_records import write_json
 from helpers.firmware_protocol import HX711_PROTOCOL_DRIVER
 from helpers.hardware_service import HardwareServiceDraft, load_cell_factor
 from helpers.logging import setup_logger
@@ -678,16 +677,9 @@ class HardwareServiceController:
                      "Loaded stop/release, pressure control/pulse, watchdog, power-loss and limit "
                      "switch behavior require the documented physical bench procedure.",
         }
-        directory = Path(DEVICE_STATE_DIR) / "service-reports"
+        path = Path(DEVICE_STATE_DIR) / "service-reports" / f"hardware-{self.session_id}.json"
         try:
-            directory.mkdir(parents=True, exist_ok=True)
-            path = directory / f"hardware-{self.session_id}.json"
-            temporary = path.with_suffix(".tmp")
-            with temporary.open("w", encoding="utf-8") as output:
-                json.dump(report, output, indent=2, allow_nan=False)
-                output.flush()
-                os.fsync(output.fileno())
-            os.replace(temporary, path)
+            write_json(path, report)
             self.report_path = path
             if not self.saved:
                 self.dialog.show_message(f"Service report saved: {path}")

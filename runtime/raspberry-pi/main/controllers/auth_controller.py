@@ -1,8 +1,8 @@
 # controllers/auth_controller.py
 """Login/PIN handling extracted from the KneeSpa window.
 
-Owns the lockout state (it is security state, not UI state) and the
-PIN-entry buffer; the window keeps thin delegating slots.
+Owns the lockout state (it is security state, not UI state); the login
+modal submits the whole PIN to handle_login.
 
 Lockout state is persisted to disk (DATA_PATHS["AUTH_STATE"]) so that
 power-cycling the kiosk does not reset the brute-force window, and the
@@ -10,10 +10,11 @@ lockout duration doubles on each consecutive lockout. Failed attempts
 are logged for audit; the PIN itself is never logged.
 """
 import json
-import os
 import time
+from pathlib import Path
 
 from config.constants import DATA_PATHS
+from helpers.device_records import write_json
 from helpers.logging import setup_logger
 from helpers.secure_auth import SecureAuthHelper
 
@@ -59,15 +60,8 @@ class AuthController:
             "lockout_count": self.lockout_count,
         }
         try:
-            directory = os.path.dirname(os.path.abspath(self.state_path)) or "."
-            os.makedirs(directory, exist_ok=True)
-            tmp_path = self.state_path + ".tmp"
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(state, f)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp_path, self.state_path)
-        except OSError as e:
+            write_json(Path(self.state_path), state)
+        except (OSError, ValueError) as e:
             # Never let bookkeeping failure block the login path; the
             # in-memory lockout still protects the running session.
             self.logger.error("Could not persist auth state: %s", e)
