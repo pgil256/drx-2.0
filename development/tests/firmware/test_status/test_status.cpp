@@ -30,7 +30,6 @@ void setUp(void) {
     statusAcknowledged = true;
     highFrequencyStatus = false;
     jerking = false;
-    hostV2 = false;
     currentCmdSeq = -1;
     pressureFault = false; pressureCalibrated = false;
     pressureGuardActive = false; pressureSampleValid = false;
@@ -69,15 +68,15 @@ static void assert_checksummed_report(const std::string &out) {
 void test_legacy_status_is_checksummed_without_v2_opt_in(void) {
     Wire.position_14 = 1940;
     sendStatus();
-    TEST_ASSERT_FALSE(hostV2);
     assert_checksummed_report(Serial1.getOutput());
     TEST_ASSERT_TRUE(Serial1.outputContains("|1940|"));
 }
 
 void test_v2_status_keeps_same_checksum_format(void) {
-    hostV2 = true;
+    currentCmdSeq = 7;  // status sent while a framed command is in flight
     sendStatus();
     assert_checksummed_report(Serial1.getOutput());
+    currentCmdSeq = -1;
 }
 
 void test_l6_uses_checksummed_status_format(void) {

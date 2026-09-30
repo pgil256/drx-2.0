@@ -35,7 +35,6 @@ void setUp(void) {
     statusAcknowledged = true;
     isProcessingStatus = false;
     AZERO = 0;
-    hostV2 = false;
     currentCmdSeq = -1;
     activeCmdSeq = -1;
     pressureCalibrated = true; pressureFault = false;
@@ -311,7 +310,6 @@ void test_v2_parse_valid_frame(void) {
     TEST_ASSERT_TRUE(parseV2Frame(frame, inner));
     TEST_ASSERT_TRUE(inner == "P50");
     TEST_ASSERT_EQUAL(42, (int)currentCmdSeq);
-    TEST_ASSERT_TRUE(hostV2);
     currentCmdSeq = -1;
 }
 

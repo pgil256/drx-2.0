@@ -192,7 +192,6 @@ bool positionReadValid = false;      // last readPosition() I2C result ok
 // checksum, including for legacy hosts. A flipped digit was previously
 // undetectable ("P10" -> "P70" passed every check on both sides).
 // Unframed commands keep their legacy command/ack behavior.
-bool hostV2 = false;        // host has sent at least one framed command
 long currentCmdSeq = -1;    // seq of the command being processed (-1 = v1)
 long activeCmdSeq = -1;     // seq of the motion/pressure command in flight
 long activeFitCmdSeq = -1;  // seq of the timed FIT command in flight
@@ -202,8 +201,6 @@ uint8_t smcDeviceNumber = 13;
 int AZERO = 0;
 int BZERO = 0;
 int CZERO = 0;
-int AInches = 0;
-int BInches = 0;
 float CInches = 0;
 bool STOP = true;            // mirrors STOP_PIN: INPUT_PULLUP idles HIGH (= not pressed)
 bool stopWasPressed = false; // previous loop's button state (press-edge detection)
@@ -236,7 +233,6 @@ bool moveFITForward = false;
 // Jerking variables - FIXED
 bool jerking = false;
 int jerkDirection = 1;
-unsigned long jerksCompleted = 0;  // strokes since J; debug/telemetry only
 unsigned long lastJerkTime = 0;
 // Boot default = the host default of 2 pulses/sec (DEFAULT_JERK_INTERVAL_MS in
 // constants.py; paired values are checked by scripts/check_limits_sync.py).
@@ -535,7 +531,6 @@ void emergencyStop() {
   }
   bRunning = false;
   jerking = false;
-  jerksCompleted = 0; // Reset jerk counter
 }
 
 // Emergency stop, then autonomously back the axial actuator off until
@@ -624,7 +619,6 @@ bool parseV2Frame(const String &raw, String &inner) {
     emitCmdError("Malformed frame");
     return false;
   }
-  hostV2 = true;
   long seq = raw.substring(1, colon).toInt();
   uint8_t expected =
       (uint8_t)strtol(raw.substring(star + 1).c_str(), NULL, 16);
@@ -958,7 +952,6 @@ void processCommand(String cmd) {
   float inches = 0.0;
   int stage = 0;
   uint16_t localDesiredPosition = 0;
-  float localPressure = 0;
 
   // Handle different command types
   switch (commandType) {
@@ -1358,12 +1351,10 @@ void processCommand(String cmd) {
       // hardware measurement session -- see the flash checklist.
       if (smcDeviceNumber == 12) {
         localDesiredPosition = (uint16_t)(AFULLINCH * inches);
-        AInches = inches;
         if (inches == 0)
           localDesiredPosition = AZERO;
       } else if (smcDeviceNumber == 13) {
         localDesiredPosition = (uint16_t)(BFULLINCH * inches);
-        BInches = inches;
         if (inches == 0)
           localDesiredPosition = BZERO;
       } else if (smcDeviceNumber == 14) {
@@ -1520,7 +1511,6 @@ void processCommand(String cmd) {
           pulseMotorSpeed = 0;
           jerkDirection = 0;
           jerking = false;
-          jerksCompleted = 0; // Reset counter
           emitAck("DONE", currentCmdSeq);
       } else {
           if (rejectIfStopEngaged()) return;
@@ -1556,7 +1546,6 @@ void processCommand(String cmd) {
           // Status stays ON during pulsing: the pressure ceiling check
           // and the Pi both need telemetry exactly when force pulses
           sendStatus();
-          jerksCompleted = 0;
           jerkDirection = pressure < desiredPressure ? 1 : -1;
           setPulseSpeed(pulseSpeed * jerkDirection);
           lastJerkTime = millis(); // Initialize jerk timer
@@ -1649,10 +1638,8 @@ void setup() {
   // SAFETY: stop all motors before anything else. After an unexpected
   // MCU reset the SMCs may still be running the last commanded speed;
   // historically they kept moving for the >1s the load-cell init took.
-  AInches = 0;
   smcDeviceNumber = 12;
   setMotorSpeed(0);
-  BInches = 2;
   smcDeviceNumber = 13;
   setMotorSpeed(0);
   smcDeviceNumber = 14;

@@ -87,7 +87,6 @@ void setUp(void) {
     runningDevice = 12;
     BZERO = 0;
     _wdt_enabled = false;
-    hostV2 = false;
     currentCmdSeq = -1;
     activeCmdSeq = -1;
     activeFitCmdSeq = -1;
@@ -111,14 +110,12 @@ void test_emergency_stop_clears_all_state(void) {
     bRunning = true;
     measurePressure = true;
     jerking = true;
-    jerksCompleted = 5;
 
     emergencyStop();
 
     TEST_ASSERT_FALSE(bRunning);
     TEST_ASSERT_FALSE(measurePressure);
     TEST_ASSERT_FALSE(jerking);
-    TEST_ASSERT_EQUAL(0, jerksCompleted);
 }
 
 void test_emergency_stop_sets_motor_speeds_to_zero(void) {
@@ -154,12 +151,10 @@ void test_commands_accepted_after_emergency_stop(void) {
 void test_emergency_stop_during_jerking(void) {
     jerking = true;
     jerkDirection = 1;
-    jerksCompleted = 3;
 
     emergencyStop();
 
     TEST_ASSERT_FALSE(jerking);
-    TEST_ASSERT_EQUAL(0, jerksCompleted);
 }
 
 void test_emergency_stop_stops_fit_motion(void) {
@@ -804,7 +799,6 @@ void test_v2_deferred_done_carries_seq(void) {
 }
 
 void test_v2_status_carries_checksum(void) {
-    hostV2 = true;
     sendStatus();
     std::string out = Serial1.getOutput();
     size_t start = out.find("STATUS_START");
@@ -820,7 +814,6 @@ void test_v2_status_carries_checksum(void) {
 }
 
 void test_v1_status_checksum_preserves_legacy_command_acks(void) {
-    hostV2 = false;
     sendStatus();
     std::string out = Serial1.getOutput();
     TEST_ASSERT_TRUE(out.find("STATUS_END*") != std::string::npos);
