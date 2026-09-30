@@ -36,7 +36,7 @@ def controller(qapp, qtbot, tmp_path, monkeypatch):
     window._on_restart_app = Mock()
     window._on_logout = Mock()
     window.calibration_controller = SimpleNamespace(
-        access=ServiceAccess(str(tmp_path / "pin.json")), _can_open=lambda: True)
+        access=ServiceAccess(str(tmp_path / "pin.json")), can_open=lambda: True)
     window.cloud_client = Mock(enabled=False)
     window.cloud_client.sync_summary.return_value = {
         "pending": 2, "blocked": 1, "last_sync": "Not recorded yet", "message": "Not configured",

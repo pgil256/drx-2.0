@@ -20,7 +20,6 @@ from helpers.hardware_service import HardwareServiceDraft, load_cell_factor
 from helpers.logging import setup_logger
 from helpers.service_auth import ServiceAccess
 from ui.modals.hardware_service_dialog import HardwareServiceDialog
-from ui.modals.service_pin_dialog import ServicePinDialog
 
 from config.constants import (
     CALIBRATION_MOVE_TIMEOUT_S, CALIBRATION_POSITION_TOLERANCE,
@@ -37,9 +36,9 @@ class HardwareServiceController:
         self.access = ServiceAccess()
         self.mode = "calibration"
         self.dialog: Optional[HardwareServiceDialog] = None
-        self.pin_dialog: Optional[ServicePinDialog] = None
 
-    def _can_open(self) -> bool:
+    def can_open(self) -> bool:
+        """Whether a service session may start now (logged in, nothing moving)."""
         w = self.window
         return bool(w.current_user) and not (
             w.protocol_running or w.reset_in_progress
@@ -61,43 +60,16 @@ class HardwareServiceController:
         if self.dialog is not None:
             self.dialog.raise_()
             return
-        if self.pin_dialog is not None:
-            self.pin_dialog.raise_()
-            return
-        if not self._can_open():
+        if not self.can_open():
             self.window._show_timed_error("Log in and finish movement, treatment or reset first.")
             return
         self.mode = mode
-        device = getattr(self.window, "device_controller", None)
-        if device is not None:
-            device.require_service(lambda _user: self._start_authorized(mode))
-            return
-        self._auth_user = dict(self.window.current_user)
-        try:
-            d = ServicePinDialog(
-                self.access, self.window.current_user.get("status") == "admin", self.window,
-            )
-        except (OSError, ValueError):
-            self.logger.exception("Cannot read service credential")
-            self.window._show_timed_error("Could not read the device service credential.")
-            return
-        self.pin_dialog = d
-        d.finished.connect(self._authenticated)
-        d.open()
-
-    def _authenticated(self, result: int) -> None:
-        pin_dialog = self.pin_dialog
-        self.pin_dialog = None
-        if pin_dialog is None:
-            return
-        pin_dialog.deleteLater()
-        if (result != QDialog.Accepted or not self._can_open()
-                or self.window.current_user != self._auth_user):
-            return
-        self._start_session()
+        # The Device screen owns the technician PIN and the service visit.
+        self.window.device_controller.require_service(
+            lambda _user: self._start_authorized(mode))
 
     def _start_authorized(self, mode: str) -> None:
-        if self._can_open() and self.window.device_controller.service_authorized():
+        if self.can_open() and self.window.device_controller.service_authorized():
             self.mode = mode
             self._start_session()
 
@@ -758,8 +730,6 @@ class HardwareServiceController:
             self.window._show_timed_error(message)
 
     def shutdown(self) -> None:
-        if self.pin_dialog is not None:
-            self.pin_dialog.reject()
         if self.dialog is not None:
             self.stop_before_close()
             self.dialog.done(QDialog.Rejected)

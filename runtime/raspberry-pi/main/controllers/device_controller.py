@@ -122,7 +122,7 @@ class DeviceController(QObject):
         from controllers.machine_sign_in_controller import authorize
         if not authorize(self.window, "service", lambda: self.require_service(callback)):
             return
-        if self.service_authorized() and self.window.calibration_controller._can_open():
+        if self.service_authorized() and self.window.calibration_controller.can_open():
             callback(dict(self.window.current_user))
             return
 
@@ -377,7 +377,7 @@ class DeviceController(QObject):
         user = dict(self.window.current_user or {})
         def eligible() -> bool:
             return (bool(user) and user == self.window.current_user and
-                    (self.window.calibration_controller._can_open() if service else self.idle()))
+                    (self.window.calibration_controller.can_open() if service else self.idle()))
 
         if not eligible():
             self.screen.set_status("Log in and finish treatment, movement, reset or service first.")
