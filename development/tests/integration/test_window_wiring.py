@@ -345,7 +345,7 @@ def test_calibration_button_opens_shared_session(
     """The calibration entry point demands the separate PIN before acquiring the shared link."""
     w = window_run.window
     w.shell.navigate(page)
-    w.calibration_controller.access.provision("654321", "654321", is_admin=True)
+    w.hardware_service.access.provision("654321", "654321", is_admin=True)
     w.shell.device._select_section(2)
     assert w.device_controller._auth_dialog.isVisible()
     w.device_controller._auth_dialog.submit("111111")
@@ -356,7 +356,7 @@ def test_calibration_button_opens_shared_session(
     assert button.isVisible()
     assert button.isEnabled()
     window_run.arduino.send.reset_mock()
-    controller = w.calibration_controller
+    controller = w.hardware_service
 
     button.click()
 
@@ -389,7 +389,7 @@ def test_calibration_entry_refuses_busy_device(
     try:
         getattr(w.shell, page).calibration_button.click()
 
-        assert w.calibration_controller.dialog is None
+        assert w.hardware_service.dialog is None
         assert not w._calibration_active
         window_run.notices.assert_called_once()
         window_run.arduino.send.assert_not_called()

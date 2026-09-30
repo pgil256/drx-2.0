@@ -310,7 +310,7 @@ class KneeSpa(QMainWindow):
         self.protocol = ProtocolController(self)
         self.connection = ConnectionManager(self)
         self.leg = LegLengthController(self)
-        self.calibration_controller = HardwareServiceController(self)
+        self.hardware_service = HardwareServiceController(self)
         self.device_controller = DeviceController(self)
         self._calibration_active = False
         # Protocol lifecycle state: idle / starting / running / stopping / fault
@@ -413,8 +413,8 @@ class KneeSpa(QMainWindow):
         s.logout_requested.connect(self._on_logout)
         s.exit_requested.connect(self._on_exit_app)
         s.profile.restart_requested.connect(lambda: self.device_controller.action("restart_app"))
-        s.device.calibration_requested.connect(self.calibration_controller.open)
-        s.device.hardware_tests_requested.connect(self.calibration_controller.open_tests)
+        s.device.calibration_requested.connect(self.hardware_service.open)
+        s.device.hardware_tests_requested.connect(self.hardware_service.open_tests)
 
         # Setup screen.
         s.setup.jog_requested.connect(self._on_setup_jog)
@@ -1241,7 +1241,7 @@ class KneeSpa(QMainWindow):
             if self.worker:
                 self.worker.cancel(firmware_stopped=self._physical_stop_active)
             if getattr(self, "_calibration_active", False) is True:
-                self.calibration_controller.shutdown()
+                self.hardware_service.shutdown()
             for name in ("protocol_timer", "controls_enable_timer", "_cloud_retry_timer",
                          "_pressure_state_timer"):
                 timer = getattr(self, name, None)
