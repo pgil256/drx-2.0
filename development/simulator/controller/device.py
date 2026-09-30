@@ -310,6 +310,9 @@ class SimulatedController(ControllerModel):
             self._tare_until = self.time_s + 0.8
             self._tare_seq = seq
         elif stage == "5":
+            if command[2:3] != "|":
+                self._reject("L5", "INVALID_FORMAT")
+                return
             _, a_zero, b_zero = command.split("|")
             a_zero, b_zero = int(a_zero), int(b_zero)
             if not 0 <= a_zero <= 4095 or not 0 <= b_zero <= 4095:

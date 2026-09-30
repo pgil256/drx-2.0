@@ -327,14 +327,13 @@ class ControllerModel:
             elif stage == '4':
                 self._write(f"weight|{self.pressure}\n")
             elif stage == '5':
-                if len(cmd) > 2 and cmd[2] == '|':
-                    parts = cmd.split('|')
-                    a_zero = int(parts[1]) if len(parts) > 1 else 0
-                    b_zero = int(parts[2]) if len(parts) > 2 else 0
-                else:
-                    # Legacy fixed-width parse (truncates 4-digit values)
-                    a_zero = int(cmd[2:5]) if cmd[2:5].strip() else 0
-                    b_zero = int(cmd[5:9]) if cmd[5:9].strip() else 0
+                if len(cmd) <= 2 or cmd[2] != '|':
+                    # Firmware accepts only the delimited form.
+                    self._write("COMMAND_REJECTED|L5|INVALID_FORMAT\n")
+                    return
+                parts = cmd.split('|')
+                a_zero = int(parts[1]) if len(parts) > 1 else 0
+                b_zero = int(parts[2]) if len(parts) > 2 else 0
                 self._a_zero = a_zero
                 self._write(f"ZEROS|{a_zero}|{b_zero}\n")
                 self._ack("DONE", self._current_seq)

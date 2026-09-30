@@ -13,7 +13,7 @@
   - Fixed STOP pin logic (INPUT_PULLUP reads HIGH when not pressed)
 */
 
-#define VERSION "2026-09-18-DRX2-NB2-SERVICE"
+#define VERSION "2026-09-30-DRX2-NB2-SERVICE"
 #define HX711_DRIVER "DRX-HX711-NB2"
 #include <math.h>
 #ifndef UNIT_TEST
@@ -1484,18 +1484,15 @@ void processCommand(String cmd) {
           if (bRunning || measurePressure || jerking || moveFITForward || releasingPressure ||
               pressureGuardActive || tareActive) { rejectCommand("L5", "MOTION_ACTIVE"); break; }
           {
-            long newAZero, newBZero;
-            if (cmd.length() > 2 && cmd.charAt(2) == '|') {
-              // Delimited form: L5|<azero>|<bzero> -- unambiguous for any
-              // digit count
-              newAZero = getValue(cmd, '|', 1).toInt();
-              newBZero = getValue(cmd, '|', 2).toInt();
-            } else {
-              // Legacy fixed-width form ("L5{:3} {:3}"): corrupts 4-digit
-              // values (1900 parses as 190); kept for old hosts only
-              newAZero = cmd.substring(2, 5).toInt();
-              newBZero = cmd.substring(5, 9).toInt();
+            // Only the delimited form L5|<azero>|<bzero> is accepted. The
+            // old fixed-width form ("L5{:3} {:3}") silently truncated
+            // 4-digit marks (1900 parsed as 190).
+            if (cmd.length() <= 2 || cmd.charAt(2) != '|') {
+              rejectCommand("L5", "INVALID_FORMAT");
+              break;
             }
+            long newAZero = getValue(cmd, '|', 1).toInt();
+            long newBZero = getValue(cmd, '|', 2).toInt();
             // The marks feed the axial floor (I/A), the E-stop release
             // floor and the "at home" checks as signed ints compared
             // against uint16 positions. An unvalidated value (typo'd
