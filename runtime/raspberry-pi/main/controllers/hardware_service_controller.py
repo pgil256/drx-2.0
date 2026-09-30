@@ -336,22 +336,12 @@ class HardwareServiceController:
             self.dialog.show_message("Open password-protected Calibration to change settings.", True)
             return
         try:
+            # Actions above the ready() gate work without fresh, stable
+            # readings; everything below it moves or measures an axis.
             if name == "begin":
-                self.prepared = True
-                self.set_result("preparation", "pass", "Technician confirmed unloaded preparation.")
-                self.dialog.show_message("Preparation recorded. Continue to connection checks.")
+                self._record_preparation()
             elif name == "check_link":
-                if self.hardware_ready() and self.stable():
-                    self.event("diagnostics_checked", "Fresh status and all three I2C replies.")
-                    self.dialog.show_message(
-                        "Fresh position feedback and controller replies received. Inspect readings "
-                        "and wiring, then record your observation."
-                    )
-                else:
-                    self.dialog.show_message(
-                        "Waiting for fresh feedback and hardware diagnostics. Install matching "
-                        "service firmware if diagnostics remain unavailable.", True,
-                    )
+                self._check_link()
             elif name == "result":
                 self.record_result(value)
             elif name == "bench_result":
@@ -369,56 +359,85 @@ class HardwareServiceController:
             elif name == "pressure_calculate":
                 if self.handle is not None or not self.prepared:
                     return
-                self.draft.scale = load_cell_factor(
-                    self.pressure_points["zero"], self.pressure_points["loaded"], float(value),
-                )
-                self.reference_lbs = float(value)
-                self.dialog.refresh_draft()
-                self.dialog.show_message(
-                    "Load-cell factor staged. Remove the reference load before resetting; "
-                    "verify against the reference again after reset."
-                )
+                self._stage_load_cell_factor(value)
             elif not self.ready():
                 self.dialog.show_message(
                     "Fresh, stable readings and completed preparation required.", True,
                 )
             elif name == "jog":
-                axis = self.dialog.current_axis()
-                if value not in (-200, -50, 50, 200):
-                    raise ValueError("Choose a supported bounded jog.")
-                self.move(axis, self.position(axis) + int(value))
+                self._jog(self.dialog.current_axis(), value)
             elif name == "record":
-                axis = self.dialog.current_axis()
-                self.draft.record(axis, float(value), self.position(axis))
-                self.dialog.refresh_draft()
+                self._record_mark(self.dialog.current_axis(), float(value))
             elif name == "goto":
                 axis = self.dialog.current_axis()
                 self.move(axis, self.draft.marks[axis][str(value)])
             elif name == "remove":
-                axis = self.dialog.current_axis()
-                self.draft.marks[axis].pop(str(value))
-                self.draft.recorded[axis].discard(str(value))
-                self.dialog.refresh_draft()
+                self._remove_mark(self.dialog.current_axis(), str(value))
             elif name == "anchor":
-                axis = self.dialog.current_axis()
-                self.anchors[axis][str(value)] = self.position(axis)
-                points = self.anchors[axis]
-                self.dialog.set_anchors(axis, points.get("start"), points.get("end"))
+                self._set_anchor(self.dialog.current_axis(), str(value))
             elif name == "factor":
-                axis = self.dialog.current_axis()
-                points = self.anchors[axis]
-                self.draft.factors[axis] = distance_factor(
-                    points["start"], points["end"], float(value),
-                )
-                self.dialog.refresh_draft()
-                self.dialog.show_message(
-                    "Distance readout factor staged. Position marks govern movement."
-                )
+                self._stage_distance_factor(self.dialog.current_axis(), value)
             elif name == "leg":
                 self.move_leg(str(value))
         except (ValueError, KeyError, TypeError) as exc:
             self.dialog.show_message(f"Check the measurements and required captures: {exc}", True)
         self.tick()
+
+    def _record_preparation(self) -> None:
+        self.prepared = True
+        self.set_result("preparation", "pass", "Technician confirmed unloaded preparation.")
+        self.dialog.show_message("Preparation recorded. Continue to connection checks.")
+
+    def _check_link(self) -> None:
+        if self.hardware_ready() and self.stable():
+            self.event("diagnostics_checked", "Fresh status and all three I2C replies.")
+            self.dialog.show_message(
+                "Fresh position feedback and controller replies received. Inspect readings "
+                "and wiring, then record your observation."
+            )
+        else:
+            self.dialog.show_message(
+                "Waiting for fresh feedback and hardware diagnostics. Install matching "
+                "service firmware if diagnostics remain unavailable.", True,
+            )
+
+    def _stage_load_cell_factor(self, reference: object) -> None:
+        self.draft.scale = load_cell_factor(
+            self.pressure_points["zero"], self.pressure_points["loaded"], float(reference),
+        )
+        self.reference_lbs = float(reference)
+        self.dialog.refresh_draft()
+        self.dialog.show_message(
+            "Load-cell factor staged. Remove the reference load before resetting; "
+            "verify against the reference again after reset."
+        )
+
+    def _jog(self, axis: str, step: object) -> None:
+        if step not in (-200, -50, 50, 200):
+            raise ValueError("Choose a supported bounded jog.")
+        self.move(axis, self.position(axis) + int(step))
+
+    def _record_mark(self, axis: str, key: float) -> None:
+        self.draft.record(axis, key, self.position(axis))
+        self.dialog.refresh_draft()
+
+    def _remove_mark(self, axis: str, key: str) -> None:
+        self.draft.marks[axis].pop(key)
+        self.draft.recorded[axis].discard(key)
+        self.dialog.refresh_draft()
+
+    def _set_anchor(self, axis: str, which: str) -> None:
+        self.anchors[axis][which] = self.position(axis)
+        points = self.anchors[axis]
+        self.dialog.set_anchors(axis, points.get("start"), points.get("end"))
+
+    def _stage_distance_factor(self, axis: str, distance: object) -> None:
+        points = self.anchors[axis]
+        self.draft.factors[axis] = distance_factor(points["start"], points["end"], float(distance))
+        self.dialog.refresh_draft()
+        self.dialog.show_message(
+            "Distance readout factor staged. Position marks govern movement."
+        )
 
     def move(self, axis: str, target: int) -> None:
         if not self.ready():
