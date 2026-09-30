@@ -479,12 +479,12 @@ class TestPressureResponse:
 
 @pytest.mark.unit
 class TestWeightResponse:
-    """Tests for weight response parsing."""
+    """The Pi never sends L4, so its weight| reply has no consumer."""
 
-    def test_weight_response(self, arduino, qtbot):
-        with qtbot.waitSignal(arduino.display_weight_emit, timeout=1000) as blocker:
-            arduino.handle_com("weight|32.1")
-        assert blocker.args == ["32.1"]
+    def test_weight_reply_is_only_logged(self, arduino):
+        arduino.logger = MagicMock()
+        arduino.handle_com("weight|32.1")
+        arduino.logger.info.assert_called_once_with("Unrecognized data format: %s", "weight|32.1")
 
 
 @pytest.mark.unit

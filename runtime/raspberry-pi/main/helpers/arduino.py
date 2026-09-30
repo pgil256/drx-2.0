@@ -94,7 +94,6 @@ class Arduino(QObject):
     ready_to_go_emit = pyqtSignal()
     status_emit = pyqtSignal(int, int, int, float)
     connection_lost = pyqtSignal()  # Signal for connection loss
-    display_weight_emit = pyqtSignal(str)  # Added missing signal for weight display
     error_emit = pyqtSignal(str)  # Firmware ERROR:/BUSY command and device errors
     warning_emit = pyqtSignal(str)  # Firmware WARNING: advisory notices
     released_emit = pyqtSignal()  # Firmware finished an autonomous pressure release
@@ -737,9 +736,6 @@ class Arduino(QObject):
                 self._invalidate_identity()
                 self.ready_event.set()
                 self.ready_to_go_emit.emit()
-            elif (tokens[0] == "weight" and len(tokens) == 2
-                  and math.isfinite(float(tokens[1])) and float(tokens[1]) >= 0):
-                self.display_weight_emit.emit(tokens[1])
             elif (
                 tokens[0] == "Test command received" or "Test command received" in data
             ):
