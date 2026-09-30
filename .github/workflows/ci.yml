@@ -5,7 +5,7 @@ name: CI
 # commit.)
 on:
   push:
-    branches: [main, improvement-plan]
+    branches: [main]
   pull_request:
   workflow_dispatch:
 
@@ -54,7 +54,8 @@ jobs:
         run: |
           xvfb-run -a python -m pytest -q
 
-  # Hermetic: system g++ + the vendored Unity framework in test/unity/,
+  # Hermetic: system g++ + the vendored Unity framework in
+  # development/tests/firmware/unity/,
   # no PlatformIO registry access needed. Gates the PR (no continue-on-error).
   firmware-native-tests:
     name: Firmware native tests (g++ + Unity)
