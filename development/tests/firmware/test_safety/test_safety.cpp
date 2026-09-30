@@ -578,7 +578,8 @@ void test_position_progress_restarts_stall_timer(void) {
 // ever applied, the old code started a backward move whose first loop
 // iteration hit the axial-at-zero guard and emitted "ERROR: Axial at
 // zero, pressure target not reached" -- which the host escalates to a
-// DEVICE SAFETY STOP over what was actually a no-op.
+// DEVICE SAFETY STOP over what was actually a no-op. That guard is now
+// the AXIAL_HOME_BEFORE_PRESSURE_TARGET fault.
 
 void test_p0_with_no_load_completes_done_without_error(void) {
     keepAlive();
@@ -590,7 +591,8 @@ void test_p0_with_no_load_completes_done_without_error(void) {
 
     TEST_ASSERT_FALSE(measurePressure);
     TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
-    TEST_ASSERT_FALSE(Serial1.outputContains("ERROR: Axial at zero"));
+    TEST_ASSERT_FALSE(pressureFault);
+    TEST_ASSERT_FALSE(Serial1.outputContains("AXIAL_HOME_BEFORE_PRESSURE_TARGET"));
     // A no-op release must not drive the motor at all
     bool motorDriven = false;
     for (int i = 0; i < Wire.commandCount; i++) {
@@ -618,7 +620,8 @@ void test_release_reaching_zero_with_target_met_completes_done(void) {
     loop();
 
     TEST_ASSERT_FALSE(measurePressure);
-    TEST_ASSERT_FALSE(Serial1.outputContains("ERROR: Axial at zero"));
+    TEST_ASSERT_FALSE(pressureFault);
+    TEST_ASSERT_FALSE(Serial1.outputContains("AXIAL_HOME_BEFORE_PRESSURE_TARGET"));
     TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
 }
 
