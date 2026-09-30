@@ -180,7 +180,10 @@ class TestLoadCsvLegacyPin:
 
         assert len(data) == 1
         stored_hash, row = next(iter(data.items()))
-        assert "1234" not in stored_hash
+        # The key is a salted hash; random salt/digest hex can itself
+        # contain "1234", so check the format and the verify round trip.
+        assert stored_hash.startswith("pbkdf2_sha256$")
+        assert SecureAuthHelper.verify_pin("1234", stored_hash)
         assert row["username"] == "Administrator"
 
     def test_plaintext_pin_removed_from_row(self, tmp_path):
