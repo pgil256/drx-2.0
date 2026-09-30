@@ -1,14 +1,11 @@
 # development/tests/integration/test_protocols.py
 import pytest
 import time
-import serial
 import threading
-from unittest.mock import patch
 
-from helpers.arduino import Arduino
 from helpers.protocols import Protocols
 from config.config import Configuration
-from fixtures.fake_arduino import FakeArduino, PTY_AVAILABLE
+from fixtures.fake_arduino import PTY_AVAILABLE
 
 pytestmark = [
     pytest.mark.skipif(
@@ -22,41 +19,15 @@ pytestmark = [
 
 
 @pytest.fixture
-def protocol_env():
+def protocol_env(fake_arduino_pair):
     """Set up full protocol test environment with FakeArduino."""
-    fake = FakeArduino()
-    fake.start()
-
-    arduino = Arduino()
-    arduino.ARDUINO_PORT = fake.port
-    arduino.serial_com = serial.Serial(fake.port, 115200, timeout=1, write_timeout=1)
-    arduino.connected = True
-    arduino._running = True
-
-    reader = threading.Thread(target=arduino.read_from_com, daemon=True)
-    reader.start()
-
+    arduino, fake = fake_arduino_pair
     config = Configuration()
     config._set_default_c_marks()
     config._set_default_a_marks()
     config._set_default_b_marks()
     config.calibration = 1.0
-
-    yield arduino, fake, config
-
-    # Exception-safe teardown: stop + join the reader before touching the
-    # port so it cannot react to the closing fd with reconnect attempts.
-    try:
-        arduino._running = False
-        arduino.connected = False
-        reader.join(timeout=2)
-        if arduino.serial_com and getattr(arduino.serial_com, "is_open", False):
-            try:
-                arduino.serial_com.close()
-            except Exception:
-                pass
-    finally:
-        fake.stop()
+    return arduino, fake, config
 
 
 def make_protocol(arduino, config, **kwargs):
