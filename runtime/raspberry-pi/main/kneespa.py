@@ -85,6 +85,7 @@ from helpers.cloud_client import CloudClient
 from helpers.cloud_contract import cloud_error_message, validate_patient
 from controllers.hardware_service_controller import HardwareServiceController
 from controllers.device_controller import DeviceController
+from controllers.linked_patient import link_patient, unlink_patient
 from controllers.patient_controller import PatientController
 from controllers.machine_sign_in_controller import MachineSignInController, authorize
 from helpers.support_ticket import create_ticket, validate_ticket
@@ -619,23 +620,14 @@ class KneeSpa(QMainWindow):
             return
         # Validation is atomic: no values reach clamping/rounding widgets until
         # the identity and the entire plan have passed the contract.
-        self.shell.treatment.set_settings(values)
-        self.shell.treatment.select_protocol(protocol)
-        self.cloud_patient = patient
-        self.shell.treatment.set_patient(
-            patient.get("display_name") or patient.get("external_ref") or patient["patient_id"]
-        )
+        link_patient(self, patient, values, protocol)
         self.shell.patient_modal.hide()  # Success must not emit the cancellation signal.
 
     def _on_patient_edit(self) -> None:
         """Detach the previous identity as soon as replacement entry starts."""
         if self.protocol_running:
             return
-        self._patient_lookup_id += 1
-        self.cloud_patient = None
-        self._patient_lookup_pending = False
-        self.shell.treatment.set_patient_pending(False)
-        self.shell.treatment.clear_patient()
+        unlink_patient(self)
 
     def _add_patient(self) -> None:
         self.patients.add()
@@ -992,12 +984,9 @@ class KneeSpa(QMainWindow):
         print("Handling logout")
         self.machine_sign_in.clear()
         self.patients.clear_session()
-        self._patient_lookup_id += 1
         self.current_user = None
-        self.cloud_patient = None
-        self._patient_lookup_pending = False
         try:
-            self.shell.treatment.clear_patient()
+            unlink_patient(self)
         except Exception:
             pass
         self.shell.logout()

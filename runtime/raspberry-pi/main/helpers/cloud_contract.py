@@ -63,6 +63,11 @@ def validate_patient(response: Any) -> Tuple[Dict[str, Any], Dict[str, float], i
     return patient, values, protocol
 
 
+def patient_label(patient: Dict[str, Any]) -> str:
+    """The name shown for a linked patient."""
+    return patient.get("display_name") or patient.get("external_ref") or patient["patient_id"]
+
+
 def end_settings(values: Dict[str, Any]) -> Dict[str, float]:
     """Capture positive angle magnitudes and the exact requested pulse rate."""
     return {

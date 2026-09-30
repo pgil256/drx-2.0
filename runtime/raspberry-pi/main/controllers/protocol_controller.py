@@ -17,7 +17,7 @@ from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QMessageBox
 
 from helpers import protocols
-from helpers.cloud_contract import end_settings
+from helpers.cloud_contract import end_settings, patient_label
 from helpers.treatment_session import TreatmentSession
 from controllers.machine_sign_in_controller import authorize
 from ui.modals.treatment_review import TreatmentReviewDialog
@@ -171,9 +171,7 @@ class ProtocolController:
 
         patient = getattr(window, "cloud_patient", None)
         if patient:
-            name = (patient.get("display_name") or patient.get("external_ref")
-                    or patient["patient_id"])
-            patient_summary = f"Patient: {name}"
+            patient_summary = f"Patient: {patient_label(patient)}"
         else:
             patient_summary = "No cloud patient linked. This treatment will not upload."
         return TreatmentReviewDialog.confirm(window, protocol, settings, patient_summary)

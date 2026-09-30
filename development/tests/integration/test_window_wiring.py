@@ -139,6 +139,26 @@ def test_machine_sign_in_that_cannot_start_is_not_left_busy(
     assert not controller._request
 
 
+def test_logout_during_patient_lookup_releases_the_start_gate(
+    window_run: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = window_run
+    run.cloud.enabled = True
+    jobs = []
+    monkeypatch.setattr(kneespa.threading, "Thread", lambda **kw: SimpleNamespace(
+        start=lambda: jobs.append(kw["target"])
+    ))
+    run.window._show_patient_modal()
+    for digit in "0123":
+        run.window.shell.patient_modal._keypad._press(digit)
+    assert run.view._patient_pending
+    run.window._on_logout()
+    assert not run.window._patient_lookup_pending
+    assert not run.view._patient_pending  # The abandoned lookup must not gate Start.
+    jobs.pop()()
+    assert run.window.cloud_patient is None
+
+
 def test_modal_patient_success_applies_whole_plan(window_run: SimpleNamespace) -> None:
     run = window_run
     run.window._show_patient_modal()

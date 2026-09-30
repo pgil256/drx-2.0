@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict
 
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 
+from controllers.linked_patient import link_patient, unlink_patient
 from helpers.cloud_contract import validate_patient
 from helpers.logging import setup_logger
 from helpers.machine_sign_in import (
@@ -267,17 +268,12 @@ class MachineSignInController(QObject):
                 return
         self._request = {}
         w.patients.clear_session()
-        w._patient_lookup_id += 1
-        w._patient_lookup_pending = False
-        w.cloud_patient = patient
+        unlink_patient(w)
         role = context["role"]
         name = (patient or {}).get("display_name") or ROLES[role]
         w.current_user = {"username": name, "status": role, "machine_sign_in": True}
-        w.shell.treatment.clear_patient()
         if patient:
-            w.shell.treatment.set_settings(values)
-            w.shell.treatment.select_protocol(protocol)
-            w.shell.treatment.set_patient(name)
+            link_patient(w, patient, values, protocol, name=name)
         if role == "clinician":
             w.patients.staff = MachineStaffClient(self.client)
         w.shell.set_access_role(role)

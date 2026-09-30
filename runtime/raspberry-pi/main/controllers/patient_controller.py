@@ -11,6 +11,7 @@ from config.constants import PATIENT_PORTAL_PATH
 from helpers.cloud_contract import validate_patient
 from helpers.patient_registration import PatientRegistration
 from helpers.staff_client import StaffClient, StaffError
+from controllers.linked_patient import link_patient
 from controllers.machine_sign_in_controller import authorize
 from ui.modals.patient_editor import PatientEditor
 from ui.modals.patient_portal import PatientPortal
@@ -253,15 +254,9 @@ class PatientController(QObject):
                 "The cloud returned invalid patient details. Patient was not linked."
             )
             return
-        self.window.cloud_patient = patient
-        view = self.window.shell.treatment
-        view.set_settings(values)
-        view.select_protocol(protocol)
-        view.set_patient(
-            patient.get("display_name") or patient.get("external_ref") or patient["patient_id"]
-        )
+        link_patient(self.window, patient, values, protocol)
         if patient.get("pin"):
-            view.set_patient_pin(patient["pin"])
+            self.window.shell.treatment.set_patient_pin(patient["pin"])
         self.flow.patient = patient
         self.flow.created = None
         self.flow.uncertain = False
