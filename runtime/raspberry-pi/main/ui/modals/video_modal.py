@@ -87,9 +87,6 @@ class VideoModal(Overlay):
         card.setObjectName("VideoCard")
         card.setAttribute(Qt.WA_StyledBackground, True)
         card.setFixedWidth(_VIDEO_CARD_WIDTH)
-        card.setStyleSheet(
-            f"#VideoCard {{ background: #ffffff; border-radius: {resolve('--radius-lg')}; }}"
-        )
         # No drop_shadow() here, on purpose. A QGraphicsEffect makes Qt
         # composite the whole card through a cached source pixmap; with the
         # native VLC surface (WA_NativeWindow) inside that card, the Pi's
@@ -114,6 +111,7 @@ class VideoModal(Overlay):
         lay.addWidget(self._pages)
 
         self.set_card(card)
+        self._apply_frame_style(rounded=True)
 
         self._engine = _VlcEngine(
             self._surface,
@@ -234,11 +232,6 @@ class VideoModal(Overlay):
         bar = QFrame()
         bar.setObjectName("VideoHeader")
         bar.setAttribute(Qt.WA_StyledBackground, True)
-        bar.setStyleSheet(
-            f"#VideoHeader {{ background: {resolve('--surface-dark')};"
-            f" border-top-left-radius: {resolve('--radius-lg')};"
-            f" border-top-right-radius: {resolve('--radius-lg')}; }}"
-        )
         h = QHBoxLayout(bar)
         h.setContentsMargins(18, 12, 18, 12)
         title = QLabel("Videos")
@@ -361,11 +354,6 @@ class VideoModal(Overlay):
         bar = QFrame()
         bar.setObjectName("VideoTransport")
         bar.setAttribute(Qt.WA_StyledBackground, True)
-        bar.setStyleSheet(
-            f"#VideoTransport {{ background: #ffffff;"
-            f" border-bottom-left-radius: {resolve('--radius-lg')};"
-            f" border-bottom-right-radius: {resolve('--radius-lg')}; }}"
-        )
         outer = QVBoxLayout(bar)
         outer.setContentsMargins(20, 14, 20, 16)
         self._current_title = QLabel()
@@ -794,39 +782,35 @@ class VideoModal(Overlay):
 
     def _toggle_fullscreen(self):
         self._fullscreen = not self._fullscreen
-        r = resolve('--radius-lg')
         if self._fullscreen:
             self._apply_fullscreen_size()
-            self._card.setStyleSheet(
-                "#VideoCard { background: #ffffff; border-radius: 0; }"
-            )
-            self._header.setStyleSheet(
-                f"#VideoHeader {{ background: {resolve('--surface-dark')};"
-                " border-radius: 0; }"
-            )
-            self._transport_bar.setStyleSheet(
-                "#VideoTransport { background: #ffffff; border-radius: 0; }"
-            )
+            self._apply_frame_style(rounded=False)
             self._fs_btn.setIcon(compress_icon("#ffffff", 16))
             self._fs_btn.setToolTip("Exit full screen")
         else:
             self._card.setFixedWidth(_VIDEO_CARD_WIDTH)
             self._stage_frame.setFixedHeight(int(_VIDEO_CARD_WIDTH * 9 / 16))
-            self._card.setStyleSheet(
-                f"#VideoCard {{ background: #ffffff; border-radius: {r}; }}"
-            )
-            self._header.setStyleSheet(
-                f"#VideoHeader {{ background: {resolve('--surface-dark')};"
-                f" border-top-left-radius: {r};"
-                f" border-top-right-radius: {r}; }}"
-            )
-            self._transport_bar.setStyleSheet(
-                f"#VideoTransport {{ background: #ffffff;"
-                f" border-bottom-left-radius: {r};"
-                f" border-bottom-right-radius: {r}; }}"
-            )
+            self._apply_frame_style(rounded=True)
             self._fs_btn.setIcon(expand_icon("#ffffff", 16))
             self._fs_btn.setToolTip("Full screen")
+
+    def _apply_frame_style(self, rounded):
+        """Style the card, title bar and transport bar as one frame: rounded
+        outer corners for the centered card, square ones in full screen."""
+        if rounded:
+            r = resolve('--radius-lg')
+            card = f"border-radius: {r};"
+            header = f"border-top-left-radius: {r}; border-top-right-radius: {r};"
+            transport = f"border-bottom-left-radius: {r}; border-bottom-right-radius: {r};"
+        else:
+            card = header = transport = "border-radius: 0;"
+        self._card.setStyleSheet(f"#VideoCard {{ background: #ffffff; {card} }}")
+        self._header.setStyleSheet(
+            f"#VideoHeader {{ background: {resolve('--surface-dark')}; {header} }}"
+        )
+        self._transport_bar.setStyleSheet(
+            f"#VideoTransport {{ background: #ffffff; {transport} }}"
+        )
 
     def _apply_fullscreen_size(self):
         parent = self.parent()
