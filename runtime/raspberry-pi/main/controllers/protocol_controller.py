@@ -379,7 +379,6 @@ class ProtocolController:
             # Freeze the association before dispatch, and invalidate any lookup
             # that could arrive after this treatment has already ended.
             window._patient_lookup_id += 1
-            window._treatment_patient = patient
             window.mid_protocol_warning_shown = False
 
             self.set_state("starting")
@@ -397,7 +396,6 @@ class ProtocolController:
                 window.threadpool.start(window.worker)
             except Exception:
                 self._session = None  # Dispatch failed: no treatment was started.
-                window._treatment_patient = None
                 window.protocol_timer.stop()
                 window.protocol_start_time = None
                 window.protocol_running = False

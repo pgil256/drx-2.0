@@ -19,7 +19,6 @@ def leg(request, qtbot, monkeypatch):
     now = [100.0]
     monkeypatch.setattr(module.time, "monotonic", lambda: now[0])
     window = make_window()
-    window.leg_length = 4.0
     window.arduino = Arduino()
     window.arduino.protocol_v2 = request.param
     window.arduino.send = MagicMock(return_value=True)
@@ -57,7 +56,7 @@ def home(leg):
     assert controller.active
     assert [handle.command for handle in handles] == ["FR", "FR"]
     complete(leg)
-    assert controller.position == window.leg_length == 0
+    assert controller.position == 0
     assert not controller.active
     assert not controller.boot_home_pending
 
@@ -202,7 +201,7 @@ def test_boot_readiness_waits_for_leg_and_later_reset_preserves_it(leg):
     manager._on_reset_finished(True)
     window._reflect_setup = MagicMock()
     KneeSpa.reset_setup_readings(window)
-    assert controller.position == window.leg_length == 0.25
+    assert controller.position == 0.25
     assert len(handles) == before
     assert all(call.args[0] != "leg_length" for call in window._reflect_setup.call_args_list)
 
@@ -241,7 +240,7 @@ def test_slider_target_uses_completed_quarter_inch_commands(leg):
         assert controller.position == 0
         assert controller.active
         complete(leg)
-    assert controller.position == window.leg_length == 1.25
+    assert controller.position == 1.25
     assert [handle.command for handle in handles[2:]] == ["F+"] * 5
     assert controller.move_to(0.5)
     for _ in range(3):

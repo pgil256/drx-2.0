@@ -224,7 +224,6 @@ def test_late_lookup_failure_preserves_active_treatment_patient(
 ) -> None:
     window = lookup_window()
     window.cloud_patient = {"patient_id": "B"}
-    window._treatment_patient = dict(window.cloud_patient)
     window.protocol_running = True
 
     KneeSpa._on_cloud_lookup_done(window, 0, result)
@@ -240,7 +239,6 @@ def test_late_lookup_failure_preserves_active_treatment_patient(
 def test_upload_uses_patient_captured_at_start(qtbot: QtBot) -> None:
     window = lookup_window()
     window.cloud_patient = {"patient_id": "A"}
-    window._treatment_patient = {"patient_id": "B"}
 
     controller = ProtocolController(window)
     controller._session = TreatmentSession("B", 2, 720)
@@ -284,12 +282,13 @@ def test_start_captures_patient_and_invalidates_pending_lookup(
     monkeypatch.setattr(protocols, "Protocols", lambda *args, **kwargs: worker)
     old_request_id = window._patient_lookup_id
 
-    assert ProtocolController(window).start_protocol() is True
+    controller = ProtocolController(window)
+    assert controller.start_protocol() is True
     window.cloud_patient["patient_id"] = "changed"
     window.protocol_running = False  # Late reply after the treatment ended.
     KneeSpa._on_cloud_lookup_done(window, old_request_id, {"patient_id": "A"})
 
-    assert window._treatment_patient == {"patient_id": "B"}
+    assert controller._session.patient_id == "B"
     window.shell.treatment.set_patient.assert_not_called()
 
 

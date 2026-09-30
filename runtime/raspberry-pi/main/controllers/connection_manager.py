@@ -375,7 +375,6 @@ class ConnectionManager:
         """Set the I2C status to done."""
         window = self.window
         print("Setting I2C status to done - signal received from Arduino")
-        window.I2Cstatus = 1
         window.I2Cstatus_event.set()  # Signal the thread-safe event
         window.enable_actuator_controls()
 

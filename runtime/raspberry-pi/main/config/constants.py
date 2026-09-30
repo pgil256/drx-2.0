@@ -149,18 +149,12 @@ DEFAULT_PROTOCOL_MINUTES = 12  # legacy default
 PROTOCOL_MINUTES_MIN = 5
 PROTOCOL_MINUTES_MAX = 30
 
-# Actuator Command Speed
-LEG_LENGTH_SPEED_NORMAL = 0.5  # inches per second
-LEG_LENGTH_SPEED_FAST = 1.0  # inches per second
+# Leg length travel
 LEG_LENGTH_MIN = 0.0  # Minimum leg length in inches
 LEG_LENGTH_MAX = 6.0  # Maximum leg length in inches
 
 # Movement Configuration
 DEFAULT_HORIZONTAL_POSITION = -10  # degrees
-
-# Default Positions
-DEFAULT_PRESSURE = 0  # pounds
-DEFAULT_LEG_LENGTH_POSITION = 0  # inches
 
 # Pulse-rate configuration (Phase 3.5 §15.2). Numeric J<ms> cadence is enabled
 # for the current firmware by default. Set KNEESPA_PULSE_RATE_FIRMWARE=0 as the

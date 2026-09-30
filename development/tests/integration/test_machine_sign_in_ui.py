@@ -212,8 +212,8 @@ def test_patient_starts_only_after_recheck_and_completion_clears_session(sign_in
     w.threadpool.start.assert_not_called()
     qtbot.waitUntil(lambda: w.threadpool.start.called)
     assert w.protocol_running
-    assert w._treatment_patient["patient_id"] == data["patient"]["patient_id"]
     frozen = w.protocol._session.patient_id
+    assert frozen == str(data["patient"]["patient_id"])
     w.worker.signals.finished.emit(True)
     assert not controller.client.token and w.current_user is None
     assert w.protocol._session.patient_id == frozen

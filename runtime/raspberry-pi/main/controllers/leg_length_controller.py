@@ -211,7 +211,6 @@ class LegLengthController(QObject):
         self._connections = []
         if success:
             self.position = self.target
-            self.window.leg_length = self.position
             self.window._service_leg_position_unknown = False
             if self.homing:
                 self.boot_home_pending = False

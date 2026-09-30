@@ -125,11 +125,9 @@ class TestReadyToGo:
         DONE event here as well could satisfy the NEXT step's wait early and
         shift every later DONE by one homing step."""
         cm, w = manager
-        w.I2Cstatus = 0
         w.I2Cstatus_event = MagicMock()
         cm.ready_to_go()
         w.I2Cstatus_event.set.assert_not_called()
-        assert w.I2Cstatus == 0
 
 
 @pytest.mark.unit

@@ -62,12 +62,6 @@ from config.constants import (
     LATERAL_MAX_DEGREES,
     HORIZONTAL_MIN_DEGREES,
     HORIZONTAL_MAX_DEGREES,
-    LEG_LENGTH_SPEED_NORMAL,
-    LEG_LENGTH_SPEED_FAST,
-    LEG_LENGTH_MIN,
-    LEG_LENGTH_MAX,
-    DEFAULT_PRESSURE,
-    DEFAULT_LEG_LENGTH_POSITION,
     DEFAULT_HORIZONTAL_POSITION,
     MIN_PRESSURE,
     DEFAULT_PROTOCOL_MINUTES,
@@ -215,7 +209,6 @@ class KneeSpa(QMainWindow):
         self._prev_settings = {}           # for mid-protocol slider rollback
         self.current_use_pulse_setting = True
         self.current_pulse_rate = None     # pulses/sec from the Settings slider
-        self.axial_flexion_pressure = 0
         self.actuator_a = ACTUATORS["AXIAL"]["ID"]
         self.actuator_b = ACTUATORS["HORIZONTAL"]["ID"]
         self.actuator_c = ACTUATORS["LATERAL"]["ID"]
@@ -224,12 +217,6 @@ class KneeSpa(QMainWindow):
         self.axial_flexion_position = 0
         self.horizontal_flexion_position = DEFAULT_HORIZONTAL_POSITION
         self.lateral_flexion_position = 0
-        self.leg_length = DEFAULT_LEG_LENGTH_POSITION
-        self.current_pressure = DEFAULT_PRESSURE
-        self.LEG_LENGTH_MIN = LEG_LENGTH_MIN
-        self.LEG_LENGTH_MAX = LEG_LENGTH_MAX
-        self.LEG_LENGTH_SPEED_NORMAL = LEG_LENGTH_SPEED_NORMAL
-        self.LEG_LENGTH_SPEED_FAST = LEG_LENGTH_SPEED_FAST
 
         # Backend initialization
         # QObject already exposes a thread() method. Keep the owned Arduino
@@ -237,7 +224,6 @@ class KneeSpa(QMainWindow):
         # mistake that inherited method for a live worker thread.
         self.arduino = None
         self.arduino_thread = None
-        self.I2Cstatus = 0  # Keep for compatibility
         self.I2Cstatus_event = threading.Event()  # Thread-safe event for synchronization
         self.config = Configuration(config_path=config_path)
         self.config.get_config()
@@ -249,7 +235,6 @@ class KneeSpa(QMainWindow):
             # Surface after the window is up; a corrupt config used to
             # degrade silently to generated default geometry
             QTimer.singleShot(1500, self._warn_uncalibrated)
-        self.reset_done_event = threading.Event()
         self.initial_setup_complete = False
         self.reset_in_progress = False  # Flag to prevent overlapping resets
         self.actuator_command_in_progress = False  # Prevents simultaneous actuator commands
@@ -328,7 +313,6 @@ class KneeSpa(QMainWindow):
 
         self.current_user = None
         self.cloud_patient = None
-        self._treatment_patient = None
         self._patient_lookup_id = 0
         self._patient_lookup_pending = False
         self._cloud_bridge = _CloudBridge()
@@ -343,7 +327,6 @@ class KneeSpa(QMainWindow):
         )
         self.patients = PatientController(self)
         self.machine_sign_in = MachineSignInController(self)
-        self._patient_editor = self.patients.editor
         self._cloud_retry_timer = QTimer(self)
         self._cloud_retry_timer.timeout.connect(self._retry_pending_uploads)
 
@@ -938,7 +921,6 @@ class KneeSpa(QMainWindow):
         print("Pressure cmd sent P{}".format(pressure))
         # This is a target, not measured pressure. The live readout is updated
         # only by status_emit feedback.
-        self.current_pressure = pressure
         self._reflect_setup("pressure", pressure)
         return True
 
@@ -1751,7 +1733,6 @@ class KneeSpa(QMainWindow):
 
     @QtCore.pyqtSlot()
     def handle_pressure_released(self):
-        self.current_pressure = 0
         # Release completion is not a new numeric measurement or target edit.
         self.enable_actuator_controls()
         self.loading_spinner.hide()

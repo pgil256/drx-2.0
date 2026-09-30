@@ -270,9 +270,6 @@ class TestLegLengthBounds:
     @staticmethod
     def _stub(position):
         stub = MagicMock()
-        stub.leg_length = position
-        stub.LEG_LENGTH_MIN = 0.0
-        stub.LEG_LENGTH_MAX = 6.0
         stub.arduino.send.return_value = True
         from controllers.leg_length_controller import LegLengthController
         stub.leg = LegLengthController(stub)
@@ -298,13 +295,15 @@ class TestLegLengthBounds:
         assert KneeSpa.forward_fast_button_clicked(stub) is False
         stub.loading_spinner.show.assert_not_called()
 
-    def test_failed_leg_send_keeps_estimate(self):
+    def test_failed_leg_send_invalidates_estimate(self):
+        """The command may have reached the wire, so the estimate is dropped
+        (Zero required) rather than kept or advanced to the target."""
         stub = self._stub(2.0)
         stub.arduino.send.return_value = False
         stub.arduino.send_tracked.return_value = None
         with patch.object(kneespa.GPIO, "output") as gpio_output:
             assert KneeSpa.forward_button_clicked(stub) is False
-        assert stub.leg_length == 2.0
+        assert stub.leg.position is None
         assert all(call.args[1] == kneespa.GPIO.LOW for call in gpio_output.call_args_list)
 
     def test_position_rounded_to_increment(self):

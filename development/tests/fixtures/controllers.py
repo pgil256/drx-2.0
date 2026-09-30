@@ -82,7 +82,6 @@ def make_window(state: str = "idle") -> SimpleNamespace:
         _block_active_treatment_exit=MagicMock(return_value=False),
         _patient_lookup_id=0, _paused_at=None, _prev_settings={},
         cloud_patient={"patient_id": "test-patient"},
-        _treatment_patient={"patient_id": "test-patient"},
         current_user={"username": "Dr", "status": "user"},
         current_use_pulse_setting=True, current_pulse_rate=2.4,
         last_measured_pressure=None, worker=worker, config=config,

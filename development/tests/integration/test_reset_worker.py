@@ -27,13 +27,11 @@ class FakeMainWindow:
     """
 
     def __init__(self, arduino):
-        self.I2Cstatus = 0
         self.I2Cstatus_event = threading.Event()
         self.worker = None  # no protocol running
         arduino.done_emit.connect(self.set_done)
 
     def set_done(self):
-        self.I2Cstatus = 1
         self.I2Cstatus_event.set()
 
 
