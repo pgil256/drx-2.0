@@ -229,7 +229,8 @@ def test_late_lookup_failure_preserves_active_treatment_patient(
     KneeSpa._on_cloud_lookup_done(window, 0, result)
     controller = ProtocolController(window)
     controller._session = TreatmentSession("B", 2, 720)
-    controller._upload_treatment(True, False, False)
+    controller.latch_session_outcome("completed")
+    controller.finalize_session()
 
     assert window.cloud_patient == {"patient_id": "B"}
     record = window.cloud_client.post_treatment_async.call_args.args[0]
@@ -242,7 +243,8 @@ def test_upload_uses_patient_captured_at_start(qtbot: QtBot) -> None:
 
     controller = ProtocolController(window)
     controller._session = TreatmentSession("B", 2, 720)
-    controller._upload_treatment(True, False, False)
+    controller.latch_session_outcome("completed")
+    controller.finalize_session()
 
     record = window.cloud_client.post_treatment_async.call_args.args[0]
     assert record["patient_id"] == "B"

@@ -586,12 +586,6 @@ class ProtocolController:
         if not user_stopped:
             window.protocol_stop_requested = False
 
-    def _upload_treatment(self, success, user_stopped, safety_fault_active):
-        self.latch_session_outcome(
-            self._completion_outcome(success, user_stopped, safety_fault_active)
-        )
-        self.finalize_session()
-
     @staticmethod
     def _completion_outcome(success: bool, user_stopped: bool, safety_fault_active: bool) -> str:
         if safety_fault_active:

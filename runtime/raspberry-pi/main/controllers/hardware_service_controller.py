@@ -127,7 +127,7 @@ class HardwareServiceController:
         self.target = None
         self.move_axis = None
         self.legacy_done = False
-        self.aborted = self.prepared = self.stop_armed = False
+        self.aborted = self.prepared = False
         self.physical_stop_seen = self.software_stop_written = False
         self.saved = False
         self.moved = False
@@ -537,7 +537,6 @@ class HardwareServiceController:
                 return
             self.abort("Stationary software-stop check requested.")
         elif kind == "physical":
-            self.stop_armed = True
             self.dialog.show_message(
                 "Press the physical emergency stop. The wizard will record its input; "
                 "confirm actual stop/release behavior separately. Reset after closing."
