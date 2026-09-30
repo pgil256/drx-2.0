@@ -1199,7 +1199,7 @@ void processCommand(String cmd) {
       localDesiredPosition = clampPositionTarget(smcDeviceNumber, localDesiredPosition);
 
       positionCommandKind = 'I';
-      positionTolerance = (smcDeviceNumber == 12 && localDesiredPosition == AZERO) ? 25 : 0;
+      positionTolerance = (smcDeviceNumber == 12 && localDesiredPosition == (uint16_t)AZERO) ? 25 : 0;
       localPosition = readPosition();
       if (!positionReadValid || pressureFault) {
         emitCmdError("Position read failed");
@@ -1837,7 +1837,7 @@ void loop() {
 
   // External actuator timer
   if (moveFITForward) {
-    if (timeInFIT > FITDelay) {
+    if (timeInFIT > (unsigned long)FITDelay) {
       digitalWrite(DIR_FIT_FORWARD, LOW);
       digitalWrite(DIR_FIT_REVERSE, LOW);
       Dbg.println("Fit stopped.");
@@ -1930,7 +1930,7 @@ void loop() {
     if (!pressureFault && measurePressure) {
       if (pressureDirection > 0 && currentPos >= min(AXIAL_MAX_POS, 4095))
         tripPressureFault("AXIAL_TRAVEL_LIMIT");
-      if (pressureDirection < 0 && currentPos <= AZERO + POSITION_DEADBAND &&
+      if (pressureDirection < 0 && currentPos <= (uint16_t)(AZERO + POSITION_DEADBAND) &&
           pressure > desiredPressure + PRESSURE_TARGET_BAND)
         tripPressureFault("AXIAL_HOME_BEFORE_PRESSURE_TARGET");
       if (millis() - pressureMoveStarted >= PRESSURE_MOVE_TIMEOUT &&
