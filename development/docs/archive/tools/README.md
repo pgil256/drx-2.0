@@ -1,7 +1,8 @@
 # Archived tools
 
 ## calibrate_gui.py
-Retired 2026-06-11. This GUI calibration tool was protocol-incompatible
+Retired 2026-06-11 and removed on 2026-09-30; recover it from git history if
+it is ever needed for reference. This GUI calibration tool was protocol-incompatible
 with the production firmware: it sent malformed move commands
 (`A{actuator}{int}` truncated sub-inch moves to zero and addressed device 0),
 used a `HA` homing command the firmware never implemented, and parsed a
@@ -11,4 +12,6 @@ completed within a single click (delta always 0), and its
 "Update Arduino Values" feature would have written `AFULLINCH 1` into
 motor.ino.
 
-Use `tools/calibrate.py` instead.
+Use the in-app Hardware Tests & Calibration wizard
+(`development/docs/hardware-service.md`), or `development/tools/calibrate.py`
+from a serial console.
