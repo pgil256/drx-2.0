@@ -1,13 +1,13 @@
 // development/tests/firmware/test_clamp/test_clamp.cpp
 //
 // Unit tests for the pure value-handling helpers in motor.ino:
-//   - clampPressureTarget()  : clamps a pressure target to [MIN, MAX]_PRESSURE_LBS
 //   - clampPositionTarget()  : clamps a position to the per-actuator safe range
 //   - getValue()             : splits a delimited String and returns one field
 //
 // These functions are not exercised by the other suites. They are
 // deterministic and side-effect free, so they make a good fast smoke test of
-// the firmware's safety-clamping and parsing primitives.
+// the firmware's safety-clamping and parsing primitives. Pressure targets are
+// not clamped: the P handler rejects out-of-range values (test_command_parse).
 #ifdef UNIT_TEST
 
 #include <unity.h>
@@ -26,8 +26,8 @@ unsigned long _millis_value = 0;
 unsigned long millis() { return _millis_value; }
 void delay(unsigned long ms) { _millis_value += ms; }  // advance mock clock (firmware timeout loops spin on millis())
 
-// Include the main firmware (clampPressureTarget, clampPositionTarget,
-// getValue and friends become available).
+// Include the main firmware (clampPositionTarget, getValue and friends
+// become available).
 #include "../../../../runtime/arduino/motor/motor.ino"
 
 void setUp(void) {
@@ -38,24 +38,6 @@ void setUp(void) {
 }
 
 void tearDown(void) {}
-
-// --- clampPressureTarget ---
-void test_pressure_within_range_unchanged(void) {
-    TEST_ASSERT_EQUAL_FLOAT(40.0, clampPressureTarget(40.0));
-}
-
-void test_pressure_below_min_clamped(void) {
-    TEST_ASSERT_EQUAL_FLOAT((float)MIN_PRESSURE_LBS, clampPressureTarget(-10.0));
-}
-
-void test_pressure_above_max_clamped(void) {
-    TEST_ASSERT_EQUAL_FLOAT((float)MAX_PRESSURE_LBS, clampPressureTarget(999.0));
-}
-
-void test_pressure_at_max_boundary_unchanged(void) {
-    TEST_ASSERT_EQUAL_FLOAT((float)MAX_PRESSURE_LBS,
-                            clampPressureTarget((float)MAX_PRESSURE_LBS));
-}
 
 // --- clampPositionTarget ---
 void test_position_axial_below_min_clamped(void) {
@@ -104,10 +86,6 @@ void test_getvalue_missing_index_returns_empty(void) {
 int main(int argc, char **argv) {
     UNITY_BEGIN();
 
-    RUN_TEST(test_pressure_within_range_unchanged);
-    RUN_TEST(test_pressure_below_min_clamped);
-    RUN_TEST(test_pressure_above_max_clamped);
-    RUN_TEST(test_pressure_at_max_boundary_unchanged);
 
     RUN_TEST(test_position_axial_below_min_clamped);
     RUN_TEST(test_position_axial_above_max_clamped);

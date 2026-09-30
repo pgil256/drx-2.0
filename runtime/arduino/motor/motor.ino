@@ -911,12 +911,6 @@ void rejectCommand(const char *command, const char *reason) {
 void updatePressure() { servicePressure(); }
 
 
-float clampPressureTarget(float target) {
-  if (target < MIN_PRESSURE_LBS) return MIN_PRESSURE_LBS;
-  if (target > MAX_PRESSURE_LBS) return MAX_PRESSURE_LBS;
-  return target;
-}
-
 uint16_t clampPositionTarget(uint8_t deviceNumber, uint16_t target) {
   uint16_t minPos = 0;
   uint16_t maxPos = 65000;
@@ -942,12 +936,6 @@ int positionMoveSpeed(uint8_t device) {
   if (device == 12) return axialSpeed;
   if (device == 14) return lateralSpeed;
   return BC_SPEED;
-}
-
-// Zero-pressure release always uses the proven fixed output, independently
-// of the treatment speed selection (as does the autonomous E-stop release).
-int pressureMoveSpeed() {
-  return desiredPressure <= 0 ? PRESSURE_SPEED : axialSpeed;
 }
 
 void processCommand(String cmd) {

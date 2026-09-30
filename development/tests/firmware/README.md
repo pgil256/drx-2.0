@@ -19,7 +19,7 @@ development/tests/firmware/
 ├── mock_hx711.h              <- mock for the HX711 load-cell amplifier (configurable pressure)
 ├── unity/                    <- vendored Unity framework (hermetic runs, no registry needed)
 ├── test_clamp/
-│   └── test_clamp.cpp          <- clampPressureTarget()/clampPositionTarget()/getValue() tests
+│   └── test_clamp.cpp          <- clampPositionTarget()/getValue() tests
 ├── test_command_parse/
 │   └── test_command_parse.cpp  <- processCommand() command-handling tests
 ├── test_safety/

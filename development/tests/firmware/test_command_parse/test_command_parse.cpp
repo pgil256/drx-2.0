@@ -84,6 +84,28 @@ void test_P_garbage_rejected(void) {
     TEST_ASSERT_FALSE(measurePressure);
 }
 
+// Out-of-range targets are rejected, never clamped into range and applied.
+void test_P_above_max_rejected(void) {
+    processCommand("P999");
+    TEST_ASSERT_TRUE(Serial1.outputContains("FAULT|PRESSURE_TARGET_INVALID"));
+    TEST_ASSERT_FALSE(measurePressure);
+    TEST_ASSERT_EQUAL_FLOAT(0.0, desiredPressure);
+}
+
+void test_P_below_min_rejected(void) {
+    processCommand("P-10");
+    TEST_ASSERT_TRUE(Serial1.outputContains("FAULT|PRESSURE_TARGET_INVALID"));
+    TEST_ASSERT_FALSE(measurePressure);
+    TEST_ASSERT_EQUAL_FLOAT(0.0, desiredPressure);
+}
+
+void test_P_at_max_boundary_accepted(void) {
+    processCommand("P80");
+    TEST_ASSERT_EQUAL(80, MAX_PRESSURE_LBS);
+    TEST_ASSERT_EQUAL_FLOAT((float)MAX_PRESSURE_LBS, desiredPressure);
+    TEST_ASSERT_TRUE(measurePressure);
+}
+
 // --- Position command ---
 void test_I_sets_position(void) {
     Wire.position_12 = 100;
@@ -341,6 +363,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_P_ignored_when_running);
     RUN_TEST(test_P_busy_reply_when_running);
     RUN_TEST(test_P_garbage_rejected);
+    RUN_TEST(test_P_above_max_rejected);
+    RUN_TEST(test_P_below_min_rejected);
+    RUN_TEST(test_P_at_max_boundary_accepted);
     RUN_TEST(test_I_sets_position);
     RUN_TEST(test_I_ignored_when_running);
     RUN_TEST(test_K_sets_c_position);
