@@ -364,8 +364,14 @@ class VideoModal(Overlay):
         )
         outer.addWidget(self._current_title)
         outer.setSpacing(12)
+        outer.addWidget(self._transport_row(bar))
+        outer.addWidget(self._audio_row(bar))
+        self._transport_bar = bar
+        return bar
 
-        transport_row = QWidget(bar)
+    def _transport_row(self, parent):
+        """Prev / play / next, the clip counter and the elapsed/total progress track."""
+        transport_row = QWidget(parent)
         h = QHBoxLayout(transport_row)
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(14)
@@ -429,9 +435,11 @@ class VideoModal(Overlay):
         self._total.setFont(mono_font(size="--text-sm"))
         self._total.setStyleSheet(f"color: {resolve('--gray-600')}; background: transparent;")
         h.addWidget(self._total)
-        outer.addWidget(transport_row)
+        return transport_row
 
-        audio_row = QWidget(bar)
+    def _audio_row(self, parent):
+        """Sound output picker, mute toggle and volume slider with its readout."""
+        audio_row = QWidget(parent)
         audio = QHBoxLayout(audio_row)
         audio.setContentsMargins(0, 0, 0, 0)
         audio.setSpacing(14)
@@ -519,9 +527,7 @@ class VideoModal(Overlay):
             f"color: {resolve('--ink-700')}; background: transparent;"
         )
         audio.addWidget(self._volume_value)
-        outer.addWidget(audio_row)
-        self._transport_bar = bar
-        return bar
+        return audio_row
 
     @staticmethod
     def _skip_button(glyph):
