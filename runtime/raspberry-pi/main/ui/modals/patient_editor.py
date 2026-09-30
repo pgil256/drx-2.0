@@ -10,7 +10,7 @@ from PyQt5.QtWidgets import (
 )
 
 from helpers.cloud_contract import SETTING_RULES, validate_patient
-from ui.modals.staff_login import open_text_keyboard
+from ui.modals.text_keyboard import ASCII_KEYS, open_text_keyboard
 from ui.screens.content import PROTOCOLS
 from ui.screens.treatment import SETTING_SPECS
 from ui.widgets.ds import DSButton, DSSlider
@@ -182,7 +182,7 @@ class PatientEditor(QDialog):
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:
         if watched is getattr(self, "_reason", None) and event.type() == QEvent.MouseButtonRelease:
-            self._reason_keyboard = open_text_keyboard(self._reason, self)
+            self._reason_keyboard = open_text_keyboard(self._reason, self, keys=ASCII_KEYS)
             return True
         if watched is self._name:
             selected = event.type() == QEvent.MouseButtonRelease

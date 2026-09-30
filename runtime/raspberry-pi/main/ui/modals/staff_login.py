@@ -7,33 +7,8 @@ from PyQt5.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget,
 )
 
-from ui.modals.text_keyboard import TextKeyboard
+from ui.modals.text_keyboard import ASCII_KEYS, TextKeyboard, open_text_keyboard
 from ui.widgets.ds import DSButton
-
-
-def open_text_keyboard(field: QLineEdit, parent: QWidget) -> TextKeyboard:
-    """Use a masked keyboard for secrets and support every printable ASCII symbol."""
-    keyboard = TextKeyboard(field.accessibleName(), field.text(), field.maxLength(), parent=parent)
-    if field.echoMode() == QLineEdit.Password:
-        keyboard.editor.setEchoMode(QLineEdit.Password)
-    for symbols in ('#$%&*()=[]{}', '";<>\\|`~^'):
-        row = QHBoxLayout()
-        for symbol in symbols:
-            button = keyboard._button(symbol)
-            button.clicked.connect(lambda _checked, text=symbol: keyboard._insert(text))
-            row.addWidget(button)
-        keyboard.layout().insertLayout(keyboard.layout().count() - 1, row)
-
-    def finish(result: int) -> None:
-        if result == QDialog.Accepted:
-            field.setText(keyboard.value())
-        keyboard.editor.clear()
-        keyboard.deleteLater()
-
-    keyboard.finished.connect(finish)
-    keyboard.open()
-    keyboard.editor.setFocus()
-    return keyboard
 
 
 class StaffLogin(QDialog):
@@ -91,7 +66,7 @@ class StaffLogin(QDialog):
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:
         if isinstance(watched, QLineEdit) and event.type() == QEvent.MouseButtonRelease:
-            self._keyboard = open_text_keyboard(watched, self)
+            self._keyboard = open_text_keyboard(watched, self, keys=ASCII_KEYS)
             return True
         return super().eventFilter(watched, event)
 

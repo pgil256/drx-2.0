@@ -95,6 +95,29 @@ def test_editor_and_keyboard_fit_touchscreen(themed_app, qtbot, tmp_path, state)
     assert editor._keyboard.grab().save(str(tmp_path / "patient-keyboard.png"))
 
 
+def test_text_keyboard_key_sets_and_initial_case(themed_app, qtbot):
+    from ui.modals.text_keyboard import ASCII_KEYS, NAME_KEYS, TextKeyboard
+
+    def keyboard(**options):
+        widget = TextKeyboard("Entry", "", 10, **options)
+        qtbot.addWidget(widget)
+        return widget
+
+    def labels(widget):
+        return "".join(button.text() for button in widget.findChildren(QPushButton)
+                       if len(button.text()) == 1)
+
+    text = "1234567890qwertyuiopasdfghjklzxcvbnm@._-+/?!,:'"
+    assert labels(keyboard()) == text
+    symbols = labels(keyboard(keys=ASCII_KEYS))
+    assert symbols == text + '#$%&*()=[]{}";<>\\|`~^'
+    assert set(symbols + symbols.upper() + " ") == set(map(chr, range(32, 127)))
+    name = keyboard(keys=NAME_KEYS, uppercase=True)
+    assert labels(name) == "1234567890QWERTYUIOPASDFGHJKLZXCVBNM'-"
+    name._shift()
+    assert labels(name) == "1234567890qwertyuiopasdfghjklzxcvbnm'-"
+
+
 def test_staff_password_keyboard_is_masked_and_fits_screen(themed_app, qtbot, tmp_path):
     from PyQt5.QtWidgets import QLineEdit
     from ui.modals.staff_login import StaffLogin
