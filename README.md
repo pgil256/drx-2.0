@@ -91,7 +91,10 @@ cannot be removed. Unrelated files and subdirectories are left alone.
 `--print-logs` prints the last 200 lines of each current-run log, including preceding
 segments when needed, without loading entire files into memory. `--sync-logs DIR`
 copies logs and numbered segments from this folder after exit.
-`KNEESPA_SERIAL_TRACE_FILE` can still request an additional serial copy for E2E runs.
+`KNEESPA_SERIAL_TRACE_FILE` can still request an additional serial copy for E2E runs;
+`development/tools/trace_report.py <trace file>` summarizes such a trace around
+out-of-band lateral readings (status frames, the commands sent just before, and the
+raw lines around the first bad frame).
 
 Provision users one of two ways:
 

@@ -115,7 +115,8 @@ def main():
         print(f"   Created: {pat['id']}")
 
     print("\n" + "=" * 60)
-    print("Done!  Set these env vars on the Pi (or in .env):\n")
+    print("Done!  Set these env vars on the Pi, or put them in the device's\n"
+          "cloud.env (devices/<device>/raspberry-pi/cloud.env):\n")
     print(f"  KNEESPA_CLOUD_URL={args.url}")
     print(f"  KNEESPA_DEVICE_ID={args.device_id}")
     print(f"  KNEESPA_DEVICE_TOKEN={device_token}")
