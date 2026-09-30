@@ -62,7 +62,6 @@ class Protocols(QtCore.QRunnable):
         as an on/off hint. ``use_pulse`` remains the master on/off gate.
         """
         super().__init__()
-        print("Initializing Protocols class...")
 
         # System setup
         self.logger = setup_logger(component="Protocols")
@@ -151,11 +150,11 @@ class Protocols(QtCore.QRunnable):
                 
             # Now connect the signal
             ser.status_emit.connect(self.update_status)
-            print("Protocol: Connected Arduino status_emit signal to update_status method")
+            self.logger.debug("Connected Arduino status_emit to update_status")
         else:
-            print("WARNING: Arduino object missing status_emit signal - status updates won't work!")
+            self.logger.warning("Arduino object has no status_emit signal; status updates will not work")
 
-        print(f"Protocols class initialized with use_pulse={use_pulse}")
+        self.logger.info("Protocols initialized with use_pulse=%s", use_pulse)
 
     def _send_command(self, command: str) -> bool:
         """Serialize cancellation with enqueueing, including live UI updates."""
@@ -222,7 +221,7 @@ class Protocols(QtCore.QRunnable):
         protocol never expires mid-pause (resume() shifts ``start_time`` past the
         paused span to keep the post-resume clock correct)."""
         if not self.start_time:
-            print("Warning: No start time set for duration check")
+            self.logger.warning("No start time set for duration check")
             return False
 
         now = time.time()
@@ -233,7 +232,7 @@ class Protocols(QtCore.QRunnable):
 
         # Only print status every 15 seconds
         if int(self.elapsed_time) % 15 == 0:
-            print(f"Duration check - Elapsed: {self.elapsed_time:.1f}s / Total: {self.duration}s")
+            self.logger.debug("Duration check: elapsed %.1fs of %ss", self.elapsed_time, self.duration)
 
         return self.elapsed_time < self.duration
 
@@ -246,20 +245,20 @@ class Protocols(QtCore.QRunnable):
         """Hold the running protocol (no-op if not running or already paused)."""
         if not self.is_running or self.is_paused:
             return
-        print("Protocol pause requested — holding")
+        self.logger.info("Protocol pause requested; holding")
         self.is_paused = True
         self._pause_started = time.time()
         # Stop an ACTIVE firmware pulse so the limb is held static (NOT 'X').
         # Unconditional JS used to stall an in-flight ramp/lateral move on
         # the deployed firmware (see _pulse_active).
         if self._pulse_active and not self._send_pulse_stop():
-            print("Error stopping pulse on pause")
+            self.logger.error("Could not stop pulse on pause")
 
     def resume(self):
         """Resume a paused protocol, shifting the clock past the paused span."""
         if not self.is_running or not self.is_paused:
             return
-        print("Protocol resume requested")
+        self.logger.info("Protocol resume requested")
         if self._pause_started is not None and self.start_time is not None:
             self.start_time += (time.time() - self._pause_started)
         self._pause_started = None
@@ -442,7 +441,7 @@ class Protocols(QtCore.QRunnable):
             self._busy_seen.clear()
             self._pulse_active = False
             self._pulse_retry_after = time.time() + 1.0
-            print("Firmware busy; pulse start deferred, will retry")
+            self.logger.info("Firmware busy; pulse start deferred, will retry")
             return True
         self._pulse_active = True
         return True
@@ -457,7 +456,7 @@ class Protocols(QtCore.QRunnable):
         try:
             ok = self._send_command("JS")
         except Exception as e:
-            print(f"Error sending JS: {e}")
+            self.logger.error("Error sending JS: %s", e)
             ok = False
         if ok:
             self._pulse_active = False
@@ -600,9 +599,9 @@ class Protocols(QtCore.QRunnable):
         initial_pressure = MIN_PRESSURE
         if self.max_pressure > 20:
             initial_pressure = max(20.0, MIN_PRESSURE)
-            print(
-                f"Setting higher initial pressure of {initial_pressure} lbs "
-                f"for max_pressure={self.max_pressure}"
+            self.logger.info(
+                "Setting higher initial pressure of %s lbs for max_pressure=%s",
+                initial_pressure, self.max_pressure,
             )
         return initial_pressure
 
@@ -627,9 +626,9 @@ class Protocols(QtCore.QRunnable):
         pulse_active = False
         pulse_stop_failed = False
         last_keepalive_time = time.time()
-        print(
-            f"Protocol {self.protocol}: entering pulse/hold phase "
-            f"(use_pulse={self.use_pulse})"
+        self.logger.info(
+            "Protocol %s: entering pulse/hold phase (use_pulse=%s)",
+            self.protocol, self.use_pulse,
         )
         try:
             while self.is_running and self.check_duration():
@@ -668,7 +667,7 @@ class Protocols(QtCore.QRunnable):
             time.sleep(1)  # settle at center before releasing traction
         if not self.set_to_pressure(0):
             return self._fail("could not release pressure")
-        print(f"Protocol {self.protocol} complete")
+        self.logger.info("Protocol %s complete", self.protocol)
         self.signals.progress.emit("Retracting and zeroing resting pressure")
         self.signals.baseline_changed.emit(False)
         try:
@@ -698,7 +697,7 @@ class Protocols(QtCore.QRunnable):
             target_angle = (
                 self.max_left if target_side == "left" else self.max_right
             )
-            print(f"Moving to {target_angle}°")
+            self.logger.info("Moving to %s°", target_angle)
             if not self.set_to_c_distance(target_angle):
                 self._fail("lateral positioning failed")
                 return
@@ -713,26 +712,26 @@ class Protocols(QtCore.QRunnable):
 
     def protocol_1(self):
         """Axial protocol - pressure only."""
-        print("Running protocol 1...")
+        self.logger.info("Running protocol 1")
         self._run_standard_protocol(">>Starting axial protocol", None)
 
     def protocol_2(self):
         """Axial with left lateral movement."""
-        print("Running protocol 2...")
+        self.logger.info("Running protocol 2")
         self._run_standard_protocol(
             ">>Starting left lateral protocol", "left"
         )
 
     def protocol_3(self):
         """Axial with right lateral movement."""
-        print("Running protocol 3...")
+        self.logger.info("Running protocol 3")
         self._run_standard_protocol(
             ">>Starting right lateral protocol", "right"
         )
 
     def protocol_4(self):
         """Axial with oscillating lateral movement between left and right."""
-        print("Running protocol 4...")
+        self.logger.info("Running protocol 4")
         if not self._preamble(">>Starting oscillating lateral protocol"):
             return
 
@@ -746,9 +745,8 @@ class Protocols(QtCore.QRunnable):
         self._active_lateral_side = "left"
 
         try:
-            print(
-                f"Starting oscillation between {self.max_left}° "
-                f"and {self.max_right}°"
+            self.logger.info(
+                "Starting oscillation between %s° and %s°", self.max_left, self.max_right,
             )
             if not self.set_to_c_distance(self.max_left):
                 self._fail("initial lateral positioning failed")
@@ -785,7 +783,7 @@ class Protocols(QtCore.QRunnable):
                     side = "right" if position_at_left else "left"
                     self._active_lateral_side = side
                     target = self.max_right if side == "right" else self.max_left
-                    print(f"Oscillating to {side} {target}°")
+                    self.logger.info("Oscillating to %s %s°", side, target)
                     self.signals.progress.emit(f">>Moving to {side} {target}°")
                     if not self.set_to_c_distance(target):
                         self._fail("oscillation move failed")
@@ -901,7 +899,7 @@ class Protocols(QtCore.QRunnable):
         flushed buffers and fought reconnects concurrently with whatever
         the user started next.
         """
-        print("Initiating protocol stop sequence...")
+        self.logger.info("Initiating protocol stop sequence")
         self.cancel()
         if self._firmware_stopped:
             # X aborts firmware's autonomous release, and P0 is rejected while
@@ -909,24 +907,30 @@ class Protocols(QtCore.QRunnable):
             return
 
         if not self.arduino:
-            print("Warning: No Arduino connection available for stop sequence")
+            self.logger.warning("No Arduino connection available for stop sequence")
             return
 
         try:
             # Emergency stop first: halts pulsing/motion immediately
             # (X jumps the transport's queue and the firmware's limiter)
             stop_sent = self.arduino.send("X")
-            print(f"Emergency stop command sent: {'Success' if stop_sent else 'FAILED'}")
+            if stop_sent:
+                self.logger.info("Emergency stop command sent")
+            else:
+                self.logger.error("Emergency stop command could not be sent")
             self._pulse_active = False  # X halts pulsing along with everything else
 
             # Actively release traction; the firmware ramps the axial
             # actuator back until the load cell reads zero
             release_sent = self.arduino.send("P0")
-            print(f"Pressure release command sent: {'Success' if release_sent else 'FAILED'}")
+            if release_sent:
+                self.logger.info("Pressure release command sent")
+            else:
+                self.logger.error("Pressure release command could not be sent")
 
             # Telemetry continues during the release via the firmware's
             # active-motion status path even after HF mode is off
             self.arduino.send("HF0")
 
         except Exception as e:
-            print(f"Error during protocol stop: {e}")
+            self.logger.error("Error during protocol stop: %s", e)
