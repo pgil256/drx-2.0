@@ -510,8 +510,9 @@ def test_video_modal_stops_playback_on_close(shell):
 def test_video_modal_degrades_without_vlc(app, monkeypatch):
     """No VLC leaves the poster visible and never claims playback started."""
     import ui.modals.video_modal as vm
+    import ui.modals.vlc_engine as ve
 
-    monkeypatch.setattr(vm, "vlc", None)
+    monkeypatch.setattr(ve, "vlc", None)
     modal = vm.VideoModal()
     try:
         assert modal._engine.available is False
@@ -537,8 +538,9 @@ def test_video_modal_degrades_without_vlc(app, monkeypatch):
 def test_video_modal_reports_native_vlc_initialization_failure(app, monkeypatch):
     """An importable binding does not guarantee a working native VLC runtime."""
     import ui.modals.video_modal as vm
+    import ui.modals.vlc_engine as ve
 
-    monkeypatch.setattr(vm.vlc.Instance, "side_effect", OSError("missing VLC plugins"))
+    monkeypatch.setattr(ve.vlc.Instance, "side_effect", OSError("missing VLC plugins"))
     modal = vm.VideoModal()
     try:
         modal._toggle()
@@ -553,8 +555,9 @@ def test_video_modal_reports_native_vlc_initialization_failure(app, monkeypatch)
 
 def test_video_modal_reports_missing_clips(app, monkeypatch, tmp_path):
     import ui.modals.video_modal as vm
+    import ui.modals.vlc_engine as ve
 
-    monkeypatch.setitem(vm.UI_PATHS, "VIDEOS", str(tmp_path))
+    monkeypatch.setitem(ve.UI_PATHS, "VIDEOS", str(tmp_path))
     modal = vm.VideoModal()
     try:
         modal._toggle()
@@ -610,9 +613,10 @@ def test_video_modal_audio_not_disabled(app):
     """The demo clips carry narration — the VLC instance must not be created
     with --no-audio (regression guard for the legacy silent-player options)."""
     import ui.modals.video_modal as vm
+    import ui.modals.vlc_engine as ve
 
-    vm.vlc.Instance.reset_mock()
-    player = vm.vlc.Instance.return_value.media_player_new.return_value
+    ve.vlc.Instance.reset_mock()
+    player = ve.vlc.Instance.return_value.media_player_new.return_value
     player.play.return_value = 0
     player.audio_get_mute.return_value = 0
     player.audio_get_volume.return_value = 100
@@ -620,7 +624,7 @@ def test_video_modal_audio_not_disabled(app):
     m = vm.VideoModal()
     try:
         m._toggle()  # forces _ensure_player → vlc.Instance(...)
-        args = vm.vlc.Instance.call_args[0][0]
+        args = ve.vlc.Instance.call_args[0][0]
         assert "--no-audio" not in args
         player.audio_set_mute.assert_called_with(False)
         player.audio_set_volume.assert_called_with(100)
@@ -631,21 +635,21 @@ def test_video_modal_audio_not_disabled(app):
 
 def test_vlc_engine_forces_selected_alsa_device(app, monkeypatch):
     """The app must use the same direct ALSA path that passed Pi Test 3."""
-    import ui.modals.video_modal as vm
+    import ui.modals.vlc_engine as ve
 
     device = "sysdefault:CARD=Headphones"
-    monkeypatch.setattr(vm.sys, "platform", "linux")
-    vm.vlc.Instance.reset_mock()
-    player = vm.vlc.Instance.return_value.media_player_new.return_value
+    monkeypatch.setattr(ve.sys, "platform", "linux")
+    ve.vlc.Instance.reset_mock()
+    player = ve.vlc.Instance.return_value.media_player_new.return_value
     player.play.return_value = 0
     player.audio_get_mute.return_value = 0
     player.audio_get_volume.return_value = 100
 
-    surface = vm.QWidget()
-    engine = vm._VlcEngine(surface, audio_device=device, volume=100)
+    surface = ve.QWidget()
+    engine = ve._VlcEngine(surface, audio_device=device, volume=100)
     try:
         assert engine.play()
-        options = vm.vlc.Instance.call_args[0][0]
+        options = ve.vlc.Instance.call_args[0][0]
         assert "--aout=alsa" in options
         assert f"--alsa-audio-device={device}" in options
     finally:
@@ -654,7 +658,7 @@ def test_vlc_engine_forces_selected_alsa_device(app, monkeypatch):
 
 
 def test_video_modal_discovers_direct_alsa_outputs(monkeypatch):
-    import ui.modals.video_modal as vm
+    import ui.modals.vlc_engine as ve
 
     output = (
         "null\n"
@@ -663,15 +667,15 @@ def test_video_modal_discovers_direct_alsa_outputs(monkeypatch):
         "sysdefault:CARD=vc4hdmi0\n"
         "    HDMI 1\n"
     )
-    monkeypatch.setattr(vm.sys, "platform", "linux")
-    monkeypatch.setattr(vm.shutil, "which", lambda command: "/usr/bin/aplay")
+    monkeypatch.setattr(ve.sys, "platform", "linux")
+    monkeypatch.setattr(ve.shutil, "which", lambda command: "/usr/bin/aplay")
     monkeypatch.setattr(
-        vm.subprocess,
+        ve.subprocess,
         "run",
         lambda *args, **kwargs: MagicMock(stdout=output),
     )
 
-    assert vm._discover_alsa_devices() == [
+    assert ve._discover_alsa_devices() == [
         "sysdefault:CARD=Headphones",
         "sysdefault:CARD=vc4hdmi0",
     ]
@@ -737,13 +741,13 @@ def test_video_modal_output_selector_restarts_on_direct_device(app, monkeypatch)
 
 def test_vlc_engine_position_uses_relative_clock_when_elapsed_stays_zero():
     """Some VLC outputs advance get_position while get_time remains at zero."""
-    import ui.modals.video_modal as vm
+    import ui.modals.vlc_engine as ve
 
     player = MagicMock()
     player.get_length.return_value = 120_000
     player.get_time.return_value = 0
     player.get_position.return_value = 0.25
-    engine = object.__new__(vm._VlcEngine)
+    engine = object.__new__(ve._VlcEngine)
     engine._player = player
 
     assert engine.position() == (30.0, 120.0)
