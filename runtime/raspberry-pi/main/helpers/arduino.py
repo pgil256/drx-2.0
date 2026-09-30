@@ -91,9 +91,7 @@ class Arduino(QObject):
     connection_failed = pyqtSignal(str)  # Signal for connection failure
     finished = pyqtSignal()
     done_emit = pyqtSignal()
-    pressure_emit = pyqtSignal(str)
     ready_to_go_emit = pyqtSignal()
-    position_emit = pyqtSignal(int, int, str, int)
     status_emit = pyqtSignal(int, int, int, float)
     connection_lost = pyqtSignal()  # Signal for connection loss
     display_weight_emit = pyqtSignal(str)  # Added missing signal for weight display
@@ -735,12 +733,6 @@ class Arduino(QObject):
                   and all(re.fullmatch(r"[0-9]+", t) and 0 <= int(t) <= 4095
                           for t in tokens[1:])):
                 self.zeros_emit.emit(int(tokens[1]), int(tokens[2]))
-            elif (tokens[0] == "P" and len(tokens) == 2
-                  and re.fullmatch(r"[0-9]+", tokens[1]) and 0 <= int(tokens[1]) <= 4095):
-                self.position_emit.emit(int(tokens[1]), 0, "", 0)
-            elif (tokens[0] == "PR" and len(tokens) == 2
-                  and math.isfinite(float(tokens[1])) and float(tokens[1]) >= 0):
-                self.pressure_emit.emit(tokens[1])
             elif data == "Ready to Go":
                 self._invalidate_identity()
                 self.ready_event.set()

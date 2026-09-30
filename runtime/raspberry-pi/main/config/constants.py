@@ -111,7 +111,7 @@ CALIBRATION_STATUS_MAX_AGE_S = 2.0
 CALIBRATION_MOVE_TIMEOUT_S = 15.0
 CALIBRATION_SETTLE_COUNTS = 8
 CALIBRATION_POSITION_TOLERANCE = 25  # firmware POSITION_DEADBAND
-CALIBRATION_DISTANCE_REFERENCE_INCHES = 6.0  # read_position() factor convention
+CALIBRATION_DISTANCE_REFERENCE_INCHES = 6.0  # factors are counts per six inches
 # Raw service targets must also fit the SMC's 12-bit feedback range. Factors
 # describe counts per six inches for legacy distance readouts, not safety limits.
 SERVICE_AXES = {

@@ -3,7 +3,7 @@
 # Union of the two development lines (Phase B replay):
 #   * Backend/controllers (improvement-plan): the Arduino QThread, controllers/
 #     (auth, connection, protocol, safety), frozen calibration math
-#     (set_to_distance / set_to_c_distance / move_actuator / read_position),
+#     (set_to_distance / set_to_c_distance / move_actuator),
 #     GPIO handling with auto-release timers, and the reset paths are preserved
 #     from the improvement-plan KneeSpa.
 #   * View (feat/gui-modernization): the monolithic kneespa.ui + findChild wiring
@@ -1588,44 +1588,6 @@ class KneeSpa(QMainWindow):
         # GPIO.output(EXTRAENABLE, GPIO.LOW)
         self.loading_spinner.hide()
         return True
-
-    def read_position(self, position, steps, actuator):
-        """Read position data from the Arduino with safety checks."""
-        print(
-            f"Reading position: position={position}, steps={steps}, actuator={actuator}"
-        )
-
-        # Safety check calibration factors to prevent division by zero
-        if not hasattr(self.config, 'a_factor') or not hasattr(self.config, 'b_factor') or not hasattr(self.config, 'c_factor'):
-            self.logger.error("Missing calibration factors in config")
-            self._show_timed_error("Calibration error - please recalibrate system")
-            return
-
-        if self.config.a_factor == 0 or self.config.b_factor == 0 or self.config.c_factor == 0:
-            self.logger.error(f"Invalid calibration factors: a={self.config.a_factor}, b={self.config.b_factor}, c={self.config.c_factor}")
-            self._show_timed_error("Calibration error - factors cannot be zero. Please recalibrate.")
-            return
-
-        try:
-            if hasattr(self, "actuator_b") and actuator == self.actuator_b:
-                inches = (position * 6) / self.config.b_factor
-                inches = round(inches * 2.0) / 2.0
-                print(f"Inches (actuator B): {inches}")
-                degrees = int(-(25 - (inches / 5) * 25)) if inches != 0 else -25
-                print(f"Degrees (actuator B): {degrees}")
-            elif hasattr(self, "actuator_a") and actuator == self.actuator_a:
-                inches = (position * 6) / self.config.a_factor
-                inches = round(inches * 2.0) / 2.0
-                print(f"Inches (actuator A): {inches}")
-            elif hasattr(self, "actuator_c") and actuator == self.actuator_c:
-                inches = steps / (self.config.c_factor / 6)
-                inches = round(inches * 2.0) / 2.0
-                print(f"Inches (actuator C): {inches}")
-                degrees = int((inches * 20) - 20)
-                print(f"Degrees (actuator C): {degrees}")
-        except (ZeroDivisionError, ValueError) as e:
-            self.logger.error(f"Position calculation error: {e}")
-            self._show_timed_error(f"Error calculating position: {str(e)}")
 
     def ensure_arduino_connection(self):
         return self.connection.ensure_arduino_connection()

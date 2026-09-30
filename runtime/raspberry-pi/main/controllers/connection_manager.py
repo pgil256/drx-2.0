@@ -74,8 +74,7 @@ class ConnectionManager:
             window.arduino_thread.started.connect(window.arduino.run)
 
             # Additional Arduino signal connections
-            print("Connecting Arduino position, status, and pressure signals")
-            window.arduino.position_emit.connect(window.read_position)
+            print("Connecting Arduino status and fault signals")
             window.arduino.status_emit.connect(window.status_emit)
             window.arduino.connection_lost.connect(window.handle_connection_lost)
             window.arduino.connection_failed.connect(window.handle_connection_failed)
