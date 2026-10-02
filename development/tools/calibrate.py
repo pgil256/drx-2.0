@@ -83,6 +83,8 @@ class ArduinoSerial:
         self._status_lock = threading.Lock()
         self._status_event = threading.Event()
         self._ok_event = threading.Event()
+        self._tare_event = threading.Event()
+        self._tare_result = ""
 
     # -- connection ---------------------------------------------------------
 
@@ -162,6 +164,22 @@ class ArduinoSerial:
         with self._status_lock:
             return self.pos_a, self.pos_b, self.pos_c, self.pressure
 
+    def tare(self, timeout_s: float = 10.0) -> str:
+        """Zero the resting load; return "" on success or the firmware's reason.
+
+        The firmware only accepts the explicit L1|BASELINE request, samples
+        asynchronously, and gives up after 8 s.
+        """
+        self._tare_event.clear()
+        self._tare_result = ""
+        if not self.send("L1|BASELINE"):
+            return "send failed"
+        if self.dry_run:
+            return ""
+        if not self._tare_event.wait(timeout_s):
+            return "no reply"
+        return self._tare_result
+
     # -- background reader --------------------------------------------------
 
     def _start_reader(self):
@@ -185,7 +203,16 @@ class ArduinoSerial:
 
     def _handle(self, data: str):
         if "STATUS_START|" in data and "|STATUS_END" in data:
-            payload = data.replace("STATUS_START|", "").replace("|STATUS_END", "")
+            # Current firmware appends "*<XOR hex>" to each status frame.
+            frame, separator, checksum = data.partition("*")
+            if separator:
+                expected = 0
+                for char in frame:
+                    expected ^= ord(char)
+                if checksum.upper() != f"{expected:02X}":
+                    print(f"Ignoring status frame with bad checksum: {data}")
+                    return
+            payload = frame.replace("STATUS_START|", "").replace("|STATUS_END", "")
             tokens = payload.split("|")
             if tokens[0] == "S" and len(tokens) >= 5:
                 with self._status_lock:
@@ -199,6 +226,15 @@ class ArduinoSerial:
                     if self.ser and self.ser.is_open:
                         self.ser.write(b"Q\n")
                         self.ser.flush()
+        elif data.startswith("CALIBRATION|TARE|"):
+            # Checked before "OK" below: "CALIBRATION|TARE|OK|..." is not a T reply.
+            outcome = data.split("|")
+            if outcome[2] == "OK":
+                self._tare_result = ""
+                self._tare_event.set()
+            elif outcome[2] in ("REJECTED", "CANCELLED"):
+                self._tare_result = "|".join(outcome[2:])
+                self._tare_event.set()
         elif "OK" in data:
             self._ok_event.set()
 
@@ -741,8 +777,10 @@ def calibrate_load_cell(ard: ArduinoSerial, cfg: configparser.ConfigParser):
     # --- Step 1: tare with no load ---
     print("\n--- Step 1: Tare (zero offset) ---")
     prompt_enter("Remove ALL load from the axial actuator, then press Enter.")
-    ard.send("L1")  # firmware: set_scale(current) + tare
-    time.sleep(2)
+    failure = ard.tare()
+    if failure:
+        print(f"  Tare failed ({failure}). Aborting load-cell calibration.")
+        return
     refresh_status(ard)
     _, _, _, zero_reading = ard.get_status()
     print(f"  Reading after tare: {zero_reading:.2f} (should be ~0)")

@@ -25,7 +25,7 @@ void setUp() {
     scale._ready = false; scale._scale = 1; scale._offset = 0; scale._raw = 0;
     STOP = true; _pin_levels[STOP_PIN] = HIGH;
     _pin_levels[DIR_FIT_FORWARD] = _pin_levels[DIR_FIT_REVERSE] = LOW;
-    currentCmdSeq = activeCmdSeq = activeFitCmdSeq = -1; hostV2 = false;
+    currentCmdSeq = activeCmdSeq = activeFitCmdSeq = -1;
     isProcessingStatus = false;
 }
 

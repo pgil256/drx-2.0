@@ -125,11 +125,9 @@ class TestReadyToGo:
         DONE event here as well could satisfy the NEXT step's wait early and
         shift every later DONE by one homing step."""
         cm, w = manager
-        w.I2Cstatus = 0
         w.I2Cstatus_event = MagicMock()
         cm.ready_to_go()
         w.I2Cstatus_event.set.assert_not_called()
-        assert w.I2Cstatus == 0
 
 
 @pytest.mark.unit
@@ -145,35 +143,6 @@ class TestLateConnect:
         )
         cm._on_late_connect()
         assert scheduled == [(0, cm._automatic_reset)]
-
-    def test_calibration_pushes_tolerate_missing_transport(self, manager):
-        cm, w = manager
-        w.arduino = None
-        cm.send_zero_mark()      # must not raise
-        cm.send_calibration()
-        assert w.logger.error.called
-
-
-@pytest.mark.unit
-class TestCalibrationPushes:
-    def test_zero_mark_uses_delimited_form(self, manager):
-        """Regression: this copy still sent the legacy fixed-width L5,
-        which truncates 4-digit marks (1900 -> 190)."""
-        cm, w = manager
-        cm.send_zero_mark()
-        w.arduino.send.assert_called_once_with("L5|160|1900")
-
-    def test_calibration_sent_when_plausible(self, manager):
-        cm, w = manager
-        cm.send_calibration()
-        w.arduino.send.assert_called_once_with("L0-28369.0")
-
-    def test_implausible_factor_refused(self, manager):
-        cm, w = manager
-        w.config.scale_calibrated = False
-        w.config.calibration = 1.0
-        cm.send_calibration()
-        assert not w.arduino.send.called
 
 
 @pytest.mark.unit

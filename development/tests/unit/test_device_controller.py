@@ -35,8 +35,8 @@ def controller(qapp, qtbot, tmp_path, monkeypatch):
     window.enable_actuator_controls = Mock()
     window._on_restart_app = Mock()
     window._on_logout = Mock()
-    window.calibration_controller = SimpleNamespace(
-        access=ServiceAccess(str(tmp_path / "pin.json")), _can_open=lambda: True)
+    window.hardware_service = SimpleNamespace(
+        access=ServiceAccess(str(tmp_path / "pin.json")), can_open=lambda: True)
     window.cloud_client = Mock(enabled=False)
     window.cloud_client.sync_summary.return_value = {
         "pending": 2, "blocked": 1, "last_sync": "Not recorded yet", "message": "Not configured",
@@ -108,7 +108,7 @@ def test_queued_mutation_rechecks_user_and_device_before_execution(controller, s
 
 
 def test_technician_restore_requires_pin_even_for_admin_and_rechecks_after_dialog(controller):
-    access = controller.window.calibration_controller.access
+    access = controller.window.hardware_service.access
     access.provision("235689", "235689", True)
     called = Mock()
     controller._authorize(called, technician=True)
@@ -236,7 +236,7 @@ def test_failed_setting_write_refreshes_actual_readback(controller, qtbot):
 
 
 def test_service_requires_pin_for_admin_and_locks_when_leaving(controller):
-    controller.window.calibration_controller.access.provision("235689", "235689", True)
+    controller.window.hardware_service.access.provision("235689", "235689", True)
     controller.require_service(lambda _user: None)
     assert not controller.service_authorized()
     controller._auth_dialog.submit("235689")

@@ -10,7 +10,7 @@ from typing import Callable, Optional
 from PyQt5.QtCore import QEvent, QObject, QTimer, pyqtSignal
 from PyQt5.QtWidgets import QApplication, QDialog, QFileDialog, QMessageBox
 
-from main.config.constants import APP_VERSION, DATA_PATHS
+from config.constants import APP_VERSION, DATA_PATHS
 from config.paths import DEVICE_STATE_DIR
 from helpers.calibration_backup import CalibrationBackups
 from helpers.device_records import DeviceRecords, write_json
@@ -122,7 +122,7 @@ class DeviceController(QObject):
         from controllers.machine_sign_in_controller import authorize
         if not authorize(self.window, "service", lambda: self.require_service(callback)):
             return
-        if self.service_authorized() and self.window.calibration_controller._can_open():
+        if self.service_authorized() and self.window.hardware_service.can_open():
             callback(dict(self.window.current_user))
             return
 
@@ -377,7 +377,7 @@ class DeviceController(QObject):
         user = dict(self.window.current_user or {})
         def eligible() -> bool:
             return (bool(user) and user == self.window.current_user and
-                    (self.window.calibration_controller._can_open() if service else self.idle()))
+                    (self.window.hardware_service.can_open() if service else self.idle()))
 
         if not eligible():
             self.screen.set_status("Log in and finish treatment, movement, reset or service first.")
@@ -389,7 +389,7 @@ class DeviceController(QObject):
             callback(user)
             return
         try:
-            dialog = ServicePinDialog(self.window.calibration_controller.access,
+            dialog = ServicePinDialog(self.window.hardware_service.access,
                                       user.get("status") == "admin", self.window)
         except (OSError, ValueError):
             self.screen.set_status("The service credential is unavailable.")

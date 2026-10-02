@@ -30,7 +30,6 @@ void setUp(void) {
     statusAcknowledged = true;
     highFrequencyStatus = false;
     jerking = false;
-    hostV2 = false;
     currentCmdSeq = -1;
     pressureFault = false; pressureCalibrated = false;
     pressureGuardActive = false; pressureSampleValid = false;
@@ -69,15 +68,15 @@ static void assert_checksummed_report(const std::string &out) {
 void test_legacy_status_is_checksummed_without_v2_opt_in(void) {
     Wire.position_14 = 1940;
     sendStatus();
-    TEST_ASSERT_FALSE(hostV2);
     assert_checksummed_report(Serial1.getOutput());
     TEST_ASSERT_TRUE(Serial1.outputContains("|1940|"));
 }
 
 void test_v2_status_keeps_same_checksum_format(void) {
-    hostV2 = true;
+    currentCmdSeq = 7;  // status sent while a framed command is in flight
     sendStatus();
     assert_checksummed_report(Serial1.getOutput());
+    currentCmdSeq = -1;
 }
 
 void test_l6_uses_checksummed_status_format(void) {
@@ -151,18 +150,32 @@ void test_calibration_l4_weight(void) {
     TEST_ASSERT_TRUE(Serial1.outputContains("weight|"));
 }
 
-void test_calibration_l5_zero_marks(void) {
+void test_l5_legacy_fixed_width_form_is_rejected(void) {
+    // The old fixed-width form truncated 4-digit marks (1900 -> 190).
+    // It is rejected and the previous marks are kept.
+    AZERO = 7; BZERO = 8;
     processCommand("L5100 200");
-    TEST_ASSERT_EQUAL(100, AZERO);
-    TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
+    TEST_ASSERT_EQUAL(7, AZERO);
+    TEST_ASSERT_EQUAL(8, BZERO);
+    TEST_ASSERT_TRUE(Serial1.outputContains("COMMAND_REJECTED|L5|INVALID_FORMAT"));
+    TEST_ASSERT_FALSE(Serial1.outputContains("ZEROS|"));
+    TEST_ASSERT_FALSE(Serial1.outputContains("DONE"));
 }
 
-void test_l5_legacy_four_digit_corruption_documented(void) {
-    // The legacy fixed-width format cannot carry a 4-digit AZERO; the
-    // delimited form below is the fix. This documents the constraint.
+void test_l5_legacy_four_digit_form_is_rejected(void) {
+    AZERO = 7; BZERO = 8;
     processCommand("L5160 1900");
-    TEST_ASSERT_EQUAL(160, AZERO);
-    TEST_ASSERT_EQUAL(190, BZERO);  // truncated! use delimited form
+    TEST_ASSERT_EQUAL(7, AZERO);
+    TEST_ASSERT_EQUAL(8, BZERO);
+    TEST_ASSERT_TRUE(Serial1.outputContains("COMMAND_REJECTED|L5|INVALID_FORMAT"));
+}
+
+void test_l5_without_marks_is_rejected(void) {
+    AZERO = 7; BZERO = 8;
+    processCommand("L5");
+    TEST_ASSERT_EQUAL(7, AZERO);
+    TEST_ASSERT_EQUAL(8, BZERO);
+    TEST_ASSERT_TRUE(Serial1.outputContains("COMMAND_REJECTED|L5|INVALID_FORMAT"));
 }
 
 void test_l5_delimited_zero_marks(void) {
@@ -235,8 +248,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_calibration_l0_sends_done);
     RUN_TEST(test_calibration_l1_tare);
     RUN_TEST(test_calibration_l4_weight);
-    RUN_TEST(test_calibration_l5_zero_marks);
-    RUN_TEST(test_l5_legacy_four_digit_corruption_documented);
+    RUN_TEST(test_l5_legacy_fixed_width_form_is_rejected);
+    RUN_TEST(test_l5_legacy_four_digit_form_is_rejected);
+    RUN_TEST(test_l5_without_marks_is_rejected);
     RUN_TEST(test_l5_delimited_zero_marks);
     RUN_TEST(test_update_pressure_reports_first_valid_sample);
     RUN_TEST(test_update_pressure_rejects_saturated_sample);

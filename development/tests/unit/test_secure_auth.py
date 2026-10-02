@@ -1,6 +1,4 @@
 # development/tests/unit/test_secure_auth.py
-from pathlib import Path
-
 import pytest
 
 from helpers.secure_auth import SecureAuthHelper
@@ -29,6 +27,16 @@ class TestPinHashing:
         assert SecureAuthHelper.verify_pin("1234", legacy)
         assert not SecureAuthHelper.verify_pin("9999", legacy)
 
+    def test_stored_hash_is_not_itself_a_valid_pin(self):
+        """The input is always hashed, never compared as a hash."""
+        legacy = SecureAuthHelper.hash_pin("4321")
+        assert not SecureAuthHelper.verify_pin(legacy, legacy)
+
+    def test_numeric_pin_verifies_against_its_string_form(self):
+        stored = SecureAuthHelper.hash_pin_secure("1234")
+        assert SecureAuthHelper.verify_pin(1234, stored)
+        assert SecureAuthHelper.verify_pin(1234, SecureAuthHelper.hash_pin("1234"))
+
     def test_malformed_stored_hash_rejected(self):
         assert not SecureAuthHelper.verify_pin("1234", "pbkdf2_sha256$bad")
         assert not SecureAuthHelper.verify_pin("1234", "")
@@ -46,7 +54,6 @@ class StubWindow:
 
     def __init__(self, users):
         self.users = users
-        self.login_pin = ""
         self.current_user = None
         self.errors = []
 
@@ -68,56 +75,28 @@ class TestLoginLockout:
 
     def test_successful_login(self, tmp_path):
         auth, w = self._make(tmp_path)
-        w.login_pin = "7531"
-        auth.handle_login()
+        auth.handle_login("7531")
         assert w.current_user is not None
-        assert w.login_pin == ""
 
     def test_lockout_after_five_failures(self, tmp_path):
         auth, w = self._make(tmp_path)
         for _ in range(5):
-            w.login_pin = "0000"
-            auth.handle_login()
-            assert w.login_pin == ""
+            auth.handle_login("0000")
         assert auth.lockout_until > 0
         assert any("locked" in e.lower() for e in w.errors)
 
         # Even the correct PIN is refused during the lockout window
-        w.login_pin = "7531"
-        auth.handle_login()
+        auth.handle_login("7531")
         assert w.current_user is None
-        assert w.login_pin == ""
 
     def test_success_resets_counter(self, tmp_path):
         auth, w = self._make(tmp_path)
         for _ in range(3):
-            w.login_pin = "0000"
-            auth.handle_login()
-        w.login_pin = "7531"
-        auth.handle_login()
+            auth.handle_login("0000")
+        auth.handle_login("7531")
         assert w.current_user is not None
         assert auth.failed_logins == 0
 
-    def test_backspace_removes_last_digit(self, tmp_path):
-        auth, w = self._make(tmp_path)
-        w.login_pin = "753"
-        auth.backspace_digit()
-        assert w.login_pin == "75"
-
-    def test_backspace_on_empty_pin_is_safe(self, tmp_path):
-        auth, w = self._make(tmp_path)
-        w.login_pin = ""
-        auth.backspace_digit()
-        assert w.login_pin == ""
-
-    def test_append_and_clear_pin_buffer(self, tmp_path: Path) -> None:
-        """Legacy PIN methods retain buffer semantics without fake widgets."""
-        auth, w = self._make(tmp_path)
-        auth.append_digit("7")
-        auth.append_digit("0")
-        assert w.login_pin == "70"
-        auth.clear_pin()
-        assert w.login_pin == ""
 
 
 @pytest.mark.unit
@@ -136,8 +115,7 @@ class TestLockoutPersistence:
 
     def _trip_lockout(self, auth, window):
         for _ in range(AuthController.LOCKOUT_THRESHOLD):
-            window.login_pin = "0000"
-            auth.handle_login()
+            auth.handle_login("0000")
 
     def test_lockout_survives_restart(self, tmp_path):
         auth, w = self._make(tmp_path)
@@ -147,22 +125,19 @@ class TestLockoutPersistence:
         # New controller instance = process restart; same state file.
         auth2, w2 = self._make(tmp_path)
         assert auth2.lockout_until == pytest.approx(auth.lockout_until)
-        w2.login_pin = "7531"
-        auth2.handle_login()
+        auth2.handle_login("7531")
         assert w2.current_user is None  # still locked
 
     def test_failed_count_survives_restart(self, tmp_path):
         auth, w = self._make(tmp_path)
         for _ in range(3):
-            w.login_pin = "0000"
-            auth.handle_login()
+            auth.handle_login("0000")
 
         auth2, w2 = self._make(tmp_path)
         assert auth2.failed_logins == 3
         # Two more failures after "reboot" trip the threshold of five.
         for _ in range(2):
-            w2.login_pin = "0000"
-            auth2.handle_login()
+            auth2.handle_login("0000")
         assert auth2.lockout_until > 0
 
     def test_exponential_backoff_doubles_and_caps(self, tmp_path):
@@ -191,8 +166,7 @@ class TestLockoutPersistence:
     def test_success_resets_backoff(self, tmp_path):
         auth, w = self._make(tmp_path)
         auth.lockout_count = 3
-        w.login_pin = "7531"
-        auth.handle_login()
+        auth.handle_login("7531")
         assert auth.lockout_count == 0
         # And the reset is persisted.
         auth2, _ = self._make(tmp_path)
@@ -203,8 +177,7 @@ class TestLockoutPersistence:
         auth, w = self._make(tmp_path)
         assert auth.failed_logins == 0
         assert auth.lockout_until == 0.0
-        w.login_pin = "7531"
-        auth.handle_login()
+        auth.handle_login("7531")
         assert w.current_user is not None
 
     def test_pin_never_logged(self, tmp_path, caplog):
@@ -213,8 +186,7 @@ class TestLockoutPersistence:
 
         auth, w = self._make(tmp_path)
         with caplog.at_level(_logging.DEBUG):
-            w.login_pin = "13372"
-            auth.handle_login()
+            auth.handle_login("13372")
             self._trip_lockout(auth, w)
         for record in caplog.records:
             assert "13372" not in record.getMessage()
@@ -222,7 +194,7 @@ class TestLockoutPersistence:
 
 
 # ---------------------------------------------------------------------------
-# Environment-driven user loading + validate_pin (from the GUI line, adapted:
+# Environment-driven user loading (from the GUI line, adapted:
 # plaintext env PINs are now hashed with the salted hash_pin_secure, so the
 # user key is no longer predictable from the PIN — verify through verify_pin).
 # ---------------------------------------------------------------------------
@@ -390,60 +362,3 @@ class TestLoadSecureUsers:
         entry = helper.users[user_hash]
         assert entry["username"] == "User"
         assert entry["email"] == "user@example.com"
-
-
-@pytest.mark.unit
-class TestValidatePin:
-    """Tests for PIN validation against loaded users (verify_pin loop)."""
-
-    def test_correct_admin_pin_returns_user(self, clean_auth_env):
-        """A matching admin PIN returns its user dict (salted verify)."""
-        clean_auth_env.setenv("ADMIN_PIN", "1234")
-
-        helper = SecureAuthHelper()
-        result = helper.validate_pin("1234")
-
-        assert result is not None
-        assert result["status"] == "admin"
-
-    def test_correct_user_pin_returns_user(self, clean_auth_env):
-        """A matching regular-user PIN returns its user dict."""
-        clean_auth_env.setenv("USER_PIN", "5678")
-
-        helper = SecureAuthHelper()
-        result = helper.validate_pin("5678")
-
-        assert result is not None
-        assert result["status"] == "user"
-
-    def test_wrong_pin_returns_none(self, clean_auth_env):
-        """A non-matching PIN returns None."""
-        clean_auth_env.setenv("ADMIN_PIN", "1234")
-
-        helper = SecureAuthHelper()
-        assert helper.validate_pin("0000") is None
-
-    def test_unknown_user_when_no_users_loaded(self, clean_auth_env):
-        """With CSV-fallback (users is None), validation returns None."""
-        helper = SecureAuthHelper()
-        assert helper.users is None
-        assert helper.validate_pin("1234") is None
-
-    def test_validate_pin_rehashes_input(self, clean_auth_env):
-        """Validation verifies the input PIN, never treats it as a hash."""
-        pin = "4321"
-        clean_auth_env.setenv("ADMIN_PIN_HASH", SecureAuthHelper.hash_pin(pin))
-
-        helper = SecureAuthHelper()
-
-        # Correct plaintext PIN validates (legacy hash still verifies)...
-        assert helper.validate_pin(pin) is not None
-        # ...but the raw hash string is NOT a valid PIN (it gets re-hashed).
-        assert helper.validate_pin(SecureAuthHelper.hash_pin(pin)) is None
-
-    def test_numeric_pin_validates(self, clean_auth_env):
-        """An int PIN validates against a hash created from its string form."""
-        clean_auth_env.setenv("ADMIN_PIN", "1234")
-
-        helper = SecureAuthHelper()
-        assert helper.validate_pin(1234) is not None

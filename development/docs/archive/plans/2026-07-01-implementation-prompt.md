@@ -1,12 +1,12 @@
 # Implementation Prompt — drx-2.0 Audit Remediation
 
-*Hand this to a fresh Claude Code session working in `C:\Users\patri\Documents\Projects\drx-2.0`. It is self-contained but references the full audit at `docs/plans/2026-07-01-audit-and-improvement-plan.md` (read it first). The work spans multiple sessions and one on-device session — do not try to do it all in one run. Stop at the checkpoints marked 🛑.*
+*Hand this to a fresh Claude Code session working in `C:\Users\patri\Documents\Projects\drx-2.0`. It is self-contained but references the full audit at `development/docs/archive/plans/2026-07-01-audit-and-improvement-plan.md` (read it first). The work spans multiple sessions and one on-device session — do not try to do it all in one run. Stop at the checkpoints marked 🛑.*
 
 ---
 
 ## Your role and the situation
 
-You are remediating a full audit of KneeSpa DRx, a PyQt5 touchscreen controller for a medical knee-traction device (Raspberry Pi + Arduino motor controller over serial). Read `docs/plans/2026-07-01-audit-and-improvement-plan.md` in full before doing anything — it has every finding with file:line evidence. This prompt tells you how to execute it.
+You are remediating a full audit of KneeSpa DRx, a PyQt5 touchscreen controller for a medical knee-traction device (Raspberry Pi + Arduino motor controller over serial). Read `development/docs/archive/plans/2026-07-01-audit-and-improvement-plan.md` in full before doing anything — it has every finding with file:line evidence. This prompt tells you how to execute it.
 
 **The crux:** a completed, tested safety overhaul lives on the unmerged `improvement-plan` branch (firmware `2026-06-11-FAILSAFE-2`, protocol-v2 framing, UI-thread unblocking, and the `KneeSpa` god-object decomposed into `main/controllers/{safety_monitor,auth_controller,protocol_controller,connection_manager}.py`). The current branch `feat/gui-modernization` (PR #15) rebuilt the GUI on top of the **old pre-FAILSAFE** `main`, so it lacks all of that. Most CRITICAL findings are already fixed on `improvement-plan`. **The core task is to reconcile the two branches, not to re-write safety code from scratch.**
 
@@ -23,8 +23,8 @@ You are remediating a full audit of KneeSpa DRx, a PyQt5 touchscreen controller 
 
 ## References
 
-- Audit + phased plan: `docs/plans/2026-07-01-audit-and-improvement-plan.md`
-- Prior safety effort (the source of the fix code): branch `improvement-plan`, docs `docs/audits/2026-06-11-full-application-audit.md`, `docs/plans/2026-06-11-improvement-plan.md`, `docs/plans/2026-06-11-batch1-hardware-checklist.md` (these docs are only on that branch — bring them across).
+- Audit + phased plan: `development/docs/archive/plans/2026-07-01-audit-and-improvement-plan.md`
+- Prior safety effort (the source of the fix code): branch `improvement-plan`, docs `development/docs/archive/audits/2026-06-11-full-application-audit.md`, `development/docs/archive/plans/2026-06-11-improvement-plan.md`, `docs/plans/2026-06-11-batch1-hardware-checklist.md` (these docs are only on that branch — bring them across).
 - GUI rebuild context: memory `gui-modernization-plan`, branch `feat/gui-modernization` (PR #15).
 
 ---

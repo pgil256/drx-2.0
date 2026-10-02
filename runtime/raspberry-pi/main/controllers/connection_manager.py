@@ -13,6 +13,7 @@ from PyQt5.QtCore import QTimer, QThread
 from PyQt5.QtWidgets import QApplication
 
 from helpers.arduino import Arduino
+from helpers.logging import setup_logger
 from helpers.reset_worker import ResetWorker
 from config.constants import ARDUINO_SETTINGS, DEFAULT_HORIZONTAL_POSITION
 
@@ -20,6 +21,7 @@ from config.constants import ARDUINO_SETTINGS, DEFAULT_HORIZONTAL_POSITION
 class ConnectionManager:
     def __init__(self, window):
         self.window = window
+        self.logger = setup_logger(component="Connection")
         self.reset_worker = None
 
     def cancel_reset(self) -> None:
@@ -44,39 +46,37 @@ class ConnectionManager:
             ) is not None:
                 if not self.teardown_arduino():
                     raise RuntimeError("Previous Arduino thread did not stop")
-            print("Showing loading spinner")
+            self.logger.debug("Showing loading spinner")
             window.loading_spinner.show()
             window.disable_actuator_controls()
 
-            print("Setting up Arduino interface")
+            self.logger.info("Setting up Arduino interface")
             # 1 - create Worker and Thread inside the Form
             window.arduino = Arduino()  # no parent!
-            print("Arduino instance created")
+            self.logger.debug("Arduino instance created")
 
             window.arduino_thread = QThread()  # no parent!
-            print("Thread instance created for Arduino")
+            self.logger.debug("Thread instance created for Arduino")
 
             # 2 - Connect Worker's Signals to Form method slots to post data
-            print("Connecting Arduino signals to corresponding slots")
+            self.logger.debug("Connecting Arduino signals to corresponding slots")
             window.arduino.done_emit.connect(self.set_done)
 
             # 3 - Move the Worker object to the Thread object
-            print("Moving Arduino object to thread")
+            self.logger.debug("Moving Arduino object to thread")
             window.arduino.moveToThread(window.arduino_thread)
 
             # 4 - Connect Worker Signals to the Thread slots
-            print("Connecting Arduino finished signal to thread quit")
+            self.logger.debug("Connecting Arduino finished signal to thread quit")
             window.arduino.finished.connect(window.arduino_thread.quit)
             window.arduino.ready_to_go_emit.connect(self.ready_to_go)
-            window.arduino.buffer_warning.connect(window.handle_buffer_warning)
 
             # 5 - Connect Thread started signal to Worker operational slot method
-            print("Connecting thread started signal to Arduino run method")
+            self.logger.debug("Connecting thread started signal to Arduino run method")
             window.arduino_thread.started.connect(window.arduino.run)
 
             # Additional Arduino signal connections
-            print("Connecting Arduino position, status, and pressure signals")
-            window.arduino.position_emit.connect(window.read_position)
+            self.logger.debug("Connecting Arduino status and fault signals")
             window.arduino.status_emit.connect(window.status_emit)
             window.arduino.connection_lost.connect(window.handle_connection_lost)
             window.arduino.connection_failed.connect(window.handle_connection_failed)
@@ -91,12 +91,12 @@ class ConnectionManager:
             window.arduino.pressure_warning.connect(window.on_pressure_progress_notice)
 
             # 6 - Start the thread
-            print("Starting Arduino thread")
+            self.logger.debug("Starting Arduino thread")
             window.arduino_thread.start()
-            print("Thread started for Arduino")
+            self.logger.debug("Thread started for Arduino")
 
             # Wait for "Ready to Go" signal with timeout
-            print("Waiting for Arduino connection readiness")
+            self.logger.debug("Waiting for Arduino connection readiness")
             connection_ready = False
             start_time = time.time()
             timeout = ARDUINO_SETTINGS["CONNECTION_TIMEOUT_S"]
@@ -110,15 +110,15 @@ class ConnectionManager:
                 time.sleep(0.1)
 
             if connection_ready:
-                print("Arduino initialized successfully")
+                self.logger.info("Arduino initialized successfully")
 
-                print("Arduino connection verified by readiness event")
+                self.logger.debug("Arduino connection verified by readiness event")
                 if auto_reset:
                     QTimer.singleShot(0, self._automatic_reset)
             else:
                 window.loading_spinner.hide()
 
-                print("Arduino initialization timed out")
+                self.logger.warning("Arduino initialization timed out")
                 if auto_reset:
                     # The transport keeps retrying in the background (its
                     # connect loop can outlast this wait). When it does come
@@ -133,7 +133,7 @@ class ConnectionManager:
         except Exception as e:
             window.loading_spinner.hide()
 
-            print(f"An error occurred while setting up Arduino: {e}")
+            self.logger.error("An error occurred while setting up Arduino: %s", e)
             raise
 
 
@@ -146,17 +146,17 @@ class ConnectionManager:
             bool: True if connection is established or restored, False otherwise
         """
         window = self.window
-        print("Verifying Arduino connection before protocol start...")
+        self.logger.info("Verifying Arduino connection before protocol start")
 
         # Check if Arduino is responsive
         if window.arduino and window.arduino.connected:
             # Send a test command to verify responsiveness
             if window.arduino.verify_connection():
-                print("Arduino connection verified.")
+                self.logger.info("Arduino connection verified")
                 return True
 
         # If we reach here, connection needs reset
-        print("Arduino connection needs reset, attempting reconnection...")
+        self.logger.warning("Arduino connection needs reset; attempting reconnection")
 
         # Forcefully disconnect current connection (disconnect() joins the
         # I/O thread itself; the long settling sleeps predate that)
@@ -171,12 +171,12 @@ class ConnectionManager:
         connection_success = self.setup_arduino(auto_reset=False)
 
         if connection_success:
-            print("Arduino successfully reset and reconnected.")
+            self.logger.info("Arduino successfully reset and reconnected")
 
             self.reset_arduino()
             return False  # Initialization must complete before a new treatment starts.
         else:
-            print("Failed to restore Arduino connection.")
+            self.logger.error("Failed to restore Arduino connection")
             window._show_timed_error(
                 "Unable to establish reliable connection to Arduino. Please check connections and try again."
             )
@@ -185,7 +185,7 @@ class ConnectionManager:
     def _on_late_connect(self):
         """The Arduino connected after setup_arduino() gave up waiting: run the
         reset sequence it would have scheduled had the connection been on time."""
-        print("Arduino connected late; running the deferred reset sequence")
+        self.logger.warning("Arduino connected late; running the deferred reset sequence")
         QTimer.singleShot(0, self._automatic_reset)
 
     def _automatic_reset(self) -> None:
@@ -233,13 +233,13 @@ class ConnectionManager:
                 or getattr(window, "_device_maintenance_active", False) is True):
             window._show_timed_error("Finish device service before resetting Arduino.")
             return
-        print("Reset Arduino requested...")
+        self.logger.info("Reset Arduino requested")
         if getattr(window, "_closing", False) is True:
             return
 
         # Check if reset is already in progress to avoid multiple overlapping resets
         if window.reset_in_progress:
-            print("Reset already in progress, ignoring duplicate request")
+            self.logger.info("Reset already in progress; ignoring duplicate request")
             return
 
         worker = getattr(window, "worker", None)
@@ -259,13 +259,13 @@ class ConnectionManager:
         window.initial_setup_complete = False
 
         if not hasattr(window, 'arduino') or window.arduino is None:
-            print("Arduino object not ready for reset.")
+            self.logger.warning("Arduino object not ready for reset")
             window._show_timed_error("Arduino connection not initialized.")
             window.reset_in_progress = False  # Reset flag
             return
 
         # Show the spinner
-        print("Showing loading spinner for reset")
+        self.logger.debug("Showing loading spinner for reset")
         window.loading_spinner.show()
         window.disable_actuator_controls()
         # Disable start button during reset to prevent crashes
@@ -283,7 +283,7 @@ class ConnectionManager:
         reset_worker.signals.error.connect(self._on_reset_error)
 
         # Run the worker in the thread pool
-        print("Starting ResetWorker in threadpool")
+        self.logger.debug("Starting ResetWorker in threadpool")
         window.threadpool.start(reset_worker)
         window.reset_setup_readings()
 
@@ -295,7 +295,7 @@ class ConnectionManager:
         if worker is not None and worker is not self.reset_worker:
             return
 
-        print(f"Reset sequence finished signal received. Success: {success}")
+        self.logger.info("Reset sequence finished; success: %s", success)
         if getattr(window, "_closing", False) is True:
             return
         if getattr(window, "_physical_stop_active", False) is True:
@@ -349,7 +349,7 @@ class ConnectionManager:
             if hasattr(window, "set_protocol_state"):
                 window.set_protocol_state("idle")
             window.enable_actuator_controls()
-            print("Reset sequence completed successfully via worker.")
+            self.logger.info("Reset sequence completed successfully")
         else:
             window._release_leg_gpio()
             window.initial_setup_complete = False
@@ -364,7 +364,7 @@ class ConnectionManager:
     def _on_reset_error(self, error_message):
         """Slot called if ResetWorker emits an error signal."""
         window = self.window
-        print(f"Reset error signal received: {error_message}")
+        self.logger.error("Reset error: %s", error_message)
         if getattr(window, "_closing", False) is True:
             return
         # Completion owns unlocking. Error arrives before worker cleanup finishes.
@@ -373,47 +373,10 @@ class ConnectionManager:
          f"Could not complete reset sequence:\n{error_message}"
         )
 
-    def send_zero_mark(self):
-        window = self.window
-        print("send_zero_mark")
-        if getattr(window, "arduino", None) is None:
-            window.logger.error("send_zero_mark: no Arduino transport")
-            return
-        a_zero = window.config.AMarks.get("0.0", window.config.AMarks.get("0", 0))
-        b_zero = window.config.BMarks.get("0.0", window.config.BMarks.get("0", 0))
-        # Delimited form: the legacy fixed-width format truncated any
-        # 4-digit zero mark (1900 became 190); the reset worker was
-        # already fixed but this copy still sent the legacy format
-        window.arduino.send(f"L5|{a_zero}|{b_zero}")
-
-    def send_calibration(self):
-        window = self.window
-        print("send_calibration")
-        if getattr(window, "arduino", None) is None:
-            # Also reached 5 s after a reset via QTimer.singleShot, by which
-            # time a reconnect may have torn the transport down
-            window.logger.error("send_calibration: no Arduino transport")
-            return
-        if not window.config.scale_calibrated:
-            # Never push an implausible/default factor: the firmware
-            # would happily produce raw-count "pressure" readings
-            print(
-                f"Refusing to send implausible scale factor "
-                f"{window.config.calibration}"
-            )
-            window.logger.error(
-                "Refusing to send implausible load-cell scale factor %s",
-                window.config.calibration,
-            )
-            return
-        window.arduino.send("L0{}".format(window.config.calibration))
-
-
     def set_done(self):
         """Set the I2C status to done."""
         window = self.window
-        print("Setting I2C status to done - signal received from Arduino")
-        window.I2Cstatus = 1
+        self.logger.debug("DONE received from Arduino")
         window.I2Cstatus_event.set()  # Signal the thread-safe event
         window.enable_actuator_controls()
 
@@ -428,12 +391,12 @@ class ConnectionManager:
         the stale set, every later DONE was attributed one step early, and a
         homing step could be skipped while the reset still reported success.
         """
-        print("Firmware ready (boot banner received)")
+        self.logger.info("Firmware ready (boot banner received)")
 
 
     def handle_connection_failed(self, message):
         """Handle failure to connect to Arduino."""
         window = self.window
-        print(message)
+        self.logger.warning("Arduino connection failed: %s", message)
         window._show_timed_error(message)
 

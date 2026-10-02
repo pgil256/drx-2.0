@@ -306,41 +306,33 @@ def test_hardware_tests_cannot_mutate_or_save_calibration(service):
     assert not c.saved
 
 
-def test_tests_and_calibration_both_require_service_pin(service):
+def test_tests_and_calibration_open_only_through_the_service_visit(service):
+    """The Device screen owns the technician PIN (see test_device_controller);
+    both modes must wait for its callback and an unlocked visit."""
     c, w, _, _ = service
     c.shutdown()
+    requests, unlocked = [], [False]
+    w.device_controller = SimpleNamespace(
+        require_service=requests.append, service_authorized=lambda: unlocked[0])
     c.open_tests()
-    assert c.dialog is None
-    assert c.pin_dialog is not None
-    c.pin_dialog.submit("654321")
-    c.pin_dialog.submit("654321")
+    assert c.dialog is None and len(requests) == 1
+    requests.pop()(dict(w.current_user))
+    assert c.dialog is None  # A callback without an unlocked visit starts nothing.
+    unlocked[0] = True
+    c.open_tests()
+    requests.pop()(dict(w.current_user))
     assert c.dialog.windowTitle() == "Hardware Tests"
-    c.shutdown()
-    c.open()
-    assert c.dialog is None
-    assert c.pin_dialog is not None
-
-
-def test_authentication_required_on_open_and_each_visit(service):
-    c, w, _, _ = service
-    c.shutdown()
-    w.protocol_state = "idle"
-    c.open()
-    assert c.dialog is None
-    assert c.pin_dialog is not None
-    c.pin_dialog.submit("654321")
-    assert c.dialog is None
-    c.pin_dialog.submit("654321")
-    assert c.dialog is not None
     c.timer.stop()
     c.shutdown()
     c.open()
     assert c.dialog is None
-    c.pin_dialog.submit("000000")
-    assert c.dialog is None
-    c.pin_dialog.submit("654321")
-    assert c.dialog is not None
+    requests.pop()(dict(w.current_user))
+    assert c.dialog.windowTitle() == "Calibration"
     c.timer.stop()
+    c.shutdown()
+    w.protocol_running = True
+    c.open()
+    assert not requests  # Busy devices never reach authentication.
 
 
 def test_session_stop_evidence_does_not_survive_reopen(service):
@@ -369,7 +361,7 @@ def test_failed_setup_allows_load_cell_repair_without_motion(service):
     c.shutdown()
     w.protocol_state = "fault"
     w.actuator_command_in_progress = True
-    assert c._can_open()
+    assert c.can_open()
     c._start_session()
     c.timer.stop()
     c.action("begin")
@@ -413,7 +405,7 @@ def test_normal_motion_cannot_overlap_service_and_leg_requires_rehome(service):
     assert not KneeSpa._send_motion_command(w, "I12550", "test")
     c.move_leg("+")
     assert w._service_leg_position_unknown
-    assert not KneeSpa._move_leg(w, "F+", 0.25, 600, True)
+    assert not KneeSpa._move_leg(w, "F+")
 
 
 def test_diagnostic_snapshot_does_not_automatically_pass_operator_check(service):
@@ -421,6 +413,20 @@ def test_diagnostic_snapshot_does_not_automatically_pass_operator_check(service)
     prepare(c, feed)
     c.action("check_link")
     assert "communication" not in c.results
+
+
+def test_failed_report_write_leaves_no_partial_file(service, tmp_path, monkeypatch):
+    c, _, _, feed = service
+    prepare(c, feed)
+    from helpers import device_records
+
+    def fail(*args):
+        raise OSError("disk full")
+
+    monkeypatch.setattr(device_records.os, "replace", fail)
+    c.export_report()
+    assert c.report_path is None
+    assert not list((tmp_path / "service-reports").glob("*"))
 
 
 def test_report_keeps_reference_and_proposed_unsaved_settings(service):

@@ -2,7 +2,7 @@
 
 **Date:** 2026-07-09  
 **Baseline:** `176b9db`  
-**Companion plan:** `docs/plans/2026-07-09-issues-1-12-remediation-plan.md`  
+**Companion plan:** `development/docs/archive/plans/2026-07-09-issues-1-12-remediation-plan.md`  
 **Scope:** Audit issues 1 through 12. Configuration-preset issue 13 is not part of this change.
 
 ## Implemented Changes

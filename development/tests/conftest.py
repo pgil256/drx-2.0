@@ -8,10 +8,10 @@ from unittest.mock import MagicMock
 
 import pytest
 
-# Add main/ to sys.path so imports like `from config.constants import ...` work
+# Add main/ to sys.path so imports like `from config.constants import ...` work.
+# Its parent is deliberately absent: main.config.constants would be a second copy.
 REPO_ROOT = os.path.abspath(os.path.join(os.path.dirname(__file__), '..', '..'))
 sys.path.insert(0, os.path.join(REPO_ROOT, 'development'))
-sys.path.insert(0, os.path.join(REPO_ROOT, 'runtime', 'raspberry-pi'))
 sys.path.insert(0, os.path.join(REPO_ROOT, 'runtime', 'raspberry-pi', 'main'))
 
 # Add tests/ to sys.path so `from fixtures.fake_arduino import ...` works
@@ -82,36 +82,42 @@ from fixtures.fake_arduino import FakeArduino, PTY_AVAILABLE
 
 @pytest.fixture
 def fake_arduino_pair():
-    """
-    Create a FakeArduino and a real Arduino instance connected via pty.
+    """A FakeArduino and a real Arduino connected over a pty, reader running.
 
     Yields:
         tuple: (arduino_instance, fake_arduino_instance)
     """
+    import threading
+
+    import serial
+
     from helpers.arduino import Arduino
 
     if not PTY_AVAILABLE:
         pytest.skip("FakeArduino requires POSIX pty/termios support")
-
-    import time
 
     fake = FakeArduino()
     fake.start()
 
     arduino = Arduino()
     arduino.ARDUINO_PORT = fake.port
+    arduino.serial_com = serial.Serial(fake.port, 115200, timeout=1, write_timeout=1)
+    arduino.connected = True
+    arduino._running = True
+    reader = threading.Thread(target=arduino.read_from_com, daemon=True)
+    reader.start()
 
     yield arduino, fake
 
-    # Exception-safe teardown, in dependency order: stop the reader loop
-    # BEFORE closing the port (the legacy reader reacts to a dying port with
-    # reconnect attempts — multi-second sleeps and new threads that outlive
+    # Exception-safe teardown, in dependency order: stop and join the reader
+    # BEFORE closing the port (the legacy reader reacted to a dying port with
+    # reconnect attempts -- multi-second sleeps and new threads that outlive
     # the test), then close the serial fd, then stop/join the FakeArduino
     # thread and close the pty.
     try:
         arduino._running = False
         arduino.connected = False
-        time.sleep(0.05)  # let read_from_com's ~10 ms poll observe the flag
+        reader.join(timeout=2)
         if arduino.serial_com and getattr(arduino.serial_com, "is_open", False):
             try:
                 arduino.serial_com.close()
@@ -119,48 +125,3 @@ def fake_arduino_pair():
                 pass
     finally:
         fake.stop()
-
-
-@pytest.fixture
-def config_with_defaults():
-    """Create a Configuration instance with default mark values."""
-    from config.config import Configuration
-    config = Configuration()
-    config._set_default_c_marks()
-    config._set_default_a_marks()
-    config._set_default_b_marks()
-    config.a_factor = 1900
-    config.b_factor = 1900
-    config.c_factor = 1900
-    config.calibration = 1.0
-    config.flexion_position = 0
-    return config
-
-
-@pytest.fixture
-def protocol_factory(fake_arduino_pair, config_with_defaults):
-    """
-    Factory for creating Protocols instances connected to FakeArduino.
-
-    Returns a callable that creates Protocols with overridable defaults.
-    """
-    from helpers.protocols import Protocols
-
-    arduino, fake = fake_arduino_pair
-
-    def create_protocol(**kwargs):
-        defaults = dict(
-            a_factor=1900,
-            protocol="1",
-            max_pressure=50,
-            max_left=10.0,
-            max_right=10.0,
-            duration=1,
-            use_pulse=False,
-            ser=arduino,
-            config=config_with_defaults,
-        )
-        defaults.update(kwargs)
-        return Protocols(**defaults), fake
-
-    return create_protocol

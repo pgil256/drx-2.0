@@ -1,24 +1,19 @@
 /*
-  Arduino Motor Controller for KneeSpa - FIXED VERSION
-  Controls axial, horizontal, and lateral actuators
+  Arduino Motor Controller for KneeSpa DRx (Mega 2560)
+  Controls the axial, horizontal and lateral actuators (motor controllers
+  on I2C), the FIT drive and the HX711 load cell for the Pi application.
   Based on DroneBot Workshop 2019 i2c_slave_ard.ino
 
-  Bug fixes applied:
-  - Fixed jerking counter logic
-  - Added break statement in case 'F'
-  - Improved command buffer handling
-  - Fixed Wire communication delays
-  - Added boundary checks
-  - Improved status management
-  - Fixed STOP pin logic (INPUT_PULLUP reads HIGH when not pressed)
+  VERSION identifies the flashed image; the change history is in git.
+  Native unit tests: development/tests/firmware/ (run_native_tests.sh).
 */
 
-#define VERSION "2026-09-18-DRX2-NB2-SERVICE"
+#define VERSION "2026-09-30-DRX2-NB2-SERVICE"
 #define HX711_DRIVER "DRX-HX711-NB2"
 #include <math.h>
 #ifndef UNIT_TEST
 // Hardware libraries; native unit tests supply mocks and arduino_shim.h
-// (see test/) before including this file
+// (see development/tests/firmware/) before including this file
 #include "hx711_sampler.h"
 #include <elapsedMillis.h>
 #include <Wire.h>
@@ -42,7 +37,6 @@
 #define DIR_FIT_REVERSE    5
 #define DIR_A_FORWARD      30
 #define DIR_A_REVERSE      31
-#define A_ANALOG           A0
 
 // Actuator constants
 #define AFULLINCH          430
@@ -96,10 +90,6 @@ int pulseSpeed = TREATMENT_SPEED_MAX;
 // warning reaches the operator before the host gives up. Raised from
 // 30 s on 2026-09-10 (slow axial load build).
 #define PRESSURE_MOVE_TIMEOUT 80000  // ms before advisory pressure warning
-#define PRESSURE_STALL_MS     5000   // legacy progress-check window
-#define PRESSURE_STALL_DELTA  0.5    // legacy progress-change threshold
-#define PRESSURE_PROGRESS_FAULT_ENABLED 0  // disabled: interferes with live control
-#define HX711_SATURATED       8388607L  // 24-bit ADC saturation magnitude
 #define POSITION_DEADBAND     25     // counts: symmetric close-enough band
 #define POSITION_STALL_MS     20000  // sustained no-progress time before warning
 #define POSITION_PROGRESS_COUNTS 4   // encoder progress that resets stall timer
@@ -122,17 +112,15 @@ float pressure = 0;          // filtered magnitude used by control/safety logic
 float signedPressure = 0;    // filtered signed value (negative = wiring/drift fault)
 
 // Non-blocking load-cell sampling state
-float pressureSamples[3] = {0, 0, 0};
-uint8_t pressureSampleIndex = 0;
-uint8_t pressureSampleCount = 0;
 unsigned long lastScaleReady = 0;    // last time the HX711 had data for us
 
 const float PRESSURE_HARD_LIMIT = 100.0;
 // Increasing pressure reaches the requested target, not its lower tolerance
 // edge. Keep the 2 lb band for reductions/release and already-satisfied loads
 // at/above target. The separate +10 lb allowance is only an overshoot ceiling.
-const float PRESSURE_TARGET_BAND = 2.0;
-const float PRESSURE_OVERSHOOT_LIMIT = 10.0;
+// Derived from the #defines that check_limits_sync.py pairs with the host.
+const float PRESSURE_TARGET_BAND = PRESSURE_TARGET_TOLERANCE_LBS;
+const float PRESSURE_OVERSHOOT_LIMIT = PRESSURE_OVERSHOOT_ALLOWANCE_LBS;
 const unsigned long PRESSURE_SAMPLE_TIMEOUT = 500; // ms
 const unsigned long PRESSURE_MOVE_DEADLINE = 90000UL; // ms; app allows 5 s for the final reply.
 bool pressureSampleValid = false;
@@ -144,10 +132,6 @@ float pressureCeiling = 0;
 float protocolPressureLimit = 0; // Selected protocol target, distinct from a ramp step.
 unsigned long lastPressureSample = 0;
 unsigned long pressureMoveStarted = 0;
-uint16_t cachedPositions[3] = {0, 0, 0};
-const unsigned long AXIAL_QUERY_INTERVAL = 500; // ms during pressure/pulse motion
-const unsigned long MOTOR_I2C_TIMEOUT_US = 25000UL;
-unsigned long lastAxialQuery = 0;
 long lastRawPressure = 0;
 unsigned long maxPressurePollGap = 0, lastPressurePoll = 0, lastPressureReadUs = 0;
 bool pressurePollStarted = false;
@@ -189,15 +173,10 @@ void emergencyStop();
 unsigned long lastHostTraffic = 0;   // last byte received from the Pi
 bool releasingPressure = false;      // autonomous post-fault release active
 unsigned long releaseStart = 0;
-unsigned long pressureMoveStart = 0; // start of current pressure move
-unsigned long pressureProgressTime = 0;
-float pressureProgressValue = 0;
 bool pressureWarningIssued = false;
 bool heartbeatWarningIssued = false;
 bool scaleWarningIssued = false;
-bool axialTravelWarningIssued = false;
 bool pressureTimeoutWarningIssued = false;
-bool pressureProgressWarningIssued = false;
 bool positionStallWarningIssued = false;
 bool positionReadValid = false;      // last readPosition() I2C result ok
 
@@ -208,7 +187,6 @@ bool positionReadValid = false;      // last readPosition() I2C result ok
 // checksum, including for legacy hosts. A flipped digit was previously
 // undetectable ("P10" -> "P70" passed every check on both sides).
 // Unframed commands keep their legacy command/ack behavior.
-bool hostV2 = false;        // host has sent at least one framed command
 long currentCmdSeq = -1;    // seq of the command being processed (-1 = v1)
 long activeCmdSeq = -1;     // seq of the motion/pressure command in flight
 long activeFitCmdSeq = -1;  // seq of the timed FIT command in flight
@@ -218,8 +196,6 @@ uint8_t smcDeviceNumber = 13;
 int AZERO = 0;
 int BZERO = 0;
 int CZERO = 0;
-int AInches = 0;
-int BInches = 0;
 float CInches = 0;
 bool STOP = true;            // mirrors STOP_PIN: INPUT_PULLUP idles HIGH (= not pressed)
 bool stopWasPressed = false; // previous loop's button state (press-edge detection)
@@ -252,14 +228,12 @@ bool moveFITForward = false;
 // Jerking variables - FIXED
 bool jerking = false;
 int jerkDirection = 1;
-unsigned long jerksCompleted = 0;  // strokes since J; debug/telemetry only
 unsigned long lastJerkTime = 0;
 // Boot default = the host default of 2 pulses/sec (DEFAULT_JERK_INTERVAL_MS in
-// constants.py; paired values are checked by scripts/check_limits_sync.py).
+// constants.py; paired values are checked by development/scripts/check_limits_sync.py).
 // It used to boot at 200 ms while the host UI claimed 2/sec. Host-settable via
 // J<ms> (Phase 3.5 §15.2).
 unsigned long jerkInterval = 500;
-bool jerkDirectionChanged = false;
 
 // Forward declarations (the native test build has no Arduino-IDE
 // prototype generation)
@@ -552,7 +526,6 @@ void emergencyStop() {
   }
   bRunning = false;
   jerking = false;
-  jerksCompleted = 0; // Reset jerk counter
 }
 
 // Emergency stop, then autonomously back the axial actuator off until
@@ -641,7 +614,6 @@ bool parseV2Frame(const String &raw, String &inner) {
     emitCmdError("Malformed frame");
     return false;
   }
-  hostV2 = true;
   long seq = raw.substring(1, colon).toInt();
   uint8_t expected =
       (uint8_t)strtol(raw.substring(star + 1).c_str(), NULL, 16);
@@ -910,12 +882,6 @@ void rejectCommand(const char *command, const char *reason) {
 void updatePressure() { servicePressure(); }
 
 
-float clampPressureTarget(float target) {
-  if (target < MIN_PRESSURE_LBS) return MIN_PRESSURE_LBS;
-  if (target > MAX_PRESSURE_LBS) return MAX_PRESSURE_LBS;
-  return target;
-}
-
 uint16_t clampPositionTarget(uint8_t deviceNumber, uint16_t target) {
   uint16_t minPos = 0;
   uint16_t maxPos = 65000;
@@ -941,12 +907,6 @@ int positionMoveSpeed(uint8_t device) {
   if (device == 12) return axialSpeed;
   if (device == 14) return lateralSpeed;
   return BC_SPEED;
-}
-
-// Zero-pressure release always uses the proven fixed output, independently
-// of the treatment speed selection (as does the autonomous E-stop release).
-int pressureMoveSpeed() {
-  return desiredPressure <= 0 ? PRESSURE_SPEED : axialSpeed;
 }
 
 void processCommand(String cmd) {
@@ -987,7 +947,6 @@ void processCommand(String cmd) {
   float inches = 0.0;
   int stage = 0;
   uint16_t localDesiredPosition = 0;
-  float localPressure = 0;
 
   // Handle different command types
   switch (commandType) {
@@ -1235,7 +1194,7 @@ void processCommand(String cmd) {
       localDesiredPosition = clampPositionTarget(smcDeviceNumber, localDesiredPosition);
 
       positionCommandKind = 'I';
-      positionTolerance = (smcDeviceNumber == 12 && localDesiredPosition == AZERO) ? 25 : 0;
+      positionTolerance = (smcDeviceNumber == 12 && localDesiredPosition == (uint16_t)AZERO) ? 25 : 0;
       localPosition = readPosition();
       if (!positionReadValid || pressureFault) {
         emitCmdError("Position read failed");
@@ -1387,12 +1346,10 @@ void processCommand(String cmd) {
       // hardware measurement session -- see the flash checklist.
       if (smcDeviceNumber == 12) {
         localDesiredPosition = (uint16_t)(AFULLINCH * inches);
-        AInches = inches;
         if (inches == 0)
           localDesiredPosition = AZERO;
       } else if (smcDeviceNumber == 13) {
         localDesiredPosition = (uint16_t)(BFULLINCH * inches);
-        BInches = inches;
         if (inches == 0)
           localDesiredPosition = BZERO;
       } else if (smcDeviceNumber == 14) {
@@ -1483,18 +1440,15 @@ void processCommand(String cmd) {
           if (bRunning || measurePressure || jerking || moveFITForward || releasingPressure ||
               pressureGuardActive || tareActive) { rejectCommand("L5", "MOTION_ACTIVE"); break; }
           {
-            long newAZero, newBZero;
-            if (cmd.length() > 2 && cmd.charAt(2) == '|') {
-              // Delimited form: L5|<azero>|<bzero> -- unambiguous for any
-              // digit count
-              newAZero = getValue(cmd, '|', 1).toInt();
-              newBZero = getValue(cmd, '|', 2).toInt();
-            } else {
-              // Legacy fixed-width form ("L5{:3} {:3}"): corrupts 4-digit
-              // values (1900 parses as 190); kept for old hosts only
-              newAZero = cmd.substring(2, 5).toInt();
-              newBZero = cmd.substring(5, 9).toInt();
+            // Only the delimited form L5|<azero>|<bzero> is accepted. The
+            // old fixed-width form ("L5{:3} {:3}") silently truncated
+            // 4-digit marks (1900 parsed as 190).
+            if (cmd.length() <= 2 || cmd.charAt(2) != '|') {
+              rejectCommand("L5", "INVALID_FORMAT");
+              break;
             }
+            long newAZero = getValue(cmd, '|', 1).toInt();
+            long newBZero = getValue(cmd, '|', 2).toInt();
             // The marks feed the axial floor (I/A), the E-stop release
             // floor and the "at home" checks as signed ints compared
             // against uint16 positions. An unvalidated value (typo'd
@@ -1552,7 +1506,6 @@ void processCommand(String cmd) {
           pulseMotorSpeed = 0;
           jerkDirection = 0;
           jerking = false;
-          jerksCompleted = 0; // Reset counter
           emitAck("DONE", currentCmdSeq);
       } else {
           if (rejectIfStopEngaged()) return;
@@ -1588,7 +1541,6 @@ void processCommand(String cmd) {
           // Status stays ON during pulsing: the pressure ceiling check
           // and the Pi both need telemetry exactly when force pulses
           sendStatus();
-          jerksCompleted = 0;
           jerkDirection = pressure < desiredPressure ? 1 : -1;
           setPulseSpeed(pulseSpeed * jerkDirection);
           lastJerkTime = millis(); // Initialize jerk timer
@@ -1681,10 +1633,8 @@ void setup() {
   // SAFETY: stop all motors before anything else. After an unexpected
   // MCU reset the SMCs may still be running the last commanded speed;
   // historically they kept moving for the >1s the load-cell init took.
-  AInches = 0;
   smcDeviceNumber = 12;
   setMotorSpeed(0);
-  BInches = 2;
   smcDeviceNumber = 13;
   setMotorSpeed(0);
   smcDeviceNumber = 14;
@@ -1882,7 +1832,7 @@ void loop() {
 
   // External actuator timer
   if (moveFITForward) {
-    if (timeInFIT > FITDelay) {
+    if (timeInFIT > (unsigned long)FITDelay) {
       digitalWrite(DIR_FIT_FORWARD, LOW);
       digitalWrite(DIR_FIT_REVERSE, LOW);
       Dbg.println("Fit stopped.");
@@ -1975,7 +1925,7 @@ void loop() {
     if (!pressureFault && measurePressure) {
       if (pressureDirection > 0 && currentPos >= min(AXIAL_MAX_POS, 4095))
         tripPressureFault("AXIAL_TRAVEL_LIMIT");
-      if (pressureDirection < 0 && currentPos <= AZERO + POSITION_DEADBAND &&
+      if (pressureDirection < 0 && currentPos <= (uint16_t)(AZERO + POSITION_DEADBAND) &&
           pressure > desiredPressure + PRESSURE_TARGET_BAND)
         tripPressureFault("AXIAL_HOME_BEFORE_PRESSURE_TARGET");
       if (millis() - pressureMoveStarted >= PRESSURE_MOVE_TIMEOUT &&

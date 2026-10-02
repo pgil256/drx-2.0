@@ -5,7 +5,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
-from main.config.constants import SERVICE_AXES
+from config.constants import SERVICE_AXES
 from helpers.device_records import read_json, write_json
 from helpers.hardware_service import validate_axis_marks, _validate_scale
 
@@ -78,12 +78,12 @@ class CalibrationBackups:
             candidate.set("Options", spec["factor"], str(data["factors"][axis]))
         candidate.set("Options", "calibration", str(data["scale"]))
         candidate.set("Options", "axial_service_calibrated", str(data["axial_service_calibrated"]))
-        config._atomic_write(candidate)
-        config.config = candidate
+        attrs: Dict[str, Any] = {
+            "calibration": data["scale"],
+            "axial_service_calibrated": data["axial_service_calibrated"],
+        }
         for axis, spec in SERVICE_AXES.items():
-            setattr(config, spec["table"], dict(data["marks"][axis]))
-            setattr(config, spec["factor"], data["factors"][axis])
-        config.calibration = data["scale"]
-        config.axial_service_calibrated = data["axial_service_calibrated"]
-        config._validate_calibration()
+            attrs[spec["table"]] = dict(data["marks"][axis])
+            attrs[spec["factor"]] = data["factors"][axis]
+        config.commit(candidate, attrs)
         return backup

@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from config.config import Configuration
-from helpers.calibration import CalibrationDraft
+from helpers.hardware_service import HardwareServiceDraft
 
 pytestmark = pytest.mark.unit
 
@@ -31,7 +31,7 @@ def test_unicode_survives_defaults_and_calibration_round_trips(
         cfg.get_config()
         assert cfg.config["Service"]["note"] == note
         cfg.save_protocol_defaults(55, 12, 14, 2, 15)
-        draft = CalibrationDraft(cfg)
+        draft = HardwareServiceDraft(cfg)
         draft.factors["horizontal"] += 1
         draft.save(cfg)
     cfg.get_config()

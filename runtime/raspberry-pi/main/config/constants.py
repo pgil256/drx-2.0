@@ -17,8 +17,6 @@ APP_VERSION = "3.0"
 PATIENT_PORTAL_PATH = "/patients/new"
 
 # Logging Configuration
-LOG_FILE = "kneespa_app.log"
-LOG_FORMAT = "%(asctime)s - %(levelname)s - %(message)s"
 LOG_LEVEL = "DEBUG"
 LOG_DIR = os.path.join(DEVICE_STATE_DIR, "logs")
 LOG_MAX_FILE_BYTES = 20 * 1024 * 1024
@@ -80,32 +78,14 @@ ACTUATORS = {
     "AXIAL": {
         "ID": "12",
         "LIMITS": (0, 4),  # inches
-        "STEP_NORMAL": 0.5,
-        "STEP_FAST": 1.0,
-        "COMMAND_PREFIX": "A12",
-        "UNITS": "in",
-        "MULTIPLIER": 2,
-        "FORMAT": "{:.1f}",
     },
     "HORIZONTAL": {
         "ID": "13",
         "LIMITS": (-25, 5),  # degrees
-        "STEP_NORMAL": 5,
-        "STEP_FAST": 10,
-        "COMMAND_PREFIX": "B",
-        "UNITS": DEGREES,
-        "MULTIPLIER": 1,
-        "FORMAT": "{:d}",
     },
     "LATERAL": {
         "ID": "14",
         "LIMITS": (-20, 20),  # degrees
-        "STEP_NORMAL": 5,
-        "STEP_FAST": 10,
-        "COMMAND_PREFIX": "K",
-        "UNITS": DEGREES,
-        "MULTIPLIER": 1,
-        "FORMAT": "{:d}",
     },
 }
 
@@ -126,24 +106,12 @@ LATERAL_MAX = 2400  # Maximum lateral position
 HORIZONTAL_MIN = 0  # Minimum horizontal position (calibrated -25 deg mark)
 HORIZONTAL_MAX = 4500  # Maximum horizontal position (envelope ceiling)
 
-# Guided service calibration uses raw positions before an angle table exists.
-CALIBRATION_AXES = {
-    "horizontal": {
-        "label": "Horizontal", "table": "BMarks", "factor": "b_factor",
-        "prefix": "I13", "position_limits": (HORIZONTAL_MIN, HORIZONTAL_MAX),
-        "angle_limits": ACTUATORS["HORIZONTAL"]["LIMITS"], "angle_step": 5.0,
-    },
-    "lateral": {
-        "label": "Lateral", "table": "CMarks", "factor": "c_factor",
-        "prefix": "K", "position_limits": (LATERAL_MIN, LATERAL_MAX),
-        "angle_limits": ACTUATORS["LATERAL"]["LIMITS"], "angle_step": 2.5,
-    },
-}
+# Hardware service calibration uses raw positions before an angle table exists.
 CALIBRATION_STATUS_MAX_AGE_S = 2.0
 CALIBRATION_MOVE_TIMEOUT_S = 15.0
 CALIBRATION_SETTLE_COUNTS = 8
 CALIBRATION_POSITION_TOLERANCE = 25  # firmware POSITION_DEADBAND
-CALIBRATION_DISTANCE_REFERENCE_INCHES = 6.0  # read_position() factor convention
+CALIBRATION_DISTANCE_REFERENCE_INCHES = 6.0  # factors are counts per six inches
 # Raw service targets must also fit the SMC's 12-bit feedback range. Factors
 # describe counts per six inches for legacy distance readouts, not safety limits.
 SERVICE_AXES = {
@@ -181,29 +149,12 @@ DEFAULT_PROTOCOL_MINUTES = 12  # legacy default
 PROTOCOL_MINUTES_MIN = 5
 PROTOCOL_MINUTES_MAX = 30
 
-# Actuator Command Speed
-LEG_LENGTH_SPEED_NORMAL = 0.5  # inches per second
-LEG_LENGTH_SPEED_FAST = 1.0  # inches per second
+# Leg length travel
 LEG_LENGTH_MIN = 0.0  # Minimum leg length in inches
 LEG_LENGTH_MAX = 6.0  # Maximum leg length in inches
 
 # Movement Configuration
-MOVEMENT_DELAY = 0.5  # seconds between movements
 DEFAULT_HORIZONTAL_POSITION = -10  # degrees
-
-# Default Positions
-DEFAULT_AXIAL_POSITION = 0  # inches
-DEFAULT_LATERAL_POSITION = 0  # degrees
-DEFAULT_PRESSURE = 0  # pounds
-DEFAULT_LEG_LENGTH_POSITION = 0  # inches
-
-# Protocol Configuration
-PROTOCOL_MAPPING = {
-    1: "AC1",
-    2: "AC2",
-    3: "AC3",
-    4: "AC4"
-}
 
 # Pulse-rate configuration (Phase 3.5 §15.2). Numeric J<ms> cadence is enabled
 # for the current firmware by default. Set KNEESPA_PULSE_RATE_FIRMWARE=0 as the
@@ -240,10 +191,6 @@ MOTOR_SPEED_ACK_TIMEOUT_S = 6.0
 # 2026-09-10: the axial actuator builds load slowly and real treatments
 # were being aborted mid-build.
 PRESSURE_BUILD_TIMEOUT_S = 95
-# After the host sees measured pressure within tolerance, wait for firmware
-# DONE before pulsing. Older firmware may still drive to the exact target
-# and reject J with BUSY. Bound the wait so missing ACKs cannot stall treatment.
-PRESSURE_DONE_SETTLE_S = 15
 # How long the host waits for a commanded lateral (K) move before failing
 # the protocol. The firmware drives C at C_SPEED 800, which the bench unit
 # moves at ~72 counts/s (2026-09-10 log: 1458 -> 1798 in 4.7 s); with
@@ -256,43 +203,13 @@ LATERAL_MOVE_TIMEOUT_S = 45
 
 # Protocol Default Settings
 PROTOCOL_DEFAULT_SETTINGS = {
-    "DEGREES0": 0,  # Center/neutral position
     "MIN_PRESSURE": 10,  # Minimum starting pressure in lbs
     "MAX_SAFE_PRESSURE": 80,  # Maximum safe pressure in lbs
-    "HOLD_TIME_SHORT": 1,
-    "HOLD_TIME_LONG": 5,  # Default hold duration in seconds
     "PRESSURE_INCREMENT": 10,  # Standard pressure increase step
-    "ANGLE_INCREMENT": 5  # Standard angle adjustment step
-}
-
-# UI Style Constants
-BUTTON_STYLES = {
-    "START": """
-        background-color: rgb(0, 200, 0);
-        color: white;
-        border: none;
-        text-decoration: bold;
-        font-size: 32px;
-        font-weight: bold;
-        border-radius: 12px;
-    """,
-    "STOP": """
-        background-color: rgb(200, 0, 0);
-        color: white;
-        border: none;
-        text-decoration: bold;
-        font-size: 32px;
-        font-weight: bold;
-        border-radius: 12px;
-    """,
 }
 
 # Arduino Communication
 ARDUINO_SETTINGS = {
-    "CALIBRATION_DELAY": 2000,  # ms
-    "ZERO_MARK_DELAY": 5000,  # ms
-    "BUFFER_WARNING_THRESHOLD": 0.8,  # 80% full
-    "ARDUINO_BUFFER_SIZE": 64,  # Standard Arduino buffer size
     "ARDUINO_PORT": os.environ.get("KNEESPA_ARDUINO_PORT", "/dev/serial0"),
     "CONNECTION_TIMEOUT_S": 30  # Timeout duration in seconds
 }
@@ -301,9 +218,8 @@ ARDUINO_SETTINGS = {
 EMAIL_CONFIG = {
     "SENDER_EMAIL": os.environ.get("KNEESPA_SMTP_USERNAME", ""),
     "SENDER_PASSWORD": os.environ.get("KNEESPA_SMTP_PASSWORD", ""),
-    "RECEIVER_EMAIL": os.environ.get("KNEESPA_ASSISTANCE_EMAIL", ""),
     # Support-ticket recipient (Phase 3.5 §15.5) — the drxcode address. Falls
-    # back to the assistance address if unset so tickets still reach support.
+    # back to the older assistance address if unset so tickets still reach support.
     "TICKET_EMAIL": os.environ.get(
         "KNEESPA_TICKET_EMAIL",
         os.environ.get("KNEESPA_ASSISTANCE_EMAIL", ""),
@@ -312,21 +228,8 @@ EMAIL_CONFIG = {
     "SMTP_PORT": int(os.environ.get("KNEESPA_SMTP_PORT", "465")),
 }
 
-# Error Messages
-ERROR_MESSAGES = {
-    "LOGIN_REQUIRED": "Please log in to start a protocol.",
-    "ADMIN_REQUIRED": "Only admins can edit patient data.",
-    "INVALID_PIN": "Invalid PIN. Please try again.",
-    "INVALID_PROTOCOL": "Please select a valid protocol (1-9).",
-    "ACTUATOR_ERROR": "Failed to initialize actuators. Please check connections.",
-    "MOVEMENT_ERROR": "Error moving {} actuator. Check connections.",
-    "ARDUINO_RESET_ERROR": "Could not complete reset sequence. Check connections.",
-}
-
 # Success Messages
 SUCCESS_MESSAGES = {
-    "PROTOCOL_COMPLETE": "The protocol has finished executing successfully.",
-    "ARDUINO_RESET": "Arduino reset and actuators reinitialized.",
     "DATA_LOADED": "User data loaded successfully."
 }
 

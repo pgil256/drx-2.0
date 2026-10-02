@@ -224,6 +224,19 @@ class TestFakeArduinoFirmwareParity:
         finally:
             fake.stop()
 
+    def test_l5_fixed_width_form_is_rejected(self):
+        """Firmware no longer parses the truncating "L5{:3} {:3}" form."""
+        fake = FakeArduino()
+        fake.start()
+        try:
+            send_cmd(fake, b"L5160 1900\n")
+            output = read_output(fake, duration=0.4)
+            assert "COMMAND_REJECTED|L5|INVALID_FORMAT" in output
+            assert "ZEROS|" not in output
+            assert "DONE" not in output
+        finally:
+            fake.stop()
+
     def test_status_backpressure_until_q_ack(self):
         """After one status frame, further frames wait for a 'Q' ack
         (or the 2 s STATUS_TIMEOUT)."""

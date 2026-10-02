@@ -171,7 +171,7 @@ def test_login_returns_to_setup_and_active_run_guards_video(shell):
     shell._on_nav("setup")
     shell.login_succeeded("Operator")
     assert shell._current == "setup"
-    shell.set_nav_guard(lambda: True)
+    shell.set_overlay_guard(lambda: True)
     shell.show_video()
     shell.show_login()
     assert shell.video_modal.isHidden()

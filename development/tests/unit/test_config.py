@@ -348,6 +348,34 @@ class TestAtomicWrite:
         assert cfg_path.read_bytes() == original
         assert not list(tmp_path.glob(".kneespa_cfg_*"))
 
+    def test_commit_publishes_only_after_a_successful_write(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+    ) -> None:
+        cfg_path = tmp_path / "kneespa.cfg"
+        config = Configuration(config_path=str(cfg_path))
+        config.get_config()
+        live, factor = config.config, config.b_factor
+        candidate = copy.deepcopy(live)
+        candidate.set("Options", "b_factor", "3720")
+        validations = []
+        monkeypatch.setattr(config, "_validate_calibration", lambda: validations.append(1))
+
+        def fail(*args: object) -> None:
+            raise OSError("disk full")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(config, "_atomic_write", fail)
+            with pytest.raises(OSError, match="disk full"):
+                config.commit(candidate, {"b_factor": 3720})
+        assert config.config is live and config.b_factor == factor
+        assert not validations
+
+        config.commit(candidate, {"b_factor": 3720})
+        assert config.config is candidate and config.b_factor == 3720
+        assert validations == [1]
+        config.commit(copy.deepcopy(candidate), {}, revalidate=False)
+        assert validations == [1]
+
     @pytest.mark.parametrize("caller", ["defaults", "update"])
     def test_callers_keep_their_write_error_contracts(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,

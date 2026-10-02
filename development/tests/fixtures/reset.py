@@ -16,7 +16,6 @@ def make_main_window(use_event: bool = True) -> SimpleNamespace:
     is set to None so the run() safety check treats no protocol as running.
     """
     mw = SimpleNamespace()
-    mw.I2Cstatus = 0
     if use_event:
         mw.I2Cstatus_event = threading.Event()
     mw.worker = None

@@ -27,12 +27,16 @@ def test_name_keyboard_appears_on_touch_and_cancel_preserves_name(themed_app, qt
     editor._name.setText("Original name")
     qtbot.mouseClick(editor._name, Qt.LeftButton)
     assert editor._keyboard.isVisible()
-    editor._keyboard.text.setText("Cancelled name")
+    keys = {key.text() for key in editor._keyboard.findChildren(QPushButton)}
+    assert {"Q", "'", "-"} <= keys and not keys & {"q", "@", "#"}
+    assert editor._keyboard.editor.text() == "Original name"
+    editor._keyboard.editor.setText("Cancelled name")
     editor._keyboard.reject()
     assert editor._name.text() == "Original name"
+    assert editor._keyboard is None
     qtbot.mouseClick(editor._name, Qt.LeftButton)
     keyboard = editor._keyboard
-    keyboard.text.clear()
+    keyboard.editor.clear()
     next(key for key in keyboard._letters if key.text() == "A").click()
     keyboard._shift()
     next(key for key in keyboard._letters if key.text() == "n").click()
@@ -93,6 +97,29 @@ def test_editor_and_keyboard_fit_touchscreen(themed_app, qtbot, tmp_path, state)
     for key in editor._keyboard.findChildren(QPushButton):
         assert key.width() >= 48 and key.height() >= 48
     assert editor._keyboard.grab().save(str(tmp_path / "patient-keyboard.png"))
+
+
+def test_text_keyboard_key_sets_and_initial_case(themed_app, qtbot):
+    from ui.modals.text_keyboard import ASCII_KEYS, NAME_KEYS, TextKeyboard
+
+    def keyboard(**options):
+        widget = TextKeyboard("Entry", "", 10, **options)
+        qtbot.addWidget(widget)
+        return widget
+
+    def labels(widget):
+        return "".join(button.text() for button in widget.findChildren(QPushButton)
+                       if len(button.text()) == 1)
+
+    text = "1234567890qwertyuiopasdfghjklzxcvbnm@._-+/?!,:'"
+    assert labels(keyboard()) == text
+    symbols = labels(keyboard(keys=ASCII_KEYS))
+    assert symbols == text + '#$%&*()=[]{}";<>\\|`~^'
+    assert set(symbols + symbols.upper() + " ") == set(map(chr, range(32, 127)))
+    name = keyboard(keys=NAME_KEYS, uppercase=True)
+    assert labels(name) == "1234567890QWERTYUIOPASDFGHJKLZXCVBNM'-"
+    name._shift()
+    assert labels(name) == "1234567890qwertyuiopasdfghjklzxcvbnm'-"
 
 
 def test_staff_password_keyboard_is_masked_and_fits_screen(themed_app, qtbot, tmp_path):

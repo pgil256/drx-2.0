@@ -3,8 +3,6 @@
 
 Covers main/helpers/logging.py:
   * setup_logger(...) factory
-  * the debug_* family of helper functions
-  * LoggerSetup.format_exception(...)
   * LoggerAdapter.process(...)
   * LoggerSetup.QtWarningFilter.filter(...)
 
@@ -23,11 +21,6 @@ import pytest
 from helpers.logging import (
     LoggerAdapter,
     LoggerSetup,
-    debug,
-    debug_error,
-    debug_safety,
-    debug_state_change,
-    debug_timing,
     setup_logger,
 )
 from config.constants import APP_NAME
@@ -130,141 +123,6 @@ class TestHandlerGuard:
             serial_logger.handlers[:] = saved_serial_handlers
             LoggerSetup._instance = saved_instance
             qt_logger.filters[:] = saved_filters
-
-
-@pytest.mark.unit
-class TestDebugHelpers:
-    """Tests for the debug_* family of helper functions.
-
-    Each helper must run without crashing and emit a log record on the
-    application logger. caplog captures records; the component name (when
-    given) is prepended to the message by LoggerAdapter.process.
-    """
-
-    def test_debug_runs_and_emits(self, caplog):
-        with caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME):
-            debug("plain message")
-        messages = [r.getMessage() for r in caplog.records]
-        assert any("plain message" in m for m in messages)
-
-    def test_debug_respects_component(self, caplog):
-        """The component arg is reflected in the emitted record."""
-        with caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME):
-            debug("hello", component="Arduino")
-        messages = [r.getMessage() for r in caplog.records]
-        assert any("[Arduino]" in m and "hello" in m for m in messages)
-
-    def test_debug_with_values_kwarg(self, caplog):
-        """A values=dict kwarg is flattened into the message context."""
-        with caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME):
-            debug("readings", component="Sensors", values={"pressure": 50})
-        messages = [r.getMessage() for r in caplog.records]
-        assert any("pressure=50" in m for m in messages)
-
-    def test_debug_level_info(self, caplog):
-        """An explicit level is honored (record emitted at INFO)."""
-        with caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME):
-            debug("info msg", level="INFO")
-        assert any(
-            r.levelno == logging.INFO and "info msg" in r.getMessage()
-            for r in caplog.records
-        )
-
-    def test_debug_state_change_runs_and_emits(self, caplog):
-        with caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME):
-            debug_state_change("Pump", "OFF", "ON", reason="start")
-        messages = [r.getMessage() for r in caplog.records]
-        assert any(
-            "[Pump]" in m and "OFF -> ON" in m and "start" in m for m in messages
-        )
-
-    def test_debug_state_change_logs_at_info(self, caplog):
-        """State changes are logged at INFO level."""
-        with caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME):
-            debug_state_change("Pump", 0, 1)
-        assert any(
-            r.levelno == logging.INFO and "0 -> 1" in r.getMessage()
-            for r in caplog.records
-        )
-
-    def test_debug_timing_with_start_time(self, caplog):
-        """With a start_time, an elapsed value is reported."""
-        import time
-
-        with caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME):
-            debug_timing("op done", start_time=time.time(), component="Perf")
-        messages = [r.getMessage() for r in caplog.records]
-        assert any("[Perf]" in m and "Elapsed" in m for m in messages)
-
-    def test_debug_timing_without_start_time(self, caplog):
-        with caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME):
-            debug_timing("just a mark", component="Perf")
-        messages = [r.getMessage() for r in caplog.records]
-        assert any("[Perf]" in m and "just a mark" in m for m in messages)
-
-    def test_debug_error_with_exception(self, caplog):
-        """debug_error includes the exception text and logs at ERROR."""
-        try:
-            raise ValueError("kaboom")
-        except ValueError as exc:
-            with caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME):
-                debug_error("operation failed", exception=exc, component="Core")
-        assert any(
-            r.levelno == logging.ERROR
-            and "kaboom" in r.getMessage()
-            and "[Core]" in r.getMessage()
-            for r in caplog.records
-        )
-
-    def test_debug_error_without_exception(self, caplog):
-        with caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME):
-            debug_error("simple error", component="Core")
-        assert any(
-            r.levelno == logging.ERROR and "simple error" in r.getMessage()
-            for r in caplog.records
-        )
-
-    def test_debug_safety_runs_and_emits(self, caplog):
-        """Safety messages default to WARNING and carry the Safety component."""
-        with caplog.at_level(logging.DEBUG, logger=_LOGGER_NAME):
-            debug_safety(
-                "pressure check",
-                limits={"max": 80},
-                current={"pressure": 50},
-            )
-        records = [
-            r
-            for r in caplog.records
-            if "SAFETY" in r.getMessage() and "[Safety]" in r.getMessage()
-        ]
-        assert records
-        assert records[0].levelno == logging.WARNING
-
-
-@pytest.mark.unit
-class TestFormatException:
-    """Tests for LoggerSetup.format_exception()."""
-
-    def test_returns_string_with_exception_text(self):
-        try:
-            raise RuntimeError("unique-error-text")
-        except RuntimeError as exc:
-            result = LoggerSetup.format_exception(exc)
-        assert isinstance(result, str)
-        assert "unique-error-text" in result
-
-    def test_includes_traceback_header(self):
-        try:
-            raise RuntimeError("boom")
-        except RuntimeError as exc:
-            result = LoggerSetup.format_exception(exc)
-        assert "Traceback:" in result
-
-    def test_handles_exception_without_traceback(self):
-        """An exception never raised has no __traceback__; should still work."""
-        result = LoggerSetup.format_exception(ValueError("no-tb"))
-        assert isinstance(result, str)
-        assert "no-tb" in result
 
 
 @pytest.mark.unit

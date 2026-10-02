@@ -167,53 +167,44 @@ class TestSetToDistance:
     def test_sends_a_command_with_actuator_and_inches(self):
         """Command is 'A<actuator><inches:.1f>' per the frozen format."""
         stub = make_distance_stub()
-        KneeSpa.set_to_distance(stub, 3.0, "A", 1900)
+        KneeSpa.set_to_distance(stub, 3.0, "A")
         stub.arduino.send.assert_called_once_with("AA3.0")
 
     def test_inches_formatted_to_one_decimal(self):
         """Inches always render with exactly one decimal place."""
         stub = make_distance_stub()
-        KneeSpa.set_to_distance(stub, 2, "A", 1900)
+        KneeSpa.set_to_distance(stub, 2, "A")
         assert sent_command(stub) == "AA2.0"
 
     def test_fractional_inches_preserved(self):
         """A fractional input keeps its one-decimal representation."""
         stub = make_distance_stub()
-        KneeSpa.set_to_distance(stub, 1.5, "A", 1900)
+        KneeSpa.set_to_distance(stub, 1.5, "A")
         assert sent_command(stub) == "AA1.5"
 
     def test_zero_inches(self):
         """Zero inches is sent as the literal 'A<actuator>0.0'."""
         stub = make_distance_stub()
-        KneeSpa.set_to_distance(stub, 0, "A", 1900)
+        KneeSpa.set_to_distance(stub, 0, "A")
         assert sent_command(stub) == "AA0.0"
 
     def test_actuator_letter_is_embedded(self):
         """The actuator identifier is placed between the 'A' prefix and value."""
         stub = make_distance_stub()
-        KneeSpa.set_to_distance(stub, 4.0, "B", 1900)
+        KneeSpa.set_to_distance(stub, 4.0, "B")
         assert sent_command(stub) == "AB4.0"
-
-    def test_factor_does_not_change_sent_command(self):
-        """FROZEN: the internal 'position' uses factor, but the SENT command
-        is driven only by inches/actuator. Two factors -> identical command."""
-        stub_a = make_distance_stub()
-        stub_b = make_distance_stub()
-        KneeSpa.set_to_distance(stub_a, 2.0, "A", 1900)
-        KneeSpa.set_to_distance(stub_b, 2.0, "A", 8)
-        assert sent_command(stub_a) == sent_command(stub_b) == "AA2.0"
 
     def test_clears_status_event(self):
         """Side effect: the thread-safe DONE event is cleared for the next
         command (the legacy I2CStatus flag write was retired on the base)."""
         stub = make_distance_stub()
-        KneeSpa.set_to_distance(stub, 1.0, "A", 1900)
+        KneeSpa.set_to_distance(stub, 1.0, "A")
         stub.I2Cstatus_event.clear.assert_called_once()
 
     def test_keeps_controls_locked_until_firmware_done(self):
         """Queue acceptance is not physical completion; DONE unlocks later."""
         stub = make_distance_stub()
-        KneeSpa.set_to_distance(stub, 1.0, "A", 1900)
+        KneeSpa.set_to_distance(stub, 1.0, "A")
         stub.enable_actuator_controls.assert_not_called()
 
 

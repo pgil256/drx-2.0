@@ -17,15 +17,12 @@ from PyQt5.QtCore import QTimer
 from PyQt5.QtWidgets import QMessageBox
 
 from helpers import protocols
-from helpers.cloud_contract import end_settings
+from helpers.cloud_contract import end_settings, patient_label
 from helpers.treatment_session import TreatmentSession
 from controllers.machine_sign_in_controller import authorize
 from ui.modals.treatment_review import TreatmentReviewDialog
 
-try:
-    from main.config.constants import DATA_PATHS, EMERGENCYSTOP
-except ModuleNotFoundError:
-    from config.constants import DATA_PATHS, EMERGENCYSTOP
+from config.constants import DATA_PATHS, EMERGENCYSTOP
 
 
 class ProtocolController:
@@ -174,9 +171,7 @@ class ProtocolController:
 
         patient = getattr(window, "cloud_patient", None)
         if patient:
-            name = (patient.get("display_name") or patient.get("external_ref")
-                    or patient["patient_id"])
-            patient_summary = f"Patient: {name}"
+            patient_summary = f"Patient: {patient_label(patient)}"
         else:
             patient_summary = "No cloud patient linked. This treatment will not upload."
         return TreatmentReviewDialog.confirm(window, protocol, settings, patient_summary)
@@ -271,11 +266,13 @@ class ProtocolController:
             window._show_timed_error(f"Could not complete treatment operation: {e}")
 
 
-    def start_protocol(self):
-        """Start protocol execution."""
+    def _preflight(self) -> bool:
+        """Refuse a start, with the reason shown, unless the device may treat now.
+
+        Only guard checks belong here; the treatment settings are read later,
+        in start_protocol.
+        """
         window = self.window
-        if not authorize(window, "treatment", self.start_protocol):
-            return False
         if getattr(window, "_patient_lookup_pending", False) is True:
             window._show_timed_error(
                 "Wait for patient lookup or choose treatment without a patient."
@@ -302,6 +299,15 @@ class ProtocolController:
             # Treating a patient on generated default geometry or a
             # default scale factor is never acceptable
             window._warn_uncalibrated()
+            return False
+        return True
+
+    def start_protocol(self):
+        """Start protocol execution."""
+        window = self.window
+        if not authorize(window, "treatment", self.start_protocol):
+            return False
+        if not self._preflight():
             return False
 
         try:
@@ -373,7 +379,6 @@ class ProtocolController:
                 partial(self.protocol_completed, session=session)
             )
             window.worker.signals.progress.connect(partial(self._session_progress, session=session))
-            window.worker.signals.motor_speed_failed.connect(window._show_timed_error)
             window.worker.signals.prepared.connect(partial(self._on_prepared, session=session))
             window.worker.signals.operation_failed.connect(
                 partial(self._on_operation_failed, session=session)
@@ -383,7 +388,6 @@ class ProtocolController:
             # Freeze the association before dispatch, and invalidate any lookup
             # that could arrive after this treatment has already ended.
             window._patient_lookup_id += 1
-            window._treatment_patient = patient
             window.mid_protocol_warning_shown = False
 
             self.set_state("starting")
@@ -401,7 +405,6 @@ class ProtocolController:
                 window.threadpool.start(window.worker)
             except Exception:
                 self._session = None  # Dispatch failed: no treatment was started.
-                window._treatment_patient = None
                 window.protocol_timer.stop()
                 window.protocol_start_time = None
                 window.protocol_running = False
@@ -592,12 +595,6 @@ class ProtocolController:
         if not user_stopped:
             window.protocol_stop_requested = False
 
-    def _upload_treatment(self, success, user_stopped, safety_fault_active):
-        self.latch_session_outcome(
-            self._completion_outcome(success, user_stopped, safety_fault_active)
-        )
-        self.finalize_session()
-
     @staticmethod
     def _completion_outcome(success: bool, user_stopped: bool, safety_fault_active: bool) -> str:
         if safety_fault_active:
@@ -676,24 +673,6 @@ class ProtocolController:
         if remaining_time == 0:
             window.protocol_timer.stop()
             window.protocol_start_time = None
-
-    def _reset_after_failure(self, session: Optional[TreatmentSession] = None) -> None:
-        """Do not let a queued worker failure reset a physical emergency stop."""
-        if getattr(self.window, "_no_automatic_recovery", False) is True:
-            return
-        if session is not None:
-            if session is not self._session or session.reset_requested:
-                return
-            # Workers emit finished(False) BEFORE reset_needed. Completing the
-            # record must not swallow that recovery request for the same run.
-            if session.finalized and session.outcome != "fault":
-                return
-            session.reset_requested = True
-        self.latch_session_outcome("fault")
-        self.finalize_session()
-        if getattr(self.window, "_physical_stop_active", False) is not True:
-            self.window.reset_arduino()
-
 
     def emergency_stop_clicked(self, event, outcome: str = "fault"):
         """Handle emergency stop button press."""

@@ -265,10 +265,6 @@ class TreatmentStatusPanel(QFrame):
     def _fit_to_parent(self, parent: QWidget) -> None:
         self.setGeometry(0, 0, parent.width(), PANEL_HEIGHT)
 
-    def set_suppressed_when(self, predicate: Optional[Callable[[], bool]]) -> None:
-        """Install (or clear) the predicate that keeps the banner hidden."""
-        self._suppress_when = predicate
-
     def is_suppressed(self) -> bool:
         if self._suppress_when is None:
             return False

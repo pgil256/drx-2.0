@@ -1,19 +1,16 @@
 # development/tests/integration/test_reset_worker.py
 import pytest
-import time
-import serial
 import threading
 from types import SimpleNamespace
 
 from helpers.reset_worker import ResetWorker
 from config.config import Configuration
-from fixtures.fake_arduino import FakeArduino, PTY_AVAILABLE
+from fixtures.fake_arduino import PTY_AVAILABLE
 
 pytestmark = pytest.mark.skipif(
     not PTY_AVAILABLE,
     reason="FakeArduino requires POSIX pty/termios support",
 )
-from helpers.arduino import Arduino
 
 
 class FakeMainWindow:
@@ -27,31 +24,19 @@ class FakeMainWindow:
     """
 
     def __init__(self, arduino):
-        self.I2Cstatus = 0
         self.I2Cstatus_event = threading.Event()
         self.worker = None  # no protocol running
         arduino.done_emit.connect(self.set_done)
 
     def set_done(self):
-        self.I2Cstatus = 1
         self.I2Cstatus_event.set()
 
 
 @pytest.fixture
-def reset_env():
+def reset_env(fake_arduino_pair):
     """Set up environment for reset worker testing."""
-    fake = FakeArduino()
+    arduino, fake = fake_arduino_pair
     fake.boot_delay = 0.1  # shorten 'Y' reboot for test speed
-    fake.start()
-
-    arduino = Arduino()
-    arduino.ARDUINO_PORT = fake.port
-    arduino.serial_com = serial.Serial(fake.port, 115200, timeout=1, write_timeout=1)
-    arduino.connected = True
-    arduino._running = True
-
-    reader = threading.Thread(target=arduino.read_from_com, daemon=True)
-    reader.start()
 
     config = Configuration()
     config._set_default_c_marks()
@@ -67,13 +52,7 @@ def reset_env():
 
     main_window = FakeMainWindow(arduino)
 
-    yield arduino, fake, config, main_window
-
-    arduino._running = False
-    time.sleep(0.2)
-    fake.stop()
-    if arduino.serial_com and arduino.serial_com.is_open:
-        arduino.serial_com.close()
+    return arduino, fake, config, main_window
 
 
 @pytest.mark.integration

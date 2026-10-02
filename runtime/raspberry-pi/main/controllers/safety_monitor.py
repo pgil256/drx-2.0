@@ -209,10 +209,6 @@ class SafetyMonitor:
 
         return True
 
-    def trigger_safety_stop(self, reason):
-        """Compatibility entry point: present a warning without stopping."""
-        self._present_warning(reason)
-
     def on_firmware_error(self, message):
         """Handle firmware faults and command rejections.
 
@@ -383,7 +379,6 @@ class SafetyMonitor:
 
     def on_connection_lost(self):
         """Present connection loss as an advisory warning."""
-        window = self.window
         print("Arduino connection lost")
         self._present_warning(
             "CONNECTION LOST. Use the physical emergency stop if motion "

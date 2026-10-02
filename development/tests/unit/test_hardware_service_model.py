@@ -222,6 +222,87 @@ def test_no_changes_does_not_write_or_backup(config, monkeypatch):
     assert not list(Path(config.configFile).parent.glob("*.bak"))
 
 
+@pytest.mark.parametrize("defaults", ["missing", "unmarked", "marked", "malformed"])
+def test_factor_save_preserves_legacy_keys_defaults_and_unknown_values(config, defaults):
+    """Service saves preserve even ignored or malformed unrelated settings."""
+    config.config["Unrelated"] = {"note": "Measured on service bench", "flag": None}
+    config.config["Device"] = {"id": "test-device", "service_note": "keep"}
+    config.config["Options"]["legacy_option"] = "keep"
+    if defaults != "missing":
+        config.config["ProtocolDefaults"] = {"max_pressure": "60", "pulse_rate": "3"}
+        if defaults != "unmarked":
+            config.config["ProtocolDefaults"]["marked"] = "1"
+        if defaults == "malformed":
+            config.config["ProtocolDefaults"]["max_pressure"] = "garbage"
+    config._atomic_write()
+    config.get_config()
+    previous_defaults = config.protocol_defaults()
+    previous_marked = config.protocol_defaults_marked
+    sections = {name: dict(config.config[name]) for name in config.config.sections()}
+    original = Path(config.configFile).read_bytes()
+    draft = HardwareServiceDraft(config)
+    draft.factors["horizontal"] = 3720
+    draft.factors["lateral"] = 3800
+
+    backup = draft.save(config)
+
+    assert Path(backup).read_bytes() == original
+    sections["Options"].update(b_factor="3720", c_factor="3800")
+    loaded = Configuration(config.configFile)
+    loaded.get_config()
+    assert {name: dict(loaded.config[name]) for name in loaded.config.sections()} == sections
+    assert loaded.BMarks["0"] == 1900
+    assert "0.0" not in loaded.BMarks
+    assert loaded.CMarks["0.0"] == 1688
+    assert "0" not in loaded.CMarks
+    assert loaded.AMarks == config.AMarks
+    assert loaded.calibration == -28369
+    assert (loaded.b_factor, loaded.c_factor) == (3720, 3800)
+    assert loaded.protocol_defaults() == previous_defaults
+    assert loaded.protocol_defaults_marked == previous_marked
+    assert loaded.device_id == "test-device"
+
+
+def test_save_without_existing_file_does_not_create_backup(config):
+    """A valid in-memory configuration can be saved when there is no prior file."""
+    path = Path(config.configFile)
+    path.unlink()
+    draft = HardwareServiceDraft(config)
+    draft.factors["horizontal"] = 3720
+
+    assert draft.save(config) is None
+
+    loaded = Configuration(config.configFile)
+    loaded.get_config()
+    assert loaded.b_factor == 3720
+    assert config.b_factor == 3720
+    assert not draft.dirty
+    assert not list(path.parent.glob("*.bak"))
+
+
+@pytest.mark.parametrize("change", ["missing_endpoint", "out_of_order", "out_of_range"])
+def test_invalid_angle_table_cannot_replace_file(config, change):
+    original = Path(config.configFile).read_bytes()
+    draft = HardwareServiceDraft(config)
+    if change == "missing_endpoint":
+        draft.marks["horizontal"].pop("-25.0")
+    elif change == "out_of_order":
+        draft.marks["horizontal"]["0.0"] = 100
+    else:
+        draft.marks["horizontal"]["5.0"] = 4096
+    with pytest.raises(ValueError):
+        draft.save(config)
+    assert Path(config.configFile).read_bytes() == original
+
+
+def test_angle_edits_do_not_certify_fallback_axial_data(config):
+    config.calibration_errors.append("AMarks section missing; defaults in use")
+    draft = HardwareServiceDraft(config)
+    draft.record("horizontal", 0, 1910)
+    draft.save(config)
+    assert not config.marks_valid
+
+
 def test_axial_interpolation_uses_measured_offset_and_nonuniform_points():
     marks = {"0": 100, "1": 700, "3": 1500, "4": 1800}
     assert axial_position(marks, 0) == 100
@@ -255,7 +336,7 @@ def test_axial_go_uses_measured_table_only_after_service_opt_in(config, marked, 
     window = MagicMock()
     window.config = config
     window.arduino.send.return_value = True
-    assert KneeSpa.set_to_distance(window, 2, "12", 1900)
+    assert KneeSpa.set_to_distance(window, 2, "12")
     window.arduino.send.assert_called_once_with(command)
 
 
@@ -271,7 +352,7 @@ def test_axial_jog_uses_measured_table_only_after_service_opt_in(config, marked,
     window.actuator_command_in_progress = False
     window.axial_flexion_position = 0
     window.arduino.send.return_value = True
-    KneeSpa.move_actuator(window, "12", None, "1", 1)
+    KneeSpa.move_actuator(window, "12", "1", 1)
     window.arduino.send.assert_called_once_with(command)
     assert window.axial_flexion_position == 0.5
 
@@ -288,9 +369,9 @@ def test_invalid_service_axial_table_never_sends_motion(config, operation):
     window.actuator_command_in_progress = False
     window.axial_flexion_position = 0
     if operation == "go":
-        assert KneeSpa.set_to_distance(window, 2, "12", 1900) is False
+        assert KneeSpa.set_to_distance(window, 2, "12") is False
     else:
-        assert KneeSpa.move_actuator(window, "12", None, "1", 1) is False
+        assert KneeSpa.move_actuator(window, "12", "1", 1) is False
         assert window.axial_flexion_position == 0
     window.arduino.send.assert_not_called()
     window._show_timed_error.assert_called_once()

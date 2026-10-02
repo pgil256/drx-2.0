@@ -124,7 +124,6 @@ def test_button_variant_and_size_switch(app):
     b.set_variant("danger")
     b.set_size("lg")
     assert b.variant() == "danger"
-    assert b.size_variant() == "lg"
     assert b.property("variant") == "danger"
     assert b.property("dsSize") == "lg"
     # invalid values fall back

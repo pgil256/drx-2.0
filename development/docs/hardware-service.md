@@ -49,8 +49,9 @@ calibration while movement stays locked. Fresh raw load-cell capture does not
 depend on a working position sensor. Save a measured repair, remove the reference
 load, close, and reset explicitly; a fault never grants permission to move.
 
-Deploy the matching Pi application and Arduino firmware. This feature's firmware
-identity is **`2026-09-18-DRX2-NB2-SERVICE`** and its load-cell driver identity is
+Deploy the matching Pi application and Arduino firmware. The firmware identity
+is **`2026-09-30-DRX2-NB2-SERVICE`** (the service feature first shipped as
+`2026-09-18-DRX2-NB2-SERVICE`) and its load-cell driver identity is
 `DRX-HX711-NB2`. Copying a sketch to the Pi does not flash the Arduino; follow
 the project's separate firmware deployment process.
 

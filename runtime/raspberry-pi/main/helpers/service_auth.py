@@ -7,10 +7,7 @@ import tempfile
 import time
 from typing import Callable, Optional
 
-try:
-    from main.config.constants import SERVICE_PIN_PATH
-except ModuleNotFoundError:  # Direct execution of main/kneespa.py
-    from config.constants import SERVICE_PIN_PATH
+from config.constants import SERVICE_PIN_PATH
 
 from helpers.logging import setup_logger
 from helpers.secure_auth import SecureAuthHelper

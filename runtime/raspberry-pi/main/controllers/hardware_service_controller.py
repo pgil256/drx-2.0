@@ -1,8 +1,6 @@
 """Supervise an authenticated, operator-guided hardware service session."""
 
-import json
 import math
-import os
 import time
 from collections import deque
 from datetime import datetime, timezone
@@ -15,23 +13,17 @@ from PyQt5.QtWidgets import QDialog
 
 from config.paths import DEVICE_STATE_DIR
 from helpers.calibration import distance_factor
+from helpers.device_records import write_json
 from helpers.firmware_protocol import HX711_PROTOCOL_DRIVER
 from helpers.hardware_service import HardwareServiceDraft, load_cell_factor
 from helpers.logging import setup_logger
 from helpers.service_auth import ServiceAccess
 from ui.modals.hardware_service_dialog import HardwareServiceDialog
-from ui.modals.service_pin_dialog import ServicePinDialog
 
-try:
-    from main.config.constants import (
-        CALIBRATION_MOVE_TIMEOUT_S, CALIBRATION_POSITION_TOLERANCE,
-        CALIBRATION_SETTLE_COUNTS, CALIBRATION_STATUS_MAX_AGE_S, SERVICE_AXES,
-    )
-except ModuleNotFoundError:
-    from config.constants import (
-        CALIBRATION_MOVE_TIMEOUT_S, CALIBRATION_POSITION_TOLERANCE,
-        CALIBRATION_SETTLE_COUNTS, CALIBRATION_STATUS_MAX_AGE_S, SERVICE_AXES,
-    )
+from config.constants import (
+    CALIBRATION_MOVE_TIMEOUT_S, CALIBRATION_POSITION_TOLERANCE,
+    CALIBRATION_SETTLE_COUNTS, CALIBRATION_STATUS_MAX_AGE_S, SERVICE_AXES,
+)
 
 
 class HardwareServiceController:
@@ -43,9 +35,9 @@ class HardwareServiceController:
         self.access = ServiceAccess()
         self.mode = "calibration"
         self.dialog: Optional[HardwareServiceDialog] = None
-        self.pin_dialog: Optional[ServicePinDialog] = None
 
-    def _can_open(self) -> bool:
+    def can_open(self) -> bool:
+        """Whether a service session may start now (logged in, nothing moving)."""
         w = self.window
         return bool(w.current_user) and not (
             w.protocol_running or w.reset_in_progress
@@ -67,43 +59,16 @@ class HardwareServiceController:
         if self.dialog is not None:
             self.dialog.raise_()
             return
-        if self.pin_dialog is not None:
-            self.pin_dialog.raise_()
-            return
-        if not self._can_open():
+        if not self.can_open():
             self.window._show_timed_error("Log in and finish movement, treatment or reset first.")
             return
         self.mode = mode
-        device = getattr(self.window, "device_controller", None)
-        if device is not None:
-            device.require_service(lambda _user: self._start_authorized(mode))
-            return
-        self._auth_user = dict(self.window.current_user)
-        try:
-            d = ServicePinDialog(
-                self.access, self.window.current_user.get("status") == "admin", self.window,
-            )
-        except (OSError, ValueError):
-            self.logger.exception("Cannot read service credential")
-            self.window._show_timed_error("Could not read the device service credential.")
-            return
-        self.pin_dialog = d
-        d.finished.connect(self._authenticated)
-        d.open()
-
-    def _authenticated(self, result: int) -> None:
-        pin_dialog = self.pin_dialog
-        self.pin_dialog = None
-        if pin_dialog is None:
-            return
-        pin_dialog.deleteLater()
-        if (result != QDialog.Accepted or not self._can_open()
-                or self.window.current_user != self._auth_user):
-            return
-        self._start_session()
+        # The Device screen owns the technician PIN and the service visit.
+        self.window.device_controller.require_service(
+            lambda _user: self._start_authorized(mode))
 
     def _start_authorized(self, mode: str) -> None:
-        if self._can_open() and self.window.device_controller.service_authorized():
+        if self.can_open() and self.window.device_controller.service_authorized():
             self.mode = mode
             self._start_session()
 
@@ -133,7 +98,7 @@ class HardwareServiceController:
         self.target = None
         self.move_axis = None
         self.legacy_done = False
-        self.aborted = self.prepared = self.stop_armed = False
+        self.aborted = self.prepared = False
         self.physical_stop_seen = self.software_stop_written = False
         self.saved = False
         self.moved = False
@@ -371,22 +336,12 @@ class HardwareServiceController:
             self.dialog.show_message("Open password-protected Calibration to change settings.", True)
             return
         try:
+            # Actions above the ready() gate work without fresh, stable
+            # readings; everything below it moves or measures an axis.
             if name == "begin":
-                self.prepared = True
-                self.set_result("preparation", "pass", "Technician confirmed unloaded preparation.")
-                self.dialog.show_message("Preparation recorded. Continue to connection checks.")
+                self._record_preparation()
             elif name == "check_link":
-                if self.hardware_ready() and self.stable():
-                    self.event("diagnostics_checked", "Fresh status and all three I2C replies.")
-                    self.dialog.show_message(
-                        "Fresh position feedback and controller replies received. Inspect readings "
-                        "and wiring, then record your observation."
-                    )
-                else:
-                    self.dialog.show_message(
-                        "Waiting for fresh feedback and hardware diagnostics. Install matching "
-                        "service firmware if diagnostics remain unavailable.", True,
-                    )
+                self._check_link()
             elif name == "result":
                 self.record_result(value)
             elif name == "bench_result":
@@ -404,56 +359,85 @@ class HardwareServiceController:
             elif name == "pressure_calculate":
                 if self.handle is not None or not self.prepared:
                     return
-                self.draft.scale = load_cell_factor(
-                    self.pressure_points["zero"], self.pressure_points["loaded"], float(value),
-                )
-                self.reference_lbs = float(value)
-                self.dialog.refresh_draft()
-                self.dialog.show_message(
-                    "Load-cell factor staged. Remove the reference load before resetting; "
-                    "verify against the reference again after reset."
-                )
+                self._stage_load_cell_factor(value)
             elif not self.ready():
                 self.dialog.show_message(
                     "Fresh, stable readings and completed preparation required.", True,
                 )
             elif name == "jog":
-                axis = self.dialog.current_axis()
-                if value not in (-200, -50, 50, 200):
-                    raise ValueError("Choose a supported bounded jog.")
-                self.move(axis, self.position(axis) + int(value))
+                self._jog(self.dialog.current_axis(), value)
             elif name == "record":
-                axis = self.dialog.current_axis()
-                self.draft.record(axis, float(value), self.position(axis))
-                self.dialog.refresh_draft()
+                self._record_mark(self.dialog.current_axis(), float(value))
             elif name == "goto":
                 axis = self.dialog.current_axis()
                 self.move(axis, self.draft.marks[axis][str(value)])
             elif name == "remove":
-                axis = self.dialog.current_axis()
-                self.draft.marks[axis].pop(str(value))
-                self.draft.recorded[axis].discard(str(value))
-                self.dialog.refresh_draft()
+                self._remove_mark(self.dialog.current_axis(), str(value))
             elif name == "anchor":
-                axis = self.dialog.current_axis()
-                self.anchors[axis][str(value)] = self.position(axis)
-                points = self.anchors[axis]
-                self.dialog.set_anchors(axis, points.get("start"), points.get("end"))
+                self._set_anchor(self.dialog.current_axis(), str(value))
             elif name == "factor":
-                axis = self.dialog.current_axis()
-                points = self.anchors[axis]
-                self.draft.factors[axis] = distance_factor(
-                    points["start"], points["end"], float(value),
-                )
-                self.dialog.refresh_draft()
-                self.dialog.show_message(
-                    "Distance readout factor staged. Position marks govern movement."
-                )
+                self._stage_distance_factor(self.dialog.current_axis(), value)
             elif name == "leg":
                 self.move_leg(str(value))
         except (ValueError, KeyError, TypeError) as exc:
             self.dialog.show_message(f"Check the measurements and required captures: {exc}", True)
         self.tick()
+
+    def _record_preparation(self) -> None:
+        self.prepared = True
+        self.set_result("preparation", "pass", "Technician confirmed unloaded preparation.")
+        self.dialog.show_message("Preparation recorded. Continue to connection checks.")
+
+    def _check_link(self) -> None:
+        if self.hardware_ready() and self.stable():
+            self.event("diagnostics_checked", "Fresh status and all three I2C replies.")
+            self.dialog.show_message(
+                "Fresh position feedback and controller replies received. Inspect readings "
+                "and wiring, then record your observation."
+            )
+        else:
+            self.dialog.show_message(
+                "Waiting for fresh feedback and hardware diagnostics. Install matching "
+                "service firmware if diagnostics remain unavailable.", True,
+            )
+
+    def _stage_load_cell_factor(self, reference: object) -> None:
+        self.draft.scale = load_cell_factor(
+            self.pressure_points["zero"], self.pressure_points["loaded"], float(reference),
+        )
+        self.reference_lbs = float(reference)
+        self.dialog.refresh_draft()
+        self.dialog.show_message(
+            "Load-cell factor staged. Remove the reference load before resetting; "
+            "verify against the reference again after reset."
+        )
+
+    def _jog(self, axis: str, step: object) -> None:
+        if step not in (-200, -50, 50, 200):
+            raise ValueError("Choose a supported bounded jog.")
+        self.move(axis, self.position(axis) + int(step))
+
+    def _record_mark(self, axis: str, key: float) -> None:
+        self.draft.record(axis, key, self.position(axis))
+        self.dialog.refresh_draft()
+
+    def _remove_mark(self, axis: str, key: str) -> None:
+        self.draft.marks[axis].pop(key)
+        self.draft.recorded[axis].discard(key)
+        self.dialog.refresh_draft()
+
+    def _set_anchor(self, axis: str, which: str) -> None:
+        self.anchors[axis][which] = self.position(axis)
+        points = self.anchors[axis]
+        self.dialog.set_anchors(axis, points.get("start"), points.get("end"))
+
+    def _stage_distance_factor(self, axis: str, distance: object) -> None:
+        points = self.anchors[axis]
+        self.draft.factors[axis] = distance_factor(points["start"], points["end"], float(distance))
+        self.dialog.refresh_draft()
+        self.dialog.show_message(
+            "Distance readout factor staged. Position marks govern movement."
+        )
 
     def move(self, axis: str, target: int) -> None:
         if not self.ready():
@@ -543,7 +527,6 @@ class HardwareServiceController:
                 return
             self.abort("Stationary software-stop check requested.")
         elif kind == "physical":
-            self.stop_armed = True
             self.dialog.show_message(
                 "Press the physical emergency stop. The wizard will record its input; "
                 "confirm actual stop/release behavior separately. Reset after closing."
@@ -713,16 +696,9 @@ class HardwareServiceController:
                      "Loaded stop/release, pressure control/pulse, watchdog, power-loss and limit "
                      "switch behavior require the documented physical bench procedure.",
         }
-        directory = Path(DEVICE_STATE_DIR) / "service-reports"
+        path = Path(DEVICE_STATE_DIR) / "service-reports" / f"hardware-{self.session_id}.json"
         try:
-            directory.mkdir(parents=True, exist_ok=True)
-            path = directory / f"hardware-{self.session_id}.json"
-            temporary = path.with_suffix(".tmp")
-            with temporary.open("w", encoding="utf-8") as output:
-                json.dump(report, output, indent=2, allow_nan=False)
-                output.flush()
-                os.fsync(output.fileno())
-            os.replace(temporary, path)
+            write_json(path, report)
             self.report_path = path
             if not self.saved:
                 self.dialog.show_message(f"Service report saved: {path}")
@@ -765,8 +741,6 @@ class HardwareServiceController:
             self.window._show_timed_error(message)
 
     def shutdown(self) -> None:
-        if self.pin_dialog is not None:
-            self.pin_dialog.reject()
         if self.dialog is not None:
             self.stop_before_close()
             self.dialog.done(QDialog.Rejected)

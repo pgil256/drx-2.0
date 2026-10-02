@@ -7,10 +7,7 @@ from datetime import datetime, timezone
 from typing import Any, Dict, Optional
 from uuid import uuid4
 
-try:
-    from main.config.constants import APP_VERSION
-except ModuleNotFoundError:
-    from config.constants import APP_VERSION
+from config.constants import APP_VERSION
 
 
 @dataclass
@@ -30,7 +27,6 @@ class TreatmentSession:
     actual_duration_s: Optional[int] = None
     finalized: bool = False
     completion_handled: bool = False
-    reset_requested: bool = False
     record: Optional[Dict[str, Any]] = None
 
     def pause(self) -> None:

@@ -308,8 +308,7 @@ class TestStartProtocolGates:
         w.treatment_panel.set_running.assert_called_once_with(50, 720)
 
     def test_worker_failure_signal_wired_to_fault(self, controller, monkeypatch):
-        """protocols 2/3 emit reset_needed after a failed pulse phase; it
-        must be connected (it used to go nowhere)."""
+        """A failed run reports through operation_failed and finished(False)."""
         pc, w = controller
         worker_cls = MagicMock(return_value=make_worker_double())
         monkeypatch.setattr(protocols_module, "Protocols", worker_cls)
@@ -318,7 +317,6 @@ class TestStartProtocolGates:
         failure = worker.signals.operation_failed.connect.call_args.args[0]
         finished = worker.signals.finished.connect.call_args.args[0]
         assert failure.func == pc._on_operation_failed
-        worker.signals.reset_needed.connect.assert_not_called()
         assert finished.func == pc.protocol_completed
         assert failure.keywords["session"] is pc._session
         assert finished.keywords["session"] is pc._session
@@ -357,7 +355,7 @@ class TestTreatmentWiring:
     def test_repeated_starts_preserve_only_active_pressure_receivers(
         self, controller: tuple, monkeypatch: pytest.MonkeyPatch, qtbot: QtBot
     ) -> None:
-        """Starts keep public worker signals and the live safety route intact."""
+        """Repeated starts keep exactly one live status route to the UI and safety."""
         pc, w = controller
         w.pressure_dialog = _RetiredDialog()
         w.arduino = _StatusSource()
@@ -371,12 +369,10 @@ class TestTreatmentWiring:
         qtbot.addWidget(w.treatment_panel)
         w.arduino.status_emit.connect(partial(KneeSpa.status_emit, w))
         workers = []
-        pressures = []
 
         def construct_worker(*args: object, **kwargs: object) -> MagicMock:
             worker = make_worker_double()
             worker.signals = protocols_module.WorkerSignals()
-            worker.signals.pressure_emit.connect(pressures.append)
             workers.append(worker)
             return worker
 
@@ -384,9 +380,7 @@ class TestTreatmentWiring:
         for pressure in (42.0, 43.0, 44.0):
             assert pc.start_protocol() is True
             worker = workers[-1]
-            assert worker.signals.receivers(worker.signals.pressure_emit) == 1
             assert w.arduino.receivers(w.arduino.status_emit) == 1
-            worker.signals.pressure_emit.emit(pressure)
             w.arduino.status_emit.emit(500, 0, 150, pressure)
             assert w.last_measured_pressure == pressure
             w.shell.treatment.set_pressure.assert_called_with(pressure)
@@ -396,7 +390,6 @@ class TestTreatmentWiring:
             assert w.protocol_state == "idle"
             assert w.arduino.receivers(w.arduino.status_emit) == 1
 
-        assert pressures == [42.0, 43.0, 44.0]
         assert w.shell.treatment.set_pressure.call_count == 3
         # The same live route still runs SafetyMonitor's limit handling.
         w.arduino.status_emit.emit(500, 0, 150, 200.0)
@@ -680,6 +673,9 @@ class TestCompletionOutcomes:
         w._show_timed_error.assert_not_called()
         w._show_safety_alert.assert_not_called()
         assert not w.initial_setup_complete
+        # Recovery is the operator's Reset; nothing moves on its own.
+        w.shell.setup.set_reset_enabled.assert_called_once_with(True)
+        w.reset_arduino.assert_not_called()
 
     @pytest.mark.parametrize("success", [False, True])
     def test_user_stop_stays_gated_until_reset_without_fault_alert(self, controller, success):

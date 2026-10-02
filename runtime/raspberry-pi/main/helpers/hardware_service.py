@@ -7,10 +7,7 @@ import shutil
 from datetime import datetime
 from typing import Dict, List, Mapping, Optional, Tuple
 
-try:
-    from main.config.constants import SERVICE_AXES
-except ModuleNotFoundError:  # Direct execution of main/kneespa.py
-    from config.constants import SERVICE_AXES
+from config.constants import SERVICE_AXES
 
 from config.config import MIN_PLAUSIBLE_SCALE_FACTOR
 
@@ -225,11 +222,7 @@ class HardwareServiceDraft:
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")
             backup = f"{config.configFile}.{stamp}.bak"
             shutil.copy2(config.configFile, backup)
-        config._atomic_write(candidate)
-        config.config = candidate
-        for attribute, value in changed.items():
-            setattr(config, attribute, value)
-        config._validate_calibration()
+        config.commit(candidate, changed)
         self.original_marks = copy.deepcopy(self.marks)
         self.original_factors = dict(self.factors)
         self.original_scale = self.scale

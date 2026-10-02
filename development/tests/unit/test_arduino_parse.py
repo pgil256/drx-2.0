@@ -184,10 +184,11 @@ class TestOKResponse:
 class TestPositionResponse:
     """Tests for position response parsing."""
 
-    def test_position_p_format(self, arduino, qtbot):
-        with qtbot.waitSignal(arduino.position_emit, timeout=1000) as blocker:
-            arduino.handle_com("P|1500")
-        assert blocker.args[0] == 1500
+    def test_position_reply_is_only_logged(self, arduino):
+        """The Pi never sends G, so a P| reply has no consumer."""
+        arduino.logger = MagicMock()
+        arduino.handle_com("P|1500")
+        arduino.logger.info.assert_called_once_with("Unrecognized data format: %s", "P|1500")
 
     def test_l6_report_feeds_status(self, arduino, qtbot):
         """The L6 'A|a|b|c|p' report carries the same payload as a status
@@ -469,20 +470,21 @@ class TestProtocolV2Receive:
 class TestPressureResponse:
     """Tests for pressure response parsing."""
 
-    def test_pressure_response(self, arduino, qtbot):
-        with qtbot.waitSignal(arduino.pressure_emit, timeout=1000) as blocker:
-            arduino.handle_com("PR|45.5")
-        assert blocker.args == ["45.5"]
+    def test_pressure_reply_is_only_logged(self, arduino):
+        """The firmware never sends PR|; the line must not reach any signal."""
+        arduino.logger = MagicMock()
+        arduino.handle_com("PR|45.5")
+        arduino.logger.info.assert_called_once_with("Unrecognized data format: %s", "PR|45.5")
 
 
 @pytest.mark.unit
 class TestWeightResponse:
-    """Tests for weight response parsing."""
+    """The Pi never sends L4, so its weight| reply has no consumer."""
 
-    def test_weight_response(self, arduino, qtbot):
-        with qtbot.waitSignal(arduino.display_weight_emit, timeout=1000) as blocker:
-            arduino.handle_com("weight|32.1")
-        assert blocker.args == ["32.1"]
+    def test_weight_reply_is_only_logged(self, arduino):
+        arduino.logger = MagicMock()
+        arduino.handle_com("weight|32.1")
+        arduino.logger.info.assert_called_once_with("Unrecognized data format: %s", "weight|32.1")
 
 
 @pytest.mark.unit

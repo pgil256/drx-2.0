@@ -82,6 +82,48 @@ def pause_icon(color="#ffffff", size=22):
     return QIcon(pm)
 
 
+# ── Fullscreen toggle icons ──────────────────────────────────────────────────
+# Corner brackets for the video modal's full-screen button: outward to enter
+# full screen, inward to leave it.
+
+def expand_icon(color="#ffffff", size=16):
+    """Four outward corner brackets — standard fullscreen icon."""
+    pm = _pixmap(size)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    pen = QPen(QColor(color))
+    pen.setWidthF(1.6)
+    pen.setCapStyle(Qt.RoundCap)
+    p.setPen(pen)
+    o = size * 0.12
+    a = size * 0.32
+    e = size - o
+    for cx, cy, sx, sy in [(o, o, 1, 1), (e, o, -1, 1), (o, e, 1, -1), (e, e, -1, -1)]:
+        p.drawLine(QPointF(cx, cy), QPointF(cx + sx * a, cy))
+        p.drawLine(QPointF(cx, cy), QPointF(cx, cy + sy * a))
+    p.end()
+    return QIcon(pm)
+
+
+def compress_icon(color="#ffffff", size=16):
+    """Four inward corner brackets — exit fullscreen icon."""
+    pm = _pixmap(size)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    pen = QPen(QColor(color))
+    pen.setWidthF(1.6)
+    pen.setCapStyle(Qt.RoundCap)
+    p.setPen(pen)
+    c = size * 0.40
+    a = size * 0.28
+    ic = size - c
+    for cx, cy, sx, sy in [(c, c, -1, -1), (ic, c, 1, -1), (c, ic, -1, 1), (ic, ic, 1, 1)]:
+        p.drawLine(QPointF(cx, cy), QPointF(cx + sx * a, cy))
+        p.drawLine(QPointF(cx, cy), QPointF(cx, cy + sy * a))
+    p.end()
+    return QIcon(pm)
+
+
 # ── Nav-rail line icons ──────────────────────────────────────────────────────
 # Lucide-style line icons drawn from the exact paths in bundle.jsx's `Icon`
 # component (24×24 space). Font-independent and recolorable so the active rail

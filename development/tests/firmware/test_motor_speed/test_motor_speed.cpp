@@ -33,7 +33,6 @@ void setUp(void) {
     pressure = 0; signedPressure = 0; desiredPressure = 0; AZERO = 0;
     Wire.position_12 = 1000; Wire.position_13 = 1000; Wire.position_14 = 1000;
     scale._ready = true; scale._scale = 1; scale._offset = 0; scale._raw = 0;
-    pressureSampleCount = 0; pressureSampleIndex = 0;
     lastHostTraffic = 0; lastScaleReady = 0;
     commandBuffer = ""; isCommandComplete = false;
     jerkInterval = 500;

@@ -45,6 +45,16 @@ def test_preparation_requires_actual_tare_and_typed_replies():
 
 
 @pytest.mark.unit
+def test_zero_marks_accept_only_the_delimited_form():
+    device = SimulatedController()
+    assert "Ready to Go" in send(device, "Y", 0.6)
+    replies = send(device, "L5160 1900")
+    assert "COMMAND_REJECTED|L5|INVALID_FORMAT" in replies
+    assert "ZEROS|" not in replies
+    assert "ZEROS|160|1900" in send(device, "L5|160|1900")
+
+
+@pytest.mark.unit
 def test_v2_position_ack_is_correlated_and_waits_for_motion():
     device = SimulatedController()
     payload = "42:K2400"

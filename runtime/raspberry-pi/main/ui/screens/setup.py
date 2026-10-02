@@ -6,7 +6,7 @@ from typing import Dict, List, Optional
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
-from main.config.constants import (
+from config.constants import (
     ACTUATORS, DEFAULT_HORIZONTAL_POSITION, LEG_LENGTH_MAX, LEG_LENGTH_MIN, PRESSURE_MAX,
 )
 from ui.theme import GLYPH
@@ -83,7 +83,6 @@ class _ActuatorRow(QWidget):
     jog = pyqtSignal(str, str)
     go = pyqtSignal(str)
     stop = pyqtSignal(str)
-    valueChanged = pyqtSignal(str, float)
 
     def __init__(self, cfg: Dict, parent=None) -> None:
         super().__init__(parent)
@@ -131,7 +130,6 @@ class _ActuatorRow(QWidget):
             unit=cfg["unit"], with_steps=True,
         )
         self.slider.set_accessible_label(cfg["name"] + " target")
-        self.slider.valueChanged.connect(self._on_target)
         self.slider._value_label.setFixedWidth(90)
         layout.addWidget(self.slider, 1)
 
@@ -150,9 +148,6 @@ class _ActuatorRow(QWidget):
         layout.addWidget(stop)
         self.safety_buttons.append(stop)
         self.motion_buttons.append(go)
-
-    def _on_target(self, value: float) -> None:
-        self.valueChanged.emit(self._key, value)
 
     def set_value(self, value: float) -> None:
         """Reflect a commanded target without changing any sensor reading."""
@@ -174,7 +169,6 @@ class SetupScreen(QWidget):
     jog_requested = pyqtSignal(str, str)
     go_requested = pyqtSignal(str)
     stop_requested = pyqtSignal(str)
-    value_changed = pyqtSignal(str, float)
     mark_default_requested = pyqtSignal()
     reset_arduino_requested = pyqtSignal()
     emergency_stop_requested = pyqtSignal()
@@ -200,7 +194,6 @@ class SetupScreen(QWidget):
             row.jog.connect(self.jog_requested)
             row.go.connect(self.go_requested)
             row.stop.connect(self.stop_requested)
-            row.valueChanged.connect(self.value_changed)
             body.addWidget(row, 1)
             if index < len(ROWS) - 1:
                 body.addWidget(hline())

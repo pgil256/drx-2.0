@@ -4,7 +4,7 @@ Single source for the protocol catalog, phase/step labels, and the Help/Support
 reference text so Treatment, Help, and Support stay in sync. Pure data.
 """
 
-from main.config.constants import ACTUATORS, PRESSURE_MAX
+from config.constants import ACTUATORS, PRESSURE_MAX
 
 # Treatment protocol catalog (bundle.jsx PROTOCOLS).
 PROTOCOLS = [
@@ -36,9 +36,6 @@ PHASES = {
     "complete": ("Protocol Complete", "success"),
     "stopped": ("Protocol Stopped", "danger"),
 }
-
-# Treatment stepper (bundle.jsx STEPS).
-STEPS = ["Ramp-Up", "Position", "Therapeutic Hold", "Smooth Reset"]
 
 # Help → "Preset Protocols" (bundle.jsx HELP_PROTOCOLS).
 HELP_PROTOCOLS = [

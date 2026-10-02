@@ -88,6 +88,77 @@ def test_modal_patient_pin_and_cancel_invalidate_late_result(
     assert run.view._start_btn.isEnabled()
 
 
+class _UnstartableThread:
+    """A thread the OS refuses to start (Thread.start raises RuntimeError)."""
+
+    def __init__(self, *args: object, **kwargs: object) -> None:
+        pass
+
+    def start(self) -> None:
+        raise RuntimeError("can't start new thread")
+
+
+def test_patient_lookup_that_cannot_start_is_not_left_pending(
+    window_run: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = window_run
+    run.cloud.enabled = True
+    run.window._show_patient_modal()
+    with monkeypatch.context() as patch:
+        patch.setattr(threading, "Thread", _UnstartableThread)
+        for digit in "0123":
+            run.window.shell.patient_modal._keypad._press(digit)
+    assert not run.window._patient_lookup_pending
+    assert run.window.cloud_patient is None
+    assert run.view._start_btn.isEnabled()
+    run.cloud.lookup_pin.assert_not_called()
+
+
+def test_patient_cloud_operation_that_cannot_start_is_not_left_pending(
+    window_run: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    controller = window_run.window.patients
+    with monkeypatch.context() as patch:
+        patch.setattr(threading, "Thread", _UnstartableThread)
+        controller._login("test@example.com", "not-a-real-password")
+    assert not controller._pending
+    assert not window_run.window._patient_lookup_pending
+
+
+def test_machine_sign_in_that_cannot_start_is_not_left_busy(
+    window_run: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    window = window_run.window
+    window.current_user = None
+    controller = window.machine_sign_in
+    controller.timer.stop()
+    with monkeypatch.context() as patch:
+        patch.setattr(threading, "Thread", _UnstartableThread)
+        controller.begin()
+    assert not controller._busy
+    assert not controller._request
+
+
+def test_logout_during_patient_lookup_releases_the_start_gate(
+    window_run: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    run = window_run
+    run.cloud.enabled = True
+    jobs = []
+    monkeypatch.setattr(kneespa.threading, "Thread", lambda **kw: SimpleNamespace(
+        start=lambda: jobs.append(kw["target"])
+    ))
+    run.window._show_patient_modal()
+    for digit in "0123":
+        run.window.shell.patient_modal._keypad._press(digit)
+    assert run.view._patient_pending
+    run.window._on_logout()
+    assert not run.window._patient_lookup_pending
+    assert not run.view._patient_pending  # The abandoned lookup must not gate Start.
+    jobs.pop()()
+    assert run.window.cloud_patient is None
+
+
 def test_modal_patient_success_applies_whole_plan(window_run: SimpleNamespace) -> None:
     run = window_run
     run.window._show_patient_modal()
@@ -109,11 +180,9 @@ def test_motor_speed_settings_reach_worker(window_run: SimpleNamespace) -> None:
     speeds = {"motor_speed": 75}
     run.view.set_settings(speeds)
     start(run)
-    worker, _args, kwargs = run.workers[-1]
+    _worker, _args, kwargs = run.workers[-1]
     assert all(kwargs["motor_speeds"][key] == value for key, value in speeds.items())
     assert all(not run.view._settings[key].isEnabled() for key in speeds)
-    worker.signals.motor_speed_failed.emit("Motor speed setup failed")
-    run.notices.assert_called_with("Motor speed setup failed")
 
 
 def nested_event(callback: Callable[[], None]) -> None:
@@ -240,7 +309,6 @@ def window_run(themed_app: QApplication, tmp_path: Path,
         assert not window.protocol_timer.isActive()
         assert worker.signals.receivers(worker.signals.finished) == 1
         assert worker.signals.receivers(worker.signals.progress) == 1
-        assert worker.signals.receivers(worker.signals.reset_needed) == 0
         worker.signals.prepared.emit(time.time(), time.monotonic())
 
     pool.start.side_effect = dispatch
@@ -277,7 +345,7 @@ def test_calibration_button_opens_shared_session(
     """The calibration entry point demands the separate PIN before acquiring the shared link."""
     w = window_run.window
     w.shell.navigate(page)
-    w.calibration_controller.access.provision("654321", "654321", is_admin=True)
+    w.hardware_service.access.provision("654321", "654321", is_admin=True)
     w.shell.device._select_section(2)
     assert w.device_controller._auth_dialog.isVisible()
     w.device_controller._auth_dialog.submit("111111")
@@ -288,7 +356,7 @@ def test_calibration_button_opens_shared_session(
     assert button.isVisible()
     assert button.isEnabled()
     window_run.arduino.send.reset_mock()
-    controller = w.calibration_controller
+    controller = w.hardware_service
 
     button.click()
 
@@ -321,7 +389,7 @@ def test_calibration_entry_refuses_busy_device(
     try:
         getattr(w.shell, page).calibration_button.click()
 
-        assert w.calibration_controller.dialog is None
+        assert w.hardware_service.dialog is None
         assert not w._calibration_active
         window_run.notices.assert_called_once()
         window_run.arduino.send.assert_not_called()
@@ -846,7 +914,6 @@ def test_unapproved_cloud_patient_stays_unlinked_after_qr_handoff(patient_flow):
 
 def test_logout_discards_staff_session_and_late_patient_result(patient_flow):
     flow = patient_flow
-    old = flow.controller.staff
     flow.editor._save.click()
     flow.run.window._on_logout()
     flow.jobs.pop(0)()

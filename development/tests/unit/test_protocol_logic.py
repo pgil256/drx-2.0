@@ -12,7 +12,7 @@ from helpers.protocols import (
     MIN_PRESSURE,
     PRESSURE_INCREMENT,
 )
-from main.config.constants import LATERAL_MOVE_TIMEOUT_S, PRESSURE_BUILD_TIMEOUT_S
+from config.constants import LATERAL_MOVE_TIMEOUT_S, PRESSURE_BUILD_TIMEOUT_S
 
 
 @pytest.mark.unit

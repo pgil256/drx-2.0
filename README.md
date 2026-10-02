@@ -91,7 +91,10 @@ cannot be removed. Unrelated files and subdirectories are left alone.
 `--print-logs` prints the last 200 lines of each current-run log, including preceding
 segments when needed, without loading entire files into memory. `--sync-logs DIR`
 copies logs and numbered segments from this folder after exit.
-`KNEESPA_SERIAL_TRACE_FILE` can still request an additional serial copy for E2E runs.
+`KNEESPA_SERIAL_TRACE_FILE` can still request an additional serial copy for E2E runs;
+`development/tools/trace_report.py <trace file>` summarizes such a trace around
+out-of-band lateral readings (status frames, the commands sent just before, and the
+raw lines around the first bad frame).
 
 Provision users one of two ways:
 
@@ -244,12 +247,16 @@ firmware, including live Treatment-slider changes. Set
 `KNEESPA_PULSE_RATE_FIRMWARE=0` and restart for an immediate compatibility
 rollback when operating a device with older bare-`J` firmware.
 
-**Before flashing firmware to a device**, run the checkout list in
-[hardware checklist](development/docs/plans/2026-06-11-batch1-hardware-checklist.md)
-— including the watchdog/bootloader recovery check (A2) and the
-position-convention measurements (E1–E3) that later math corrections
-are gated on.
+**Before flashing firmware to a device**, complete the deployment bench checks in
+[Hardware Tests & Calibration](development/docs/hardware-service.md#verification-before-deployment)
+for the current image (`VERSION` in `motor.ino`, now `2026-09-30-DRX2-NB2-SERVICE`).
+The older [Flash Batch 1 checklist](development/docs/plans/2026-06-11-batch1-hardware-checklist.md)
+was written for `2026-06-11-FAILSAFE-2`. Its watchdog/bootloader recovery check (A2)
+and the position-convention measurements (E1–E3) that later math corrections are
+gated on still apply, but some items describe behavior later firmware changed:
+pressure-progress and move-timeout problems are now advisory notices, not stops.
 
 Known residual risk: there is no hardware E-stop that cuts motor power
-independently of the MCU; see the audit §8 for the recommended future
-hardware change.
+independently of the MCU; see §8 of the
+[June 2026 audit](development/docs/archive/audits/2026-06-11-full-application-audit.md)
+for the recommended future hardware change.

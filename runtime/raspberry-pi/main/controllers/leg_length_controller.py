@@ -7,7 +7,7 @@ from typing import Callable, Optional
 import RPi.GPIO as GPIO
 from PyQt5.QtCore import QObject, QTimer
 
-from main.config.constants import EXTRABACKWARD, EXTRAFORWARD, LEG_LENGTH_MAX, LEG_LENGTH_MIN
+from config.constants import EXTRABACKWARD, EXTRAFORWARD, LEG_LENGTH_MAX, LEG_LENGTH_MIN
 from helpers.logging import setup_logger
 
 
@@ -211,7 +211,6 @@ class LegLengthController(QObject):
         self._connections = []
         if success:
             self.position = self.target
-            self.window.leg_length = self.position
             self.window._service_leg_position_unknown = False
             if self.homing:
                 self.boot_home_pending = False

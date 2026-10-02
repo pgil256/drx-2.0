@@ -46,8 +46,8 @@ def make_worker_double() -> MagicMock:
     worker.is_paused = False
     worker.signals = SimpleNamespace(**{
         name: MagicMock(spec_set=["connect", "disconnect", "emit"])
-        for name in ("finished", "progress", "reset_needed", "motor_speed_failed",
-                     "prepared", "baseline_changed", "operation_failed")
+        for name in ("finished", "progress", "prepared",
+                     "baseline_changed", "operation_failed")
     })
     return worker
 
@@ -82,7 +82,6 @@ def make_window(state: str = "idle") -> SimpleNamespace:
         _block_active_treatment_exit=MagicMock(return_value=False),
         _patient_lookup_id=0, _paused_at=None, _prev_settings={},
         cloud_patient={"patient_id": "test-patient"},
-        _treatment_patient={"patient_id": "test-patient"},
         current_user={"username": "Dr", "status": "user"},
         current_use_pulse_setting=True, current_pulse_rate=2.4,
         last_measured_pressure=None, worker=worker, config=config,
@@ -120,7 +119,6 @@ def make_stub() -> SimpleNamespace:
     window.actuator_b = "13"
     window.actuator_c = "14"
     window.auth = SimpleNamespace(handle_login=MagicMock())
-    window.csv = SimpleNamespace(add_user=MagicMock())
     window.safety = SimpleNamespace(on_status=MagicMock())
     window.protocol = MagicMock(spec_set=ProtocolController)
     window._is_admin = MagicMock(return_value=False)
@@ -130,8 +128,7 @@ def make_stub() -> SimpleNamespace:
     for name in (
         "close", "_seed_modern_run_inputs", "_reflect_setup", "_setup_reset", "_leg_jog",
         "move_actuator", "_apply_setup_pressure", "reset_flexion_button_clicked",
-        "stop_leg_movement", "stop_position_flexion_button", "emergency_stop_clicked",
-        "email_admin",
+        "stop_leg_movement", "stop_position_flexion_button",
         "_show_patient_modal", "_on_patient_edit", "_on_mark_default",
     ):
         setattr(window, name, MagicMock())

@@ -6,7 +6,8 @@ unit tests for the KneeSpa AVR firmware (`runtime/arduino/motor/motor.ino`).
 The tests compile `motor.ino` on the host machine (no AVR hardware needed) by
 substituting lightweight mock implementations for the Arduino libraries the
 firmware depends on. This lets us exercise the command parser, status
-reporting, safety logic, and value clamping in CI and on a developer laptop.
+reporting, safety logic, load-cell sampling, and value clamping in CI and on a
+developer laptop.
 
 ## Layout
 
@@ -17,15 +18,16 @@ development/tests/firmware/
 ├── mock_serial.h             <- mock for Arduino Serial / Serial1 (captures output, injects input)
 ├── mock_wire.h               <- mock for the I2C Wire library (records commands, returns positions)
 ├── mock_hx711.h              <- mock for the HX711 load-cell amplifier (configurable pressure)
+├── run_native_tests.sh       <- hermetic runner: builds and runs every test_*/ suite
 ├── unity/                    <- vendored Unity framework (hermetic runs, no registry needed)
-├── test_clamp/
-│   └── test_clamp.cpp          <- clampPressureTarget()/clampPositionTarget()/getValue() tests
-├── test_command_parse/
-│   └── test_command_parse.cpp  <- processCommand() command-handling tests
-├── test_safety/
-│   └── test_safety.cpp         <- emergencyStop() and X-command safety tests
-└── test_status/
-    └── test_status.cpp         <- sendStatus() formatting + calibration command tests
+├── test_clamp/                 <- clampPositionTarget()/getValue() helpers
+├── test_command_parse/         <- processCommand() handling, v2 framing, P/I/K targets
+├── test_hardware_diagnostics/  <- the D probe: feedback, stop input, FIT output, retries
+├── test_hx711/                 <- hx711_sampler.h bit-level reads (readiness, gain, rails)
+├── test_motor_speed/           <- V speed configuration and its effect on motion
+├── test_nb2/                   <- non-blocking sampler: tare, sensor loss, pulse recovery
+├── test_safety/                <- emergency stop, release, watchdog, pressure/position faults
+└── test_status/                <- sendStatus() format/checksum, L-stage calibration commands
 ```
 
 PlatformIO's Unity test runner treats each `test_*/` subdirectory as a separate
@@ -37,8 +39,8 @@ Each test file:
 
 1. Guards everything behind `#ifdef UNIT_TEST` (the `native` build defines
    `-DUNIT_TEST`; see `platformio.ini`). `motor.ino` only includes the real
-   hardware libraries (`HX711.h`, `elapsedMillis.h`, `Wire.h`, `avr/wdt.h`)
-   when `UNIT_TEST` is *not* defined.
+   hardware headers (`hx711_sampler.h`, `elapsedMillis.h`, `Wire.h`,
+   `avr/wdt.h`) when `UNIT_TEST` is *not* defined.
 2. Includes `<unity.h>`, `../arduino_shim.h` (Arduino core substitutes), and
    the three mock headers (`../mock_*.h`) — the shim must come first.
 3. Instantiates the mock globals (`MockWire Wire;`, `MockSerial Serial;`,
@@ -82,7 +84,7 @@ the firmware would expect the real Arduino libraries.
 ## Offline / registry caveat
 
 `run_native_tests.sh` is fully offline: it uses the system C/C++ compiler and
-the vendored Unity sources in `test/unity/`. Only the `pio test -e native`
+the vendored Unity sources in `development/tests/firmware/unity/`. Only the `pio test -e native`
 route downloads packages (the `native` platform and Unity) from the PlatformIO
 registry on first run, so it needs connectivity once to populate the package
 cache.

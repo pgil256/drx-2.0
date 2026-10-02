@@ -1,6 +1,6 @@
-"""Touch text entry for support requests, including email and punctuation."""
+"""Touch text entry for names, credentials and support requests."""
 
-from typing import Optional
+from typing import Optional, Sequence, Union
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtWidgets import (
@@ -10,12 +10,20 @@ from PyQt5.QtWidgets import (
 from ui.widgets.ds import DSButton
 from ui.widgets.ds._common import sans_font
 
+# Rows of keys. Letter keys follow Shift; every other key types its own label.
+TEXT_KEYS = ("1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm", "@._-+/?!,:'")
+# Credentials and codes can contain any printable ASCII character.
+ASCII_KEYS = TEXT_KEYS + ('#$%&*()=[]{}', '";<>\\|`~^')
+# Names need only letters, digits, apostrophes and hyphens.
+NAME_KEYS = ("1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm'-")
+
 
 class TextKeyboard(QDialog):
     """Stage text until Done; Cancel preserves the original field contents."""
 
     def __init__(self, title: str, value: str, limit: int, multiline: bool = False,
-                 parent: Optional[QWidget] = None, secret: bool = False) -> None:
+                 parent: Optional[QWidget] = None, secret: bool = False,
+                 keys: Sequence[str] = TEXT_KEYS, uppercase: bool = False) -> None:
         super().__init__(parent)
         self.setWindowTitle(title)
         self.setWindowModality(Qt.ApplicationModal)
@@ -48,7 +56,7 @@ class TextKeyboard(QDialog):
         self.count = QLabel()
         self.count.setFont(sans_font(size="--text-sm"))
         layout.addWidget(self.count)
-        for letters in ("1234567890", "qwertyuiop", "asdfghjkl", "zxcvbnm", "@._-+/?!,:'"):
+        for letters in keys:
             row = QHBoxLayout()
             row.setSpacing(6)
             for letter in letters:
@@ -58,6 +66,8 @@ class TextKeyboard(QDialog):
                 if letter.isalpha():
                     self._letters.append(key)
             layout.addLayout(row)
+        if uppercase:
+            self._shift()
         actions = QHBoxLayout()
         for title, action in (
             ("Shift", self._shift), ("Space", lambda: self._insert(" ")),
@@ -117,3 +127,34 @@ class TextKeyboard(QDialog):
     def accept(self) -> None:
         if len(self.value()) <= self.limit:
             super().accept()
+
+
+def open_text_keyboard(field: Union[QLineEdit, QPlainTextEdit], parent: QWidget,
+                       limit: Optional[int] = None, keys: Sequence[str] = TEXT_KEYS,
+                       uppercase: bool = False) -> TextKeyboard:
+    """Edit a field on a fresh keyboard that writes back only when Done is tapped.
+
+    Line edits default to their own length limit; a multiline field must pass one.
+    Password fields stay masked, and the staged copy is cleared when the keyboard closes.
+    """
+    multiline = isinstance(field, QPlainTextEdit)
+    keyboard = TextKeyboard(
+        field.accessibleName(), field.toPlainText() if multiline else field.text(),
+        field.maxLength() if limit is None else limit, multiline=multiline, parent=parent,
+        secret=not multiline and field.echoMode() == QLineEdit.Password,
+        keys=keys, uppercase=uppercase,
+    )
+
+    def finish(result: int) -> None:
+        if result == QDialog.Accepted:
+            if multiline:
+                field.setPlainText(keyboard.value())
+            else:
+                field.setText(keyboard.value())
+        keyboard.editor.clear()
+        keyboard.deleteLater()
+
+    keyboard.finished.connect(finish)
+    keyboard.open()
+    keyboard.editor.setFocus()
+    return keyboard

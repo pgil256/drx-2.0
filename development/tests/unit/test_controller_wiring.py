@@ -14,7 +14,6 @@ from functools import partial
 from pathlib import Path
 import time
 from types import SimpleNamespace
-from typing import Optional
 from unittest.mock import MagicMock
 
 import pytest
@@ -91,7 +90,6 @@ class TestLogin:
             current_user=None,
             protocol_running=False,
             machine_sign_in=SimpleNamespace(clear=MagicMock()),
-            login_pin="",
             users={SecureAuthHelper.hash_pin_secure("7531"): user},
             _show_timed_error=MagicMock(),
             _show_patient_modal=MagicMock(),
@@ -113,7 +111,6 @@ class TestLogin:
         for digit in ("0000" if outcome == "invalid" else "7531"):
             buttons[digit].click()
 
-        assert stub.login_pin == ""
         if outcome == "success":
             assert stub.current_user == user
             assert shell.login_modal.isHidden()
@@ -129,13 +126,12 @@ class TestLogin:
             shell.nav_rail.navigate.emit("setup")
             assert shell.stack.currentIndex() == PAGES.index("home")
 
-    def test_login_attempt_seeds_pin_and_delegates(self):
-        """The modal submits the whole PIN; the window buffers it and hands
-        off to AuthController (salted verify + lockout)."""
+    def test_login_attempt_delegates_pin(self):
+        """The modal submits the whole PIN; the window hands it to
+        AuthController (salted verify + lockout)."""
         stub = make_stub()
         KneeSpa._on_login_attempt(stub, "4242")
-        assert stub.login_pin == "4242"
-        stub.auth.handle_login.assert_called_once()
+        stub.auth.handle_login.assert_called_once_with("4242")
 
     def test_failed_login_shows_modal_error(self):
         """If AuthController did not produce a user, the modal shows the
@@ -248,17 +244,17 @@ class TestSetupJog:
     def test_axial_fwd_calls_move_actuator(self):
         stub = make_stub()
         KneeSpa._on_setup_jog(stub, "axial", "fwd")
-        stub.move_actuator.assert_called_once_with("12", None, "04", 1)
+        stub.move_actuator.assert_called_once_with("12", "04", 1)
 
     def test_lateral_rev_fast(self):
         stub = make_stub()
         KneeSpa._on_setup_jog(stub, "lateral", "rev_fast")
-        stub.move_actuator.assert_called_once_with("14", None, "20", -1)
+        stub.move_actuator.assert_called_once_with("14", "20", -1)
 
     def test_horizontal_fwd_fast(self):
         stub = make_stub()
         KneeSpa._on_setup_jog(stub, "horizontal", "fwd_fast")
-        stub.move_actuator.assert_called_once_with("13", None, "20", 1)
+        stub.move_actuator.assert_called_once_with("13", "20", 1)
 
     def test_reset_routes_to_setup_reset(self):
         stub = make_stub()
@@ -337,7 +333,7 @@ class TestSetupGo:
         stub.shell.setup.row_value.return_value = 3.0
         stub.config.a_factor = 1900
         KneeSpa._on_setup_go(stub, "axial")
-        stub.set_to_distance.assert_called_once_with(3.0, "12", 1900)
+        stub.set_to_distance.assert_called_once_with(3.0, "12")
 
     def test_lateral_go_calls_set_to_c_distance(self):
         stub = make_stub()
@@ -560,25 +556,12 @@ class TestDuration:
 
 # ----- support ticket -----
 class TestSupport:
-    def test_issue_activated_remembers_question(self):
-        stub = make_stub()
-        KneeSpa._on_issue_activated(stub, "Pressure not reaching target")
-        assert stub._selected_issue == "Pressure not reaching target"
-
     def test_empty_ticket_is_rejected_at_controller_boundary(self) -> None:
         stub = make_stub()
         stub._send_support_email = MagicMock()
         KneeSpa._on_submit_ticket(stub, {})
         stub._send_support_email.assert_not_called()
         assert stub.shell.support.set_delivery_state.call_args.args[0] == "invalid"
-
-    def test_assistance_reads_current_user(self):
-        stub = make_stub()
-        stub.current_user = {"username": "Dr", "email": "d@x", "status": "admin"}
-        KneeSpa.handle_assistance_request(stub)
-        assert stub.username == "Dr"
-        assert stub.user_email == "d@x"
-        stub.email_admin.assert_called_once()
 
 
 # ----- live telemetry (medical-device "telemetry updates live") -----

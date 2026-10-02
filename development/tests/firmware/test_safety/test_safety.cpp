@@ -36,8 +36,6 @@ void setUp(void) {
     pressure = 0;
     desiredPressure = 0;
     signedPressure = 0;
-    pressureSampleIndex = 0;
-    pressureSampleCount = 0;
     pressureDirection = 0;
     pressureSampleValid = true;
     pressureCalibrated = true;
@@ -62,9 +60,7 @@ void setUp(void) {
     pressureWarningIssued = false;
     heartbeatWarningIssued = false;
     scaleWarningIssued = false;
-    axialTravelWarningIssued = false;
     pressureTimeoutWarningIssued = false;
-    pressureProgressWarningIssued = false;
     positionStallWarningIssued = false;
     lastCommandTime = 0;
     AZERO = 0;
@@ -91,7 +87,6 @@ void setUp(void) {
     runningDevice = 12;
     BZERO = 0;
     _wdt_enabled = false;
-    hostV2 = false;
     currentCmdSeq = -1;
     activeCmdSeq = -1;
     activeFitCmdSeq = -1;
@@ -115,14 +110,12 @@ void test_emergency_stop_clears_all_state(void) {
     bRunning = true;
     measurePressure = true;
     jerking = true;
-    jerksCompleted = 5;
 
     emergencyStop();
 
     TEST_ASSERT_FALSE(bRunning);
     TEST_ASSERT_FALSE(measurePressure);
     TEST_ASSERT_FALSE(jerking);
-    TEST_ASSERT_EQUAL(0, jerksCompleted);
 }
 
 void test_emergency_stop_sets_motor_speeds_to_zero(void) {
@@ -158,12 +151,10 @@ void test_commands_accepted_after_emergency_stop(void) {
 void test_emergency_stop_during_jerking(void) {
     jerking = true;
     jerkDirection = 1;
-    jerksCompleted = 3;
 
     emergencyStop();
 
     TEST_ASSERT_FALSE(jerking);
-    TEST_ASSERT_EQUAL(0, jerksCompleted);
 }
 
 void test_emergency_stop_stops_fit_motion(void) {
@@ -406,8 +397,6 @@ void test_release_bounded_by_travel_limit(void) {
     // Pressure still high but axial is at its travel floor
     scale._raw = 50;
     pressure = 50;
-    pressureSampleCount = 3;
-    pressureSamples[0] = pressureSamples[1] = pressureSamples[2] = 50;
     AZERO = 160;
     Wire.position_12 = 100;  // below AZERO + deadband
     keepAlive();
@@ -466,13 +455,11 @@ void test_pressure_move_timeout_warns_without_stopping(void) {
     keepAlive();
     measurePressure = true;
     pressureDirection = 1;
-    pressureMoveStart = 0;
-    pressureProgressTime = _millis_value;
+    pressureMoveStarted = 0;
     scale._raw = 20;
     desiredPressure = 50;
     _millis_value = PRESSURE_MOVE_TIMEOUT + 1000;
     keepAlive();
-    pressureProgressTime = _millis_value;  // isolate the time-bound check
 
     loop();
 
@@ -489,29 +476,6 @@ void test_invalid_feedback_stops_pressure_move(void) {
     TEST_ASSERT_TRUE(pressureFault);
     TEST_ASSERT_FALSE(measurePressure);
     TEST_ASSERT_TRUE(Serial1.outputContains("POSITION_FEEDBACK_INVALID"));
-}
-
-void test_pressure_progress_fault_is_disabled(void) {
-    keepAlive();
-    measurePressure = true;
-    pressureDirection = 1;
-    desiredPressure = 50;
-    scale._raw = 20;  // frozen well below target
-    pressureMoveStart = _millis_value;
-    pressureProgressTime = 0;
-    pressureProgressValue = 20;
-    pressureSampleCount = 3;
-    pressureSamples[0] = pressureSamples[1] = pressureSamples[2] = 20;
-    pressure = 20;
-    _millis_value = PRESSURE_STALL_MS + 500;
-    keepAlive();
-    pressureMoveStart = _millis_value;  // isolate the stall check
-
-    loop();
-
-    TEST_ASSERT_TRUE(measurePressure);
-    TEST_ASSERT_FALSE(releasingPressure);
-    TEST_ASSERT_FALSE(Serial1.outputContains("ERROR: No pressure progress"));
 }
 
 // A position move that settles within POSITION_DEADBAND of its target has
@@ -614,7 +578,8 @@ void test_position_progress_restarts_stall_timer(void) {
 // ever applied, the old code started a backward move whose first loop
 // iteration hit the axial-at-zero guard and emitted "ERROR: Axial at
 // zero, pressure target not reached" -- which the host escalates to a
-// DEVICE SAFETY STOP over what was actually a no-op.
+// DEVICE SAFETY STOP over what was actually a no-op. That guard is now
+// the AXIAL_HOME_BEFORE_PRESSURE_TARGET fault.
 
 void test_p0_with_no_load_completes_done_without_error(void) {
     keepAlive();
@@ -626,7 +591,8 @@ void test_p0_with_no_load_completes_done_without_error(void) {
 
     TEST_ASSERT_FALSE(measurePressure);
     TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
-    TEST_ASSERT_FALSE(Serial1.outputContains("ERROR: Axial at zero"));
+    TEST_ASSERT_FALSE(pressureFault);
+    TEST_ASSERT_FALSE(Serial1.outputContains("AXIAL_HOME_BEFORE_PRESSURE_TARGET"));
     // A no-op release must not drive the motor at all
     bool motorDriven = false;
     for (int i = 0; i < Wire.commandCount; i++) {
@@ -649,14 +615,13 @@ void test_release_reaching_zero_with_target_met_completes_done(void) {
     pressureDirection = -1;
     desiredPressure = 0;
     scale._raw = 0;          // load fully cleared
-    pressureMoveStart = _millis_value;
-    pressureProgressTime = _millis_value;
-    pressureProgressValue = 5;
+    pressureMoveStarted = _millis_value;
 
     loop();
 
     TEST_ASSERT_FALSE(measurePressure);
-    TEST_ASSERT_FALSE(Serial1.outputContains("ERROR: Axial at zero"));
+    TEST_ASSERT_FALSE(pressureFault);
+    TEST_ASSERT_FALSE(Serial1.outputContains("AXIAL_HOME_BEFORE_PRESSURE_TARGET"));
     TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
 }
 
@@ -681,8 +646,6 @@ static void setMeasuredPressure(float value) {
     pressure = value;
     scale._scale = 100.0;
     scale.setRawForUnits(value);
-    pressureSampleCount = 3;
-    pressureSamples[0] = pressureSamples[1] = pressureSamples[2] = value;
 }
 
 void test_pressure_at_or_above_target_in_band_completes(void) {
@@ -839,7 +802,6 @@ void test_v2_deferred_done_carries_seq(void) {
 }
 
 void test_v2_status_carries_checksum(void) {
-    hostV2 = true;
     sendStatus();
     std::string out = Serial1.getOutput();
     size_t start = out.find("STATUS_START");
@@ -855,7 +817,6 @@ void test_v2_status_carries_checksum(void) {
 }
 
 void test_v1_status_checksum_preserves_legacy_command_acks(void) {
-    hostV2 = false;
     sendStatus();
     std::string out = Serial1.getOutput();
     TEST_ASSERT_TRUE(out.find("STATUS_END*") != std::string::npos);
@@ -1021,7 +982,7 @@ void test_position_move_tracks_its_own_device_during_pressure_move(void) {
     desiredPressure = 50;
     scale._raw = 20;
     Wire.position_12 = 100;
-    pressureMoveStart = _millis_value;
+    pressureMoveStarted = _millis_value;
 
     loop();
 
@@ -1183,7 +1144,6 @@ int main(int argc, char **argv) {
     RUN_TEST(test_commands_not_merged_under_rate_limit);
     RUN_TEST(test_pressure_move_timeout_warns_without_stopping);
     RUN_TEST(test_invalid_feedback_stops_pressure_move);
-    RUN_TEST(test_pressure_progress_fault_is_disabled);
     RUN_TEST(test_axial_home_within_deadband_not_stalled);
     RUN_TEST(test_genuine_stall_warns_after_sustained_interval_without_stopping);
     RUN_TEST(test_position_progress_restarts_stall_timer);

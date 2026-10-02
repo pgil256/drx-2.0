@@ -63,23 +63,6 @@ class SecureAuthHelper:
 
         return users
 
-    def validate_pin(self, pin):
-        """
-        Validate a PIN against stored users.
-
-        Args:
-            pin (str): The PIN to validate
-
-        Returns:
-            dict: User data if valid, None otherwise
-        """
-        if not self.users:
-            return None
-        for stored_hash, user in self.users.items():
-            if self.verify_pin(pin, stored_hash):
-                return user
-        return None
-
     @staticmethod
     def hash_pin_secure(pin):
         """Hash a PIN with PBKDF2-HMAC-SHA256 and a random per-user salt.
@@ -119,7 +102,7 @@ class SecureAuthHelper:
             except (ValueError, TypeError):
                 return False
         # Legacy unsalted SHA-256
-        legacy = hashlib.sha256(str(pin).encode()).hexdigest()
+        legacy = SecureAuthHelper.hash_pin(pin)
         try:
             return hmac.compare_digest(legacy, str(stored_hash))
         except (TypeError, ValueError):

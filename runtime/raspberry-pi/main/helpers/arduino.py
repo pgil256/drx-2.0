@@ -90,15 +90,10 @@ class Arduino(QObject):
     connection_ready = pyqtSignal()  # Signal for successful connection
     connection_failed = pyqtSignal(str)  # Signal for connection failure
     finished = pyqtSignal()
-    progress = pyqtSignal(int)
     done_emit = pyqtSignal()
-    pressure_emit = pyqtSignal(str)
     ready_to_go_emit = pyqtSignal()
-    position_emit = pyqtSignal(int, int, str, int)
     status_emit = pyqtSignal(int, int, int, float)
-    buffer_warning = pyqtSignal(str)
     connection_lost = pyqtSignal()  # Signal for connection loss
-    display_weight_emit = pyqtSignal(str)  # Added missing signal for weight display
     error_emit = pyqtSignal(str)  # Firmware ERROR:/BUSY command and device errors
     warning_emit = pyqtSignal(str)  # Firmware WARNING: advisory notices
     released_emit = pyqtSignal()  # Firmware finished an autonomous pressure release
@@ -321,11 +316,6 @@ class Arduino(QObject):
         self.connection_ready_event.clear()
         return False
 
-    def reconnect(self, max_retries=3):
-        """Attempt to reestablish the Arduino connection."""
-        self.logger.info("Attempting to reconnect to Arduino...")
-        return self.connect_to_arduino(max_retries=max_retries, emit_connection_failed=False)
-
     def run(self):
         """Connect to Arduino and start reading data."""
         try:
@@ -335,11 +325,6 @@ class Arduino(QObject):
             # signal that its startup slot returned so the Qt event loop can be
             # shut down deterministically instead of leaking across reconnects.
             self.finished.emit()
-
-    # Keeping compatibility with old method name
-    def try_connect(self):
-        """Try to connect to serial0 (compatibility method)."""
-        return self.connect_to_arduino(max_retries=1, emit_connection_failed=False)
 
     def _start_io_thread(self):
         if self._io_thread and self._io_thread.is_alive():
@@ -747,19 +732,10 @@ class Arduino(QObject):
                   and all(re.fullmatch(r"[0-9]+", t) and 0 <= int(t) <= 4095
                           for t in tokens[1:])):
                 self.zeros_emit.emit(int(tokens[1]), int(tokens[2]))
-            elif (tokens[0] == "P" and len(tokens) == 2
-                  and re.fullmatch(r"[0-9]+", tokens[1]) and 0 <= int(tokens[1]) <= 4095):
-                self.position_emit.emit(int(tokens[1]), 0, "", 0)
-            elif (tokens[0] == "PR" and len(tokens) == 2
-                  and math.isfinite(float(tokens[1])) and float(tokens[1]) >= 0):
-                self.pressure_emit.emit(tokens[1])
             elif data == "Ready to Go":
                 self._invalidate_identity()
                 self.ready_event.set()
                 self.ready_to_go_emit.emit()
-            elif (tokens[0] == "weight" and len(tokens) == 2
-                  and math.isfinite(float(tokens[1])) and float(tokens[1]) >= 0):
-                self.display_weight_emit.emit(tokens[1])
             elif (
                 tokens[0] == "Test command received" or "Test command received" in data
             ):

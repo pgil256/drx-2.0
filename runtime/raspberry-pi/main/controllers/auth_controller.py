@@ -1,8 +1,8 @@
 # controllers/auth_controller.py
 """Login/PIN handling extracted from the KneeSpa window.
 
-Owns the lockout state (it is security state, not UI state) and the
-PIN-entry buffer; the window keeps thin delegating slots.
+Owns the lockout state (it is security state, not UI state); the login
+modal submits the whole PIN to handle_login.
 
 Lockout state is persisted to disk (DATA_PATHS["AUTH_STATE"]) so that
 power-cycling the kiosk does not reset the brute-force window, and the
@@ -10,10 +10,11 @@ lockout duration doubles on each consecutive lockout. Failed attempts
 are logged for audit; the PIN itself is never logged.
 """
 import json
-import os
 import time
+from pathlib import Path
 
 from config.constants import DATA_PATHS
+from helpers.device_records import write_json
 from helpers.logging import setup_logger
 from helpers.secure_auth import SecureAuthHelper
 
@@ -59,15 +60,8 @@ class AuthController:
             "lockout_count": self.lockout_count,
         }
         try:
-            directory = os.path.dirname(os.path.abspath(self.state_path)) or "."
-            os.makedirs(directory, exist_ok=True)
-            tmp_path = self.state_path + ".tmp"
-            with open(tmp_path, "w", encoding="utf-8") as f:
-                json.dump(state, f)
-                f.flush()
-                os.fsync(f.fileno())
-            os.replace(tmp_path, self.state_path)
-        except OSError as e:
+            write_json(Path(self.state_path), state)
+        except (OSError, ValueError) as e:
             # Never let bookkeeping failure block the login path; the
             # in-memory lockout still protects the running session.
             self.logger.error("Could not persist auth state: %s", e)
@@ -79,26 +73,10 @@ class AuthController:
             self.LOCKOUT_MAX_SECONDS,
         )
 
-    # -- PIN entry ----------------------------------------------------
-
-    def append_digit(self, value: str) -> None:
-        """Append a digit to the PIN buffer."""
-        self.window.login_pin += value
-
-    def backspace_digit(self) -> None:
-        """Remove the last entered PIN digit."""
-        window = self.window
-        window.login_pin = window.login_pin[:-1]
-
-    def clear_pin(self) -> None:
-        """Clear the PIN buffer."""
-        window = self.window
-        window.login_pin = ""
-
     # -- login --------------------------------------------------------
 
-    def handle_login(self):
-        """Validate the entered PIN with persistent lockout protection."""
+    def handle_login(self, pin: str):
+        """Validate a submitted PIN with persistent lockout protection."""
         window = self.window
         print("Handling login")
 
@@ -113,12 +91,11 @@ class AuthController:
             window._show_timed_error(
                 f"Too many failed attempts. Try again in {wait_s} seconds."
             )
-            self.clear_pin()
             return
 
         matched_user = None
         for stored_hash, user in window.users.items():
-            if SecureAuthHelper.verify_pin(window.login_pin, stored_hash):
+            if SecureAuthHelper.verify_pin(pin, stored_hash):
                 matched_user = user
                 break
 
@@ -131,9 +108,7 @@ class AuthController:
             self.lockout_count = 0
             self._save_state()
             window.current_user = matched_user
-            window.login_pin = ""
             window.update_ui_after_login()
-            self.clear_pin()
         else:
             print("Login failed: Invalid PIN")
             self.failed_logins += 1
@@ -157,4 +132,3 @@ class AuthController:
             else:
                 window._show_timed_error("Invalid PIN. Please try again.")
             self._save_state()
-            self.clear_pin()

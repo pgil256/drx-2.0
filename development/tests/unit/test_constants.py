@@ -11,7 +11,7 @@ from config.constants import (
     PRESSURE_MAX, PRESSURE_WARNING_MAX, MIN_PRESSURE, AXIAL_MAX,
     LATERAL_MIN, LATERAL_MAX, HORIZONTAL_MIN, HORIZONTAL_MAX,
     EMERGENCYSTOP, EXTRAFORWARD, EXTRABACKWARD, EXTRAENABLE,
-    ACTUATORS, PROTOCOL_MAPPING, PROTOCOL_DEFAULT_SETTINGS,
+    ACTUATORS, PROTOCOL_DEFAULT_SETTINGS,
     ARDUINO_SETTINGS,
 )
 from config import constants
@@ -108,11 +108,15 @@ class TestEnvironmentOverrides:
         assert values["EMAIL_CONFIG"] == {
             "SENDER_EMAIL": "sender@example.invalid",
             "SENDER_PASSWORD": "synthetic-test-password",
-            "RECEIVER_EMAIL": "help@example.invalid",
             "TICKET_EMAIL": "tickets@example.invalid",
             "SMTP_SERVER": "smtp.example.invalid",
             "SMTP_PORT": 2465,
         }
+
+    def test_ticket_email_falls_back_to_assistance_address(self) -> None:
+        """Devices provisioned before ticket email existed keep receiving tickets."""
+        values = read_isolated_constants({"KNEESPA_ASSISTANCE_EMAIL": "help@example.invalid"})
+        assert values["EMAIL_CONFIG"]["TICKET_EMAIL"] == "help@example.invalid"
 
 
 @pytest.mark.unit
@@ -186,20 +190,10 @@ class TestActuatorConfig:
         ids = [cfg["ID"] for cfg in ACTUATORS.values()]
         assert len(ids) == len(set(ids))
 
-    def test_actuator_command_prefixes(self):
-        assert ACTUATORS["AXIAL"]["COMMAND_PREFIX"] == "A12"
-        assert ACTUATORS["HORIZONTAL"]["COMMAND_PREFIX"] == "B"
-        assert ACTUATORS["LATERAL"]["COMMAND_PREFIX"] == "K"
-
 
 @pytest.mark.unit
 class TestProtocolConfig:
     """Verify protocol configuration values."""
-
-    def test_protocol_mapping_has_four_protocols(self):
-        assert len(PROTOCOL_MAPPING) == 4
-        for i in range(1, 5):
-            assert i in PROTOCOL_MAPPING
 
     def test_protocol_defaults_pressure_range(self):
         assert PROTOCOL_DEFAULT_SETTINGS["MIN_PRESSURE"] == 10
@@ -256,9 +250,6 @@ class TestArduinoSettings:
 
     def test_port(self):
         assert ARDUINO_SETTINGS["ARDUINO_PORT"] == "/dev/serial0"
-
-    def test_buffer_warning_threshold(self):
-        assert 0 < ARDUINO_SETTINGS["BUFFER_WARNING_THRESHOLD"] < 1
 
     def test_connection_timeout_positive(self):
         assert ARDUINO_SETTINGS["CONNECTION_TIMEOUT_S"] > 0

@@ -11,9 +11,9 @@
 
 *Hand this to a fresh Claude Code session in `C:\Users\patri\Documents\Projects\drx-2.0`. It continues Phase B (branch reconciliation) of the audit remediation. Read these first, in order:*
 
-1. `docs/plans/2026-07-01-implementation-prompt.md` — ground rules (all still in force) + Phase B/C/D/E/F definitions.
+1. `development/docs/archive/plans/2026-07-01-implementation-prompt.md` — ground rules (all still in force) + Phase B/C/D/E/F definitions.
 2. `docs/adr/2026-07-02-branch-reconciliation.md` — the decided strategy: replay `9b23e11..feat/gui-modernization` onto `improvement-plan` via new branch `feat/gui-on-failsafe`.
-3. `docs/plans/2026-07-02-current-state-and-decisions.md` — owner decisions still pending.
+3. `development/docs/archive/plans/2026-07-02-current-state-and-decisions.md` — owner decisions still pending.
 4. This file — exact mid-B4 state and next steps.
 
 ## Where things stand (end of session 1, 2026-07-02)

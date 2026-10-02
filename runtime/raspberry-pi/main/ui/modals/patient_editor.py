@@ -10,60 +10,11 @@ from PyQt5.QtWidgets import (
 )
 
 from helpers.cloud_contract import SETTING_RULES, validate_patient
-from ui.modals.staff_login import open_text_keyboard
+from ui.modals.text_keyboard import ASCII_KEYS, NAME_KEYS, open_text_keyboard
 from ui.screens.content import PROTOCOLS
 from ui.screens.treatment import SETTING_SPECS
 from ui.widgets.ds import DSButton, DSSlider
 from ui.widgets.ds._common import sans_font
-
-
-class NameKeyboard(QDialog):
-    """Edit a name without relying on a desktop's optional keyboard service."""
-
-    def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Patient name")
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setFixedWidth(860)
-        layout = QVBoxLayout(self)
-        layout.setSpacing(8)
-        self.text = QLineEdit()
-        self.text.setMaxLength(200)
-        self.text.setAccessibleName("Patient name")
-        self.text.setMinimumHeight(52)
-        self.text.setFont(sans_font(size=22))
-        self.text.returnPressed.connect(self.accept)
-        layout.addWidget(self.text)
-        self._letters = []
-        self._uppercase = True
-        for letters in ("1234567890", "QWERTYUIOP", "ASDFGHJKL", "ZXCVBNM'-"):
-            row = QHBoxLayout()
-            row.setSpacing(6)
-            for letter in letters:
-                key = DSButton(letter, variant="secondary", size="sm")
-                key.setMinimumSize(60, 48)
-                key.setAutoDefault(False)
-                key.setFocusPolicy(Qt.NoFocus)
-                key.clicked.connect(lambda _checked, button=key: self.text.insert(button.text()))
-                row.addWidget(key)
-                if letter.isalpha():
-                    self._letters.append(key)
-            layout.addLayout(row)
-        row = QHBoxLayout()
-        for title, action in (("Shift", self._shift), ("Space", lambda: self.text.insert(" ")),
-                              ("Backspace", self.text.backspace), ("Cancel", self.reject),
-                              ("Done", self.accept)):
-            key = DSButton(title, variant="primary" if title == "Done" else "secondary")
-            key.setAutoDefault(False)
-            key.setFocusPolicy(Qt.NoFocus)
-            key.clicked.connect(action)
-            row.addWidget(key)
-        layout.addLayout(row)
-
-    def _shift(self) -> None:
-        self._uppercase = not self._uppercase
-        for key in self._letters:
-            key.setText(key.text().upper() if self._uppercase else key.text().lower())
 
 
 class PatientEditor(QDialog):
@@ -119,8 +70,7 @@ class PatientEditor(QDialog):
         self._name.setAccessibleName("Patient name")
         self._name.setPlaceholderText("Tap to enter patient name")
         self._name.installEventFilter(self)
-        self._keyboard = NameKeyboard(self)
-        self._keyboard.accepted.connect(lambda: self._name.setText(self._keyboard.text.text()))
+        self._keyboard = None
         self._protocol = QComboBox()
         self._protocol.setMinimumHeight(52)
         self._protocol.setAccessibleName("Protocol number")
@@ -182,7 +132,7 @@ class PatientEditor(QDialog):
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:
         if watched is getattr(self, "_reason", None) and event.type() == QEvent.MouseButtonRelease:
-            self._reason_keyboard = open_text_keyboard(self._reason, self)
+            self._reason_keyboard = open_text_keyboard(self._reason, self, keys=ASCII_KEYS)
             return True
         if watched is self._name:
             selected = event.type() == QEvent.MouseButtonRelease
@@ -190,12 +140,15 @@ class PatientEditor(QDialog):
                 Qt.TabFocusReason, Qt.BacktabFocusReason,
             )
             if (selected or tabbed) and not self._pending:
-                if not self._keyboard.isVisible():
-                    self._keyboard.text.setText(self._name.text())
-                    self._keyboard.open()
-                    self._keyboard.text.setFocus()
+                if self._keyboard is None:
+                    self._keyboard = open_text_keyboard(self._name, self, keys=NAME_KEYS,
+                                                        uppercase=True)
+                    self._keyboard.finished.connect(self._keyboard_closed)
                 return selected
         return super().eventFilter(watched, event)
+
+    def _keyboard_closed(self) -> None:
+        self._keyboard = None
 
     def open_patient(self, patient: Mapping, values: Mapping, protocol: int,
                      editing: bool = False) -> None:

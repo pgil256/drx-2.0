@@ -6,12 +6,8 @@ from helpers.secure_auth import SecureAuthHelper
 try:
     from PyQt5.QtWidgets import QApplication, QMessageBox
 except ImportError:
-    QApplication = None
-
-    class QMessageBox:
-        @staticmethod
-        def critical(parent, title, message):
-            print(f"{title}: {message}")
+    # Headless import: _report_error only logs without a QApplication.
+    QApplication = QMessageBox = None
 
 
 class CSVHelper:
@@ -51,53 +47,6 @@ class CSVHelper:
                 "provisioning'.",
                 users_file,
             )
-
-    def add_user(self, username, pin, status="user", email=""):
-        """Provision a new user PIN at runtime (admin "Add PIN").
-
-        Appends a salted-hash row to the runtime users CSV and adds it to
-        ``self.users`` in place (the window aliases that dict, so the new
-        PIN can log in immediately).
-
-        Returns:
-            (bool, str): success flag + operator-facing message.
-        """
-        username = (username or "").strip() or "User"
-        pin = str(pin or "").strip()
-        if not pin.isdigit() or len(pin) != 4:
-            return False, "PIN must be exactly 4 digits."
-        # A duplicate PIN would be ambiguous at login (first hash match
-        # wins), silently shadowing one of the two users.
-        for stored_hash in self.users:
-            if SecureAuthHelper.verify_pin(pin, stored_hash):
-                return False, "That PIN is already in use. Choose another."
-
-        pin_hash = SecureAuthHelper.hash_pin_secure(pin)
-        row = {
-            "pin_hash": pin_hash,
-            "username": username,
-            "email": email,
-            "status": status,
-        }
-
-        users_file = DATA_PATHS["USER_PINS"]
-        self._seed_users_file(users_file)
-        try:
-            file_exists = os.path.exists(users_file)
-            with open(users_file, "a", newline="", encoding="utf-8") as file:
-                writer = csv.DictWriter(
-                    file, fieldnames=["pin_hash", "username", "email", "status"]
-                )
-                if not file_exists or os.path.getsize(users_file) == 0:
-                    writer.writeheader()
-                writer.writerow(row)
-        except OSError as e:
-            self.logger.error("Could not save new user to %s: %s", users_file, e)
-            return False, "Could not save the new PIN to disk."
-
-        self.users[pin_hash] = row
-        self.logger.info("Provisioned new %s %r via Add PIN", status, username)
-        return True, f"PIN added for {username}."
 
     def _seed_users_file(self, users_file):
         """Create an empty device-local user table without provisioning any users."""

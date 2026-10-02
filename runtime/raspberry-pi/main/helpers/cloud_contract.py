@@ -9,10 +9,7 @@ from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Tuple
 from uuid import UUID
 
-try:
-    from main.config.constants import PROTOCOL_MINUTES_MAX, PROTOCOL_MINUTES_MIN
-except ModuleNotFoundError:
-    from config.constants import PROTOCOL_MINUTES_MAX, PROTOCOL_MINUTES_MIN
+from config.constants import PROTOCOL_MINUTES_MAX, PROTOCOL_MINUTES_MIN
 
 
 # API field: (control key, minimum, maximum, increment).
@@ -64,6 +61,11 @@ def validate_patient(response: Any) -> Tuple[Dict[str, Any], Dict[str, float], i
         raise ValueError("Patient settings need correction in the cloud dashboard") from exc
     patient = dict(response, patient_id=patient_id, settings=dict(settings))
     return patient, values, protocol
+
+
+def patient_label(patient: Dict[str, Any]) -> str:
+    """The name shown for a linked patient."""
+    return patient.get("display_name") or patient.get("external_ref") or patient["patient_id"]
 
 
 def end_settings(values: Dict[str, Any]) -> Dict[str, float]:

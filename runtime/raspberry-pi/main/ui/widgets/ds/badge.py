@@ -53,6 +53,3 @@ class DSBadge(QFrame):
 
     def set_text(self, text):
         self._label.setText(text)
-
-    def set_dot(self, on):
-        self._dot.setVisible(on)

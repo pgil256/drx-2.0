@@ -31,16 +31,10 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-try:
-    from main.config.constants import (
-        DEFAULT_PROTOCOL_MINUTES, PROTOCOL_MINUTES_MAX, PROTOCOL_MINUTES_MIN,
-        MOTOR_SPEED_DEFAULT, MOTOR_SPEED_DEFAULTS, MOTOR_SPEED_MAX, MOTOR_SPEED_MIN, MOTOR_SPEED_STEP,
-    )
-except ModuleNotFoundError:
-    from config.constants import (
-        DEFAULT_PROTOCOL_MINUTES, PROTOCOL_MINUTES_MAX, PROTOCOL_MINUTES_MIN,
-        MOTOR_SPEED_DEFAULT, MOTOR_SPEED_DEFAULTS, MOTOR_SPEED_MAX, MOTOR_SPEED_MIN, MOTOR_SPEED_STEP,
-    )
+from config.constants import (
+    DEFAULT_PROTOCOL_MINUTES, PROTOCOL_MINUTES_MAX, PROTOCOL_MINUTES_MIN,
+    MOTOR_SPEED_DEFAULT, MOTOR_SPEED_DEFAULTS, MOTOR_SPEED_MAX, MOTOR_SPEED_MIN, MOTOR_SPEED_STEP,
+)
 from helpers.motor_speed import treatment_motor_speed
 from ui.modals.treatment_editor import TreatmentEditorDialog
 from ui.theme import pause_icon, play_icon

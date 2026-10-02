@@ -23,6 +23,7 @@ from PyQt5.QtWidgets import (
 
 from ui.widgets.common import ClickableLabel, image_label
 from ui.widgets.ds._common import image_path, mono_font, resolve, sans_font
+from ui.widgets.press_feedback import install_press_feedback
 
 BAR_HEIGHT = 84
 
@@ -63,6 +64,9 @@ class TopBar(QFrame):
         self._wordmark.setStyleSheet("background: transparent;")
         self._wordmark.clicked.connect(self.home_clicked)
         lay.addWidget(self._wordmark)
+        # Labels have no pressed state of their own; the filter is parentless,
+        # so keep a reference or it is garbage-collected.
+        self._press_feedback = install_press_feedback(logo, self._wordmark)
 
         lay.addStretch(1)
 

@@ -139,6 +139,20 @@ def test_description_keyboard_enforces_limit_and_keeps_newlines(shell, qtbot):
     assert screen.description.toPlainText() == "First line\nSecond line"
 
 
+def test_sending_dismisses_touch_entry_without_changing_draft(shell, qtbot):
+    shell.navigate("support")
+    screen = shell.support
+    screen._select_section(3)
+    fill_ticket(screen)
+    qtbot.mouseClick(screen.description.viewport(), Qt.LeftButton)
+    screen._keyboard.editor.setPlainText("Changed while sending")
+    screen.set_delivery_state("sending", "Sending request…")
+    assert screen._keyboard is None
+    assert screen.description.toPlainText() == "The controller disconnects after reset."
+    qtbot.mouseClick(screen.description.viewport(), Qt.LeftButton)
+    assert screen._keyboard is None
+
+
 def test_logout_dismisses_unsaved_touch_entry(shell, qtbot):
     shell.set_user("Operator")
     shell.navigate("support")

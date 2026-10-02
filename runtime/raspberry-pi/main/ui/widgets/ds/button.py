@@ -53,9 +53,6 @@ class DSButton(QPushButton):
         self.setProperty("dsSize", self._size)
         repolish(self)
 
-    def size_variant(self):
-        return self._size
-
     def set_full_width(self, full_width):
         self.setSizePolicy(
             QSizePolicy.Expanding if full_width else QSizePolicy.Preferred,

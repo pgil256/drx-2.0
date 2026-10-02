@@ -1,11 +1,10 @@
 # development/tests/integration/test_arduino_comm.py
 import pytest
 import time
-import serial
 from unittest.mock import patch
 
 from helpers.arduino import Arduino
-from fixtures.fake_arduino import FakeArduino, PTY_AVAILABLE
+from fixtures.fake_arduino import PTY_AVAILABLE
 
 pytestmark = pytest.mark.skipif(
     not PTY_AVAILABLE,
@@ -14,28 +13,9 @@ pytestmark = pytest.mark.skipif(
 
 
 @pytest.fixture
-def connected_pair():
-    """Create FakeArduino + Arduino with an open serial connection."""
-    fake = FakeArduino()
-    fake.start()
-
-    arduino = Arduino()
-    arduino.ARDUINO_PORT = fake.port
-    arduino.serial_com = serial.Serial(fake.port, 115200, timeout=1, write_timeout=1)
-    arduino.connected = True
-    arduino._running = True
-
-    import threading
-    reader = threading.Thread(target=arduino.read_from_com, daemon=True)
-    reader.start()
-
-    yield arduino, fake
-
-    arduino._running = False
-    time.sleep(0.2)
-    fake.stop()
-    if arduino.serial_com and arduino.serial_com.is_open:
-        arduino.serial_com.close()
+def connected_pair(fake_arduino_pair):
+    """FakeArduino + Arduino with an open serial connection (see conftest)."""
+    return fake_arduino_pair
 
 
 @pytest.mark.integration
@@ -88,8 +68,8 @@ class TestArduinoSend:
         arduino = Arduino()
         arduino.connected = False
         arduino.serial_com = None
-        # Should attempt reconnect and fail gracefully
-        with patch.object(arduino, 'reconnect', return_value=False):
+        # Fails fast without attempting a new connection
+        with patch.object(arduino, 'connect_to_arduino', return_value=False):
             result = arduino.send("T")
         assert result is False
 

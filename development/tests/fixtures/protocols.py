@@ -14,7 +14,7 @@ def make_arduino() -> MagicMock:
     arduino = MagicMock(spec_set=[
         "send", "send_tracked", "cancel_pending_commands", "disconnect",
         "verify_connection", "is_connected", "connected", "protocol_v2", "ready_event",
-        "done_emit", "error_emit", "status_emit", "pressure_emit",
+        "done_emit", "error_emit", "status_emit",
         "motion_done", "calibration_result", "zeros_emit", "ready_to_go_emit",
         "command_rejected", "fault_emit", "connection_lost", "firmware_driver",
         "baseline_valid", "_signal_owner",
@@ -31,7 +31,7 @@ def make_arduino() -> MagicMock:
     arduino.disconnect.return_value = True
     signal_owner = Arduino()
     arduino._signal_owner = signal_owner
-    for name in ("done_emit", "error_emit", "status_emit", "pressure_emit", "motion_done",
+    for name in ("done_emit", "error_emit", "status_emit", "motion_done",
                  "calibration_result", "zeros_emit", "ready_to_go_emit", "command_rejected",
                  "fault_emit", "connection_lost"):
         signal = MagicMock(spec_set=["connect", "disconnect", "emit"])

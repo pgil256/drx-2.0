@@ -6,6 +6,7 @@ from typing import Any, Callable, Dict
 
 from PyQt5.QtCore import QObject, QTimer, pyqtSignal
 
+from controllers.linked_patient import link_patient, unlink_patient
 from helpers.cloud_contract import validate_patient
 from helpers.logging import setup_logger
 from helpers.machine_sign_in import (
@@ -89,7 +90,12 @@ class MachineSignInController(QObject):
             except RuntimeError:
                 client.logout(client.clear())
 
-        threading.Thread(target=execute, daemon=True, name="machine-sign-in").start()
+        try:
+            threading.Thread(target=execute, daemon=True, name="machine-sign-in").start()
+        except RuntimeError as exc:
+            # Without a worker nothing would ever clear _busy.
+            self.logger.warning("Could not start machine sign-in %s: %s", action, exc)
+            self.completed.emit(generation, action, (client, {"error": "unavailable"}))
 
     def clear(self) -> None:
         """Retire callbacks before discarding credentials on logout or user change."""
@@ -169,84 +175,102 @@ class MachineSignInController(QObject):
             self.clear()
             return
         if "error" in result:
-            message = self._message(result)
-            if action == "poll" and result.get("error") in ("rate_limited", "unavailable"):
-                self._next_poll = time.monotonic() + max(5, result.get("retry_after_s", 5))
-                self.modal.phone_status(message, retry=False, keep_qr=True)
-            elif action in ("check", "authorize"):
-                self._callback = None
-                if result.get("http_status") == 401:
-                    self._expired()
-                elif action == "authorize":
-                    self.window._show_timed_error(message)
-                self._next_check = time.monotonic() + 15
-            else:
-                self.clear()
-                self.modal.phone_status(message)
+            self._failed(action, result)
             return
         if action == "create":
-            try:
-                self._request = validate_request(result)
-                self.modal.show_phone_request(self._request)
-            except (KeyError, TypeError, ValueError, AttributeError, ImportError):
-                # Retain a valid ID for cancellation even if rendering fails.
-                if isinstance(result.get("id"), str):
-                    self._request = {"id": result["id"]}
-                self.clear()
-                self.modal.phone_status("The sign-in QR could not be displayed. Try again.")
+            if not self._show_request(result):
                 return
-            self._next_poll = time.monotonic() + self._request["poll_interval_seconds"]
         elif action == "poll":
-            state = result.get("state")
-            if state == "pending":
-                self._next_poll = time.monotonic() + self._request["poll_interval_seconds"]
-            elif state == "approved":
-                self.modal.phone_status("Approval received. Checking your access…", retry=False)
-                identity, client = self._request["id"], self.client
-
-                def exchange() -> Dict:
-                    context = client.exchange(identity)
-                    if "error" in context:
-                        return context
-                    if context["role"] == "patient":
-                        patient = client.patient()
-                        if "error" in patient:
-                            return patient
-                        return {"context": context, "patient": patient}
-                    return {"context": context}
-
-                self._run("exchange", exchange)
-            else:
-                messages = {"denied": "Sign-in was declined on the phone.",
-                            "cancelled": "This code was cancelled.",
-                            "expired": "This code expired.",
-                            "consumed": "This code was already used."}
-                self.clear()
-                self.modal.phone_status(messages.get(state, "Sign-in could not be confirmed.")
-                                        + " Request a new QR code.")
+            self._polled(result)
         elif action == "exchange":
             self._signed_in(result)
         elif action == "authorize":
-            callback, self._callback = self._callback, None
-            if callback is None or (self.active_treatment() and callback[0] != "settings"):
+            if not self._run_authorized(result):
                 return
-            permission, operation = callback
-            if self.window.current_user is None:
-                return
-            if not self._allows(permission, result["context"]):
-                self.window._show_timed_error("Your approved role cannot perform this action.")
-                return
-            if permission == "treatment" and result["context"]["role"] == "patient":
-                if not self._check_patient_plan(result.get("patient")):
-                    return
-            self._authorized = permission
-            try:
-                if permission == "treatment":
-                    self.window._seed_modern_run_inputs()
-                operation()
-            finally:
-                self._authorized = None
         self._next_check = time.monotonic() + 15
+
+    def _failed(self, action: str, result: Dict) -> None:
+        message = self._message(result)
+        if action == "poll" and result.get("error") in ("rate_limited", "unavailable"):
+            self._next_poll = time.monotonic() + max(5, result.get("retry_after_s", 5))
+            self.modal.phone_status(message, retry=False, keep_qr=True)
+        elif action in ("check", "authorize"):
+            self._callback = None
+            if result.get("http_status") == 401:
+                self._expired()
+            elif action == "authorize":
+                self.window._show_timed_error(message)
+            self._next_check = time.monotonic() + 15
+        else:
+            self.clear()
+            self.modal.phone_status(message)
+
+    def _show_request(self, result: Dict) -> bool:
+        """Show the new QR request; False when it could not be displayed."""
+        try:
+            self._request = validate_request(result)
+            self.modal.show_phone_request(self._request)
+        except (KeyError, TypeError, ValueError, AttributeError, ImportError):
+            # Retain a valid ID for cancellation even if rendering fails.
+            if isinstance(result.get("id"), str):
+                self._request = {"id": result["id"]}
+            self.clear()
+            self.modal.phone_status("The sign-in QR could not be displayed. Try again.")
+            return False
+        self._next_poll = time.monotonic() + self._request["poll_interval_seconds"]
+        return True
+
+    def _polled(self, result: Dict) -> None:
+        state = result.get("state")
+        if state == "pending":
+            self._next_poll = time.monotonic() + self._request["poll_interval_seconds"]
+        elif state == "approved":
+            self.modal.phone_status("Approval received. Checking your access…", retry=False)
+            identity, client = self._request["id"], self.client
+
+            def exchange() -> Dict:
+                context = client.exchange(identity)
+                if "error" in context:
+                    return context
+                if context["role"] == "patient":
+                    patient = client.patient()
+                    if "error" in patient:
+                        return patient
+                    return {"context": context, "patient": patient}
+                return {"context": context}
+
+            self._run("exchange", exchange)
+        else:
+            messages = {"denied": "Sign-in was declined on the phone.",
+                        "cancelled": "This code was cancelled.",
+                        "expired": "This code expired.",
+                        "consumed": "This code was already used."}
+            self.clear()
+            self.modal.phone_status(messages.get(state, "Sign-in could not be confirmed.")
+                                    + " Request a new QR code.")
+
+    def _run_authorized(self, result: Dict) -> bool:
+        """Run the operation waiting on a fresh check; False when it was refused."""
+        callback, self._callback = self._callback, None
+        if callback is None or (self.active_treatment() and callback[0] != "settings"):
+            return False
+        permission, operation = callback
+        if self.window.current_user is None:
+            return False
+        if not self._allows(permission, result["context"]):
+            self.window._show_timed_error("Your approved role cannot perform this action.")
+            return False
+        if permission == "treatment" and result["context"]["role"] == "patient":
+            if not self._check_patient_plan(result.get("patient")):
+                return False
+        self._authorized = permission
+        try:
+            if permission == "treatment":
+                self.window._seed_modern_run_inputs()
+            operation()
+        finally:
+            self._authorized = None
+        return True
 
     def _signed_in(self, result: Dict) -> None:
         w, context = self.window, result["context"]
@@ -262,17 +286,12 @@ class MachineSignInController(QObject):
                 return
         self._request = {}
         w.patients.clear_session()
-        w._patient_lookup_id += 1
-        w._patient_lookup_pending = False
-        w.cloud_patient = patient
+        unlink_patient(w)
         role = context["role"]
         name = (patient or {}).get("display_name") or ROLES[role]
         w.current_user = {"username": name, "status": role, "machine_sign_in": True}
-        w.shell.treatment.clear_patient()
         if patient:
-            w.shell.treatment.set_settings(values)
-            w.shell.treatment.select_protocol(protocol)
-            w.shell.treatment.set_patient(name)
+            link_patient(w, patient, values, protocol, name=name)
         if role == "clinician":
             w.patients.staff = MachineStaffClient(self.client)
         w.shell.set_access_role(role)

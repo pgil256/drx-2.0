@@ -38,7 +38,7 @@ phase. Check both 1366 × 768 and 1360 × 768 because the main window code docum
 as a device mode. Smaller screen support requires an explicit product decision.
 
 This is an improvement to the current code-built GUI, which already implements much of the
-[June modernization plan](2026-06-25-pyqt5-gui-modernization.md). It is not a second framework
+[June modernization plan](../archive/plans/2026-06-25-pyqt5-gui-modernization.md). It is not a second framework
 migration. Treatment algorithms, calibration mathematics, motion limits, firmware, and automatic
 recovery policy are outside the proposed UI changes. Any behavior change discovered necessary
 during design becomes a separately specified engineering change.

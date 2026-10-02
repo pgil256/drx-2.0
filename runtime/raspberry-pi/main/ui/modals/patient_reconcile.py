@@ -7,7 +7,7 @@ from PyQt5.QtWidgets import (
     QCheckBox, QComboBox, QDialog, QHBoxLayout, QLabel, QLineEdit, QVBoxLayout, QWidget,
 )
 
-from ui.modals.staff_login import open_text_keyboard
+from ui.modals.text_keyboard import ASCII_KEYS, open_text_keyboard
 from ui.widgets.ds import DSButton
 
 
@@ -73,7 +73,7 @@ class PatientReconcile(QDialog):
 
     def eventFilter(self, watched: object, event: QEvent) -> bool:
         if watched is self._pin and event.type() == QEvent.MouseButtonRelease:
-            self._keyboard = open_text_keyboard(self._pin, self)
+            self._keyboard = open_text_keyboard(self._pin, self, keys=ASCII_KEYS)
             return True
         return super().eventFilter(watched, event)
 
