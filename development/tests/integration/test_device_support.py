@@ -209,3 +209,20 @@ def test_wifi_password_and_touch_keyboard_stay_masked(themed_app, qtbot):
     keyboard.done_button.click()
     assert dialog.password.text() == "test password"
     assert keyboard.editor.text() == ""
+
+
+def test_wifi_password_keyboard_types_symbols(themed_app, qtbot):
+    from PyQt5.QtWidgets import QPushButton
+    from ui.modals.device_dialogs import WifiDialog
+
+    dialog = WifiDialog([{"ssid": "Clinic", "signal": "80%", "security": "WPA2"}])
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.mouseClick(dialog.password, Qt.LeftButton)
+    keyboard = dialog.keyboard
+    assert keyboard.width() <= 1360 and keyboard.height() <= 730
+    buttons = {button.text(): button for button in keyboard.findChildren(QPushButton)}
+    for character in '#$%&*()=[]{}";<>\\|`~^':
+        buttons[character].click()
+    keyboard.done_button.click()
+    assert dialog.password.text() == '#$%&*()=[]{}";<>\\|`~^'
