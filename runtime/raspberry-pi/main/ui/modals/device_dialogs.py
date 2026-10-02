@@ -9,7 +9,7 @@ from PyQt5.QtWidgets import (
     QVBoxLayout, QWidget,
 )
 
-from ui.modals.text_keyboard import open_text_keyboard
+from ui.modals.text_keyboard import ASCII_KEYS, open_text_keyboard
 from ui.widgets.ds import DSButton
 from ui.widgets.ds._common import sans_font
 
@@ -57,7 +57,7 @@ class WifiDialog(QDialog):
     def eventFilter(self, watched: object, event: QEvent) -> bool:
         if watched is self.password and event.type() == QEvent.MouseButtonRelease:
             if self.keyboard is None:
-                self.keyboard = open_text_keyboard(self.password, self)
+                self.keyboard = open_text_keyboard(self.password, self, keys=ASCII_KEYS)
                 self.keyboard.finished.connect(self._keyboard_closed)
             return True
         return super().eventFilter(watched, event)
