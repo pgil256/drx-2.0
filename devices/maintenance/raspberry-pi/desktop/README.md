@@ -12,7 +12,8 @@ blocked, use its **Properties → Permissions** to allow executing it, then open
 again and choose **Execute / Allow Launching** if prompted. This is the desktop's
 trust step for a newly copied launcher. Do this while signed in as `pi`.
 
-If using [`kneespa-pi-desktop-setup.tar.gz`](../../../../kneespa-pi-desktop-setup.tar.gz),
+If using `kneespa-pi-desktop-setup.tar.gz`
+([built on the PC](../../../../development/docs/rpi/setup-and-maintenance.md#copying-the-tools-and-bundles)),
 extract its contents
 into `/home/pi/drx` using File Manager first. The archive contains the `devices/`
 paths and preserves executable permissions for the installer icon and scripts.

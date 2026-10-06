@@ -14,7 +14,8 @@ On the Pi, double-click **Install KneeSpa.desktop** in `/home/pi/drx/devices` to
 install the **KneeSpa** and **Flash KneeSpa Firmware** desktop icons. See the
 [desktop launcher setup](maintenance/raspberry-pi/desktop/README.md).
 
-The [Pi setup bundle](../kneespa-pi-desktop-setup.tar.gz) is kept at the project root.
+The Pi setup bundle is not tracked;
+[build it on the PC](../development/docs/rpi/setup-and-maintenance.md#copying-the-tools-and-bundles).
 Extract it into `/home/pi/drx` using File Manager to preserve executable permissions,
 then double-click **Install KneeSpa** in the `devices` folder.
 
