@@ -32,26 +32,28 @@ firmware native tests 8 suites / 165 tests; Mega build warning-free;
   uses 48 px minimum keys instead of 60, and opens in capitals every time (it
   used to keep the previous Shift state). Keep this, or add options to restore
   the old look?
-- **Wi-Fi password keyboard:** it has never offered the symbols
+- **Wi-Fi password keyboard:** it did not offer the symbols
   `` #$%&*()=[]{}";<>\|`~^ ``, although real Wi-Fi passwords can contain them.
-  Probably a bug. The fix is one argument, `keys=ASCII_KEYS`, in
-  `ui/modals/device_dialogs.py`. Apply it?
+  Fixed on 2026-10-02 with `keys=ASCII_KEYS` in
+  `ui/modals/device_dialogs.py` (PR #24).
 - **Video modal:** split into `video_modal.py` and `vlc_engine.py` with no
   intended visual change. Releases must ship the new `ui/modals/vlc_engine.py`;
   the release installer extracts the whole tree, so this matters only for
   hand-copied files.
 
-## 3. Deletions held for the owner
+## 3. Deletions held for the owner (decided 2026-10-06: delete all)
 
-| Item | Why it was held | Options |
-| --- | --- | --- |
-| `kneespa-pi-desktop-setup.tar.gz` | A hand-made snapshot of 7 tracked files. It is identical today but will drift. Four docs link to it: `devices/README.md`, `devices/maintenance/raspberry-pi/desktop/README.md`, `devices/maintenance/raspberry-pi/firmware.md`, `development/docs/rpi/setup-and-maintenance.md`. | Generate it in the sync or release script, have the sync script deliver the launchers, or keep it |
-| `drx.code-workspace` | Personal editor settings at the repo root | Delete, or move to a personal location |
-| `development/docs/rpi/*.txt` | `kneespa_url`, `rpi_config`, `ser-connection-fix`, `ssh_setup`, `sync`, `vnc_start` and the display baseline have no references (`dev-path` and `startup_version` are referenced). `display-baseline-20260712-161506.txt` is a device dump with USB serial numbers. | Delete or archive. Deleting does not remove the serial numbers from git history. |
-| `development/docs/archive/audits/` | Already archived; the handoff suggested deleting it | Keep or delete |
-| Orphan plans: `2026-01-09-kneespa-web-demo-design.md` with `development/docs/reference/demo/`, and `2026-09-01-admin-dashboard-poc-plan.md` | No incoming links. They may describe future work. | Archive, delete, or keep as active ideas |
-| `development/tools/calibrate.py` | Works with current firmware again, but the in-app Hardware Tests & Calibration wizard supersedes it | Keep as a serial-console fallback, or retire to the archive |
-| `development/tools/ds_gallery.py` | Unreferenced but working | Keep, or delete |
+Each item is its own commit, so any one can be reverted alone.
+
+| Item | What was done |
+| --- | --- |
+| `kneespa-pi-desktop-setup.tar.gz` | Deleted and ignored again. `development/docs/rpi/setup-and-maintenance.md` gives the `git archive` command that builds it from the current commit; the three other docs link to that section. |
+| `drx.code-workspace` | Deleted |
+| `development/docs/rpi/*.txt` | Deleted `kneespa_url`, `ssh_setup`, `sync`, `vnc_start` and the display baseline. The baseline's USB serial numbers remain in git history. `rpi_config` and `ser-connection-fix` are deleted in a separate commit: they were the only record of the Pi's `/boot/config.txt` and UART setup. `dev-path` and `startup_version` stay. |
+| `development/docs/archive/audits/` | Deleted. The README's E-stop pointer now goes to §8 of the archived improvement plan, where that section actually is. |
+| Orphan plans: `2026-01-09-kneespa-web-demo-design.md` with `development/docs/reference/demo/`, and `2026-09-01-admin-dashboard-poc-plan.md` | Deleted |
+| `development/tools/calibrate.py` | Deleted; `development/docs/archive/tools/README.md` records the removal |
+| `development/tools/ds_gallery.py` | Deleted |
 
 ## 4. Repository and CI changes that cannot be verified locally
 
@@ -93,9 +95,10 @@ firmware native tests 8 suites / 165 tests; Mega build warning-free;
 - `ui/media/images/graphics/1-4.png` are never loaded; startup only checks that
   `UI_PATHS["PROTOCOL_IMAGES"]` exists. Add them to this F9 asset list.
 
-## 7. Cleanup after merge
+## 7. Cleanup after merge (done 2026-10-02)
 
 - The agent branches `claude/video-modal-split` and `claude/one-keyboard`, and
-  their worktrees under `.claude/worktrees/agent-*`, are fully cherry-picked
-  into this branch and can be deleted.
-- `claude/dead-code-refactoring-review-1dcc8e` is contained in this branch.
+  their worktrees under `.claude/worktrees/agent-*`, were fully cherry-picked
+  into this branch and are deleted.
+- `claude/dead-code-refactoring-review-1dcc8e` was contained in this branch and
+  is deleted locally and on GitHub.
