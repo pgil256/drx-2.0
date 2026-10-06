@@ -258,5 +258,5 @@ pressure-progress and move-timeout problems are now advisory notices, not stops.
 
 Known residual risk: there is no hardware E-stop that cuts motor power
 independently of the MCU; see §8 of the
-[June 2026 audit](development/docs/archive/audits/2026-06-11-full-application-audit.md)
+[June 2026 improvement plan](development/docs/archive/plans/2026-06-11-improvement-plan.md)
 for the recommended future hardware change.

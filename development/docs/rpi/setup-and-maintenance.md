@@ -46,12 +46,20 @@ Python requirements, or flash the Arduino. Copy updated device tools separately.
 Preserve the Pi's `devices/local/` state; do not replace it with another device's
 calibration, identities or credentials.
 
-Two bundles were prepared:
+Two bundles are generated on the PC:
 
 | Bundle | Contents and use |
 |---|---|
-| [kneespa-pi-desktop-setup.tar.gz](../../../kneespa-pi-desktop-setup.tar.gz) | Desktop installation and firmware-launcher files; extract into `/home/pi/drx`, then run the desktop installer. |
+| `kneespa-pi-desktop-setup.tar.gz` | Desktop installation and firmware-launcher files; build it with the command below, extract into `/home/pi/drx`, then run the desktop installer. It is ignored by Git. |
 | `.cache/kneespa-buster-update.tar.gz` on the PC | Generated local bundle containing the inventory script, Buster wrapper/helper, maintenance docs and updated runtime requirements. It is ignored by Git and may not exist in a fresh checkout. |
+
+Build the desktop setup bundle from the repository root. It packs the launcher
+files of the current commit and keeps the scripts' executable permissions and LF
+line endings, also on Windows:
+
+```bash
+git archive --format=tar.gz -o kneespa-pi-desktop-setup.tar.gz HEAD -- "devices/Install KneeSpa.desktop" devices/install_kneespa_desktop.sh devices/flash_firmware.sh devices/maintenance/raspberry-pi/firmware.md devices/maintenance/raspberry-pi/desktop
+```
 
 These bundles supplement the existing application; they are not full device
 images or state backups. After copying a bundle into `/home/pi/drx` on the Pi,
