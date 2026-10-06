@@ -154,5 +154,5 @@ python development/scripts/check_limits_sync.py
 The desktop preview selects `devices/development/` unless `KNEESPA_DEVICE_DIR`
 is explicitly set. For example, a disposable profile can be selected with
 `KNEESPA_DEVICE_DIR=/tmp/drx-preview python development/tools/run_local.py`.
-The repository's historical plans/audits retain references to their original
+The repository's historical plans retain references to their original
 layout; use this document and the root README for current commands.
