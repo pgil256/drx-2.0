@@ -120,7 +120,7 @@ class CalibrationRestoreDialog(QDialog):
         actions = QHBoxLayout()
         cancel = DSButton("Cancel", variant="secondary")
         cancel.clicked.connect(self.reject)
-        restore = DSButton("Restore This Calibration", variant="danger")
+        restore = DSButton("Restore This Calibration", variant="destructive")
         restore.setAutoDefault(False)
         restore.clicked.connect(self.accept)
         actions.addWidget(cancel)

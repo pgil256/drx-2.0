@@ -423,7 +423,7 @@ class TreatmentScreen(QWidget):
     def _run_controls(self):
         row = QHBoxLayout()
         row.setSpacing(_GAP)
-        self._start_btn = DSButton("START", variant="dark", size="lg", full_width=True,
+        self._start_btn = DSButton("START", variant="success", size="lg", full_width=True,
                                    icon=play_icon("#ffffff", 22))
         self._start_btn.clicked.connect(self._on_start)
         self._pause_btn = DSButton("PAUSE", variant="secondary", size="lg", full_width=True,

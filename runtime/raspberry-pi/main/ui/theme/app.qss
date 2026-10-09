@@ -6,7 +6,7 @@
  * transition, text-transform, letter-spacing) are applied in Python
  * (QGraphicsDropShadowEffect, manual uppercasing, property animations).
  *
- * Buttons read a dynamic `variant` (dark/primary/success/danger/secondary/ghost) and
+ * Buttons read a dynamic `variant` (dark/primary/success/danger/destructive/secondary/ghost) and
  * `size` (sm/md/lg) property — set via widget.setProperty(...) then re-polished —
  * mirroring the design-system Button component. Bare controls get sensible
  * neutral styling so the legacy screens look coherent until each is rebuilt.
@@ -103,18 +103,27 @@ QPushButton:hover { background-color: var(--blue-050); border-color: var(--color
 QPushButton:pressed { background-color: var(--gray-200); }
 QPushButton:disabled { background-color: var(--gray-300); color: var(--gray-600); border-color: var(--gray-300); }
 
-/* Action rows use dark / secondary / primary, with one blue action per group.
- * The legacy danger variant also uses blue, including hover and press states. */
+/* Colour carries meaning (visual audit 2026-09-21 §1.1):
+ *   success     green fill  — START / RESUME, the one action that begins motion
+ *   danger      red fill    — STOP, the one action that interrupts motion
+ *   destructive white fill, red text/border — Log Out, Shut Down, Restore, Exit:
+ *               disruptive but not a motion stop, so red fill stays reserved
+ *   primary     blue fill   — the one ordinary call-to-action per group
+ *   dark        black fill  — chrome (rail / top bar), not action rows */
 QPushButton[variant="dark"] { background-color: var(--color-dark); color: var(--white); border-color: var(--color-dark); }
 QPushButton[variant="dark"]:hover { background-color: var(--color-dark-hover); border-color: var(--color-dark-hover); }
 
-QPushButton[variant="primary"],
-QPushButton[variant="danger"] { background-color: var(--color-primary); color: var(--text-on-accent); border-color: var(--color-primary); }
-QPushButton[variant="primary"]:hover,
-QPushButton[variant="danger"]:hover { background-color: var(--color-primary-hover); border-color: var(--color-primary-hover); }
+QPushButton[variant="primary"] { background-color: var(--color-primary); color: var(--text-on-accent); border-color: var(--color-primary); }
+QPushButton[variant="primary"]:hover { background-color: var(--color-primary-hover); border-color: var(--color-primary-hover); }
 
 QPushButton[variant="success"] { background-color: var(--color-success); color: var(--white); border-color: var(--color-success); }
 QPushButton[variant="success"]:hover { background-color: var(--color-success-hover); border-color: var(--color-success-hover); }
+
+QPushButton[variant="danger"] { background-color: var(--color-danger); color: var(--white); border-color: var(--color-danger); }
+QPushButton[variant="danger"]:hover { background-color: var(--color-danger-hover); border-color: var(--color-danger-hover); }
+
+QPushButton[variant="destructive"] { background-color: var(--white); color: var(--color-danger); border-color: var(--red-400); }
+QPushButton[variant="destructive"]:hover { background-color: var(--red-100); border-color: var(--color-danger); }
 
 QPushButton[variant="secondary"] { background-color: var(--white); color: var(--ink-800); border-color: var(--border-control); }
 QPushButton[variant="secondary"]:hover { background-color: #e0e6e8; }
@@ -126,9 +135,10 @@ QPushButton[variant="ghost"]:hover { background-color: var(--gray-100); }
  * transform (scale 0.97) is substituted with a consistent per-variant darken
  * (the device is touch-only: a visible press state matters more than parity). */
 QPushButton[variant="dark"]:pressed { background-color: var(--color-dark-active); border-color: var(--color-dark-active); }
-QPushButton[variant="primary"]:pressed,
-QPushButton[variant="danger"]:pressed { background-color: var(--color-primary-active); border-color: var(--color-primary-active); }
+QPushButton[variant="primary"]:pressed { background-color: var(--color-primary-active); border-color: var(--color-primary-active); }
 QPushButton[variant="success"]:pressed { background-color: var(--color-success-hover); border-color: var(--color-success-hover); }
+QPushButton[variant="danger"]:pressed { background-color: var(--red-600); border-color: var(--red-600); }
+QPushButton[variant="destructive"]:pressed { background-color: var(--red-100); border-color: var(--red-600); color: var(--red-600); }
 QPushButton[variant="secondary"]:pressed { background-color: var(--gray-300); }
 QPushButton[variant="ghost"]:pressed { background-color: var(--gray-200); }
 
@@ -137,6 +147,7 @@ QPushButton[variant="dark"]:disabled,
 QPushButton[variant="primary"]:disabled,
 QPushButton[variant="success"]:disabled,
 QPushButton[variant="danger"]:disabled,
+QPushButton[variant="destructive"]:disabled,
 QPushButton[variant="secondary"]:disabled,
 QPushButton[variant="ghost"]:disabled {
   background-color: var(--gray-300); color: var(--gray-600); border-color: var(--gray-300);

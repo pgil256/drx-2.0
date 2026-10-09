@@ -45,7 +45,7 @@ def test_all_components_construct_and_polish(app):
     assert app_qss, "themed app has no stylesheet applied"
     assert "var(--" not in app_qss, "unresolved theme tokens in app QSS"
 
-    for variant in ("primary", "success", "danger", "secondary", "ghost"):
+    for variant in ("primary", "success", "danger", "destructive", "secondary", "ghost"):
         for size in ("sm", "md", "lg"):
             b = DSButton(variant, variant=variant, size=size)
             b.ensurePolished()

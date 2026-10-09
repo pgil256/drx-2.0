@@ -323,3 +323,23 @@ def test_action_text_and_control_edges_have_measurable_contrast():
     for background in ("--white", "--gray-200"):
         assert contrast("--border-control", background) >= 3
     assert contrast("--color-primary", "--white") >= 3  # indicator / focus / slider ring
+    # destructive variant: red text on white, red-400 outline
+    assert contrast("--color-danger", "--white") >= 4.5
+    assert contrast("--red-600", "--red-100") >= 4.5          # pressed destructive
+    assert contrast("--red-400", "--white") >= 3
+
+
+def test_button_colour_carries_meaning():
+    """Visual audit §1.1: START is green, STOP is red, red fill is reserved for
+    stopping motion, and disruptive non-motion actions use the outlined
+    destructive variant. The danger rule must not alias primary (blue)."""
+    import re
+    from ui.theme.qss import load_app_qss
+
+    sheet = load_app_qss()
+    rules = dict(re.findall(r'QPushButton\[variant="(\w+)"\] \{([^}]*)\}', sheet))
+    assert resolve("--color-danger") in rules["danger"]
+    assert resolve("--color-primary") not in rules["danger"]
+    assert resolve("--color-success") in rules["success"]
+    assert resolve("--color-danger") in rules["destructive"]
+    assert resolve("--white") in rules["destructive"]

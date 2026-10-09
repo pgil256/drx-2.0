@@ -28,6 +28,15 @@ QT_QPA_PLATFORM=offscreen python development/tools/screen_gallery.py --outdir .c
 ## 1. Systemic issues (fix once, improves everything)
 
 ### 1.1 Colour no longer means anything
+
+**Status 2026-10-09: done.** `danger` now resolves to `--color-danger` (red) with
+its own hover/press states, START/RESUME use `success` (green), PAUSE stays
+`secondary`, and a new outlined `destructive` variant (white fill, red text and
+border) carries Log Out, Shut Down and "Restore This Calibration". `dark` is no
+longer used in action rows: Save treatment defaults is `primary`, Restart App and
+Close service are `secondary`. Tests: `test_button_colour_carries_meaning` and
+`test_treatment_and_setup_action_rows_use_motion_colours`. Button label casing
+(`Stop` vs `START`) is unchanged and remains open.
 * `app.qss` styles `variant="danger"` **identically to `primary`** (blue) — see the
   comment "The legacy danger variant also uses blue" in
   [app.qss](../../../runtime/raspberry-pi/main/ui/theme/app.qss). Result: Stop
