@@ -63,6 +63,12 @@ firmware native tests 8 suites / 165 tests; Mega build warning-free;
   is set in CI and in `tests/conftest.py`. Removing it needs a CI run to confirm.
 - **Separate `check_limits_sync.py` CI step:** it repeats
   `unit/test_limits_sync.py` but fails faster. Keep as is unless CI time matters.
+- **Python 3.7 import job (added 2026-10-09):** `python37-imports` runs
+  `development/scripts/check_runtime_imports.py` in a `python:3.7-slim-bookworm`
+  container. The script passes on 3.12 locally, but no 3.7 interpreter was
+  available, so the job is `continue-on-error` until its first green CI run.
+  Running the full test suite on 3.7 is a separate decision: about 80 test
+  lines use `call_args.kwargs`, which needs Python 3.8.
 - **WSL test gaps:** installing `qrcode` would clear the 24 known WSL failures,
   and `aiohttp` would let the two simulator test files run. Neither is installed.
 
