@@ -1,6 +1,5 @@
 # development/tests/unit/test_protocol_logic.py
 import time
-from unittest.mock import patch
 
 import pytest
 

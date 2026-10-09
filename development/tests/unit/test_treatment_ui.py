@@ -4,7 +4,6 @@ lifecycle state machine that drives it."""
 from types import SimpleNamespace
 
 import pytest
-from PyQt5.QtWidgets import QWidget
 
 from ui.widgets.treatment_status_panel import TreatmentStatusPanel
 from controllers.protocol_controller import ProtocolController

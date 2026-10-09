@@ -5,7 +5,7 @@ from unittest.mock import Mock
 
 import pytest
 from PyQt5.QtCore import QPoint, QPointF, Qt
-from PyQt5.QtWidgets import QAbstractButton, QScrollArea, QScroller
+from PyQt5.QtWidgets import QAbstractButton, QScroller
 
 from kneespa import KneeSpa
 from ui.app_shell import AppShell

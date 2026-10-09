@@ -1,6 +1,5 @@
 """Executable September 15 cloud handoff contract and atomic UI application."""
 
-from copy import deepcopy
 from functools import partial
 from uuid import uuid4
 

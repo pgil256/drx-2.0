@@ -14,12 +14,10 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "runtime", "raspberry-pi", "main"))
 
-from PyQt5.QtCore import Qt  # noqa: E402
 from PyQt5.QtWidgets import (  # noqa: E402
     QApplication,
     QButtonGroup,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QVBoxLayout,
