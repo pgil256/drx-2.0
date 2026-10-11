@@ -65,8 +65,9 @@ firmware native tests 8 suites / 165 tests; Mega build warning-free;
   `unit/test_limits_sync.py` but fails faster. Keep as is unless CI time matters.
 - **Python 3.7 import job (added 2026-10-09):** `python37-imports` runs
   `development/scripts/check_runtime_imports.py` in a `python:3.7-slim-bookworm`
-  container. The script passes on 3.12 locally, but no 3.7 interpreter was
-  available, so the job is `continue-on-error` until its first green CI run.
+  container and gates the PR: run 38168318618 on 2026-10-11 imported 98 of 98
+  modules on Python 3.7.17. The job pins `PyQt5==5.15.9` / `PyQt5-sip==12.12.2`,
+  the last pair with 3.7 wheels; the Pi itself uses apt's PyQt5, not pip.
   Running the full test suite on 3.7 is a separate decision: about 80 test
   lines use `call_args.kwargs`, which needs Python 3.8.
 - **WSL test gaps:** installing `qrcode` would clear the 24 known WSL failures,

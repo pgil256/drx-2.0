@@ -74,14 +74,11 @@ jobs:
           ruff check .
 
   # A real Python 3.7 (the Pi's interpreter) byte-compiles the shipped code and
-  # imports every runtime module. NOT YET CONFIRMED GREEN: no 3.7 interpreter
-  # was available when this was written, so it reports without gating the PR.
-  # Remove continue-on-error after the first passing run.
+  # imports every runtime module. Gates the PR.
   python37-imports:
     name: Python 3.7 import check (Pi runtime)
     runs-on: ubuntu-latest
     container: python:3.7-slim-bookworm
-    continue-on-error: true
     steps:
       - name: Checkout
         uses: actions/checkout@v4
