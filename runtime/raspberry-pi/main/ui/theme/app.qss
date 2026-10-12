@@ -165,8 +165,6 @@ QPushButton[dsSize="lg"] { padding: 18px 32px; font-size: var(--text-lg); font-w
 
 QPushButton:focus { border: 3px solid var(--ink-900); }
 QPushButton[variant="dark"]:focus { border: 3px solid var(--border-control); }
-/* Fixed-color section buttons indicate selection without changing their fill. */
-QPushButton[sectionTab="true"]:checked { border: 3px solid var(--brand-cyan); }
 /* Standard Qt dialogs create plain QPushButtons rather than DSButtons. */
 QDialogButtonBox QPushButton, QProgressDialog QPushButton {
   min-width: 112px;
