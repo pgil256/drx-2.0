@@ -112,6 +112,41 @@ jobs:
           QT_QPA_PLATFORM: offscreen
         run: python development/scripts/check_runtime_imports.py
 
+  # The same suite as python-tests, on the Pi's interpreter. Catches standard
+  # library calls that exist on 3.12 but not on 3.7, which the import check
+  # cannot see because they only fail when the line runs.
+  python37-tests:
+    name: Python 3.7 tests (Pi interpreter)
+    runs-on: ubuntu-latest
+    container: python:3.7-slim-bookworm
+    # Not a gate until its first green run.
+    continue-on-error: true
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install system libraries for PyQt5 (headless)
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            libegl1 \
+            libgl1 \
+            libglib2.0-0 \
+            libxkbcommon0 \
+            libdbus-1-3 \
+            libfontconfig1 \
+            rsync
+
+      - name: Install Python test dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r development/requirements-test.txt
+
+      - name: Run pytest
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: python -m pytest -q
+
   # Hermetic: system g++ + the vendored Unity framework in
   # development/tests/firmware/unity/,
   # no PlatformIO registry access needed. Gates the PR (no continue-on-error).
