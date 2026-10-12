@@ -145,8 +145,15 @@ class DiagnosticFileHandler(logging.FileHandler):
         self.retention = retention
         self._part = 0
         self._encoding_errors = "backslashreplace"
+        # logging.Handler only tracks _closed on Python 3.10 and later. On the
+        # Pi's 3.7 emit() must not depend on the base class providing it.
+        self._closed = False
         # FileHandler only accepts errors= on Python 3.9 and later.
         super().__init__(filename, encoding=encoding)
+
+    def close(self) -> None:
+        self._closed = True
+        super().close()
 
     def _open(self) -> TextIO:
         """Preserve encoding error handling on older Pi Python versions and rollover."""
