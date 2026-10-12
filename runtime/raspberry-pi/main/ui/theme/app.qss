@@ -93,11 +93,12 @@ QPushButton {
   outline: none;
   background-color: var(--surface-card);
   color: var(--ink-800);
-  border: var(--border-thick) solid var(--border-control);
+  border: var(--border-thin) solid var(--border-control);
   border-radius: var(--radius-md);
   padding: 12px 24px;
+  min-height: 24px;
   font-size: var(--text-base);
-  font-weight: 700;
+  font-weight: 600;
 }
 QPushButton:hover { background-color: var(--blue-050); border-color: var(--color-primary); }
 QPushButton:pressed { background-color: var(--gray-200); }
@@ -155,11 +156,12 @@ QPushButton[variant="ghost"]:disabled {
 
 /* Touch sizes (from Button.jsx SIZES). Property is "dsSize" — "size" collides
  * with QWidget's built-in size property and would never match.
- * NB: QSS min-height is the CONTENT box — padding and the 2px border add on
- * top. These content minima produce outer heights of at least 48/56/72 px. */
-QPushButton[dsSize="sm"] { padding: 8px 16px; font-size: var(--text-base); min-height: 28px; border-radius: var(--radius-md); }
-QPushButton[dsSize="md"] { padding: 12px 24px; font-size: var(--text-base); min-height: 28px; border-radius: var(--radius-md); }
-QPushButton[dsSize="lg"] { padding: 18px 32px; font-size: var(--text-lg); min-height: 32px; border-radius: var(--radius-lg); }
+ * NB: QSS min-height is the CONTENT box — padding and the 1px border add on
+ * top. These content minima produce outer heights of at least 48/56/72 px.
+ * Bold is kept for the large START / Stop size; other buttons are semibold. */
+QPushButton[dsSize="sm"] { padding: 8px 16px; font-size: var(--text-base); min-height: 30px; border-radius: var(--radius-md); }
+QPushButton[dsSize="md"] { padding: 12px 24px; font-size: var(--text-base); min-height: 30px; border-radius: var(--radius-md); }
+QPushButton[dsSize="lg"] { padding: 18px 32px; font-size: var(--text-lg); font-weight: 700; min-height: 34px; border-radius: var(--radius-lg); }
 
 QPushButton:focus { border: 3px solid var(--ink-900); }
 QPushButton[variant="dark"]:focus { border: 3px solid var(--border-control); }
@@ -168,7 +170,7 @@ QPushButton[sectionTab="true"]:checked { border: 3px solid var(--brand-cyan); }
 /* Standard Qt dialogs create plain QPushButtons rather than DSButtons. */
 QDialogButtonBox QPushButton, QProgressDialog QPushButton {
   min-width: 112px;
-  min-height: 28px;
+  min-height: 30px;
 }
 QDialogButtonBox QPushButton:default {
   background-color: var(--color-primary);
