@@ -195,7 +195,7 @@ class TestMoveActuatorHorizontal:
         """Horizontal jogs that would pass 0 deg are refused with no command,
         even though calibration still spans -25..+5 deg."""
         stub = make_kneespa_stub(horizontal=start)
-        KneeSpa.move_actuator(stub, ACTUATOR_B, None, speed, 1)
+        KneeSpa.move_actuator(stub, ACTUATOR_B, speed, 1)
         stub.arduino.send.assert_not_called()
         assert stub.horizontal_flexion_position == start
 

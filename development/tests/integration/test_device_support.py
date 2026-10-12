@@ -36,22 +36,22 @@ def test_device_gates_login_and_preserves_destination(shell):
     assert not shell.device.calibration_button.isEnabled()
 
 
-def test_device_tabs_fill_only_the_open_section(shell, qtbot):
-    """Device uses the Help and Support tab pattern, not three fixed colours."""
+def test_device_tabs_mark_only_the_open_section(shell, qtbot):
+    """Device uses the shared segmented tabs: exactly the open section is checked."""
     screen = shell.device
     tabs = screen._section_buttons
 
     def state():
-        return [(tab.variant(), tab.isChecked()) for tab in tabs]
+        return [tab.isChecked() for tab in tabs]
 
-    assert state() == [("primary", True), ("secondary", False), ("secondary", False)]
+    assert state() == [True, False, False]
     qtbot.mouseClick(tabs[1], Qt.LeftButton)
-    assert state() == [("secondary", False), ("primary", True), ("secondary", False)]
-    # Service stays unfilled until access is granted.
+    assert state() == [False, True, False]
+    # Service stays unmarked until access is granted.
     qtbot.mouseClick(tabs[2], Qt.LeftButton)
-    assert state() == [("secondary", False), ("primary", True), ("secondary", False)]
+    assert state() == [False, True, False]
     screen.unlock_service()
-    assert state() == [("secondary", False), ("secondary", False), ("primary", True)]
+    assert state() == [False, False, True]
 
 
 @pytest.mark.parametrize("section", range(4))

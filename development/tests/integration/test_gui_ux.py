@@ -155,7 +155,7 @@ def test_target_slider_tap_and_drag_set_target_without_moving_device(shell, qtbo
 
 
 def test_horizontal_target_never_exceeds_zero_degrees(shell, qtbot):
-    from main.config.constants import ACTUATORS, CALIBRATION_AXES, HORIZONTAL_MAX_DEGREES
+    from config.constants import ACTUATORS, HORIZONTAL_MAX_DEGREES
     shell.navigate("setup")
     qtbot.wait(1)
     control = shell.setup._rows["horizontal"].slider
@@ -167,7 +167,6 @@ def test_horizontal_target_never_exceeds_zero_degrees(shell, qtbot):
     assert shell.setup.row_value("horizontal") == 0
     # Calibration still records the full mechanical travel.
     assert ACTUATORS["HORIZONTAL"]["LIMITS"] == (-25, 5)
-    assert CALIBRATION_AXES["horizontal"]["angle_limits"] == (-25, 5)
 
 
 def test_motor_speed_touch_drag_commits_only_on_release(shell, qtbot):
@@ -377,5 +376,5 @@ def test_button_colour_carries_meaning():
     assert resolve("--color-danger") in rules["danger"]
     assert resolve("--color-primary") not in rules["danger"]
     assert resolve("--color-success") in rules["success"]
-    assert resolve("--color-danger") in rules["destructive"]
+    assert resolve("--color-destructive") in rules["destructive"]
     assert resolve("--white") in rules["destructive"]

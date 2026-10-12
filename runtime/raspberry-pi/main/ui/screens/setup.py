@@ -336,6 +336,7 @@ class _ActuatorRow(QWidget):
     jog = pyqtSignal(str, str)
     go = pyqtSignal(str)
     stop = pyqtSignal(str)
+    valueChanged = pyqtSignal(str, float)
 
     def __init__(self, cfg: Dict, parent=None) -> None:
         super().__init__(parent)
@@ -462,6 +463,7 @@ class SetupScreen(QWidget):
     jog_requested = pyqtSignal(str, str)
     go_requested = pyqtSignal(str)
     stop_requested = pyqtSignal(str)
+    value_changed = pyqtSignal(str, float)
     mark_default_requested = pyqtSignal()
     reset_arduino_requested = pyqtSignal()
     emergency_stop_requested = pyqtSignal()
@@ -487,6 +489,7 @@ class SetupScreen(QWidget):
             row.jog.connect(self.jog_requested)
             row.go.connect(self.go_requested)
             row.stop.connect(self.stop_requested)
+            row.valueChanged.connect(self.value_changed)
             body.addWidget(row, 1)
             if index < len(ROWS) - 1:
                 body.addWidget(hline())
