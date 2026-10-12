@@ -10,13 +10,14 @@ from PyQt5.QtCore import QPoint
 
 from controllers.machine_sign_in_controller import authorize
 from helpers.machine_sign_in import MachineSignInClient, MachineStaffClient, REQUESTS, SESSION
-from integration.test_window_wiring import window_run
+# window_run is a pytest fixture: imported so pytest can resolve it by name.
+from integration.test_window_wiring import window_run  # noqa: F401
 
 pytestmark = pytest.mark.integration
 
 
 @pytest.fixture
-def sign_in(window_run, monkeypatch):
+def sign_in(window_run, monkeypatch):  # noqa: F811
     w = window_run.window
     w.cloud_client.enabled = True
     w.cloud_client._headers.return_value = {

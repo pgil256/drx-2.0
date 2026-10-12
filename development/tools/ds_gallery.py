@@ -14,12 +14,10 @@ import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(os.path.abspath(__file__)), "..", "..", "runtime", "raspberry-pi", "main"))
 
-from PyQt5.QtCore import Qt  # noqa: E402
 from PyQt5.QtWidgets import (  # noqa: E402
     QApplication,
     QButtonGroup,
     QFrame,
-    QGridLayout,
     QHBoxLayout,
     QLabel,
     QVBoxLayout,
@@ -81,11 +79,11 @@ def build():
 
     # Buttons: variant × size, plus disabled
     box, lay = section("BUTTON — variant × size")
-    for variant in ("primary", "success", "danger", "secondary", "ghost"):
+    for variant in ("primary", "success", "danger", "destructive", "secondary", "ghost"):
         lay.addWidget(hrow(
             [DSButton(f"{variant} {s}", variant=variant, size=s) for s in ("sm", "md", "lg")]
         ))
-    dis = [DSButton(f"{v} disabled", variant=v) for v in ("primary", "secondary", "danger")]
+    dis = [DSButton(f"{v} disabled", variant=v) for v in ("primary", "secondary", "danger", "destructive")]
     for b in dis:
         b.setEnabled(False)
     lay.addWidget(hrow(dis))

@@ -6,7 +6,6 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from controllers.protocol_controller import ProtocolController
 from controllers.safety_monitor import SafetyMonitor
 from fixtures.controllers import make_window, make_worker_double
 from helpers import treatment_session

@@ -55,7 +55,7 @@ def test_themed_widgets_construct_and_polish(app):
 
     apply_theme(app)
 
-    for variant in ("primary", "success", "danger", "secondary", "ghost"):
+    for variant in ("primary", "success", "danger", "destructive", "secondary", "ghost"):
         btn = QPushButton(variant)
         btn.setProperty("variant", variant)
         btn.ensurePolished()

@@ -12,7 +12,7 @@ no Qt window or Arduino is constructed. Constructor coverage lives in Gate W.
 """
 from functools import partial
 from types import SimpleNamespace
-from unittest.mock import MagicMock, call
+from unittest.mock import MagicMock
 
 import pytest
 from PyQt5.QtCore import QObject, pyqtSignal

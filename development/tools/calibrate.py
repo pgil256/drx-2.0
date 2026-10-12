@@ -382,9 +382,9 @@ def jog_loop(ard: ArduinoSerial, actuator: str, label: str) -> int:
     print(f"\n  Jog controls for {label}:")
     print(f"    w/s = small step (+/- {small} {unit})")
     print(f"    e/d = large step (+/- {large} {unit})")
-    print(f"    r   = refresh status from Arduino")
-    print(f"    x   = emergency stop")
-    print(f"    q   = done (record current position)\n")
+    print("    r   = refresh status from Arduino")
+    print("    x   = emergency stop")
+    print("    q   = done (record current position)\n")
 
     while True:
         try:

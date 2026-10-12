@@ -248,6 +248,17 @@ def test_treatment_stop_button_uses_concise_label(shell):
     assert shell.treatment._estop_btn.text() == "Stop"
 
 
+def test_treatment_and_setup_action_rows_use_motion_colours(shell):
+    """START is the one green action; Stop is the one red-filled action."""
+    t = shell.treatment
+    assert t._start_btn.variant() == "success"
+    assert t._pause_btn.variant() == "secondary"
+    assert t._estop_btn.variant() == "danger"
+    s = shell.setup
+    assert s._estop_btn.variant() == "danger"
+    assert s._mark_btn.variant() != "danger"
+
+
 def test_treatment_protocol_select_and_settings(shell):
     t = shell.treatment
     picked, settings = [], []

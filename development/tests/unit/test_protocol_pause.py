@@ -73,7 +73,6 @@ def test_check_duration_frozen_while_paused():
     w.is_running = True
     w.start_time = time.time() - 59.0  # ~1s left
     w.pause()
-    frozen = w.elapsed_time
     w.check_duration()
     e1 = w.elapsed_time
     time.sleep(0.1)

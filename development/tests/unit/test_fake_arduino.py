@@ -2,7 +2,6 @@
 import pytest
 import os
 import time
-import serial
 
 from fixtures.fake_arduino import FakeArduino, PRESSURE_WARNING_LBS, PTY_AVAILABLE
 

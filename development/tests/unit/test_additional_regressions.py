@@ -1,5 +1,4 @@
 """Regression coverage for software stops, startup, final homing, and shutdown."""
-import threading
 from unittest.mock import MagicMock
 
 import pytest
@@ -7,7 +6,7 @@ from pytestqt.qtbot import QtBot
 
 from controllers.connection_manager import ConnectionManager
 from controllers.protocol_controller import ProtocolController
-from helpers.arduino import Arduino, CommandHandle
+from helpers.arduino import Arduino
 from helpers.reset_worker import ResetWorker
 from kneespa import KneeSpa
 from fixtures.controllers import make_window

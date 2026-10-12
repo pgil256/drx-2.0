@@ -149,7 +149,7 @@ class HardwareServiceDialog(QDialog):
         self.message.setMinimumHeight(42)
         root.addWidget(self.message)
         footer = QHBoxLayout()
-        self.close_button = DSButton("Close service", variant="dark")
+        self.close_button = DSButton("Close service", variant="secondary")
         self.close_button.setMinimumHeight(48)
         self.close_button.clicked.connect(self.reject)
         footer.addWidget(self.close_button)

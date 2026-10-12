@@ -8,7 +8,6 @@ from typing import TextIO, Tuple
 from unittest.mock import patch
 
 from config.config import Configuration
-from config.constants import CONFIG_PATH
 
 
 @pytest.fixture

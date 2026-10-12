@@ -1,0 +1,22 @@
+# Lint configuration (CI: "Lint" job; locally: `ruff check .`).
+#
+# Deliberately small. The Raspberry Pi runs Buster's Python 3.7, while the
+# tests and CI run a current Python, so the most useful thing a linter can do
+# here is refuse syntax the Pi cannot parse.
+target-version = "py37"
+
+extend-exclude = [
+    ".cache",
+    ".claude",
+    "development/backups",
+    "development/reference",
+    "devices/archive",
+    "devices/profiles",
+]
+
+[lint]
+select = [
+    "E9",     # syntax errors, including syntax newer than target-version
+    "F",      # pyflakes: undefined names, unused imports and variables
+    "FA102",  # `X | None` / `list[int]` annotations that fail on Python 3.7
+]

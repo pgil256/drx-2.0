@@ -4,7 +4,7 @@ from uuid import uuid4
 
 import pytest
 from PyQt5.QtCore import QPoint, Qt
-from PyQt5.QtWidgets import QLabel, QPushButton
+from PyQt5.QtWidgets import QPushButton
 
 from ui.modals.patient_editor import PatientEditor
 from ui.screens.treatment import SETTING_SPECS

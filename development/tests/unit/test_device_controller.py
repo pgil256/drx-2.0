@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 from PyQt5.QtCore import QEvent, Qt
-from PyQt5.QtWidgets import QApplication, QDialog, QMainWindow, QMessageBox
+from PyQt5.QtWidgets import QApplication, QMainWindow, QMessageBox
 
 from controllers import device_controller as module
 from helpers.service_auth import ServiceAccess
