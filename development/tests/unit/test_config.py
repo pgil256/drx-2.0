@@ -378,7 +378,7 @@ class TestAtomicWrite:
     @pytest.mark.parametrize("caller", ["defaults", "update"])
     def test_callers_keep_their_write_error_contracts(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
-        capsys: pytest.CaptureFixture[str], caller: str,
+        caplog: pytest.LogCaptureFixture, caller: str,
     ) -> None:
         """Initial defaults propagate errors; unrelated update_config keeps its contract."""
         cfg_path = tmp_path / "kneespa.cfg"
@@ -390,7 +390,7 @@ class TestAtomicWrite:
             raise OSError("disk full")
 
         monkeypatch.setattr("config.config.os.replace", fail_replace)
-        capsys.readouterr()
+        caplog.clear()
         if caller == "defaults":
             with pytest.raises(OSError, match="disk full"):
                 config._write_default_config()
@@ -399,9 +399,13 @@ class TestAtomicWrite:
             assert config.update_config() is None
             assert config.b_factor == 3720
             assert config.config["Options"]["b_factor"] == "3720"
-            output = capsys.readouterr().out
-            assert "disk full" in output
-            assert f'Fatal error, could not write config file to "{cfg_path}"' in output
+            errors = [
+                record.getMessage() for record in caplog.records
+                if record.name == "KneeSpa.config" and record.levelname == "ERROR"
+            ]
+            assert errors == [
+                "disk full", f'Fatal error, could not write config file to "{cfg_path}"',
+            ]
 
         assert cfg_path.read_bytes() == original
         assert not list(tmp_path.glob(".kneespa_cfg_*"))

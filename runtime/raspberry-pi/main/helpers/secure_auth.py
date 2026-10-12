@@ -6,11 +6,17 @@ This module provides secure authentication using environment variables.
 import os
 import hashlib
 import hmac
+import logging
 import secrets
 
+from config.constants import APP_NAME
 from config.paths import load_device_environment
 
 load_device_environment()
+
+# A plain child of the application logger: importing helpers.logging creates
+# the run's log files, which hashing a PIN from the command line must not do.
+logger = logging.getLogger(f"{APP_NAME}.auth")
 
 PBKDF2_ITERATIONS = 200_000
 PBKDF2_PREFIX = "pbkdf2_sha256"
@@ -19,7 +25,7 @@ PBKDF2_PREFIX = "pbkdf2_sha256"
 class SecureAuthHelper:
     def __init__(self):
         """Initialize secure authentication helper."""
-        print("SecureAuthHelper: Initializing secure authentication")
+        logger.info("SecureAuthHelper: Initializing secure authentication")
         self.users = self._load_secure_users()
 
     def _load_secure_users(self):
@@ -40,7 +46,7 @@ class SecureAuthHelper:
                 "email": os.getenv("ADMIN_EMAIL", "admin@example.com"),
                 "status": "admin"
             }
-            print("SecureAuthHelper: Loaded admin user from environment")
+            logger.info("SecureAuthHelper: Loaded admin user from environment")
 
         user_pin_hash = os.getenv("USER_PIN_HASH")
         user_pin = os.getenv("USER_PIN")
@@ -53,12 +59,14 @@ class SecureAuthHelper:
                 "email": os.getenv("USER_EMAIL", "user@example.com"),
                 "status": "user"
             }
-            print("SecureAuthHelper: Loaded regular user from environment")
+            logger.info("SecureAuthHelper: Loaded regular user from environment")
 
         # If no environment users are defined, fall back to CSV (for backwards compatibility)
         if not users:
-            print("SecureAuthHelper: WARNING - No users in environment, falling back to CSV")
-            print("SecureAuthHelper: For production, configure users in environment variables")
+            logger.warning("SecureAuthHelper: No users in environment, falling back to CSV")
+            logger.warning(
+                "SecureAuthHelper: For production, configure users in environment variables"
+            )
             return None  # Signal to use CSV fallback
 
         return users
