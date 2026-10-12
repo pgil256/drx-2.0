@@ -216,7 +216,7 @@ class SafetyMonitor:
         remain advisory; parser errors retain their command-failure handling.
         """
         window = self.window
-        print(f"FIRMWARE ERROR: {message}")
+        window.logger.error("FIRMWARE ERROR: %s", message)
 
         if message in ("Stop button pressed", "Stop button engaged"):
             self.on_physical_stop()
@@ -261,7 +261,7 @@ class SafetyMonitor:
                 try:
                     window.worker.cancel()
                 except Exception as e:
-                    print(f"Error flagging worker stop: {e}")
+                    window.logger.error("Error flagging worker stop: %s", e)
             fault = f"COMMAND REJECTED: {message}"
             window.treatment_panel.set_fault(fault)
             window.set_protocol_state("fault")
@@ -351,7 +351,6 @@ class SafetyMonitor:
 
     def on_pressure_released(self):
         """Firmware completed its autonomous post-fault pressure release."""
-        print("Firmware reports traction released")
         self.window.logger.info("Firmware reports traction released")
 
     def on_zeros_echo(self, a_zero, b_zero):
@@ -369,17 +368,16 @@ class SafetyMonitor:
                     f"Zero-mark mismatch: firmware applied A={a_zero} B={b_zero}, "
                     f"config has A={expected_a} B={expected_b}"
                 )
-                print(msg)
                 window.logger.error(msg)
                 window._show_timed_error(msg)
             else:
-                print(f"Zero marks verified: A={a_zero} B={b_zero}")
+                window.logger.info("Zero marks verified: A=%s B=%s", a_zero, b_zero)
         except Exception as e:
-            print(f"Error verifying zero marks: {e}")
+            window.logger.error("Error verifying zero marks: %s", e)
 
     def on_connection_lost(self):
         """Present connection loss as an advisory warning."""
-        print("Arduino connection lost")
+        self.window.logger.warning("Arduino connection lost")
         self._present_warning(
             "CONNECTION LOST. Use the physical emergency stop if motion "
             "must be interrupted."

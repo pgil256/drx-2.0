@@ -78,7 +78,7 @@ class AuthController:
     def handle_login(self, pin: str):
         """Validate a submitted PIN with persistent lockout protection."""
         window = self.window
-        print("Handling login")
+        self.logger.info("Handling login")
 
         # Lockout: a kiosk with a short numeric PIN and unlimited instant
         # retries is brute-forceable in minutes
@@ -100,7 +100,6 @@ class AuthController:
                 break
 
         if matched_user:
-            print("Login successful")
             self.logger.info(
                 "Login successful for user %r", matched_user.get("username")
             )
@@ -110,7 +109,6 @@ class AuthController:
             window.current_user = matched_user
             window.update_ui_after_login()
         else:
-            print("Login failed: Invalid PIN")
             self.failed_logins += 1
             self.logger.warning(
                 "Failed login attempt %d of %d",
