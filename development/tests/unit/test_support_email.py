@@ -76,9 +76,7 @@ def sent_message(run: SimpleNamespace):
     return message_from_string(run.server.sendmail.call_args[0][2], policy=policy.default)
 
 
-def test_message_and_transport_contract(
-    email_run: SimpleNamespace, capsys: pytest.CaptureFixture[str]
-) -> None:
+def test_message_and_transport_contract(email_run: SimpleNamespace) -> None:
     run = email_run
     deliver = queue_ticket(run)
     ticket = run.window._pending_support_ticket[1]
@@ -105,7 +103,7 @@ def test_message_and_transport_contract(
     assert str(message["Subject"]) == ticket["subject"]
     assert message.get_content() == ticket["body"]
     success = f"Ticket sent. Request reference: {ticket['reference']}."
-    assert capsys.readouterr().out == success + "\n"
+    run.window.logger.info.assert_called_once_with("%s", success)
     run.window.support_email_result.emit.assert_called_once_with(True, success)
     run.window.config.ensure_device_id.assert_called_once_with()
     assert run.server.method_calls == [
@@ -145,7 +143,7 @@ def test_worker_start_failure_leaves_support_retryable(email_run):
 
 @pytest.mark.parametrize("missing", ["SENDER_EMAIL", "SENDER_PASSWORD", "TICKET_EMAIL"])
 def test_missing_credentials_log_without_connecting(
-    email_run: SimpleNamespace, missing: str, capsys: pytest.CaptureFixture[str],
+    email_run: SimpleNamespace, missing: str,
 ) -> None:
     run = email_run
     run.settings[missing] = ""
@@ -154,13 +152,12 @@ def test_missing_credentials_log_without_connecting(
     run.smtp.assert_not_called()
     diagnostic = f"{FAILURE_PREFIX}: SMTP credentials are not configured"
     run.window.logger.error.assert_called_once_with(diagnostic)
-    assert diagnostic in capsys.readouterr().out
     assert run.window.support_email_result.emit.call_args[0][0] is False
 
 
 @pytest.mark.parametrize("stage", ["connect", "enter", "login", "sendmail", "exit"])
 def test_smtp_failures_are_logged_by_the_worker(
-    email_run: SimpleNamespace, stage: str, capsys: pytest.CaptureFixture[str],
+    email_run: SimpleNamespace, stage: str,
 ) -> None:
     run = email_run
     operation = {
@@ -175,9 +172,7 @@ def test_smtp_failures_are_logged_by_the_worker(
 
     diagnostic = f"{FAILURE_PREFIX}: {stage} failed"
     run.window.logger.error.assert_called_once_with(diagnostic)
-    output = capsys.readouterr().out
-    assert diagnostic in output
-    assert "Ticket sent" not in output
+    run.window.logger.info.assert_not_called()
     if stage in ("connect", "enter", "login"):
         run.server.sendmail.assert_not_called()
     assert run.window.support_email_result.emit.call_args[0][0] is False

@@ -148,8 +148,8 @@ class KneeSpa(QMainWindow):
         self.I2Cstatus_event.clear()
         if not KneeSpa._send_motion_command(self, command, "axial movement"):
             return False
-        print("Sent cmd {}".format(command.strip()))
-        print("End set to distance")
+        self.logger.debug("Sent cmd %s", command.strip())
+        self.logger.debug("End set to distance")
         return True
 
     def set_to_c_distance(self, degrees):
@@ -166,22 +166,22 @@ class KneeSpa(QMainWindow):
                 self.config.CMarks, degrees
             )
 
-            print(f" positioned to {degrees} degrees pos {position}")
+            self.logger.debug(" positioned to %s degrees pos %s", degrees, position)
             command = f"K{position}"
             self.I2Cstatus_event.clear()
             if not KneeSpa._send_motion_command(self, command, "lateral movement"):
                 return False
-            print(f"cmd {command}")
+            self.logger.debug("cmd %s", command)
 
-            print("End set to c.")
+            self.logger.debug("End set to c.")
             self.loading_spinner.hide()
             return True
 
         except Exception as e:
             self.loading_spinner.hide()
-            print(f"Error in set_to_c_distance: {str(e)}")
-            print(f"Degrees: {degrees}, Type: {type(degrees)}")
-            print(f"CMarks: {self.config.CMarks}")
+            self.logger.error("Error in set_to_c_distance: %s", e)
+            self.logger.error("Degrees: %s, Type: %s", degrees, type(degrees))
+            self.logger.error("CMarks: %s", self.config.CMarks)
             return False
 
     ### App Initialization ####
@@ -189,8 +189,8 @@ class KneeSpa(QMainWindow):
         super().__init__()
 
         self.logger = setup_logger(component="KneeSpa")
-        print(
-            f"Initializing KneeSpa class in {'debug' if debug_mode else 'production'} mode"
+        self.logger.info(
+            "Initializing KneeSpa class in %s mode", "debug" if debug_mode else "production"
         )
         # The order is load-bearing: controllers need the shell; the patient
         # and machine-sign-in controllers need cloud_client and the login
@@ -281,9 +281,9 @@ class KneeSpa(QMainWindow):
             # fullscreen always matches the display exactly.
             self.setMinimumSize(1, 1)
             self.showFullScreen()
-            print("Production mode: Set to full screen without frame")
+            self.logger.info("Production mode: Set to full screen without frame")
         else:
-            print("Debug mode: Running in windowed mode")
+            self.logger.info("Debug mode: Running in windowed mode")
 
         self.loading_spinner = LoadingSpinner(
             parent=self,
@@ -323,10 +323,10 @@ class KneeSpa(QMainWindow):
         try:
             self.csv.initialize_data()
             self.users = self.csv.users
-            print(SUCCESS_MESSAGES["DATA_LOADED"])
+            self.logger.info("%s", SUCCESS_MESSAGES["DATA_LOADED"])
         except Exception as e:
             self.users = {}
-            print(f"Error loading CSV data: {str(e)}")
+            self.logger.error("Error loading CSV data: %s", e)
             self._show_timed_error(f"Failed to load CSV data: {str(e)}")
         self.current_user = None
 
@@ -360,7 +360,9 @@ class KneeSpa(QMainWindow):
         self.shell.treatment.set_settings(self.config.protocol_defaults())
 
         self.threadpool = QtCore.QThreadPool()
-        print(f"Multithreading with maximum {self.threadpool.maxThreadCount()} threads")
+        self.logger.info(
+            "Multithreading with maximum %s threads", self.threadpool.maxThreadCount()
+        )
 
         # Wire the view's signals/setters to the backend, then start hardware.
         self._connect_shell()
@@ -528,7 +530,7 @@ class KneeSpa(QMainWindow):
             return
         self.actuator_command_in_progress = False
         if self.protocol_running == False:
-            print("Scheduling controls to enable with delay...") # Add for debugging
+            self.logger.debug("Scheduling controls to enable with delay...")
             # Single timer instance shared by all controls: a new enable
             # request supersedes any pending one instead of stacking
             # per-widget timers that can interleave with a later disable
@@ -757,7 +759,7 @@ class KneeSpa(QMainWindow):
         # "duration" is a pre-run parameter — the Treatment screen locks its
         # slider during an active run, so it is deliberately NOT adjusted live
         # here (a mid-run shorten could silently end the treatment).
-        print(f"Mid-protocol: worker {key} updated to {value}")
+        self.logger.info("Mid-protocol: worker %s updated to %s", key, value)
 
     def _seed_modern_run_inputs(self):
         """Snapshot the modern Settings sliders for the controllers and the
@@ -913,7 +915,7 @@ class KneeSpa(QMainWindow):
                 return self._apply_setup_pressure()
             return True
         except Exception as e:
-            print(f"Error in Setup Go: {str(e)}")
+            self.logger.error("Error in Setup Go: %s", e)
             self._show_timed_error(f"Error moving actuator: {str(e)}")
         finally:
             self.loading_spinner.hide()
@@ -936,7 +938,7 @@ class KneeSpa(QMainWindow):
             self, "P{}".format(pressure), "pressure movement"
         ):
             return False
-        print("Pressure cmd sent P{}".format(pressure))
+        self.logger.info("Pressure cmd sent P%s", pressure)
         # This is a target, not measured pressure. The live readout is updated
         # only by status_emit feedback.
         self._reflect_setup("pressure", pressure)
@@ -981,7 +983,6 @@ class KneeSpa(QMainWindow):
                 f"Motor speed: {vals['motor_speed']:g}%."
             )
         except Exception as e:
-            print(f"Failed to save defaults: {e}")
             self.logger.error("Failed to save defaults: %s", e)
             self._show_timed_error("Could not save defaults.")
 
@@ -1004,7 +1005,7 @@ class KneeSpa(QMainWindow):
     def _on_logout(self):
         if self._block_active_treatment_exit():
             return
-        print("Handling logout")
+        self.logger.info("Handling logout")
         self.machine_sign_in.clear()
         self.patients.clear_session()
         self.current_user = None
@@ -1018,7 +1019,7 @@ class KneeSpa(QMainWindow):
         """Exit App from the Profile screen — full cleanup via closeEvent."""
         if self._block_active_treatment_exit():
             return
-        print("Handling app exit")
+        self.logger.info("Handling app exit")
         self.close()
 
     def _on_restart_app(self) -> None:
@@ -1034,7 +1035,7 @@ class KneeSpa(QMainWindow):
     def update_ui_after_login(self):
         """Update user interface with user details after login (modern shell:
         close the modal, set the user chip, and go to the Treatment screen)."""
-        print("Updating UI after login")
+        self.logger.info("Updating UI after login")
         self.machine_sign_in.clear()
         self.shell.set_access_role(None)
         self.patients.clear_session()
@@ -1095,7 +1096,7 @@ class KneeSpa(QMainWindow):
 
     def _on_video_toggled(self, playing):
         # The VideoModal owns the embedded VLC player; this is just telemetry.
-        print(f"Video play toggled: {playing}")
+        self.logger.info("Video play toggled: %s", playing)
 
     def _send_support_email(
         self, *, subject: str, body: str, receiver_email: str,
@@ -1128,11 +1129,10 @@ class KneeSpa(QMainWindow):
                 with smtplib.SMTP_SSL(smtp_server, smtp_port, timeout=15) as server:
                     server.login(sender_email, sender_password)
                     server.sendmail(sender_email, receiver_email, message.as_string())
-                print(success_message)
+                self.logger.info("%s", success_message)
                 if signal is not None:
                     signal.emit(True, success_message)
             except Exception as e:
-                print(f"{failure_prefix}: {e}")
                 self.logger.error(f"{failure_prefix}: {e}")
                 if signal is not None:
                     signal.emit(False, "Request not sent. Check the connection or contact your administrator.")
@@ -1192,7 +1192,6 @@ class KneeSpa(QMainWindow):
         Device-originated safety notices are warnings rather than emergency
         stops, so they use the orange warning icon and title.
         """
-        print(f"SAFETY ALERT: {message}")
         self.logger.error(f"Safety alert: {message}")
         # Coalesce: a fault cascade (protocol abort -> firmware ERROR from
         # the same event) used to stack a second modal on top of the first;
@@ -1305,14 +1304,14 @@ class KneeSpa(QMainWindow):
         tested). Only the UI feedback is rerouted to the modern Setup screen.
         """
         if self.actuator_command_in_progress:
-            print("Actuator command already in progress - ignoring input")
+            self.logger.info("Actuator command already in progress - ignoring input")
             return
         if not self.config.marks_valid:
             # Generated default marks are fabricated geometry; jogging on
             # them moves the mechanism to unintended positions
             self._warn_uncalibrated()
             return
-        print(f"Speed factor: {speed_factor}")
+        self.logger.debug("Speed factor: %s", speed_factor)
         if actuator == self.actuator_b:  # Horizontal Flexion
             step = 10 if int(speed_factor) > 4 else 5
             new_position = self.horizontal_flexion_position + (step * direction)
@@ -1336,7 +1335,7 @@ class KneeSpa(QMainWindow):
                 return False
 
             self.horizontal_flexion_position = new_position
-            print(f"B position: {self.horizontal_flexion_position}")
+            self.logger.info("B position: %s", self.horizontal_flexion_position)
 
             self._reflect_setup("horizontal", self.horizontal_flexion_position)
             self.loading_spinner.hide()
@@ -1368,12 +1367,12 @@ class KneeSpa(QMainWindow):
                     self.loading_spinner.hide()
                     self.enable_actuator_controls()
                     return False
-            print(f"Sending axial command: {command}")
+            self.logger.info("Sending axial command: %s", command)
             if not KneeSpa._send_motion_command(self, command, "axial movement"):
                 return False
             self.axial_flexion_position = new_position
-            print(f"A position: {self.axial_flexion_position}")
-            print(f"Axial flexion position: {self.axial_flexion_position} in")
+            self.logger.info("A position: %s", self.axial_flexion_position)
+            self.logger.info("Axial flexion position: %s in", self.axial_flexion_position)
 
             # Removed problematic L5 command that was sent without proper parameters
             # This was causing malformed commands after forward axial movement
@@ -1411,13 +1410,13 @@ class KneeSpa(QMainWindow):
                     self.config.CMarks, new_position
                 )
             except ValueError as e:
-                print(f"Invalid lateral position: {e}")
+                self.logger.error("Invalid lateral position: %s", e)
                 self.enable_actuator_controls()
                 self.loading_spinner.hide()
                 return
 
-            print(
-                f" positioned to {new_position} degrees pos {position}"
+            self.logger.info(
+                " positioned to %s degrees pos %s", new_position, position
             )
 
             # Send command to Arduino
@@ -1435,7 +1434,7 @@ class KneeSpa(QMainWindow):
     def reset_flexion_button_clicked(self, actuator):
         self.loading_spinner.show()
         self.disable_actuator_controls()
-        print(actuator)
+        self.logger.debug("%s", actuator)
         if actuator == self.actuator_c:
             # Tolerant lookup (same as the horizontal branch): a hand-edited
             # CMarks without an exact "0.0" key raised KeyError out of this
@@ -1443,11 +1442,11 @@ class KneeSpa(QMainWindow):
             try:
                 position, _ = lateral_degrees_to_position(self.config.CMarks, 0)
             except ValueError as e:
-                print(f"Invalid lateral position: {e}")
+                self.logger.error("Invalid lateral position: %s", e)
                 self.enable_actuator_controls()
                 self.loading_spinner.hide()
                 return
-            print(f" positioned to 0 degrees pos {position}")
+            self.logger.info(" positioned to 0 degrees pos %s", position)
             command = f"I14{position}"
             if not KneeSpa._send_motion_command(self, command, "lateral reset"):
                 return False
@@ -1467,7 +1466,7 @@ class KneeSpa(QMainWindow):
                     self.config.BMarks, DEFAULT_HORIZONTAL_POSITION
                 )
             except ValueError as e:
-                print(f"Invalid horizontal position: {e}")
+                self.logger.error("Invalid horizontal position: %s", e)
                 self.enable_actuator_controls()
                 self.loading_spinner.hide()
                 return
@@ -1496,7 +1495,7 @@ class KneeSpa(QMainWindow):
 
     def stop_actuators(self):
         """Emergency stop for all actuators."""
-        print("Emergency stop triggered")
+        self.logger.warning("Emergency stop triggered")
         self.connection.cancel_reset()
         try:
             if not self.arduino.send("X"):  # Stop all movement
@@ -1509,7 +1508,7 @@ class KneeSpa(QMainWindow):
                     "Press the physical emergency stop immediately."
                 )
         except Exception as e:
-            print(f"Error in emergency stop: {str(e)}")
+            self.logger.error("Error in emergency stop: %s", e)
             self._show_timed_error(f"Emergency stop failed: {str(e)}")
 
     def stop_position_flexion_button(self, actuator):
@@ -1657,7 +1656,7 @@ class KneeSpa(QMainWindow):
                     "From calibration" if reading is not None else "Check calibration",
                 )
         except Exception as e:
-            print(f"Error updating live status: {e}")
+            self.logger.error("Error updating live status: %s", e)
         return self.safety.on_status(position_a, position_b, steps, pressure)
 
     def on_sensor_diagnostics(self, diagnostics: dict) -> None:
@@ -1717,7 +1716,7 @@ class KneeSpa(QMainWindow):
 
     def _show_timed_error(self, message):
         """Show error message that automatically closes after a timeout."""
-        print(f"Status emit error: {message}")
+        self.logger.warning("Status emit error: %s", message)
 
         # Create the error dialog
         msg_box = QMessageBox(self)
@@ -1763,7 +1762,7 @@ class KneeSpa(QMainWindow):
 
     def setup_timers(self):
         """Setup timers for protocol events."""
-        print("Setting up timers for protocol events")
+        self.logger.info("Setting up timers for protocol events")
         self.protocol_timer = QTimer(self)
         # QTimer defaults to 0 ms. The controller's start() relied on a
         # dialog-gated start(1000) that never ran on the modern UI, so the
@@ -1783,16 +1782,16 @@ class KneeSpa(QMainWindow):
 
     def setup_gpio(self):
         """Setup GPIO pins with proper error handling."""
-        print("Initializing GPIO setup process")
+        self.logger.info("Initializing GPIO setup process")
         try:
             # Initialize GPIO helper
-            print("Setting GPIO mode to BCM")
+            self.logger.debug("Setting GPIO mode to BCM")
             GPIO.setmode(GPIO.BCM)
 
-            print("Disabling GPIO warnings")
+            self.logger.debug("Disabling GPIO warnings")
             GPIO.setwarnings(False)
 
-            print(
+            self.logger.debug(
                 "Setting up GPIO pins for EMERGENCYSTOP, EXTRAFORWARD, EXTRABACKWARD, and EXTRAENABLE"
             )
             GPIO.setup(EMERGENCYSTOP, GPIO.OUT)
@@ -1800,13 +1799,13 @@ class KneeSpa(QMainWindow):
             GPIO.setup(EXTRABACKWARD, GPIO.OUT)
             GPIO.setup(EXTRAENABLE, GPIO.OUT)
 
-            print("Configuring default GPIO states")
+            self.logger.debug("Configuring default GPIO states")
             GPIO.output(EMERGENCYSTOP, GPIO.HIGH)
             GPIO.output(EXTRAENABLE, GPIO.HIGH)
 
-            print("GPIO setup completed successfully")
+            self.logger.info("GPIO setup completed successfully")
         except Exception as e:
-            print(f"GPIO setup failed with error: {str(e)}")
+            self.logger.error("GPIO setup failed with error: %s", e)
             raise
 
 
@@ -1893,8 +1892,8 @@ def main():
     log_setup = LoggerSetup()
     log_setup.start_console_capture()
     try:
-        print(f"Application started at {datetime.now()}")
-        print(f"Debug mode: {'enabled' if args.debug else 'disabled'}")
+        log_setup.logger.info("Application started at %s", datetime.now())
+        log_setup.logger.info("Debug mode: %s", "enabled" if args.debug else "disabled")
 
         app = QApplication(sys.argv)
         app.setStyle("Fusion")
@@ -1903,9 +1902,11 @@ def main():
         try:
             from ui.theme import apply_theme
             theme_info = apply_theme(app)
-            print(f"Theme applied: {theme_info}")
+            log_setup.logger.info("Theme applied: %s", theme_info)
         except Exception as theme_err:
-            print(f"Theme not applied, continuing with default style: {theme_err}")
+            log_setup.logger.warning(
+                "Theme not applied, continuing with default style: %s", theme_err
+            )
 
         window = KneeSpa(debug_mode=args.debug, config_path=args.config)
         window._release_install_enabled = True
