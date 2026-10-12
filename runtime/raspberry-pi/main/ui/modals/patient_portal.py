@@ -5,9 +5,9 @@ from urllib.parse import urlsplit
 
 from PyQt5.QtCore import Qt
 from PyQt5.QtGui import QPainter, QPixmap
-from PyQt5.QtWidgets import QDialog, QLabel, QVBoxLayout, QWidget
+from PyQt5.QtWidgets import QLabel, QWidget
 
-from ui.widgets.ds import DSButton
+from ui.widgets.ds import DSButton, DSDialog
 from ui.widgets.ds._common import sans_font
 
 
@@ -56,7 +56,7 @@ def portal_qr_pixmap(url: str) -> QPixmap:
     return pixmap
 
 
-class PatientPortal(QDialog):
+class PatientPortal(DSDialog):
     """Show the registration link, then return to explicit patient PIN entry."""
 
     INSTRUCTIONS = (
@@ -65,21 +65,14 @@ class PatientPortal(QDialog):
     )
 
     def __init__(self, parent: Optional[QWidget] = None) -> None:
-        super().__init__(parent)
-        self.setWindowTitle("Add patient in clinician app")
-        self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
-        self.setFixedWidth(640)
-        layout = QVBoxLayout(self)
-        layout.setContentsMargins(28, 24, 28, 24)
+        super().__init__(parent, title="Add patient in clinician app", width=640)
+        layout = self.body_layout
+        layout.setContentsMargins(28, 20, 28, 20)
         layout.setSpacing(16)
-        title = QLabel("Add patient in clinician app")
-        title.setFont(sans_font(size=24, weight=600))
-        title.setAlignment(Qt.AlignCenter)
-        layout.addWidget(title)
         self._instructions = QLabel(self.INSTRUCTIONS)
         self._instructions.setWordWrap(True)
         self._instructions.setAlignment(Qt.AlignCenter)
-        self._instructions.setFont(sans_font(size=18))
+        self._instructions.setFont(sans_font(size="--text-base"))
         layout.addWidget(self._instructions)
         self._qr = QLabel()
         self._qr.setFixedSize(320, 320)
@@ -89,17 +82,17 @@ class PatientPortal(QDialog):
         self._address.setTextFormat(Qt.PlainText)
         self._address.setWordWrap(True)
         self._address.setAlignment(Qt.AlignCenter)
-        self._address.setFont(sans_font(size=16))
+        self._address.setFont(sans_font(size="--text-sm"))
         layout.addWidget(self._address)
         self._status = QLabel()
         self._status.setTextFormat(Qt.PlainText)
         self._status.setWordWrap(True)
         self._status.setAlignment(Qt.AlignCenter)
-        self._status.setFont(sans_font(size=18))
+        self._status.setFont(sans_font(size="--text-base"))
         layout.addWidget(self._status)
         self._back = DSButton("Back to patient PIN", full_width=True)
         self._back.clicked.connect(self.accept)
-        layout.addWidget(self._back)
+        self.add_action(self._back, 1)
 
     def set_portal_url(self, value: str) -> None:
         """Replace previous content; never display an unvalidated address."""

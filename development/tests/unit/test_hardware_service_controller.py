@@ -321,7 +321,7 @@ def test_tests_and_calibration_open_only_through_the_service_visit(service):
     unlocked[0] = True
     c.open_tests()
     requests.pop()(dict(w.current_user))
-    assert c.dialog.windowTitle() == "Hardware Tests"
+    assert c.dialog.windowTitle() == "Hardware tests"
     c.timer.stop()
     c.shutdown()
     c.open()
