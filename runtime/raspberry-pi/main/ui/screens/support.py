@@ -55,7 +55,7 @@ class _FailureItem(QFrame):
             "QPushButton { text-align: left; border: none; background: transparent;"
             " padding: 12px 18px; }"
             f" QPushButton:hover {{ background: {resolve('--gray-050')}; }}"
-            f" QPushButton:focus {{ border: 3px solid {resolve('--border-focus')}; }}"
+            f" QPushButton[keyboardFocus=\"true\"]:focus {{ border: 3px solid {resolve('--border-focus')}; }}"
         )
         hlay = QHBoxLayout(self._header)
         hlay.setContentsMargins(18, 12, 18, 12)
@@ -94,7 +94,7 @@ class _FailureItem(QFrame):
             "QPushButton { text-align: left; border: none; padding: 12px 18px;"
             f" background: {resolve('--gray-050') if self._open else 'transparent'}; }}"
             f" QPushButton:hover {{ background: {resolve('--gray-050')}; }}"
-            f" QPushButton:focus {{ border: 3px solid {resolve('--border-focus')}; }}"
+            f" QPushButton[keyboardFocus=\"true\"]:focus {{ border: 3px solid {resolve('--border-focus')}; }}"
         )
         if self._open:
             self.activated.emit(self._question)

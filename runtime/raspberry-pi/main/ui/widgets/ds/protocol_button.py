@@ -75,7 +75,7 @@ class DSProtocolButton(QPushButton):
             f"#DSProtocolButton {{ background: {bg}; border: 2px solid {border};"
             f" border-radius: {resolve('--radius-md')}; }}"
             f"#DSProtocolButton:hover:enabled {{ border-color: {primary}; }}"
-            f"#DSProtocolButton:focus {{ border: 3px solid {resolve('--ink-900')}; }}"
+            f"#DSProtocolButton[keyboardFocus=\"true\"]:focus {{ border: 3px solid {resolve('--ink-900')}; }}"
             f"#DSProtocolButton:pressed {{ border: 3px solid {resolve('--ink-900')}; }}"
             f" QLabel {{ color: {fg}; background: transparent; }}"
         )
