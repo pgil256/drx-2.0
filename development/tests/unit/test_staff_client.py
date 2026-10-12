@@ -22,7 +22,8 @@ def staff_server():
 
         def handle_request(self):
             body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
-            path = self.path.removeprefix("/api/v1/admin")
+            assert self.path.startswith("/api/v1/admin")
+            path = self.path[len("/api/v1/admin"):]
             state["requests"].append((self.command, path, dict(self.headers), body))
             status, result, cookies = 200, {"ok": True}, []
             if state["reject"]:

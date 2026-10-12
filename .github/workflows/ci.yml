@@ -142,10 +142,15 @@ jobs:
           python -m pip install --upgrade pip
           pip install -r development/requirements-test.txt
 
+      # The container runs as root, and the firmware flash script refuses root
+      # by design, so the suite runs as an ordinary user like the 3.12 job.
       - name: Run pytest
         env:
           QT_QPA_PLATFORM: offscreen
-        run: python -m pytest -q
+        run: |
+          useradd --create-home tester
+          chown -R tester .
+          runuser -u tester -- python -m pytest -q
 
   # Hermetic: system g++ + the vendored Unity framework in
   # development/tests/firmware/unity/,
