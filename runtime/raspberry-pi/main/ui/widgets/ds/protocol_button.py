@@ -31,6 +31,7 @@ class DSProtocolButton(QPushButton):
 
         self._name = QLabel(str(name).upper(), self)
         self._name.setFont(sans_font(size="--text-2xs", weight=600, tracking=0.03))
+        self._name.setProperty("dsCaption", True)
         self._name.setAlignment(Qt.AlignCenter)
         self._name.setAttribute(Qt.WA_TransparentForMouseEvents, True)
 

@@ -35,6 +35,7 @@ class DSBadge(QFrame):
         self._label = QLabel(text, self)
         # text-xs / weight 600 / tracking-wide
         self._label.setFont(sans_font(size="--text-xs", weight=600, tracking=0.03))
+        self._label.setProperty("dsCaption", True)
         lay.addWidget(self._dot)
         lay.addWidget(self._label)
 

@@ -44,6 +44,7 @@ def eyebrow(text, parent=None):
     """Uppercase, letter-spaced, muted section caption (the DS T_EYEBROW)."""
     lbl = QLabel(text.upper(), parent)
     lbl.setFont(sans_font(size="--text-xs", weight=600, tracking=0.06))
+    lbl.setProperty("dsCaption", True)
     lbl.setStyleSheet(f"color: {resolve('--gray-600')}; background: transparent;")
     return lbl
 
