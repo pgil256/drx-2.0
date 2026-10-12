@@ -81,4 +81,4 @@ def test_incomplete_firmware_flash_blocks_reset():
     connection = ConnectionManager(window)
     connection.reset_arduino()
     window.threadpool.start.assert_not_called()
-    assert "recovery" in window._show_timed_error.call_args.args[0]
+    assert "recovery" in window._show_timed_error.call_args[0][0]

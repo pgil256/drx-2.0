@@ -218,7 +218,7 @@ def test_patient_starts_only_after_recheck_and_completion_clears_session(sign_in
     w.worker.signals.finished.emit(True)
     assert not controller.client.token and w.current_user is None
     assert w.protocol._session.patient_id == frozen
-    record = w.cloud_client.post_treatment_async.call_args.args[0]
+    record = w.cloud_client.post_treatment_async.call_args[0][0]
     assert record["patient_id"] == frozen
     assert "machine_session" not in record
 

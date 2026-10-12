@@ -21,7 +21,7 @@ def test_ramp_does_not_repeat_completed_waypoints(start, target, commands):
     worker = make_protocol(acknowledge=True, max_pressure=target)
     worker.is_running = True
     assert worker.run_pressure_sequence(start, target)
-    assert [c.args[0] for c in worker.arduino.send.call_args_list] == commands
+    assert [c[0][0] for c in worker.arduino.send.call_args_list] == commands
 
 @pytest.mark.parametrize("reply", ["none", "done", "typed", "wrong_kind", "wrong_target"])
 def test_pressure_cannot_complete_without_matching_evidence_and_ack(protocol_clock, reply):

@@ -53,11 +53,11 @@ def test_stop_cancels_new_motion_before_delayed_cleanup(
     assert worker._send_command("K1800") is False
     arduino._service_tx_queue()
     assert old_motion.result == "CANCELLED"
-    assert [c.args[0] for c in arduino.serial_com.write.call_args_list] == [b"X\n"]
+    assert [c[0][0] for c in arduino.serial_com.write.call_args_list] == [b"X\n"]
 
     callbacks[0]()  # The delayed release still runs after immediate cancellation.
     arduino._service_tx_queue()
-    writes = [c.args[0] for c in arduino.serial_com.write.call_args_list]
+    writes = [c[0][0] for c in arduino.serial_com.write.call_args_list]
     assert writes[-1] == b"P0\n"
     assert not any(command.startswith(b"K") for command in writes)
 
@@ -122,7 +122,7 @@ def test_shutdown_discards_manual_motion_before_draining(
     window._cloud_close_thread.join(timeout=1)
     assert KneeSpa.cleanup(window)
 
-    writes = [c.args[0] for c in serial.write.call_args_list]
+    writes = [c[0][0] for c in serial.write.call_args_list]
     assert writes == ([] if physical_stop else [b"X\n", b"P0\n", b"HF0\n"])
     assert queued_motion.result == "CANCELLED"
     assert window.arduino is None

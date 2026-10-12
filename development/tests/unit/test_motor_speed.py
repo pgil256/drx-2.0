@@ -82,7 +82,7 @@ def test_missing_firmware_ack_prevents_treatment(monkeypatch):
     assert finished == [False]
     assert "motor speeds" in errors[0]
     worker.protocol_1.assert_not_called()
-    assert all(not c.args[0].startswith("P") for c in worker.arduino.send.call_args_list)
+    assert all(not c[0][0].startswith("P") for c in worker.arduino.send.call_args_list)
 
 
 def test_stop_interrupts_speed_wait():

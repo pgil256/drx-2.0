@@ -292,12 +292,12 @@ def test_http_request_headers_timeout_and_no_redirect(monkeypatch):
     build = MagicMock(return_value=opener)
     monkeypatch.setattr("helpers.cloud_client.build_opener", build)
     c.ping()
-    request = opener.open.call_args.args[0]
+    request = opener.open.call_args[0][0]
     assert request.full_url == "https://cloud.example/api/v1/device/ping"
     assert request.get_header("Authorization") == "Bearer t"
     assert request.get_header("X-device-id") == "d"
-    assert opener.open.call_args.kwargs["timeout"] == 10
-    redirect = build.call_args.args[0]
+    assert opener.open.call_args[1]["timeout"] == 10
+    redirect = build.call_args[0][0]
     assert redirect.redirect_request(None, None, 302, "", {}, "https://elsewhere") is None
 
 

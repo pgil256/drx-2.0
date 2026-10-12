@@ -22,10 +22,10 @@ def test_volume_uses_default_sink_and_reads_back(settings, monkeypatch):
     monkeypatch.setattr(settings, "_run", run)
     assert settings.read("volume")[0] == 42
     assert settings.write("volume", 60)[0] == 61
-    assert run.call_args_list[2].args[0] == [
+    assert run.call_args_list[2][0][0] == [
         "pactl", "set-sink-volume", "@DEFAULT_SINK@", "60%",
     ]
-    assert run.call_args_list[3].args[0] == ["pactl", "set-sink-mute", "@DEFAULT_SINK@", "0"]
+    assert run.call_args_list[3][0][0] == ["pactl", "set-sink-mute", "@DEFAULT_SINK@", "0"]
 
 
 def test_volume_falls_back_to_alsa_and_detects_mute(settings, monkeypatch):
@@ -68,6 +68,6 @@ def test_commands_have_timeout_and_do_not_use_shell(monkeypatch):
     run = Mock(return_value=SimpleNamespace(stdout="result"))
     monkeypatch.setattr(module.subprocess, "run", run)
     assert module.DeviceSettings._run(["amixer", "sget", "PCM"]) == "result"
-    assert run.call_args.kwargs == {
+    assert run.call_args[1] == {
         "check": True, "capture_output": True, "text": True, "timeout": 3,
     }

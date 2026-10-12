@@ -37,7 +37,7 @@ class TestCloudLookupResult:
         stub = make_stub()
         stub.protocol_running = False
         KneeSpa._on_cloud_lookup_done(stub, 0, ["not", "a", "patient"])
-        assert "Cloud unavailable" in stub.shell.treatment.set_patient_error.call_args.args[0]
+        assert "Cloud unavailable" in stub.shell.treatment.set_patient_error.call_args[0][0]
         assert stub.cloud_patient is None
 
     def test_garbage_setting_rejects_entire_patient_plan(self):
@@ -561,7 +561,7 @@ class TestSupport:
         stub._send_support_email = MagicMock()
         KneeSpa._on_submit_ticket(stub, {})
         stub._send_support_email.assert_not_called()
-        assert stub.shell.support.set_delivery_state.call_args.args[0] == "invalid"
+        assert stub.shell.support.set_delivery_state.call_args[0][0] == "invalid"
 
 
 # ----- live telemetry (medical-device "telemetry updates live") -----

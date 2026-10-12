@@ -22,7 +22,7 @@ def test_upload_failure_alerts_once_and_retries_without_losing_record(tmp_path, 
     monkeypatch.setattr(client, "post_treatment", post)
     client.post_treatment_async(record, path).result(timeout=3)
     errors.assert_called_once()
-    message, manual_retry = errors.call_args.args
+    message, manual_retry = errors.call_args[0]
     assert "saved on this device" in message and "retry automatically" in message
     assert manual_retry is False
     client.retry_pending(path)
@@ -48,7 +48,7 @@ def test_disk_failure_does_not_claim_record_is_saved(tmp_path, monkeypatch):
     monkeypatch.setattr(client, "post_treatment", post)
     client.post_treatment_async({"client_record_id": str(uuid4())},
                                 str(tmp_path / "pending.json")).result(timeout=3)
-    message, can_retry = errors.call_args.args
+    message, can_retry = errors.call_args[0]
     assert "could not be saved" in message
     assert "is saved" not in message
     assert not can_retry
@@ -64,6 +64,6 @@ def test_rejected_upload_is_saved_and_has_manual_recovery(tmp_path, monkeypatch)
     })
     client.post_treatment_async({"client_record_id": str(uuid4())},
                                 str(tmp_path / "pending.json")).result(timeout=3)
-    assert errors.call_args.args[1] is True
-    assert "saved on this device" in errors.call_args.args[0]
+    assert errors.call_args[0][1] is True
+    assert "saved on this device" in errors.call_args[0][0]
     client.close()

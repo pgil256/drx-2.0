@@ -117,8 +117,8 @@ class TestConfirmLeaveTreatment:
 
         assert pc.confirm_leave_treatment("protocols", "home") is expected
         warning.assert_called_once()
-        assert warning.call_args.args[1] == "Caution"
-        assert warning.call_args.args[2].startswith("Caution:")
+        assert warning.call_args[0][1] == "Caution"
+        assert warning.call_args[0][2].startswith("Caution:")
 
     @pytest.mark.parametrize("state", ["idle", "fault"])
     def test_allows_without_warning_when_inactive(self, controller, state, monkeypatch):
@@ -203,7 +203,7 @@ class TestStartGates:
         w.protocol_timer.start.assert_not_called()
         w.ensure_arduino_connection.assert_called_once()
         w.threadpool.start.assert_called_once_with(worker_cls.return_value)
-        prepared = worker_cls.return_value.signals.prepared.connect.call_args.args[0]
+        prepared = worker_cls.return_value.signals.prepared.connect.call_args[0][0]
         prepared(1000, 2000)
         assert w.protocol_state == "running"
         w.shell.treatment.set_busy.assert_called_with(False)
@@ -314,8 +314,8 @@ class TestStartProtocolGates:
         monkeypatch.setattr(protocols_module, "Protocols", worker_cls)
         pc.start_protocol()
         worker = worker_cls.return_value
-        failure = worker.signals.operation_failed.connect.call_args.args[0]
-        finished = worker.signals.finished.connect.call_args.args[0]
+        failure = worker.signals.operation_failed.connect.call_args[0][0]
+        finished = worker.signals.finished.connect.call_args[0][0]
         assert failure.func == pc._on_operation_failed
         assert finished.func == pc.protocol_completed
         assert failure.keywords["session"] is pc._session
@@ -347,7 +347,7 @@ class TestTreatmentWiring:
         assert pc.start_protocol()
         w.protocol_timer.start.assert_not_called()
         w.threadpool.start.assert_called_once_with(worker)
-        prepared = worker.signals.prepared.connect.call_args.args[0]
+        prepared = worker.signals.prepared.connect.call_args[0][0]
         prepared(1000, 2000)
         w.protocol_timer.start.assert_called_once()
         assert w.protocol_start_time == 1000
@@ -688,7 +688,7 @@ class TestCompletionOutcomes:
         assert w.protocol_state == "stopping"
         assert w.protocol_stop_requested is True
         w._show_safety_alert.assert_not_called()
-        record = w.cloud_client.post_treatment_async.call_args.args[0]
+        record = w.cloud_client.post_treatment_async.call_args[0][0]
         assert record["outcome"] == "stopped"
 
     def test_start_exception_recovers_state(self, controller, monkeypatch):
