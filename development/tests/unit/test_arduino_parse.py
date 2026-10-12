@@ -82,7 +82,7 @@ class TestTelemetryIntegrity:
         assert received[-1][2] == 3940
         window._show_safety_alert.assert_called_once()
         assert "Lateral position limit exceeded (3940" in (
-            window._show_safety_alert.call_args.args[0]
+            window._show_safety_alert.call_args[0][0]
         )
 
     @pytest.mark.parametrize("report", [

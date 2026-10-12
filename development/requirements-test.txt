@@ -5,7 +5,8 @@ pytest-qt
 pytest-cov
 pytest-timeout
 pyserial>=3.5
-aiohttp==3.13.3  # Shared simulator HTTP/transport tests run in the full suite.
+aiohttp==3.13.3; python_version >= "3.9"  # Shared simulator HTTP/transport tests run in the full suite.
+aiohttp==3.8.6; python_version < "3.9"  # Last release for the Pi's Python 3.7.
 python-dotenv==0.21.1  # Match the Buster-compatible runtime pin.
 qrcode==7.4.2
 # PyQt5 is provided by the system apt package on the Raspberry Pi
@@ -13,4 +14,8 @@ qrcode==7.4.2
 # CI/dev environment only, where no system Qt is present. Keep the two
 # in step when bumping — a pip PyQt5 newer than the Pi's Qt runtime can
 # fail to load on-device.
-PyQt5>=5.15
+PyQt5>=5.15; python_version >= "3.8"
+# Python 3.7 (the CI job that runs the suite on the Pi's interpreter): 5.15.9
+# with sip 12.12 is the last pair that ships 3.7 wheels.
+PyQt5==5.15.9; python_version < "3.8"
+PyQt5-sip==12.12.2; python_version < "3.8"

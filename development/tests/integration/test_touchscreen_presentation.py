@@ -36,7 +36,10 @@ def test_screen_text_and_touch_targets(
     for label in screen.findChildren(QLabel):
         if not label.isVisibleTo(screen) or not label.text():
             continue
-        assert label.font().pixelSize() >= 16, label.text()
+        # Arm's-length text stays >= 16px; only tagged captions, eyebrows and
+        # units use the smaller 13-14px steps of the type scale.
+        minimum = 13 if label.property("dsCaption") else 16
+        assert label.font().pixelSize() >= minimum, label.text()
         needed = (label.heightForWidth(label.width()) if label.hasHeightForWidth()
                   else label.minimumSizeHint().height())
         assert label.height() >= needed, label.text()

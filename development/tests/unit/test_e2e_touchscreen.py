@@ -9,6 +9,13 @@ from unittest.mock import MagicMock
 import pytest
 
 
+try:
+    # The runner is a Windows tool and imports this at module level.
+    from ctypes import wintypes  # noqa: F401
+except ValueError:
+    pytest.skip("ctypes.wintypes cannot be imported on Linux before Python 3.8",
+                allow_module_level=True)
+
 MODULE_PATH = Path(__file__).resolve().parents[2] / "tools" / "e2e_touchscreen.py"
 SPEC = importlib.util.spec_from_file_location("e2e_touchscreen", MODULE_PATH)
 e2e = importlib.util.module_from_spec(SPEC)

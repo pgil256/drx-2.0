@@ -79,7 +79,7 @@ def _arrow_btn_css():
         f" QPushButton:hover {{ background: {resolve('--blue-050')};"
         f" border-color: {resolve('--color-primary')}; }}"
         f" QPushButton:pressed {{ background: {resolve('--blue-100')}; }}"
-        f" QPushButton:focus {{ border: 3px solid {resolve('--ink-900')}; }}"
+        f" QPushButton[keyboardFocus=\"true\"]:focus {{ border: 3px solid {resolve('--ink-900')}; }}"
         f" QPushButton:disabled {{ background: {resolve('--gray-200')};"
         f" color: {resolve('--gray-600')}; border-color: {resolve('--gray-400')}; }}"
     )

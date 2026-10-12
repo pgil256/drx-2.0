@@ -90,7 +90,8 @@ class TopBar(QFrame):
         self._name.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self._name.setStyleSheet("color: #ffffff; background: transparent;")
         self._role = QLabel("Clinician")
-        self._role.setFont(mono_font(size="--text-2xs"))
+        self._role.setFont(mono_font(size="--text-xs"))
+        self._role.setProperty("dsCaption", True)
         self._role.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self._role.setStyleSheet("color: #c6ced3; background: transparent;")
         idlay.addWidget(self._name)
@@ -111,7 +112,7 @@ class TopBar(QFrame):
         self._avatar.setStyleSheet(
             "QPushButton { border-radius: 27px; background: #ffffff;"
             " border: 2px solid #000; }"
-            " QPushButton:focus { border: 3px solid #176b9a; }"
+            " QPushButton[keyboardFocus=\"true\"]:focus { border: 3px solid #176b9a; }"
             " QPushButton:pressed { background: #e6f3ff; }"
         )
         self._avatar.clicked.connect(self._on_avatar)

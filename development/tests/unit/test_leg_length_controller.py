@@ -169,7 +169,7 @@ def test_completed_command_cannot_restart_gpio_after_gui_delay(leg, monkeypatch)
     controller._poll()
     assert not controller.active
     assert controller.position is None
-    assert all(call.args == (None,) for call in drive.call_args_list)
+    assert all(call[0] == (None,) for call in drive.call_args_list)
 
 
 @pytest.mark.parametrize("flag", ["reset_in_progress", "protocol_running",
@@ -203,7 +203,7 @@ def test_boot_readiness_waits_for_leg_and_later_reset_preserves_it(leg):
     KneeSpa.reset_setup_readings(window)
     assert controller.position == 0.25
     assert len(handles) == before
-    assert all(call.args[0] != "leg_length" for call in window._reflect_setup.call_args_list)
+    assert all(call[0][0] != "leg_length" for call in window._reflect_setup.call_args_list)
 
 
 def test_boot_failure_blocks_readiness_and_explicit_retry_can_home(leg):

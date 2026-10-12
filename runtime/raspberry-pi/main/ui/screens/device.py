@@ -41,10 +41,9 @@ class DeviceScreen(QWidget):
         tabs = QHBoxLayout()
         self._section_buttons = []
         self._sections = QStackedWidget()
-        titles = ("Overview", "Settings", "Service")
-        for index, (title, variant) in enumerate(zip(titles, ("dark", "secondary", "primary"))):
-            button = DSButton(title, variant=variant, full_width=True)
-            button.setProperty("sectionTab", True)
+        # Same tab pattern as Help and Support: the open section is filled.
+        for index, title in enumerate(("Overview", "Settings", "Service")):
+            button = DSButton(title, variant="secondary", full_width=True)
             button.setCheckable(True)
             button.clicked.connect(lambda _checked, i=index: self._select_section(i))
             self._section_buttons.append(button)
@@ -287,6 +286,8 @@ class DeviceScreen(QWidget):
 
     def _select_section(self, index: int) -> None:
         if index == 2 and not self.service_unlocked:
+            # The tap checked the Service tab; show the section that is still open.
+            self._show_section(self._sections.currentIndex())
             self.service_access_requested.emit()
             return
         if index != 2 and self.service_unlocked:
@@ -297,6 +298,7 @@ class DeviceScreen(QWidget):
         self._sections.setCurrentIndex(index)
         for i, button in enumerate(self._section_buttons):
             button.setChecked(i == index)
+            button.set_variant("primary" if i == index else "secondary")
 
     def unlock_service(self) -> None:
         self.service_unlocked = True

@@ -152,7 +152,9 @@ def apply_theme(app, set_base_font=True):
 
     app.setStyleSheet(load_app_qss())
     from .dialogs import install_dialog_theme
+    from .focus import install_keyboard_focus
 
     install_dialog_theme(app)
+    install_keyboard_focus(app)
 
     return {"font_families": families, "plex_loaded": plex_loaded}

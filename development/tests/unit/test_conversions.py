@@ -137,6 +137,7 @@ def make_c_stub(config=None):
     if config is None:
         config = make_config_with_defaults()
     return types.SimpleNamespace(
+        logger=MagicMock(),
         loading_spinner=MagicMock(),
         disable_actuator_controls=MagicMock(),
         enable_actuator_controls=MagicMock(),
@@ -149,6 +150,7 @@ def make_c_stub(config=None):
 def make_distance_stub():
     """Lightweight stub carrying only what KneeSpa.set_to_distance reads."""
     return types.SimpleNamespace(
+        logger=MagicMock(),
         arduino=MagicMock(),
         I2Cstatus_event=MagicMock(),
         enable_actuator_controls=MagicMock(),

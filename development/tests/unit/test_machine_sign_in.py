@@ -56,15 +56,15 @@ def test_machine_transport_uses_device_headers_and_never_cookies(monkeypatch):
     c.token = "human-secret"
     c.call("GET", api.SESSION)
     c.create()
-    first, second = [call.args[0] for call in opener.open.call_args_list]
+    first, second = [call[0][0] for call in opener.open.call_args_list]
     headers = {k.lower(): v for k, v in first.header_items()}
     assert headers["authorization"] == "Bearer device-secret"
     assert headers["x-device-id"] == "device-id"
     assert headers["x-kneespa-machine-session"] == "human-secret"
     assert "cookie" not in headers and "x-clinic-id" not in headers
     assert "x-kneespa-machine-session" not in {k.lower() for k, _ in second.header_items()}
-    assert isinstance(factory.call_args.args[0], api._NoRedirect)
-    assert len(factory.call_args.args) == 1
+    assert isinstance(factory.call_args[0][0], api._NoRedirect)
+    assert len(factory.call_args[0]) == 1
 
 
 def test_429_cooldown_blocks_refresh_and_honors_retry_after(monkeypatch):
@@ -139,7 +139,7 @@ def test_staff_adapter_rechecks_device_session_and_never_uses_admin_me():
     staff = api.MachineStaffClient(c)
     staff.request("PATCH", "/patients/" + str(uuid4()), {"display_name": "Updated"})
     c.inspect.assert_called_once()
-    assert c.call.call_args.args[1].startswith("/api/v1/admin/patients/")
+    assert c.call.call_args[0][1].startswith("/api/v1/admin/patients/")
     assert staff.context["clinic"]["id"] == c.context["site_id"]
     with pytest.raises(StaffError):
         staff.request("GET", "/me")

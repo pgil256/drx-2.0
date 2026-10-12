@@ -7,7 +7,6 @@ approval URLs nor session tokens belong in logs, configuration or the outbox.
 import json
 import math
 import time
-from datetime import datetime
 from typing import Any, Dict, Optional
 from urllib.error import HTTPError
 from urllib.parse import parse_qs, urlencode, urlsplit
@@ -15,6 +14,7 @@ from urllib.request import Request, build_opener
 from uuid import UUID
 
 from helpers.cloud_client import CloudClient, _NoRedirect
+from helpers.cloud_contract import parse_timestamp
 from helpers.staff_client import StaffError
 
 
@@ -26,10 +26,7 @@ SESSION = "/api/v1/device/session"
 
 def deadline(value: str) -> float:
     """Require an explicit timezone on cloud expiry timestamps."""
-    stamp = datetime.fromisoformat(value.replace("Z", "+00:00"))
-    if stamp.utcoffset() is None:
-        raise ValueError("Missing timezone")
-    return stamp.timestamp()
+    return parse_timestamp(value).timestamp()
 
 
 def validate_request(result: Dict[str, Any]) -> Dict[str, Any]:
