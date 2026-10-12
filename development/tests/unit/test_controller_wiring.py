@@ -87,6 +87,7 @@ class TestLogin:
         user = {"username": "Test clinician", "status": "user"}
         stub = SimpleNamespace(
             shell=shell,
+            logger=MagicMock(),
             current_user=None,
             protocol_running=False,
             machine_sign_in=SimpleNamespace(clear=MagicMock()),
@@ -569,6 +570,7 @@ class TestTelemetry:
     def test_protocol_timer_keeps_one_second_interval_and_countdown_callback(self) -> None:
         """Exercise timer configuration without constructing the hardware window."""
         owner = QObject()
+        owner.logger = MagicMock()
         owner.update_protocol_time = MagicMock()
         KneeSpa.setup_timers(owner)
         assert owner.protocol_timer.parent() is owner

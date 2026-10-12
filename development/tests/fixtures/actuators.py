@@ -1,5 +1,7 @@
 """Real-button harness for actuator control gating."""
 
+from unittest.mock import MagicMock
+
 from PyQt5.QtWidgets import QPushButton
 from pytestqt.qtbot import QtBot
 
@@ -18,6 +20,7 @@ class ControlsHarness:
     move_actuator = KneeSpa.move_actuator
 
     def __init__(self, qtbot: QtBot, n_buttons: int = 3) -> None:
+        self.logger = MagicMock()
         self.protocol_running = False
         self.protocol_state = "idle"
         self.reset_in_progress = False
