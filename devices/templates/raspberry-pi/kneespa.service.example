@@ -8,6 +8,13 @@ WorkingDirectory=/home/pi/drx-2.0
 ExecStart=/home/pi/kneespa_env/bin/python /home/pi/drx-2.0/runtime/raspberry-pi/main/kneespa.py
 Restart=on-failure
 RestartSec=5
+# The app pings systemd from its GUI thread (helpers/watchdog.py). If the
+# screen stops responding for this long, systemd aborts the app and
+# Restart=on-failure brings it back. Remove both lines to run without it.
+# Requires an app build that contains helpers/watchdog.py: an older build never
+# pings and would be restarted every WatchdogSec.
+WatchdogSec=60
+NotifyAccess=main
 
 [Install]
 WantedBy=multi-user.target

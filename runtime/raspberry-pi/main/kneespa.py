@@ -93,6 +93,7 @@ from controllers.leg_length_controller import LegLengthController
 from helpers.hardware_service import axial_position
 
 from helpers.logging import LoggerSetup, read_recent_log_lines, setup_logger
+from helpers.watchdog import extend_watchdog_for_shutdown, start_watchdog
 
 # Modern view layer — the composition root for chrome + screens + modals.
 from ui.app_shell import AppShell
@@ -1912,7 +1913,11 @@ def main():
         window._release_install_enabled = True
         window.show()
 
+        # Under systemd with WatchdogSec set, a frozen GUI thread stops these
+        # pings and the service is restarted. A no-op everywhere else.
+        watchdog = start_watchdog(app)
         app.exec_()
+        extend_watchdog_for_shutdown(watchdog)
         log_setup.logger.info("Application exited")
     except Exception:
         log_setup.logger.exception("Application failed")
