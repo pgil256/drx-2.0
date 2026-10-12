@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 from urllib.request import HTTPRedirectHandler, Request, build_opener
 from uuid import UUID, uuid4
 
-from helpers.cloud_contract import cloud_error_message
+from helpers.cloud_contract import cloud_error_message, parse_timestamp
 from helpers.device_records import read_json, write_json
 from helpers.logging import setup_logger
 
@@ -181,8 +181,8 @@ class CloudClient:
         if "error" in result:
             return result
         try:
-            server_time = datetime.fromisoformat(result["server_time"].replace("Z", "+00:00"))
-            if (server_time.utcoffset() is None or not isinstance(result["device_name"], str)
+            parse_timestamp(result["server_time"])
+            if (not isinstance(result["device_name"], str)
                     or not isinstance(result["min_app_version"], str)):
                 raise ValueError("Invalid device ping")
         except (KeyError, TypeError, ValueError, AttributeError):
@@ -349,9 +349,8 @@ class CloudClient:
             return False
         try:
             UUID(result["id"])
-            received = datetime.fromisoformat(result["received_at"].replace("Z", "+00:00"))
-            return (received.utcoffset() is not None
-                    and UUID(result["client_record_id"]) == UUID(record["client_record_id"]))
+            parse_timestamp(result["received_at"])
+            return UUID(result["client_record_id"]) == UUID(record["client_record_id"])
         except (KeyError, TypeError, ValueError, AttributeError):
             return False
 

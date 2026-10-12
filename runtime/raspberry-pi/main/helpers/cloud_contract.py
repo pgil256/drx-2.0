@@ -5,6 +5,8 @@ compatibility; there is no unit conversion. Unsupported values are rejected,
 never rounded or clamped into a different treatment plan.
 """
 
+import re
+from datetime import datetime
 from decimal import Decimal, InvalidOperation
 from typing import Any, Dict, Tuple
 from uuid import UUID
@@ -20,6 +22,34 @@ SETTING_RULES = {
     "max_right_deg": ("max_right", 0, 20, "1"),
     "pulse_rate_hz": ("pulse_rate", 0, 5, "0.2"),
 }
+
+
+_TIMESTAMP = re.compile(
+    r"(\d{4}-\d{2}-\d{2})[Tt ](\d{2}:\d{2})(?::(\d{2})(?:[.,](\d+))?)?"
+    r"([Zz]|[+-]\d{2}:?\d{2})"
+)
+
+
+def parse_timestamp(value: Any) -> datetime:
+    """Parse a cloud ISO-8601 timestamp that carries an explicit UTC offset.
+
+    Python 3.7's ``datetime.fromisoformat`` only reads what ``isoformat``
+    writes: no ``Z``, and fractional seconds of exactly three or six digits.
+    Servers send other widths (``.5``, ``.1234567``), so the parts are matched
+    here and the fraction is cut to microseconds.
+    """
+    if not isinstance(value, str):
+        raise TypeError("Expected a timestamp string")
+    match = _TIMESTAMP.fullmatch(value)
+    if match is None:
+        raise ValueError("Expected an ISO-8601 timestamp with a UTC offset")
+    date, minutes, seconds, fraction, zone = match.groups()
+    if zone in ("Z", "z"):
+        zone = "+00:00"
+    elif ":" not in zone:
+        zone = zone[:3] + ":" + zone[3:]
+    return datetime.fromisoformat("%sT%s:%s.%s%s" % (
+        date, minutes, seconds or "00", (fraction or "")[:6].ljust(6, "0"), zone))
 
 
 def contract_number(value: Any, minimum: int, maximum: int, step: str) -> Decimal:
