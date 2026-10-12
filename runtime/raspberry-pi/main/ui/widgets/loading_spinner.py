@@ -1,9 +1,16 @@
 # ui/widgets/loading_spinner.py
+import logging
 import os
 from typing import Union, Optional
 from PyQt5.QtCore    import Qt, QEvent, QSize
 from PyQt5.QtGui     import QMovie
 from PyQt5.QtWidgets import QWidget, QLabel, QVBoxLayout
+
+from config.constants import APP_NAME
+
+# A plain child of the application logger, so UI tools that import this widget
+# do not create the run's log files (helpers.logging does that on import).
+logger = logging.getLogger(f"{APP_NAME}.ui.spinner")
 
 SPINNER_PATH = os.path.join(
     os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
@@ -24,7 +31,9 @@ class LoadingSpinner(QWidget):
         speed_pct: int = 500                    # 100 = normal, >100 faster
     ) -> None:
         super().__init__(parent, Qt.SubWindow | Qt.FramelessWindowHint)
-        print(f"LoadingSpinner: Initializing spinner (size={size}, speed={speed_pct}%)")
+        logger.debug(
+            "LoadingSpinner: Initializing spinner (size=%s, speed=%s%%)", size, speed_pct
+        )
 
         # --- transparent & mouse-through ---
         for w in (self,):                       # QWidget itself
@@ -57,24 +66,24 @@ class LoadingSpinner(QWidget):
         lay.setContentsMargins(0, 0, 0, 0)
 
         self.hide()
-        print("LoadingSpinner: Initialization complete")
+        logger.debug("LoadingSpinner: Initialization complete")
 
     # ------------------------
     # public control
     # ------------------------
     def show(self) -> None:
-        print("LoadingSpinner: Showing spinner")
+        logger.debug("LoadingSpinner: Showing spinner")
         if self._movie.state() != QMovie.Running:
             self._movie.start()
-            print("LoadingSpinner: Animation started")
+            logger.debug("LoadingSpinner: Animation started")
         super().show()
         self.raise_()
 
     def hide(self) -> None:
-        print("LoadingSpinner: Hiding spinner")
+        logger.debug("LoadingSpinner: Hiding spinner")
         if self._movie.state() == QMovie.Running:
             self._movie.stop()
-            print("LoadingSpinner: Animation stopped")
+            logger.debug("LoadingSpinner: Animation stopped")
         super().hide()
 
     # ------------------------
