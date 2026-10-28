@@ -9,9 +9,19 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Read-only token: no job here pushes, comments or publishes releases.
+permissions:
+  contents: read
+
+# A new push to a PR supersedes the run in progress; runs on main always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   python-tests:
     name: Python tests
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -58,6 +68,7 @@ jobs:
   # 3.12, so this is the step that rejects syntax the device cannot parse.
   lint:
     name: Lint (ruff, Python 3.7 syntax)
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -77,6 +88,7 @@ jobs:
   # imports every runtime module. Gates the PR.
   python37-imports:
     name: Python 3.7 import check (Pi runtime)
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     container: python:3.7-slim-bookworm
     steps:
@@ -117,6 +129,7 @@ jobs:
   # cannot see because they only fail when the line runs. Gates the PR.
   python37-tests:
     name: Python 3.7 tests (Pi interpreter)
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     container: python:3.7-slim-bookworm
     steps:
@@ -155,6 +168,7 @@ jobs:
   # no PlatformIO registry access needed. Gates the PR (no continue-on-error).
   firmware-native-tests:
     name: Firmware native tests (g++ + Unity)
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -165,6 +179,7 @@ jobs:
 
   firmware-avr-build:
     name: Firmware AVR build check (Mega 2560)
+    timeout-minutes: 25
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
