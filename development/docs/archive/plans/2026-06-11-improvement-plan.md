@@ -1,7 +1,7 @@
 # KneeSpa / drx-2.0 — Improvement Plan
 
 **Date:** 2026-06-11
-**Basis:** [Full application audit](../audits/2026-06-11-full-application-audit.md) (same date).
+**Basis:** Full application audit (same date; deleted 2026-10-06, recover it from git history).
 
 > **Implementation status (2026-06-11, branch `improvement-plan`):**
 > - **Phase 0 — DONE.** Firmware tests buildable+green (57 tests), Linux CI workflow, FakeArduino firmware parity, both verified regressions fixed, docs reconciled.

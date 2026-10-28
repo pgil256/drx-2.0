@@ -67,7 +67,6 @@ main/motor/.pio/
 
 # Distribution
 *.tar.gz
-!/kneespa-pi-desktop-setup.tar.gz
 *.zip
 *.rar
 

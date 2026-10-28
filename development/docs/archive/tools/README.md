@@ -13,5 +13,9 @@ completed within a single click (delta always 0), and its
 motor.ino.
 
 Use the in-app Hardware Tests & Calibration wizard
-(`development/docs/hardware-service.md`), or `development/tools/calibrate.py`
-from a serial console.
+(`development/docs/hardware-service.md`).
+
+## calibrate.py
+The serial-console calibration script `development/tools/calibrate.py` was
+removed on 2026-10-06; the in-app wizard supersedes it. Recover it from git
+history if a console fallback is ever needed.

@@ -49,8 +49,8 @@ Environment overrides: `KNEESPA_APP_DIR`, `KNEESPA_DEVICE_DIR`, `KNEESPA_SERVICE
 `KNEESPA_PIO` (full executable path), and `PLATFORMIO_CORE_DIR`. Use absolute paths.
 
 If an older launcher reports **Cannot find PlatformIO's avrdude package** after
-a successful build, update `devices/flash_firmware.sh` from the current
-[Pi setup bundle](../../../kneespa-pi-desktop-setup.tar.gz) and retry the desktop
+a successful build, update `devices/flash_firmware.sh` from a freshly built
+[Pi setup bundle](../../../development/docs/rpi/setup-and-maintenance.md#copying-the-tools-and-bundles) and retry the desktop
 shortcut. Extract the bundle into `/home/pi/drx`, replacing its launcher files.
 Routine runtime sync does not update this script. That lookup failure happens
 before stopping the service or reading/writing the board; the new launcher prepares
