@@ -13,14 +13,24 @@ firmware native tests 8 suites / 165 tests; Mega build warning-free;
 
 - **What is queued:** the `L5` fixed-width form is now rejected with
   `COMMAND_REJECTED|L5|INVALID_FORMAT`, plus dead-code and comment cleanup.
-  `VERSION` is `2026-09-30-DRX2-NB2-SERVICE`.
-- **Image:** Mega hex sha256 `fb840258d10a49e41b341f6cf6100d2eee3b1f386b0082b4c3d1cafbc9bf6306`,
-  flash 33,974 bytes, RAM 2,688 bytes. Only the `L5` change alters behavior; the
-  cleanup commits leave the code identical (at most the LTO trampoline order moves).
+  Added 2026-10-28: after a serial line overflows the 100-byte command buffer,
+  the rest of that line is discarded instead of running as a command, and the
+  rejection is reported once. `VERSION` is `2026-10-28-DRX2-NB2-SERVICE`.
+- **Image:** Mega hex sha256 `298242468e76b3a5b8e2581a7c530b99826d59c781f6516fca540adcb81aba24`,
+  flash 34,232 bytes, RAM 2,689 bytes, built with the pinned `atmelavr@5.3.0`.
+  CI's firmware job uploads the same image with its checksum. The `L5` and
+  overflow changes alter behavior; the cleanup commits leave the code identical
+  (at most the LTO trampoline order moves).
 - **The Pi does not need this flash:** it already sends only `L5|a|b`, and it
   checks the HX711 driver identity, not the version string.
 - **Decide:** when to flash, after the deployment bench checks in
   `development/docs/hardware-service.md#verification-before-deployment`.
+- **Also decide:** whether motion should continue when the app dies. The
+  host heartbeat only warns, so after an app abort a pressure ramp runs to its
+  target or its 90-second deadline, and pulsing continues until the restarted
+  app's reset sends `Y`. `development/docs/deployment.md` describes the
+  current behavior. Making the heartbeat stop pulsing again would be a
+  firmware change for this batch.
 
 ## 2. UI changes to look at on the Pi or simulator
 

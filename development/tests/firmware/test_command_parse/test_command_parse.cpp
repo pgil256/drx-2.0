@@ -45,6 +45,8 @@ void setUp(void) {
     axialSpeed = PRESSURE_SPEED; lateralSpeed = C_SPEED; pulseSpeed = TREATMENT_SPEED_MAX;
     scale._ready = true; scale._scale = 1; scale._offset = 0; scale._raw = 0;
     STOP = true; _pin_levels[STOP_PIN] = HIGH;
+    commandBuffer = ""; isCommandComplete = false;
+    discardingOverlongCommand = false; lastCommandTime = 0;
     _millis_value = 0;
     jerkInterval = 200;  // mutable since Phase 3.5 (J<ms>); reset between tests
 }
@@ -228,6 +230,54 @@ void test_long_command_rejected(void) {
     TEST_ASSERT_TRUE(Serial1.outputContains("ERROR"));
 }
 
+// --- Overlong lines through the real serial read loop ---
+
+// Feed one line through loop(), past the 200 ms command rate limiter.
+static void feedLine(const std::string &line) {
+    Serial1.injectCommand(line);
+    for (int i = 0; i < 4; i++) {
+        _millis_value += 1000;
+        loop();
+    }
+}
+
+static int countOccurrences(const std::string &haystack, const std::string &needle) {
+    int count = 0;
+    for (size_t at = haystack.find(needle); at != std::string::npos;
+         at = haystack.find(needle, at + needle.size()))
+        count++;
+    return count;
+}
+
+void test_overlong_line_tail_is_not_executed(void) {
+    // Byte 100 overflows the buffer. The old loop cleared it and kept
+    // appending, so the tail "P80" ran as a pressure command.
+    feedLine(std::string(MAX_COMMAND_LENGTH, 'Z') + "P80");
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Command too long"));
+    TEST_ASSERT_FALSE(measurePressure);
+    TEST_ASSERT_TRUE(desiredPressure == 0);
+    TEST_ASSERT_EQUAL(0, (int)commandBuffer.length());
+}
+
+void test_overlong_line_is_reported_once(void) {
+    feedLine(std::string(3 * MAX_COMMAND_LENGTH, 'Z'));
+    TEST_ASSERT_EQUAL(1, countOccurrences(Serial1.getOutput(), "ERROR: Command too long"));
+}
+
+void test_command_after_overlong_line_runs(void) {
+    feedLine(std::string(150, 'Z'));
+    feedLine("T");
+    TEST_ASSERT_TRUE(Serial1.outputContains("OK"));
+    TEST_ASSERT_FALSE(discardingOverlongCommand);
+}
+
+void test_longest_allowed_line_still_runs(void) {
+    // MAX_COMMAND_LENGTH - 1 bytes fit; padding a T keeps it a test command.
+    feedLine("T" + std::string(MAX_COMMAND_LENGTH - 2, ' '));
+    TEST_ASSERT_FALSE(Serial1.outputContains("ERROR: Command too long"));
+    TEST_ASSERT_TRUE(Serial1.outputContains("OK"));
+}
+
 // --- Input rejection (corrupt commands must not move anything) ---
 
 void test_A_negative_inches_rejected(void) {
@@ -391,6 +441,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_v2_emitAck_formats);
     RUN_TEST(test_v2_emitCmdError_formats);
     RUN_TEST(test_v2_emergency_buffer_detection);
+    RUN_TEST(test_overlong_line_tail_is_not_executed);
+    RUN_TEST(test_overlong_line_is_reported_once);
+    RUN_TEST(test_command_after_overlong_line_runs);
+    RUN_TEST(test_longest_allowed_line_still_runs);
 
     return UNITY_END();
 }
