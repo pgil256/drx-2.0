@@ -7,7 +7,7 @@ from unittest.mock import Mock
 
 import pytest
 from PyQt5.QtCore import QEvent, Qt
-from PyQt5.QtWidgets import QApplication, QDialog, QMainWindow, QMessageBox
+from PyQt5.QtWidgets import QApplication, QMainWindow, QMessageBox
 
 from controllers import device_controller as module
 from helpers.service_auth import ServiceAccess
@@ -167,14 +167,14 @@ def test_dimming_wakes_on_first_touch_without_activating_button(controller, qtbo
     controller.tick()
     settled(controller, qtbot)
     assert controller._restore_level == 80
-    assert controller.backend.write.call_args.args == ("brightness", 10)
+    assert controller.backend.write.call_args[0] == ("brightness", 10)
     button = controller.screen.hardware_button
     clicked = Mock()
     button.clicked.connect(clicked)
     qtbot.mouseClick(button, Qt.LeftButton)
     settled(controller, qtbot)
     clicked.assert_not_called()
-    assert controller.backend.write.call_args.args == ("brightness", 80)
+    assert controller.backend.write.call_args[0] == ("brightness", 80)
     assert controller._restore_level is None
     qtbot.mouseClick(button, Qt.LeftButton)
     clicked.assert_called_once()
@@ -192,7 +192,7 @@ def test_dimming_skips_treatment_and_restores_on_service_entry(controller, qtbot
     controller.window._calibration_active = True
     controller.tick()
     settled(controller, qtbot)
-    assert controller.backend.write.call_args.args == ("brightness", 80)
+    assert controller.backend.write.call_args[0] == ("brightness", 80)
 
 
 def test_wake_failure_is_throttled_and_manual_brightness_recovers(controller, qtbot):

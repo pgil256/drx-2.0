@@ -51,6 +51,7 @@ from .vlc_engine import (
     _friendly_audio_device,
     _read_audio_preference,
     _write_audio_preference,
+    logger,
 )
 
 _VIDEO_CARD_WIDTH = 800
@@ -759,7 +760,7 @@ class VideoModal(Overlay):
         (with the play button back) is the right surface: the operator sees
         it stopped and can retry. Logged for diagnostics.
         """
-        print("VideoModal: playback position stalled; resetting to poster")
+        logger.warning("VideoModal: playback position stalled; resetting to poster")
         self._reset_playback()
         self._show_playback_error()
         self.play_toggled.emit(False)

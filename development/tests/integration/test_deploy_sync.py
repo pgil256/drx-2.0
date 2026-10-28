@@ -7,6 +7,7 @@ import shutil
 import subprocess
 import sys
 from types import SimpleNamespace
+from typing import Optional
 
 import pytest
 
@@ -149,7 +150,7 @@ def test_unreachable_device_does_not_sync_or_restart(
 
 @pytest.mark.parametrize("hosts", [None, "", "   "])
 def test_requires_explicit_hosts_before_any_external_action(
-    deployment: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, hosts: str | None,
+    deployment: SimpleNamespace, monkeypatch: pytest.MonkeyPatch, hosts: Optional[str],
 ) -> None:
     if hosts is None:
         monkeypatch.delenv("PI_HOSTS", raising=False)

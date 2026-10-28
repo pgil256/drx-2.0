@@ -36,6 +36,24 @@ def test_device_gates_login_and_preserves_destination(shell):
     assert not shell.device.calibration_button.isEnabled()
 
 
+def test_device_tabs_fill_only_the_open_section(shell, qtbot):
+    """Device uses the Help and Support tab pattern, not three fixed colours."""
+    screen = shell.device
+    tabs = screen._section_buttons
+
+    def state():
+        return [(tab.variant(), tab.isChecked()) for tab in tabs]
+
+    assert state() == [("primary", True), ("secondary", False), ("secondary", False)]
+    qtbot.mouseClick(tabs[1], Qt.LeftButton)
+    assert state() == [("secondary", False), ("primary", True), ("secondary", False)]
+    # Service stays unfilled until access is granted.
+    qtbot.mouseClick(tabs[2], Qt.LeftButton)
+    assert state() == [("secondary", False), ("primary", True), ("secondary", False)]
+    screen.unlock_service()
+    assert state() == [("secondary", False), ("secondary", False), ("primary", True)]
+
+
 @pytest.mark.parametrize("section", range(4))
 def test_support_tabs_fit_display(shell, qtbot, section):
     shell.navigate("support")

@@ -12,7 +12,7 @@ class TestPressFeedback:
         label = QLabel("nav")
         qtbot.addWidget(label)
         label.show()
-        feedback = install_press_feedback(label)
+        _feedback = install_press_feedback(label)
         assert label.graphicsEffect() is None
 
         qtbot.mousePress(label, Qt.LeftButton)
@@ -28,7 +28,7 @@ class TestPressFeedback:
         label.show()
         calls = []
         label.mousePressEvent = lambda event: calls.append(1)
-        feedback = install_press_feedback(label)
+        _feedback = install_press_feedback(label)
 
         qtbot.mousePress(label, Qt.LeftButton)
         assert calls == [1]  # the filter never consumes the event
@@ -38,7 +38,7 @@ class TestPressFeedback:
         label = QLabel("nav")
         qtbot.addWidget(label)
         label.show()
-        feedback = install_press_feedback(None, label, None)
+        _feedback = install_press_feedback(None, label, None)
         qtbot.mousePress(label, Qt.LeftButton)
         assert label.graphicsEffect() is not None
         qtbot.mouseRelease(label, Qt.LeftButton)

@@ -108,7 +108,7 @@ def test_staff_registration_edit_and_automatic_upload_in_local_simulator(tmp_pat
                 device.close(wait=True)
 
         try:
-            await asyncio.to_thread(run_workflow)
+            await asyncio.get_running_loop().run_in_executor(None, run_workflow)
         finally:
             await server.close()
         recording = (server.directory / "session.jsonl").read_text()

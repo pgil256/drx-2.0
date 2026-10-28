@@ -128,7 +128,7 @@ def test_manual_axial_home_does_not_fabricate_zero_pressure() -> None:
     KneeSpa.reset_flexion_button_clicked(window, window.actuator_a)
 
     window.arduino.send.assert_called_once_with("I120")
-    assert all(call.args[0] != "pressure" for call in window._reflect_setup.call_args_list)
+    assert all(call[0][0] != "pressure" for call in window._reflect_setup.call_args_list)
 
 
 def test_lateral_wait_exits_after_stop_during_pause(protocol_clock):
@@ -215,7 +215,7 @@ def test_older_patient_response_cannot_replace_newer_selection(
 
     assert window.cloud_patient["patient_id"] == patients["B"]["patient_id"]
     assert window.shell.treatment.set_settings.call_count == 1
-    assert window.shell.treatment.set_settings.call_args.args[0]["max_pressure"] == 50
+    assert window.shell.treatment.set_settings.call_args[0][0]["max_pressure"] == 50
 
 
 @pytest.mark.parametrize("result", [None, {"error": "unknown_pin"}])
@@ -233,7 +233,7 @@ def test_late_lookup_failure_preserves_active_treatment_patient(
     controller.finalize_session()
 
     assert window.cloud_patient == {"patient_id": "B"}
-    record = window.cloud_client.post_treatment_async.call_args.args[0]
+    record = window.cloud_client.post_treatment_async.call_args[0][0]
     assert record["patient_id"] == "B"
 
 
@@ -246,7 +246,7 @@ def test_upload_uses_patient_captured_at_start(qtbot: QtBot) -> None:
     controller.latch_session_outcome("completed")
     controller.finalize_session()
 
-    record = window.cloud_client.post_treatment_async.call_args.args[0]
+    record = window.cloud_client.post_treatment_async.call_args[0][0]
     assert record["patient_id"] == "B"
 
 

@@ -28,6 +28,15 @@ QT_QPA_PLATFORM=offscreen python development/tools/screen_gallery.py --outdir .c
 ## 1. Systemic issues (fix once, improves everything)
 
 ### 1.1 Colour no longer means anything
+
+**Status 2026-10-09: done.** `danger` now resolves to `--color-danger` (red) with
+its own hover/press states, START/RESUME use `success` (green), PAUSE stays
+`secondary`, and a new outlined `destructive` variant (white fill, red text and
+border) carries Log Out, Shut Down and "Restore This Calibration". `dark` is no
+longer used in action rows: Save treatment defaults is `primary`, Restart App and
+Close service are `secondary`. Tests: `test_button_colour_carries_meaning` and
+`test_treatment_and_setup_action_rows_use_motion_colours`. Button label casing
+(`Stop` vs `START`) is unchanged and remains open.
 * `app.qss` styles `variant="danger"` **identically to `primary`** (blue) — see the
   comment "The legacy danger variant also uses blue" in
   [app.qss](../../../runtime/raspberry-pi/main/ui/theme/app.qss). Result: Stop
@@ -47,6 +56,13 @@ owner prefers no red outside the physical e-stop, the fallback is START green +
 STOP `--ink-900` black, but never blue.
 
 ### 1.2 Flat type scale
+
+**Status 2026-10-12: scale done, literal sweep open.** The tokens are 13 / 14 /
+16 / 18 / 20 / 24 / 30 / 40 / 56. Eyebrows, badge labels, readout captions, the
+protocol-button name and the signed-in role use the two small steps and are
+tagged `dsCaption`; `test_screen_text_and_touch_targets` holds every other
+label to 16px. Default button weight is 600 (see 1.3). The raw
+`sans_font(size=16)` literals are not swept yet.
 [tokens.py](../../../runtime/raspberry-pi/main/ui/theme/tokens.py) sets
 `--text-2xs`, `--text-xs` and `--text-sm` all to **16px**, base 18, md 20. Captions,
 helper copy, body and labels differ only by weight and grey, and almost every
@@ -62,6 +78,12 @@ page titles and readouts. Remove raw `sans_font(size=16)` literals
 favour of tokens.
 
 ### 1.3 Heavy outlines everywhere
+
+**Status 2026-10-12: done for buttons.** Plain and secondary buttons have a 1px
+border and weight 600; bold stays on the `lg` START / Stop size. Content
+minimum heights rose 2px so outer heights stay 48 / 56 / 72px. Text inputs and
+the Setup slider's own `-` / `+` buttons keep 2px. The segmented jog group
+(3.2) is open.
 `QPushButton` default and `secondary` use a **2px `#78858e` border + bold text**.
 Setup shows 55 of these boxes at once; Device/Support tab rows and every
 dialog footer repeat it. Recommendation: secondary = 1px `--gray-400` border,
@@ -69,6 +91,12 @@ white fill, weight 600; the 2px treatment only for the *checked* state of tab
 buttons and for focus. Jog clusters become one segmented group (see §3.2).
 
 ### 1.4 Three tab styles for one pattern
+
+**Status 2026-10-12: one style, no shared widget.** Device now follows Help and
+Support (open section filled primary, others outlined) and the `sectionTab`
+rule is gone. The calibration dialog and its `QTabWidget` were removed earlier.
+`DSSegmentedTabs` is not built. Test:
+`test_device_tabs_fill_only_the_open_section`.
 * Support / Troubleshooting topics: filled primary when active, outline otherwise
   ([help.py:153](../../../runtime/raspberry-pi/main/ui/screens/help.py),
   [support.py:156](../../../runtime/raspberry-pi/main/ui/screens/support.py)).
@@ -109,6 +137,13 @@ has its own `rgb()` palette and 22/26/30px sizes. Add the missing tokens
 `--banner-fault`, `--table-selection`) and sweep to `resolve()`.
 
 ### 1.7 Focus rings fire on touch
+
+**Status 2026-10-12: done.** `ui/theme/focus.py` sets `keyboardFocus` only for
+Tab, Backtab and shortcut focus, and every button, tool-button and slider
+`:focus` rule requires it. Buttons keep their focus policy (not `Qt.TabFocus`),
+so a tap still takes focus away from a text field. Tests:
+`test_focus_rings_are_marked_for_keyboard_focus_only` and
+`test_no_button_rule_draws_a_ring_on_plain_focus`.
 `QPushButton:focus { border: 3px solid ink-900 }` stays lit after every tap
 (visible on "Done" in the editor, "STOP" in the wizard, "Back to settings" in the
 review). On a touch kiosk show focus only for keyboard navigation: give

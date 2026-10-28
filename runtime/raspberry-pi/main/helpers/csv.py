@@ -12,8 +12,8 @@ except ImportError:
 
 class CSVHelper:
     def __init__(self):
-        print("CSVHelper: Initializing CSV helper")
         self.logger = setup_logger(component="CSV Helper")
+        self.logger.info("Initializing CSV helper")
         self.users = {}
 
     def initialize_data(self):
@@ -24,19 +24,19 @@ class CSVHelper:
         persisted, so it must load even when the env provides the seed
         users. Env entries win on a hash collision.
         """
-        print("CSVHelper: Initializing user data")
+        self.logger.info("Initializing user data")
 
         # KNEESPA_USER_PINS_PATH overrides the default in-repo location;
         # the file itself is runtime state and is not tracked in git.
         users_file = DATA_PATHS["USER_PINS"]
         self._seed_users_file(users_file)
-        print(f"CSVHelper: Loading user data from {users_file}")
+        self.logger.info("Loading user data from %s", users_file)
         self.users = self.load_csv(users_file)
-        print(f"CSVHelper: Loaded {len(self.users)} user records from CSV")
+        self.logger.info("Loaded %d user records from CSV", len(self.users))
 
         secure_auth = SecureAuthHelper()
         if secure_auth.users:
-            print("CSVHelper: Merging secure authentication users from environment")
+            self.logger.info("Merging secure authentication users from environment")
             self.users.update(secure_auth.users)
 
         if not self.users:
@@ -89,7 +89,7 @@ class CSVHelper:
         Returns:
             dict: Dictionary with PIN hash as key and row data as value
         """
-        print(f"CSVHelper: Loading CSV file from {filename}")
+        self.logger.debug("Loading CSV file from %s", filename)
 
         data = {}
         row_count = 0
@@ -123,7 +123,7 @@ class CSVHelper:
                     row["pin_hash"] = pin_hash
                     data[pin_hash] = row
                     row_count += 1
-            print(f"CSVHelper: Successfully loaded {row_count} rows from {filename}")
+            self.logger.info("Successfully loaded %d rows from %s", row_count, filename)
             if skipped:
                 self._report_load_error(
                     f"Skipped {skipped} malformed row(s) in {filename}; "
@@ -131,18 +131,15 @@ class CSVHelper:
                 )
 
         except FileNotFoundError:
-            print(f"CSVHelper: ERROR - CSV file not found: {filename}")
             self._report_load_error(f"CSV file not found: {filename}")
 
         except csv.Error as e:
-            print(f"CSVHelper: ERROR - CSV file error in {filename}: {e}")
             self._report_load_error(f"CSV file error in {filename}: {e}")
 
         except (OSError, UnicodeDecodeError) as e:
             # A permission error, a mid-read I/O failure, or a binary/
             # corrupt file must not crash startup on a patient-facing
             # kiosk -- degrade to whatever rows loaded and surface it.
-            print(f"CSVHelper: ERROR - Could not read {filename}: {e}")
             self._report_load_error(f"Could not read {filename}: {e}")
 
         return data

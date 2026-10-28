@@ -8,6 +8,7 @@ its native runtime is missing the engine reports ``available = False`` and the
 modal falls back to its static frame.
 """
 
+import logging
 import os
 import shutil
 import subprocess
@@ -17,12 +18,16 @@ from typing import List, Optional
 
 from PyQt5.QtWidgets import QWidget
 
-from config.constants import UI_PATHS
+from config.constants import APP_NAME, UI_PATHS
+
+# A plain child of the application logger, so UI tools that import the modal
+# do not create the run's log files (helpers.logging does that on import).
+logger = logging.getLogger(f"{APP_NAME}.ui.video")
 
 try:  # VLC is optional — absent on dev boxes / headless CI (mocked in tests).
     import vlc
 except Exception as exc:  # pragma: no cover - exercised only where vlc is missing
-    print(f"VideoModal: VLC unavailable: {exc!r}")
+    logger.warning("VideoModal: VLC unavailable: %r", exc)
     vlc = None
 
 _DEFAULT_VOLUME = 100
@@ -75,7 +80,7 @@ def _write_audio_preference(name: str, value: object) -> None:
             handle.write(f"{value}\n")
         os.replace(temporary, path)
     except OSError as exc:
-        print(f"VideoModal: unable to save audio preference {name}: {exc!r}")
+        logger.warning("VideoModal: unable to save audio preference %s: %r", name, exc)
 
 
 def _discover_alsa_devices() -> List[str]:
@@ -174,7 +179,9 @@ class _VlcEngine:
                 ]
                 pointers = [path for path in clips if _is_lfs_pointer(path)]
                 for path in pointers:
-                    print(f"VideoModal: skipping Git LFS pointer (run git lfs pull): {path}")
+                    logger.warning(
+                        "VideoModal: skipping Git LFS pointer (run git lfs pull): %s", path
+                    )
                 return [path for path in clips if path not in pointers]
         except Exception:
             pass
@@ -211,7 +218,7 @@ class _VlcEngine:
                     "--aout=alsa",
                     f"--alsa-audio-device={self._audio_device}",
                 ])
-                print(f"VideoModal: forcing ALSA output {self._audio_device}")
+                logger.info("VideoModal: forcing ALSA output %s", self._audio_device)
             self._instance = vlc.Instance(options)
             self._player = self._instance.media_player_new()
             self._embed()
@@ -225,14 +232,16 @@ class _VlcEngine:
                 pass
             self._load(self._index)
         except Exception as exc:
-            print(f"VideoModal: VLC init failed, degrading to poster: {exc!r}")
+            logger.error("VideoModal: VLC init failed, degrading to poster: %r", exc)
             self._player = None
             self.available = False
         return self._player
 
     def _load(self, index):
         path = self._playlist[index]
-        print(f"VideoModal: loading clip {index + 1}/{len(self._playlist)}: {path}")
+        logger.info(
+            "VideoModal: loading clip %d/%d: %s", index + 1, len(self._playlist), path
+        )
         media = self._instance.media_new(path)
         self._player.set_media(media)
         media.release()
@@ -287,10 +296,10 @@ class _VlcEngine:
         if os.environ.get("KNEESPA_VIDEO_NO_EMBED") == "1":
             # Diagnostic escape hatch: let VLC open its own top-level window
             # so embedding problems can be separated from playback problems.
-            print("VideoModal: KNEESPA_VIDEO_NO_EMBED=1 — VLC opens its own window")
+            logger.info("VideoModal: KNEESPA_VIDEO_NO_EMBED=1 — VLC opens its own window")
             return
         handle = int(self._surface.winId())
-        print(f"VideoModal: embedding VLC into winId=0x{handle:x} ({sys.platform})")
+        logger.info("VideoModal: embedding VLC into winId=0x%x (%s)", handle, sys.platform)
         if sys.platform.startswith("linux"):
             self._player.set_xwindow(handle)
         elif sys.platform == "win32":
@@ -311,7 +320,7 @@ class _VlcEngine:
             self.ensure_audio()
             return True
         except Exception as exc:
-            print(f"VideoModal: play() failed: {exc!r}")
+            logger.error("VideoModal: play() failed: %r", exc)
             return False
 
     def pause(self):
@@ -372,13 +381,13 @@ class _VlcEngine:
                 and muted == float(desired_mute)
             )
             if self._audio_attempts == 20 and not self._audio_ready:
-                print(
+                logger.warning(
                     "VideoModal: VLC audio output did not become ready "
-                    f"(mute={muted!r}, volume={volume!r})"
+                    "(mute=%r, volume=%r)", muted, volume,
                 )
         except Exception as exc:
             if self._audio_attempts == 20:
-                print(f"VideoModal: unable to enable VLC audio: {exc!r}")
+                logger.warning("VideoModal: unable to enable VLC audio: %r", exc)
 
     def stop(self):
         # Unconditional — a paused player is not "playing" but still holds media.

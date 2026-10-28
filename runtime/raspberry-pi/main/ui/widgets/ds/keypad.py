@@ -120,7 +120,7 @@ class DSKeypad(QWidget):
         font_size = 18 if text == "Clear" else (24 if self._compact else 30)
         css += f"QPushButton {{ padding: 0 2px; font-size: {font_size}px; }}"
         css += (
-            f"QPushButton:focus {{ border: 3px solid {resolve('--ink-900')}; }}"
+            f"QPushButton[keyboardFocus=\"true\"]:focus {{ border: 3px solid {resolve('--ink-900')}; }}"
             f"QPushButton:pressed {{ background: {resolve('--blue-100')}; }}"
             f"QPushButton:disabled {{ background: {resolve('--gray-300')};"
             f" color: {resolve('--gray-600')}; border-color: {resolve('--gray-400')}; }}"

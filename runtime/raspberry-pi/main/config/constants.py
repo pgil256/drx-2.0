@@ -5,6 +5,7 @@ Constants and configuration values for the KneeSpa application.
 Centralizes all magic numbers and configuration settings.
 """
 
+import logging
 import os
 
 from .paths import APP_BASE_DIR, DEVICE_STATE_DIR, PROJECT_DIR
@@ -256,5 +257,7 @@ if os.environ.get("KNEESPA_SKIP_PATH_VALIDATION", "0") != "1":
     try:
         validate_paths()
     except FileNotFoundError as e:
-        print(f"Configuration Error: {str(e)}")
+        # helpers.logging imports this module, so the app handlers cannot exist
+        # yet: the stdlib last-resort handler reports this on stderr.
+        logging.getLogger(APP_NAME).error("Configuration Error: %s", e)
         raise

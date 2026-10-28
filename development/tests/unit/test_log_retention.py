@@ -83,6 +83,18 @@ def test_encoding_errors_are_escaped_before_and_after_rotation(
     assert path.read_text(encoding="utf-8") == "next \\udcff\n"
 
 
+def test_closed_handler_drops_later_records_without_reopening(tmp_path: Path) -> None:
+    """The handler tracks closing itself; Python 3.7's base Handler does not."""
+    path = tmp_path / "closed.log"
+    handler = DiagnosticFileHandler(str(path))
+    handler.handle(_record("kept"))
+    assert handler.level <= logging.CRITICAL  # not disabled by a write failure
+    handler.close()
+    handler.handle(_record("late"))
+    assert path.read_text() == "kept\n"
+    assert handler.level <= logging.CRITICAL
+
+
 def test_single_oversized_record_is_kept_intact(tmp_path: Path) -> None:
     path = tmp_path / "large.log"
     handler = DiagnosticFileHandler(str(path), max_bytes=16)

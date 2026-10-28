@@ -71,8 +71,8 @@ def test_runs_in_repo_with_current_interpreter_and_propagates_status(
     ]
     assert run.call_count == len(statuses)
     for call, command in zip(run.call_args_list, commands):
-        assert call.args == (command,)
-        assert call.kwargs == {"cwd": runner.ROOT, "check": False}
+        assert call[0] == (command,)
+        assert call[1] == {"cwd": runner.ROOT, "check": False}
 
 
 def test_launch_error_is_reported_as_failure(

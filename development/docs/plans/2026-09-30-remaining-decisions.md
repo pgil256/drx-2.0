@@ -65,6 +65,20 @@ Each item is its own commit, so any one can be reverted alone.
   is set in CI and in `tests/conftest.py`. Removing it needs a CI run to confirm.
 - **Separate `check_limits_sync.py` CI step:** it repeats
   `unit/test_limits_sync.py` but fails faster. Keep as is unless CI time matters.
+- **Python 3.7 import job (added 2026-10-09):** `python37-imports` runs
+  `development/scripts/check_runtime_imports.py` in a `python:3.7-slim-bookworm`
+  container and gates the PR: run 38168318618 on 2026-10-11 imported 98 of 98
+  modules on Python 3.7.17. The job pins `PyQt5==5.15.9` / `PyQt5-sip==12.12.2`,
+  the last pair with 3.7 wheels; the Pi itself uses apt's PyQt5, not pip.
+  Running the full test suite on 3.7 is a separate decision: about 80 test
+  lines use `call_args.kwargs`, which needs Python 3.8.
+- **Python 3.7 test job (added 2026-10-12):** `python37-tests` runs the whole
+  suite in the same container and gates the PR: run 38262400584 passed 1839
+  tests on Python 3.7.17. `requirements-test.txt` carries version markers for
+  it (`aiohttp==3.8.6`, `PyQt5==5.15.9`, `PyQt5-sip==12.12.2` below 3.8/3.9).
+  Its first run found that `DiagnosticFileHandler` disabled itself on 3.7, so
+  the Pi wrote no application or Arduino log files; fixed in the same branch.
+  Check on a device that `devices/local/raspberry-pi/logs` fills again.
 - **WSL test gaps:** installing `qrcode` would clear the 24 known WSL failures,
   and `aiohttp` would let the two simulator test files run. Neither is installed.
 

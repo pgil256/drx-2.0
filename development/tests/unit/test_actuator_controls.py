@@ -304,7 +304,7 @@ class TestLegLengthBounds:
         with patch.object(kneespa.GPIO, "output") as gpio_output:
             assert KneeSpa.forward_button_clicked(stub) is False
         assert stub.leg.position is None
-        assert all(call.args[1] == kneespa.GPIO.LOW for call in gpio_output.call_args_list)
+        assert all(call[0][1] == kneespa.GPIO.LOW for call in gpio_output.call_args_list)
 
     def test_position_rounded_to_increment(self):
         """The new position is snapped to the nearest 2.5-degree increment."""

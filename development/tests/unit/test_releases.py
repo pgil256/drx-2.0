@@ -83,7 +83,7 @@ def test_download_verifies_actual_bytes_and_cleans_partial_files(tmp_path, failu
     else:
         path = client.download(release, tmp_path)
         assert path.read_bytes() == data
-        request = client._opener.open.call_args.args[0]
+        request = client._opener.open.call_args[0][0]
         assert request.full_url == client.cloud_url + release["download_url"]
         assert request.get_header("Authorization") is None
         assert list(tmp_path.iterdir()) == [path]

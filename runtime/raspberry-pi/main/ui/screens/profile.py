@@ -66,9 +66,9 @@ class ProfileScreen(QWidget):
         ))
         root.addStretch(1)
         actions = QHBoxLayout()
-        self._restart = DSButton("Restart App", variant="dark", full_width=True)
+        self._restart = DSButton("Restart App", variant="secondary", full_width=True)
         self._exit = DSButton("Exit App", variant="secondary", full_width=True)
-        self._logout = DSButton("Log Out", variant="danger", full_width=True)
+        self._logout = DSButton("Log Out", variant="destructive", full_width=True)
         for button, signal in ((self._restart, self.restart_requested),
                                (self._exit, self.exit_requested),
                                (self._logout, self.logout_requested)):

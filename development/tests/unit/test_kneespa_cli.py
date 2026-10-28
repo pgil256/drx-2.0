@@ -56,6 +56,11 @@ def test_main_routes_options(
     monkeypatch.setattr(kneespa, "_sync_logs", sync)
     monkeypatch.setattr(kneespa, "os", SimpleNamespace(_exit=exit_process))
     monkeypatch.setattr(kneespa.logging, "shutdown", MagicMock())
+    monkeypatch.setattr(
+        kneespa, "start_watchdog", lambda parent: events.append("watchdog") or "timer")
+    monkeypatch.setattr(
+        kneespa, "extend_watchdog_for_shutdown",
+        lambda timer: events.append("watchdog-extended:" + timer))
 
     kneespa.main()
 
@@ -72,9 +77,9 @@ def test_main_routes_options(
     else:
         sync.assert_not_called()
     exit_process.assert_not_called()
-    assert events == ["event-loop"] + (["print"] if print_logs else []) + (
-        ["sync"] if sync_logs else []
-    )
+    # The watchdog pings only while the event loop runs; exit work gets a long deadline.
+    assert events == ["watchdog", "event-loop", "watchdog-extended:timer"] + (
+        ["print"] if print_logs else []) + (["sync"] if sync_logs else [])
 
 
 def test_print_and_sync_use_run_logs(

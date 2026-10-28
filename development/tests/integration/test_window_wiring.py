@@ -363,7 +363,7 @@ def test_calibration_button_opens_shared_session(
     assert controller.dialog.isVisible()
     assert w._calibration_active
     assert not controller.ready()
-    assert [call.args[0] for call in window_run.arduino.send.call_args_list] == ["HF1", "T"]
+    assert [call[0][0] for call in window_run.arduino.send.call_args_list] == ["HF1", "T"]
     assert not w.shell.setup._rows["horizontal"].motion_buttons[0].isEnabled()
 
     controller.dialog.close_button.click()
@@ -461,7 +461,7 @@ def test_constructor_timer_wiring_and_cleanup(window_run: SimpleNamespace,
     assert run.view._progress_fraction == pytest.approx(5 / 720)
     w.close()
     assert w._closing and not w.protocol_timer.isActive()
-    assert [c.args[0] for c in run.arduino.send.call_args_list][-3:] == ["X", "P0", "HF0"]
+    assert [c[0][0] for c in run.arduino.send.call_args_list][-3:] == ["X", "P0", "HF0"]
 
 
 @pytest.mark.parametrize("answer", [False, True])
@@ -645,7 +645,7 @@ def test_upload_uses_live_end_settings_and_frozen_patient(window_run: SimpleName
     run.window.cloud_patient = {"patient_id": 8}
     run.view.set_settings({"max_pressure": 67, "max_left": 12, "max_right": 16})
     worker.signals.finished.emit(True)
-    record = run.cloud.post_treatment_async.call_args.args[0]
+    record = run.cloud.post_treatment_async.call_args[0][0]
     assert record["patient_id"] == "7"
     assert record["outcome"] == "completed"
     assert record["settings_at_end"] == {
@@ -695,12 +695,12 @@ def test_pressure_notice_actions_keep_recovery_explicit(window_run, action, qtbo
         run.arduino.send.assert_not_called()
         worker.cancel.assert_not_called()
     else:
-        assert [c.args[0] for c in run.arduino.send.call_args_list] == ["X", "X", "HF1"]
+        assert [c[0][0] for c in run.arduino.send.call_args_list] == ["X", "X", "HF1"]
         worker.cancel.assert_called_once_with(firmware_stopped=True)
         assert run.window._no_automatic_recovery
         run.window.protocol._stop_phase2()
         run.window.connection._automatic_reset()
-        assert [c.args[0] for c in run.arduino.send.call_args_list] == ["X", "X", "HF1"]
+        assert [c[0][0] for c in run.arduino.send.call_args_list] == ["X", "X", "HF1"]
 
 
 def test_restart_button_requests_cleanup_once(window_run, monkeypatch):
@@ -710,7 +710,7 @@ def test_restart_button_requests_cleanup_once(window_run, monkeypatch):
     run.window.shell.profile._restart.click()
     assert run.window.restart_requested and run.window._closing
     run.window._on_restart_app()
-    assert [c.args[0] for c in run.arduino.send.call_args_list] == ["X", "P0", "HF0"]
+    assert [c[0][0] for c in run.arduino.send.call_args_list] == ["X", "P0", "HF0"]
 
 
 def test_pressure_caption_and_decimal_render_in_existing_panel(window_run, tmp_path):
@@ -856,7 +856,7 @@ def test_qr_registration_pin_lookup_then_staff_mfa_edit_and_cancel(patient_flow)
     assert run.view._patient_label.text() == "Test Patient"
     assert run.view._patient_detail.text() == "Patient linked"
     staff.request.assert_called_once()
-    assert staff.request.call_args.args[0] == "GET"
+    assert staff.request.call_args[0][0] == "GET"
     editor._name.setText("Cancelled edit")
     editor.reject()
     assert run.window.cloud_patient["display_name"] == "Test Patient"
@@ -888,7 +888,7 @@ def test_uncertain_profile_edit_requires_reload_before_retry(patient_flow):
     flow.editor._reload.click()
     flow.jobs.pop(0)()
     assert flow.editor._save.isEnabled()
-    assert [call.args[0] for call in flow.staff.request.call_args_list] == ["GET", "PATCH", "GET"]
+    assert [call[0][0] for call in flow.staff.request.call_args_list] == ["GET", "PATCH", "GET"]
 
 
 def test_unapproved_cloud_patient_stays_unlinked_after_qr_handoff(patient_flow):

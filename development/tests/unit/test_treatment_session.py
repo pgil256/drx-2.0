@@ -6,7 +6,6 @@ from uuid import UUID, uuid4
 
 import pytest
 
-from controllers.protocol_controller import ProtocolController
 from controllers.safety_monitor import SafetyMonitor
 from fixtures.controllers import make_window, make_worker_double
 from helpers import treatment_session
@@ -99,10 +98,10 @@ def test_duplicate_worker_completion_captures_original_plan(monkeypatch, qtbot, 
     window.protocol_start_time = None
     window.protocol_value = "3"
     window.cloud_patient = {"patient_id": str(uuid4())}
-    finish = worker.signals.finished.connect.call_args.args[0]
+    finish = worker.signals.finished.connect.call_args[0][0]
     finish(success)
     finish(False)
-    record = window.cloud_client.post_treatment_async.call_args.args[0]
+    record = window.cloud_client.post_treatment_async.call_args[0][0]
     assert window.cloud_client.post_treatment_async.call_count == 1
     assert record["patient_id"] == original_patient
     assert record["protocol_number"] == 2
@@ -118,17 +117,17 @@ def test_stop_latch_survives_reset_and_late_success(monkeypatch, qtbot):
     controller.stop_protocol()
     window.protocol_stop_requested = False  # Reset completed before the queued finish arrived.
     window.protocol_state = "idle"
-    worker.signals.finished.connect.call_args.args[0](True)
+    worker.signals.finished.connect.call_args[0][0](True)
     assert window.cloud_client.post_treatment_async.call_count == 1
-    assert window.cloud_client.post_treatment_async.call_args.args[0]["outcome"] == "stopped"
+    assert window.cloud_client.post_treatment_async.call_args[0][0]["outcome"] == "stopped"
 
 
 def test_physical_stop_records_fault_once_without_serial_stop(monkeypatch, qtbot):
     window, controller, worker = dispatch(monkeypatch)
     SafetyMonitor(window).on_physical_stop()
-    worker.signals.finished.connect.call_args.args[0](False)
+    worker.signals.finished.connect.call_args[0][0](False)
     assert window.cloud_client.post_treatment_async.call_count == 1
-    assert window.cloud_client.post_treatment_async.call_args.args[0]["outcome"] == "fault"
+    assert window.cloud_client.post_treatment_async.call_args[0][0]["outcome"] == "fault"
     window.stop_actuators.assert_not_called()
     worker.cancel.assert_called_once_with(firmware_stopped=True)
 
@@ -139,7 +138,7 @@ def test_finalized_fault_does_not_automatically_release_or_home(monkeypatch, qtb
     # P0 pressure release. Recording first must not swallow that cleanup.
     controller.set_state("fault")
     assert controller._session.finalized
-    finish = worker.signals.finished.connect.call_args.args[0]
+    finish = worker.signals.finished.connect.call_args[0][0]
     finish(False)
     finish(False)
     worker.stop.assert_not_called()
@@ -149,7 +148,7 @@ def test_finalized_fault_does_not_automatically_release_or_home(monkeypatch, qtb
 
 def test_failed_worker_requires_explicit_recovery(monkeypatch, qtbot):
     window, controller, worker = dispatch(monkeypatch)
-    worker.signals.finished.connect.call_args.args[0](False)
+    worker.signals.finished.connect.call_args[0][0](False)
     window.reset_arduino.assert_not_called()
     assert window.protocol_state == "fault"
     assert window.cloud_client.post_treatment_async.call_count == 1
@@ -157,18 +156,18 @@ def test_failed_worker_requires_explicit_recovery(monkeypatch, qtbot):
 
 def test_old_worker_cannot_finalize_or_reset_new_run(monkeypatch, qtbot):
     window, controller, first = dispatch(monkeypatch)
-    first.signals.finished.connect.call_args.args[0](True)
+    first.signals.finished.connect.call_args[0][0](True)
     second = make_worker_double()
     monkeypatch.setattr(
         "controllers.protocol_controller.protocols.Protocols", lambda *a, **kw: second
     )
     assert controller.start_protocol()
     session = controller._session
-    first.signals.finished.connect.call_args.args[0](False)
-    first.signals.operation_failed.connect.call_args.args[0]("late fault")
+    first.signals.finished.connect.call_args[0][0](False)
+    first.signals.operation_failed.connect.call_args[0][0]("late fault")
     assert not session.finalized
     window.reset_arduino.assert_not_called()
-    second.signals.finished.connect.call_args.args[0](True)
+    second.signals.finished.connect.call_args[0][0](True)
     assert window.cloud_client.post_treatment_async.call_count == 2
 
 
@@ -194,7 +193,7 @@ def test_pending_patient_lookup_blocks_dispatch(qtbot):
 
 def test_cleanup_finish_signal_cannot_reenter_finalizer(monkeypatch, qtbot):
     window, controller, worker = dispatch(monkeypatch)
-    finish = worker.signals.finished.connect.call_args.args[0]
+    finish = worker.signals.finished.connect.call_args[0][0]
     worker.stop.side_effect = lambda: finish(False)
     finish(True)
     worker.stop.assert_not_called()
@@ -212,15 +211,15 @@ def test_snapshot_precedes_cleanup_and_upload_follows_release(monkeypatch, qtbot
         window.protocol_duration = 0
 
     worker.stop.side_effect = cleanup
-    worker.signals.finished.connect.call_args.args[0](True)
-    record = window.cloud_client.post_treatment_async.call_args.args[0]
+    worker.signals.finished.connect.call_args[0][0](True)
+    record = window.cloud_client.post_treatment_async.call_args[0][0]
     assert record["settings_at_end"]["max_pressure_lb"] == original["max_pressure"]
     assert record["planned_duration_s"] == 720
 
 
 def test_manual_treatment_keeps_local_start_checks(monkeypatch, qtbot):
     window, controller, worker = dispatch(monkeypatch, patient=False)
-    worker.signals.finished.connect.call_args.args[0](True)
+    worker.signals.finished.connect.call_args[0][0](True)
     window.cloud_client.post_treatment_async.assert_not_called()
     assert controller._session.finalized
     window.current_user = None

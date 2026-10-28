@@ -10,13 +10,14 @@ from PyQt5.QtCore import QPoint
 
 from controllers.machine_sign_in_controller import authorize
 from helpers.machine_sign_in import MachineSignInClient, MachineStaffClient, REQUESTS, SESSION
-from integration.test_window_wiring import window_run
+# window_run is a pytest fixture: imported so pytest can resolve it by name.
+from integration.test_window_wiring import window_run  # noqa: F401
 
 pytestmark = pytest.mark.integration
 
 
 @pytest.fixture
-def sign_in(window_run, monkeypatch):
+def sign_in(window_run, monkeypatch):  # noqa: F811
     w = window_run.window
     w.cloud_client.enabled = True
     w.cloud_client._headers.return_value = {
@@ -217,7 +218,7 @@ def test_patient_starts_only_after_recheck_and_completion_clears_session(sign_in
     w.worker.signals.finished.emit(True)
     assert not controller.client.token and w.current_user is None
     assert w.protocol._session.patient_id == frozen
-    record = w.cloud_client.post_treatment_async.call_args.args[0]
+    record = w.cloud_client.post_treatment_async.call_args[0][0]
     assert record["patient_id"] == frozen
     assert "machine_session" not in record
 

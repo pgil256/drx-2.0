@@ -131,6 +131,27 @@ Do this once per device, with the application stopped. Preserve the old `main/`,
 4. Verify the existing device identity, calibration, login, and logs before
    retiring the old folders. Use routine sync for subsequent updates.
 
+### Restart a frozen screen automatically (optional)
+
+The unit example sets `WatchdogSec=60` and `NotifyAccess=main`. The app pings
+systemd from its GUI thread, so a screen that stops responding for 60 seconds is
+aborted and restarted by `Restart=on-failure`. An abort ends serial traffic, and
+the firmware's host-heartbeat timeout then stops motion on its own.
+
+Add the two lines to an installed unit only after the device runs a build that
+contains `helpers/watchdog.py`; an older build never pings and would be
+restarted every minute. Then run `sudo systemctl daemon-reload` and restart the
+service. Check it on the device before relying on it:
+
+```bash
+systemctl show kneespa.service -p WatchdogUSec -p NRestarts
+sudo kill -STOP "$(systemctl show kneespa.service -p MainPID --value)"   # simulate a hang
+journalctl -u kneespa.service -f   # expect "Watchdog timeout" and a restart within about 65 s
+```
+
+The desktop launcher and the simulator are unaffected: without systemd's
+`NOTIFY_SOCKET` the app sends nothing. Not yet verified on a Pi.
+
 A direct application launch performs the same migration before loading settings.
 Explicit `KNEESPA_DEVICE_DIR` profiles are never auto-migrated from local state;
 the migration CLI's `--device-dir` and `--project-root` are available for an

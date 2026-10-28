@@ -100,8 +100,10 @@ TOKENS = {
     "--weight-semibold": "600",
     "--weight-bold": "700",
 
-    "--text-2xs": "16px",   # minimum readable metadata
-    "--text-xs": "16px",    # captions and status labels
+    # Anything read at arm's length (readouts, labels, buttons, body copy)
+    # uses --text-sm or larger; only eyebrows, captions and badges go below.
+    "--text-2xs": "13px",   # eyebrows, units
+    "--text-xs": "14px",    # captions and badge labels
     "--text-sm": "16px",    # secondary copy
     "--text-base": "18px",  # body, control labels
     "--text-md": "20px",    # emphasized labels

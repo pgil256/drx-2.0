@@ -4,8 +4,8 @@ import select
 import threading
 import time
 
-from simulator.controller.serial_model import (
-    ControllerModel, MAX_PRESSURE_LBS, PRESSURE_WARNING_LBS,
+from simulator.controller.serial_model import (  # limits are re-exported for tests
+    ControllerModel, MAX_PRESSURE_LBS, PRESSURE_WARNING_LBS,  # noqa: F401
 )
 
 try:

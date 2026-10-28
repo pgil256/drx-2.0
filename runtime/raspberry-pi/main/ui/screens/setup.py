@@ -202,7 +202,7 @@ class SetupScreen(QWidget):
         actions = QHBoxLayout()
         actions.setSpacing(16)
         self._mark_btn = DSButton(
-            "Save treatment defaults", variant="dark", size="lg", full_width=True,
+            "Save treatment defaults", variant="primary", size="lg", full_width=True,
         )
         self._reset_btn = DSButton(
             "Reset and home device", variant="secondary", size="lg", full_width=True,

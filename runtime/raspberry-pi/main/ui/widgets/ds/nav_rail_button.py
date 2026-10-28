@@ -50,7 +50,7 @@ class DSNavRailButton(QToolButton):
             f" border-left: 4px solid {left}; padding: 18px 0; }}"
             f" QToolButton:hover {{ background: {hover}; }}"
             f" QToolButton:pressed {{ background: #333333; }}"
-            f" QToolButton:focus {{ border: 3px solid #ffffff;"
+            f" QToolButton[keyboardFocus=\"true\"]:focus {{ border: 3px solid #ffffff;"
             f" border-left: 4px solid {left}; }}"
         )
         repolish(self)

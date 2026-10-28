@@ -2,9 +2,9 @@
 """Tests for the always-visible treatment banner and the protocol
 lifecycle state machine that drives it."""
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
 import pytest
-from PyQt5.QtWidgets import QWidget
 
 from ui.widgets.treatment_status_panel import TreatmentStatusPanel
 from controllers.protocol_controller import ProtocolController
@@ -158,6 +158,7 @@ class _StubWindow:
     """Window surface the ProtocolController's state machine touches."""
 
     def __init__(self, qtbot):
+        self.logger = MagicMock()
         self.protocol_state = "idle"
         self.protocol_running = False
         self.reset_in_progress = False

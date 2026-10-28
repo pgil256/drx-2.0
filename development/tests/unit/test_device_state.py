@@ -71,6 +71,29 @@ def test_existing_destination_wins_and_failure_can_be_retried(
     assert source.read_text() == "original"
 
 
+def test_failed_copy_cleanup_works_with_the_python_37_unlink_signature(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The Pi runs Python 3.7, where Path.unlink() takes no arguments."""
+    source = tmp_path / "config/kneespa.cfg"
+    source.parent.mkdir()
+    source.write_text("original")
+    device = tmp_path / "devices/local"
+    real_unlink = Path.unlink
+
+    def unlink_37(self: Path) -> None:
+        real_unlink(self)
+
+    def fail_copy(*args: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr(Path, "unlink", unlink_37)
+    monkeypatch.setattr(migration.shutil, "copyfileobj", fail_copy)
+    with pytest.raises(OSError, match="disk full"):
+        migration.migrate_state(tmp_path, device)
+    assert not (device / "raspberry-pi/config/kneespa.cfg").exists()
+
+
 def test_custom_profile_does_not_migrate_local_state(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setenv("KNEESPA_DEVICE_DIR", "selected-profile")
     monkeypatch.setattr(migration, "migrate_state", lambda *args: pytest.fail("mixed devices"))

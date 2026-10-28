@@ -44,6 +44,7 @@ class DSStatReadout(QWidget):
         if label:  # truthy — empty-string label renders no caption (matches DS)
             self._caption = QLabel(str(label).upper(), self)
             self._caption.setFont(sans_font(size="--text-xs", weight=600, tracking=0.06))
+            self._caption.setProperty("dsCaption", True)
             self._caption.setAlignment(Qt.AlignCenter)
             self._caption.setStyleSheet(f"color: {resolve('--gray-600')};")
             lay.addWidget(self._caption)

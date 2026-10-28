@@ -97,3 +97,24 @@ def test_rendered_app_qss_has_no_unresolved_vars():
     assert "var(" not in rendered, "app.qss still contains unresolved var() refs"
     # sanity: the primary interactive blue made it into the stylesheet
     assert "#176b9a" in rendered
+
+
+_TYPE_SCALE = ("--text-2xs", "--text-xs", "--text-sm", "--text-base", "--text-md",
+               "--text-lg", "--text-xl", "--text-2xl", "--text-3xl")
+
+
+def _px(token):
+    return int(resolve(token).replace("px", ""))
+
+
+def test_type_scale_is_strictly_increasing():
+    """Every step reads as a different volume; no two steps collapse together."""
+    sizes = [_px(token) for token in _TYPE_SCALE]
+    assert sizes == sorted(set(sizes)), dict(zip(_TYPE_SCALE, sizes))
+
+
+def test_arm_length_text_stays_at_least_16px():
+    """Readouts, labels and buttons use --text-sm or larger; only captions go below."""
+    assert _px("--text-sm") >= 16
+    assert _px("--text-base") >= 16
+    assert _px("--text-2xs") >= 12  # eyebrows / units still legible

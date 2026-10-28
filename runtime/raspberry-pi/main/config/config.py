@@ -1,5 +1,6 @@
 import configparser
 import copy
+import logging
 import os
 import shutil
 import tempfile
@@ -9,11 +10,17 @@ from typing import Dict, Mapping, Optional
 from helpers.motor_speed import motor_speed_values
 
 from config.constants import (
+    APP_NAME,
     CONFIG_PATH,
     DEFAULT_CONFIG_PATH,
     DEFAULT_PROTOCOL_MINUTES,
     LEGACY_CONFIG_PATH,
 )
+
+# A plain child of the application logger: helpers.logging creates the run's
+# log files when imported, which tools that only read a configuration must
+# not trigger. Records reach the app handlers once the app has set them up.
+logger = logging.getLogger(f"{APP_NAME}.config")
 
 # A real HX711 scale factor for this hardware is in the tens of
 # thousands (the shipped device uses -28369). Small magnitudes mean the
@@ -73,7 +80,7 @@ class Configuration:
         return self.marks_valid and self.scale_calibrated
 
     def _flag_error(self, message: str):
-        print(f"CALIBRATION: {message}")
+        logger.warning("CALIBRATION: %s", message)
         self.calibration_errors.append(message)
 
     def get_config(self, config_path: Optional[str] = None):
@@ -114,10 +121,9 @@ class Configuration:
             self._validate_calibration()
 
         except Exception as e:
-            print(str(e))
-            print(
-                'Fatal error, could not load config file from "%s"'
-                % self.configFile
+            logger.error("%s", e)
+            logger.error(
+                'Fatal error, could not load config file from "%s"', self.configFile
             )
             self._set_default_c_marks()
             self._set_default_a_marks()
@@ -198,7 +204,7 @@ class Configuration:
                 if option_settings["type"] != str:
                     value = option_settings["type"](raw_value)
             except (ValueError, TypeError) as e:
-                print(f"Error parsing {option_name}: {e}, using default")
+                logger.warning("Error parsing %s: %s, using default", option_name, e)
                 value = option_settings["default"]
                 self.config.set(section, option_name, str(value))
             setattr(self, option_name, value)
@@ -210,7 +216,7 @@ class Configuration:
         if not self.config.has_section(section):
             return
         if self.config.get(section, "marked", fallback="") != "1":
-            print(
+            logger.info(
                 "Ignoring [ProtocolDefaults] that was auto-written rather than "
                 "marked by an operator; using code defaults"
             )
@@ -228,7 +234,9 @@ class Configuration:
                 try:
                     setattr(self, attr, float(self.config[section][key]))
                 except (ValueError, TypeError) as e:
-                    print(f"Error parsing ProtocolDefaults.{key}: {e}, using default")
+                    logger.warning(
+                        "Error parsing ProtocolDefaults.%s: %s, using default", key, e
+                    )
         for key in motor_speed_values():
             try:
                 values = motor_speed_values({key: self.config.getfloat(
@@ -236,7 +244,7 @@ class Configuration:
                 )})
                 setattr(self, f"default_{key}", values[key])
             except (ValueError, TypeError):
-                print(f"Invalid ProtocolDefaults.{key}; using default motor speed")
+                logger.warning("Invalid ProtocolDefaults.%s; using default motor speed", key)
 
     def _migrate_legacy_config(self) -> None:
         """Copy legacy calibration once, without overwriting an existing config.
@@ -264,7 +272,9 @@ class Configuration:
             except Exception:
                 os.unlink(self.configFile)
                 raise
-        print(f"Copied legacy configuration from {LEGACY_CONFIG_PATH} to {self.configFile}")
+        logger.info(
+            "Copied legacy configuration from %s to %s", LEGACY_CONFIG_PATH, self.configFile
+        )
 
     def _load_device(self) -> None:
         """Load the device identity and a device number from 1 through 3."""
@@ -276,7 +286,7 @@ class Configuration:
             if number not in (1, 2, 3):
                 raise ValueError("must be 1, 2, or 3")
         except (ValueError, TypeError):
-            print(f"Invalid Device.number {raw_number!r}; using default 1")
+            logger.warning("Invalid Device.number %r; using default 1", raw_number)
             number = 1
         self.device_number = number
         self._set_section("Device", {"number": number})
@@ -522,13 +532,13 @@ class Configuration:
     def update_config(self):
         """Update current values, retaining this caller's legacy error reporting."""
         self._populate_config(self.config)
-        print("Config updated")
+        logger.info("Config updated")
         try:
             self._ensure_config_sections()
             self._atomic_write()
         except Exception as e:
-            print(str(e))
-            print(f'Fatal error, could not write config file to "{self.configFile}"')
+            logger.error("%s", e)
+            logger.error('Fatal error, could not write config file to "%s"', self.configFile)
 
     def _set_default_c_marks(self):
         """Set default CMarks values for lateral actuator."""

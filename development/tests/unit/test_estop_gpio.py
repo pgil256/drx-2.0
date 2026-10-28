@@ -19,6 +19,7 @@ class RecordingWindow:
 
     def __init__(self, events):
         self._events = events
+        self.logger = MagicMock()
         self.worker = MagicMock()
         self.worker.stop.side_effect = lambda: events.append("worker.stop")
 

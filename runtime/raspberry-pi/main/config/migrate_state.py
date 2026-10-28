@@ -28,7 +28,13 @@ def _copy_missing(source: Path, destination: Path) -> bool:
         shutil.copystat(source, destination)
     except Exception:
         target.close()
-        destination.unlink(missing_ok=True)
+        # Path.unlink(missing_ok=...) needs Python 3.8; the Pi runs 3.7, where
+        # the TypeError would hide the real failure and leave a partial copy
+        # that later "wins" over the legacy original.
+        try:
+            destination.unlink()
+        except FileNotFoundError:
+            pass
         raise
     return True
 

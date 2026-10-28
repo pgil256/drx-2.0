@@ -52,7 +52,7 @@ class ProtocolController:
         if state == "fault":
             self.latch_session_outcome("fault")
             self.finalize_session()
-        print(f"Protocol state: {window.protocol_state} -> {state}")
+        window.logger.info("Protocol state: %s -> %s", window.protocol_state, state)
         window.protocol_state = state
         window.protocol_running = state in ("starting", "running", "stopping")
 
@@ -148,7 +148,7 @@ class ProtocolController:
 
     def panel_stop_requested(self):
         """Emergency stop pressed on the always-visible treatment banner."""
-        print("Panel EMERGENCY STOP pressed")
+        self.window.logger.warning("Panel EMERGENCY STOP pressed")
         self.emergency_stop_clicked(None)
 
 
@@ -166,7 +166,7 @@ class ProtocolController:
             settings = dict(window.shell.treatment.settings_values())
             settings["duration"] = int(window._duration_minutes())
         except Exception as e:
-            print(f"Error reading protocol parameters for confirmation: {e}")
+            window.logger.error("Error reading protocol parameters for confirmation: %s", e)
             return False
 
         patient = getattr(window, "cloud_patient", None)
@@ -189,7 +189,7 @@ class ProtocolController:
     def _toggle_start_stop(self) -> None:
         """Start or stop the protocol with debouncing to prevent multiple rapid clicks."""
         window = self.window
-        print("Toggling protocol start/stop")
+        window.logger.info("Toggling protocol start/stop")
         if window.protocol_state == "idle" and not authorize(
                 window, "treatment", self.start_or_stop):
             return
@@ -251,7 +251,6 @@ class ProtocolController:
                 self._set_run_state(True)
                 self.stop_protocol()
         except Exception as e:
-            print(f"Error during protocol operation: {e}")
             window.logger.exception("Protocol start/stop transition failed")
             if window.protocol_state in ("fault", "stopping"):
                 # A nested event may already have started fault/stop recovery.
@@ -291,7 +290,7 @@ class ProtocolController:
             window._show_timed_error("Finish recovery/reset and movement before starting treatment.")
             return False
         if not window.current_user:
-            print("Access denied: User not logged in")
+            window.logger.warning("Access denied: User not logged in")
             window._show_timed_error("Please login to proceed")
             return False
 
@@ -321,12 +320,14 @@ class ProtocolController:
             try:
                 duration = int(window._duration_minutes())
             except Exception as e:
-                print(f"Error getting time value: {e}, using default 5 minutes")
+                window.logger.warning(
+                    "Error getting time value: %s, using default 5 minutes", e
+                )
 
             if duration == 0:
                 duration = 12  # Ensure we have a valid duration
 
-            print(f"Protocol duration: {duration} minutes")
+            window.logger.info("Protocol duration: %s minutes", duration)
             max_pressure = int(window.shell.treatment.settings_values().get("max_pressure", 50))
             max_left_from_slider = int(window.shell.treatment.settings_values().get("max_left", 10))
             max_right_from_slider = int(
@@ -413,13 +414,12 @@ class ProtocolController:
             return True
 
         except ValueError as e:
-            print(f"Invalid parameter: {str(e)}")
+            window.logger.error("Invalid parameter: %s", e)
             window._show_timed_error(f"Invalid Parameters: {str(e)}")
             return False
         except Exception as e:
-            print(f"Failed to start protocol: {str(e)}")
-            import traceback
-            traceback.print_exc()  # Print full stack trace
+            # exception() records the full stack trace with the message.
+            window.logger.exception("Failed to start protocol: %s", e)
             window._show_timed_error(f"Protocol Error: {str(e)}")
             return False
 
@@ -477,7 +477,7 @@ class ProtocolController:
     def stop_protocol(self):
         """Stop protocol sequence."""
         window = self.window
-        print("Stopping protocol")
+        window.logger.info("Stopping protocol")
         window.protocol_stop_requested = True
         self.latch_session_outcome("stopped")
         # Cancel the producer before X clears queued work. Waiting until phase
@@ -554,7 +554,7 @@ class ProtocolController:
             if self._session.completion_handled:
                 return
             self._session.completion_handled = True
-        print(f"Protocol completed; success={success}")
+        window.logger.info("Protocol completed; success=%s", success)
         user_stopped = bool(getattr(window, "protocol_stop_requested", False))
         safety_fault_active = getattr(window, "protocol_state", "") == "fault"
         outcome = self._completion_outcome(success, user_stopped, safety_fault_active)
@@ -575,7 +575,7 @@ class ProtocolController:
                 "Protocol complete" if success else "Protocol stopped"
             )
         except Exception as e:
-            print(f"Error updating status label: {e}")
+            window.logger.error("Error updating status label: %s", e)
         window.mid_protocol_warning_shown = False
         if safety_fault_active:
             # Preserve an existing command/device fault. A later worker
@@ -677,7 +677,6 @@ class ProtocolController:
     def emergency_stop_clicked(self, event, outcome: str = "fault"):
         """Handle emergency stop button press."""
         window = self.window
-        print("Emergency stop triggered")
         # Mark this as an intentional stop before any firmware responses can
         # arrive. Command rejections from the follow-up pressure-release
         # cleanup must not be mislabeled as a new physical device fault.
@@ -698,7 +697,9 @@ class ProtocolController:
         try:
             GPIO.output(EMERGENCYSTOP, GPIO.LOW)
         except Exception as e:
-            print(f"Could not assert EMERGENCYSTOP GPIO: {e}")
+            window.logger.error("Could not assert EMERGENCYSTOP GPIO: %s", e)
+        # Logged only after the hardware line is asserted.
+        window.logger.warning("Emergency stop triggered")
         if window.worker:
             window.worker.cancel()
         # arduino.send never blocks or reconnects; 'X' jumps the tx queue
@@ -712,7 +713,7 @@ class ProtocolController:
             try:
                 self.set_state("stopping")
             except Exception as e:
-                print(f"Could not update emergency-stop UI state: {e}")
+                window.logger.error("Could not update emergency-stop UI state: %s", e)
         # Use QTimer instead of sleep to avoid blocking UI
         QTimer.singleShot(1000, self._emergency_stop_phase2)
 
@@ -739,7 +740,7 @@ class ProtocolController:
         try:
             GPIO.output(EMERGENCYSTOP, GPIO.HIGH)
         except Exception as e:
-            print(f"Could not release EMERGENCYSTOP GPIO: {e}")
+            self.window.logger.error("Could not release EMERGENCYSTOP GPIO: %s", e)
         # Same release-then-reset ordering as the staged stop
         self._reset_after_release(time.time())
 
@@ -752,7 +753,7 @@ class ProtocolController:
         try:
             self._set_phase_from_text(clean)
         except Exception as e:
-            print(f"Error updating status label: {e}")
+            window.logger.error("Error updating status label: %s", e)
         window.treatment_panel.set_phase(clean.upper())
 
     def _set_phase_from_text(self, text: str) -> None:

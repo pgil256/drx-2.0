@@ -211,7 +211,7 @@ class TestEnsureConnection:
 
         old_arduino.disconnect.assert_called_once()
         assert w.gpio_reset
-        sent = [c.args[0] for c in w.arduino.send.call_args_list]
+        sent = [c[0][0] for c in w.arduino.send.call_args_list]
         assert sent == []
         assert w.reset_in_progress
         w.threadpool.start.assert_called_once()

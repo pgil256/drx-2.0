@@ -157,7 +157,7 @@ class TestDrainBeforeDisconnect:
         arduino._service_tx_queue()
 
         assert arduino.wait_for_drain(0.1) is True
-        payloads = [call.args[0] for call in arduino.serial_com.write.call_args_list]
+        payloads = [call[0][0] for call in arduino.serial_com.write.call_args_list]
         assert payloads == [b"X\n"]
 
     def test_disconnect_reports_drain_timeout_then_clears_queue(self, arduino):
@@ -180,7 +180,7 @@ class TestTrackedQueueSafety:
         arduino._service_tx_queue()
 
         payloads = [
-            call.args[0].decode().strip()
+            call[0][0].decode().strip()
             for call in arduino.serial_com.write.call_args_list
         ]
         if protocol_v2:
