@@ -78,7 +78,7 @@ fi
 if [[ -z "$PIO" ]]; then
     TOOL_ENV="$HOME/.local/share/kneespa/platformio"
     python3 -m venv "$TOOL_ENV"
-    "$TOOL_ENV/bin/python" -m pip install platformio
+    "$TOOL_ENV/bin/python" -m pip install platformio==6.1.19
     PIO="$TOOL_ENV/bin/pio"
 fi
 [[ -x "$PIO" && ! -d "$PIO" ]] || fail "Cannot run PlatformIO: $PIO"
