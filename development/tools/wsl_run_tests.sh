@@ -4,7 +4,7 @@
 # do not skip. Writes pytest output to /tmp/kneespa_pytest.log.
 set -uo pipefail
 
-cd "$(dirname "${BASH_SOURCE[0]}")/../.."
+cd "$(dirname "${BASH_SOURCE[0]}")/../.." || exit 1
 
 echo "=== pytest (full suite) ==="
 python3 -m pytest -q >/tmp/kneespa_pytest.log 2>&1

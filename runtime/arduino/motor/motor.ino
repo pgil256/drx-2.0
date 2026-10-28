@@ -236,6 +236,9 @@ const unsigned long HIGH_FREQ_INTERVAL = 1000; // ms for frequent updates (adjus
 // Command handling
 String commandBuffer = "";
 bool isCommandComplete = false;
+// Set when a line overflows commandBuffer: the rest of that line is
+// dropped up to its newline instead of being run as a new command.
+bool discardingOverlongCommand = false;
 
 // Timer tracking
 unsigned long loopPosition = 0;
@@ -2192,19 +2195,27 @@ void loop() {
     lastHostTraffic = millis();  // any host byte feeds the heartbeat
 
     if (incomingByte == '\n' || incomingByte == '\r') {  // Command complete
+      // The end of an overlong line: the buffer is already empty, so
+      // nothing from that line runs.
+      discardingOverlongCommand = false;
       if (commandBuffer.length() > 0) { // Only process non-empty commands
         isCommandComplete = true;
         break;
       }
+    } else if (discardingOverlongCommand) {
+      // Drop the rest of an overlong line. Its tail used to collect in
+      // the cleared buffer and run as a command at the newline, so a
+      // corrupt line ending in "P80" applied pressure.
     } else {
       // Limit buffer size to prevent overflows
       if (commandBuffer.length() < MAX_COMMAND_LENGTH - 1) {
         commandBuffer += incomingByte;  // Append character to buffer
       } else {
-        // Buffer overflow - reset and report error
+        // Buffer overflow: reject the whole line once and discard it
         Dbg.println("Command buffer overflow");
         Serial1.println("ERROR: Command too long");
         commandBuffer = "";
+        discardingOverlongCommand = true;
       }
     }
   }

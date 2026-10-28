@@ -9,9 +9,19 @@ on:
   pull_request:
   workflow_dispatch:
 
+# Read-only token: no job here pushes, comments or publishes releases.
+permissions:
+  contents: read
+
+# A new push to a PR supersedes the run in progress; runs on main always finish.
+concurrency:
+  group: ${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: ${{ github.event_name == 'pull_request' }}
+
 jobs:
   python-tests:
     name: Python tests
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -47,17 +57,40 @@ jobs:
         run: python development/scripts/check_limits_sync.py
 
       # On Linux the pty-based integration tests run for real
-      # (they skip on Windows dev machines).
-      - name: Run pytest
+      # (they skip on Windows dev machines). Coverage of the shipped app is
+      # measured here only; there is no threshold yet.
+      - name: Run pytest with coverage
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          xvfb-run -a python -m pytest -q
+          xvfb-run -a python -m pytest -q \
+            --cov=runtime/raspberry-pi/main \
+            --cov-config=development/coverage.ini \
+            --cov-report=xml
+
+      - name: Report coverage total
+        if: ${{ !cancelled() }}
+        run: |
+          total="$(python -m coverage report --rcfile=development/coverage.ini --format=total)"
+          echo "Line coverage of runtime/raspberry-pi/main: ${total}%"
+          echo "Line coverage of \`runtime/raspberry-pi/main\`: **${total}%**" >> "$GITHUB_STEP_SUMMARY"
+
+      # coverage.ini writes the XML under .cache/, which upload-artifact
+      # treats as hidden.
+      - name: Upload coverage XML
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml-${{ github.sha }}
+          path: .cache/coverage/coverage.xml
+          include-hidden-files: true
+          if-no-files-found: error
 
   # Rules live in ruff.toml. The Pi runs Python 3.7 while the tests above run
   # 3.12, so this is the step that rejects syntax the device cannot parse.
   lint:
     name: Lint (ruff, Python 3.7 syntax)
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -73,10 +106,33 @@ jobs:
           python -m pip install ruff==0.15.13
           ruff check .
 
+  # Every tracked shell script. Gates on warnings and errors; info-level notes
+  # (SC2086/SC2029 on the intentionally word-split $SSH_OPTS in the sync
+  # scripts) are printed by `shellcheck -S style` locally but do not fail CI.
+  shellcheck:
+    name: Shell scripts (shellcheck)
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Python 3.12
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.12"
+
+      - name: Run shellcheck
+        run: |
+          python -m pip install shellcheck-py==0.11.0.1
+          shellcheck --version
+          git ls-files -z '*.sh' | xargs -0 shellcheck --severity=warning
+
   # A real Python 3.7 (the Pi's interpreter) byte-compiles the shipped code and
   # imports every runtime module. Gates the PR.
   python37-imports:
     name: Python 3.7 import check (Pi runtime)
+    timeout-minutes: 15
     runs-on: ubuntu-latest
     container: python:3.7-slim-bookworm
     steps:
@@ -117,6 +173,7 @@ jobs:
   # cannot see because they only fail when the line runs. Gates the PR.
   python37-tests:
     name: Python 3.7 tests (Pi interpreter)
+    timeout-minutes: 20
     runs-on: ubuntu-latest
     container: python:3.7-slim-bookworm
     steps:
@@ -155,6 +212,7 @@ jobs:
   # no PlatformIO registry access needed. Gates the PR (no continue-on-error).
   firmware-native-tests:
     name: Firmware native tests (g++ + Unity)
+    timeout-minutes: 10
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -165,6 +223,7 @@ jobs:
 
   firmware-avr-build:
     name: Firmware AVR build check (Mega 2560)
+    timeout-minutes: 25
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
@@ -178,7 +237,8 @@ jobs:
       - name: Install PlatformIO
         run: |
           python -m pip install --upgrade pip
-          pip install platformio
+          # Same PlatformIO Core the Pi maintenance script installs (update_buster.py).
+          pip install platformio==6.1.19
 
       - name: Cache PlatformIO packages
         uses: actions/cache@v4
@@ -186,6 +246,30 @@ jobs:
           path: ~/.platformio
           key: pio-${{ runner.os }}-${{ hashFiles('runtime/arduino/motor/platformio.ini') }}
 
+      # Flash and RAM use against the Mega 2560's limits, for review in the log.
+      # Runs before the compile step: the size target rebuilds the environment
+      # without producing firmware.hex, so the default build must come last.
+      - name: Report firmware size
+        working-directory: runtime/arduino/motor
+        run: pio run -e mega -t size
+
       - name: Compile firmware for target hardware
         working-directory: runtime/arduino/motor
         run: pio run -e mega
+
+      - name: Checksum firmware image
+        working-directory: runtime/arduino/motor/.pio/build/mega
+        run: |
+          sha256sum firmware.hex > firmware.hex.sha256
+          cat firmware.hex.sha256
+
+      # .pio/ is a hidden directory, which upload-artifact skips by default.
+      - name: Upload firmware image
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-mega-${{ github.sha }}
+          path: |
+            runtime/arduino/motor/.pio/build/mega/firmware.hex
+            runtime/arduino/motor/.pio/build/mega/firmware.hex.sha256
+          include-hidden-files: true
+          if-no-files-found: error

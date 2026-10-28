@@ -81,3 +81,11 @@ class TestEmergencyStopGpio:
         gpio.output.side_effect = RuntimeError("gpio unavailable")
         controller._emergency_stop_phase3()
         assert "reset_arduino" in events
+
+    def test_phase3_does_not_release_after_physical_stop(self, estop_env):
+        """Documents why the operator reset must release the line itself:
+        after a physical stop the automatic recovery never runs."""
+        events, _, controller, window = estop_env
+        window._no_automatic_recovery = True
+        controller._emergency_stop_phase3()
+        assert events == []
