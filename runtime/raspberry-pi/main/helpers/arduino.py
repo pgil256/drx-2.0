@@ -629,7 +629,7 @@ class Arduino(QObject):
         pressure = float(tokens[4])
         if (not math.isfinite(pressure) or pressure < 0
                 or any(not 0 <= pos <= 4095 for pos in (pos_a, pos_b, pos_c))):
-            self.logger.warning("Rejected non-finite status pressure: %s", data)
+            self.logger.warning("Rejected out-of-range status frame: %s", data)
             return
 
         if separator and not self._status_checksum_required:
