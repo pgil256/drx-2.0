@@ -22,11 +22,11 @@ MEGA_APPLICATION_BYTES = 253952
 MEGA_BUILD = """[platformio]
 src_dir = .
 [env:mega]
-platform = atmelavr
+platform = atmelavr@5.3.0
 board = megaatmega2560
 framework = arduino
 build_src_filter = +<*> -<test/> -<.native-build/>
-lib_deps = pfeerick/elapsedMillis@^1.0.6
+lib_deps = pfeerick/elapsedMillis@1.0.6
 """
 
 
