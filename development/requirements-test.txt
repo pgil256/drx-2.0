@@ -1,5 +1,5 @@
 # requirements-test.txt
-pytest>=7.0
+pytest>=9.1.1
 pytest-mock
 pytest-qt
 pytest-cov
