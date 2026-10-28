@@ -8,7 +8,7 @@
   Native unit tests: development/tests/firmware/ (run_native_tests.sh).
 */
 
-#define VERSION "2026-10-28-DRX2-release-margin"
+#define VERSION "2026-10-28-DRX2-pulse-overshoot"
 #define HX711_DRIVER "DRX-HX711-NB2"
 #include <math.h>
 #ifndef UNIT_TEST
@@ -179,6 +179,19 @@ uint16_t positionTolerance = 0;
 char positionCommandKind = 'I';
 const float PULSE_RELEASE_DROP = 2.0;
 const unsigned long PULSE_RECOVERY_TIMEOUT = 5000UL;
+// The leg is still settling early in pulsing, so recoveries that start within
+// this period get the longer window (operator request, 2026-10-28).
+const unsigned long PULSE_SETTLING_PERIOD = 30000UL;
+const unsigned long PULSE_SETTLING_RECOVERY_TIMEOUT = 10000UL;
+unsigned long pulsingStarted = 0;
+// A forward stroke stops on a sample, and a stiff leg keeps gaining force for
+// about one sample interval after it. Stop once the current rise would carry
+// the next sample to target, so the stroke lands on target instead of past it.
+const unsigned long PULSE_STOP_LEAD_MS = 100;
+const unsigned long PULSE_RISE_MAX_GAP_MS = 250;
+bool pulseRiseReachesTarget = false;
+float previousPressure = 0;
+unsigned long previousPressureAt = 0;
 int pulseMotorSpeed = 0;
 void servicePressure();
 void reportSensorDiagnostics();
@@ -931,6 +944,12 @@ void servicePressure() {
       return;
     }
     pressure = sample < 0.5 ? 0 : sample;
+    unsigned long sinceLast = now - previousPressureAt;
+    pulseRiseReachesTarget = jerking && jerkDirection > 0 && pressureSampleValid &&
+        sinceLast > 0 && sinceLast <= PULSE_RISE_MAX_GAP_MS && pressure > previousPressure &&
+        pressure + (pressure - previousPressure) * PULSE_STOP_LEAD_MS / sinceLast >= desiredPressure;
+    previousPressure = pressure;
+    previousPressureAt = now;
     // A sensor gap cannot count toward the duration of a stable window.
     if (tareActive && now - lastPressureSample > PRESSURE_SAMPLE_TIMEOUT)
       tareCount = 0;
@@ -952,7 +971,7 @@ void servicePressure() {
       pressureCeiling = protocolPressureLimit + PRESSURE_OVERSHOOT_LIMIT;
       pressureDonePending = true;
     }
-    if (jerking && ((jerkDirection > 0 && pressure >= desiredPressure) ||
+    if (jerking && ((jerkDirection > 0 && (pressure >= desiredPressure || pulseRiseReachesTarget)) ||
                     (jerkDirection < 0 && pressure <= pulseReleaseFloor())))
       setPulseSpeed(0); // Stop at the sampled bound, before telemetry or phase timing.
   }
@@ -1774,6 +1793,8 @@ void processCommand(String cmd) {
           jerkDirection = pressure < desiredPressure ? 1 : -1;
           setPulseSpeed(pulseSpeed * jerkDirection);
           lastJerkTime = millis(); // Initialize jerk timer
+          pulsingStarted = lastJerkTime;
+          pulseRiseReachesTarget = false;
           smcDeviceNumber = 12;
           emitAck("DONE", currentCmdSeq);
       }
@@ -2052,8 +2073,12 @@ void loop() {
         lastJerkTime = millis();
         setPulseSpeed(-pulseSpeed);
       }
-    } else if (phaseElapsed >= PULSE_RECOVERY_TIMEOUT) {
+    } else if (phaseElapsed >= (lastJerkTime - pulsingStarted < PULSE_SETTLING_PERIOD ?
+                                PULSE_SETTLING_RECOVERY_TIMEOUT : PULSE_RECOVERY_TIMEOUT)) {
       tripPressureFault("PULSE_RECOVERY_TIMEOUT");
+    } else if (pulseRiseReachesTarget) {
+      // Coasting toward target; the next sample decides whether to push again.
+      setPulseSpeed(0);
     } else {
       // Keep recovering after 500 ms if needed, and recover any droop after
       // an early target stop. Only a recovered load permits the next release.

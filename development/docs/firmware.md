@@ -33,6 +33,31 @@ warns and continues correcting; the host's bounded waits/retries can fail the
 protocol. The paired pressure constants are checked by
 `development/scripts/check_limits_sync.py`.
 
+# Pulse stroke stop and recovery window
+
+Firmware `2026-10-28-DRX2-pulse-overshoot` changes only pulsing (`J`). It ports
+the drx-demo `2026-10-28-pulse-overshoot` fix. From 10/16 to 10/28, 12 of
+KS-FB's 55 demo runs ended in a pulse safety stop:
+
+- **Six `PRESSURE_LIMIT` stops.** Forward strokes on a stiff leg (high targets,
+  or the actuator far extended) overshot past target + 10 lb. Each stroke used
+  to stop only on a sample at or above target. It now also stops when the rise
+  since the previous sample (measured within 250 ms) would carry the next
+  sample, 100 ms ahead (`PULSE_STOP_LEAD_MS`), to target. If the coast stalls
+  below target, the stroke pushes again. A release still starts only from a
+  sample at or above target.
+- **Six `PULSE_RECOVERY_TIMEOUT` stops**, all in the first 20 s of pulsing while
+  the load sagged. At the operator's request, a recovery that starts within the
+  first 30 s of pulsing now has 10 s to regain target; later recoveries keep
+  5 s. A duplicate `J` does not restart either window.
+
+The +10 lb overshoot limit, the absolute cutoff, the release floor, the sensor
+timeout, the adjustable pulse cadence and speed, and stop handling are
+unchanged. In a synthetic stiff load (15 lb/s, 100 ms actuator lag, 40 lb
+target, `test_nb2`) the peak drops from 42 to 40.5 lb. The real gain depends on
+how far the actuator coasts after a stop, so `PULSE_STOP_LEAD_MS` needs a bench
+check. This version has not been flashed or bench-tested.
+
 # Treatment motor speed
 
 The app's Motor Speed controls require this firmware's `V<axial%>,<lateral%>,<pulse%>`
