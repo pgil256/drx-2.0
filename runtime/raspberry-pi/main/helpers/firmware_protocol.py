@@ -4,6 +4,7 @@ import re
 
 
 HX711_PROTOCOL_DRIVER = "DRX-HX711-NB2"
+HOME_RELEASE_CAPABILITY = "HOME_RELEASE_V1"
 
 
 def _number(value, nonzero=False):
@@ -37,6 +38,18 @@ def parse_diagnostic_frame(frame):
     a NOTICE never becomes a safety fault or a command to stop the machine.
     """
     parts = frame.split("|")
+    if parts[0] == "HOME_RELEASE":
+        if len(parts) != 7 or not re.fullmatch(r"[0-9a-f]{12}", parts[1]):
+            raise ValueError("Malformed home release confirmation")
+        pressure = _number(parts[4])
+        if not 0 <= pressure <= 100:
+            raise ValueError("Invalid home release pressure")
+        return "home_release_result", {
+            "token": parts[1], "target": _integer(parts[2], 0, 4095),
+            "actual": _integer(parts[3], 0, 4095), "pressure_lb": pressure,
+            "offset": _integer(parts[5], -8388608, 8388607),
+            "factor": _number(parts[6], nonzero=True),
+        }
     if parts[0] == "MOTION_DONE":
         if len(parts) != 4 or parts[1] not in ("P", "I", "K", "A"):
             raise ValueError("Malformed motion completion")
@@ -89,9 +102,13 @@ def parse_diagnostic_frame(frame):
         values["valid"] = values["age_ms"] >= 0
         return "sensor_diagnostics", values
     if parts[0] == "FIRMWARE":
-        if len(parts) != 3:
+        if len(parts) not in (3, 4):
             raise ValueError("Malformed firmware identity")
-        return "firmware_identity", {"version": _label(parts[1]), "driver": _label(parts[2])}
+        capabilities = [_label(parts[3])] if len(parts) == 4 else []
+        return "firmware_identity", {
+            "version": _label(parts[1]), "driver": _label(parts[2]),
+            "capabilities": capabilities,
+        }
     if parts[0] == "NOTICE":
         if len(parts) != 5 or parts[1] != "PRESSURE_NO_PROGRESS":
             raise ValueError("Malformed pressure notice")

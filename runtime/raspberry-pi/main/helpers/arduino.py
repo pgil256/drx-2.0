@@ -99,6 +99,7 @@ class Arduino(QObject):
     released_emit = pyqtSignal()  # Firmware finished an autonomous pressure release
     zeros_emit = pyqtSignal(int, int)  # Firmware echo of applied AZERO/BZERO
     motion_done = pyqtSignal(str, float, float)
+    home_release_result = pyqtSignal(dict)
     calibration_result = pyqtSignal(dict)
     firmware_identity = pyqtSignal(dict)
     sensor_diagnostics = pyqtSignal(dict)
@@ -158,6 +159,7 @@ class Arduino(QObject):
         self._write_generation = 0
         self.firmware_driver = None
         self.firmware_version = None
+        self.firmware_capabilities = frozenset()
         self.baseline_valid = False
         self.link_retries = 0  # parse rejections answered with a resend
         # Every run records traffic using this single-owner transport. The E2E
@@ -504,6 +506,7 @@ class Arduino(QObject):
     def _invalidate_identity(self) -> None:
         """A reboot/disconnect removes authority to send live calibration."""
         self.firmware_driver = self.firmware_version = None
+        self.firmware_capabilities = frozenset()
         self.baseline_valid = False
 
     def _requeue_front(self, wire: str, handle: CommandHandle) -> None:
@@ -638,6 +641,14 @@ class Arduino(QObject):
                 if signal == "firmware_identity":
                     self.firmware_driver = result["driver"]
                     self.firmware_version = result["version"]
+                    self.firmware_capabilities = frozenset(result["capabilities"])
+                elif signal == "home_release_result":
+                    # R has a token-bound reply, never a generic DONE. Retire
+                    # only its exact v2 handle so it cannot remain outstanding.
+                    with self._lock:
+                        for seq, handle in list(self._pending_v2.items()):
+                            if handle.command == "R|" + result["token"]:
+                                self._resolve_v2_ack(seq, "HOME_RELEASE")
                 elif signal == "fault_emit":
                     self.baseline_valid = False
                 elif signal == "calibration_result" and result["operation"] == "tare":
@@ -732,6 +743,9 @@ class Arduino(QObject):
                   and all(re.fullmatch(r"[0-9]+", t) and 0 <= int(t) <= 4095
                           for t in tokens[1:])):
                 self.zeros_emit.emit(int(tokens[1]), int(tokens[2]))
+            elif data == "Reset|":
+                self._invalidate_identity()
+                self.ready_event.clear()
             elif data == "Ready to Go":
                 self._invalidate_identity()
                 self.ready_event.set()

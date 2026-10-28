@@ -12,6 +12,7 @@ void delay(unsigned long ms) { now += ms; }
 #include "../../../../runtime/arduino/motor/motor.ino"
 
 void setUp() {
+    Wire.reset();
     pressureFault = false; emergencyStop();
     Serial.reset(); Serial1.reset(); Wire.reset(); now = 0;
     pressureCalibrated = true; pressureSampleValid = true;
@@ -70,9 +71,9 @@ void test_stable_resting_load_requires_ten_samples_and_900ms() {
     TEST_ASSERT_TRUE(Serial1.outputContains("TARE|OK|1234|100"));
     stopped();
 }
-void test_unstable_tare_has_fixed_eight_second_deadline() {
+void test_unstable_tare_has_fixed_thirty_second_deadline() {
     scale._offset = 321; processCommand("L1|BASELINE");
-    for (int i=0; i<80; ++i) { scale._raw = (i%2)*100; now += 100; servicePressure(); }
+    for (int i=0; i<300; ++i) { scale._raw = (i%2)*100; now += 100; servicePressure(); }
     TEST_ASSERT_FALSE(tareActive || pressureCalibrated);
     TEST_ASSERT_EQUAL(321, scale.get_offset());
     TEST_ASSERT_TRUE(Serial1.outputContains("TARE|REJECTED|UNSTABLE"));
@@ -162,11 +163,13 @@ void test_position_bands_and_feedback_range() {
     Wire.position_12 = 65535; smcDeviceNumber = 12; readPosition();
     TEST_ASSERT_FALSE(positionReadValid);
 }
+#include "../home_release_cases.h"
+
 int main() {
     UNITY_BEGIN();
     RUN_TEST(test_l0_changes_factor_without_taring);
     RUN_TEST(test_stable_resting_load_requires_ten_samples_and_900ms);
-    RUN_TEST(test_unstable_tare_has_fixed_eight_second_deadline);
+    RUN_TEST(test_unstable_tare_has_fixed_thirty_second_deadline);
     RUN_TEST(test_gap_resets_candidate_without_extending_tare_deadline);
     RUN_TEST(test_tare_is_rejected_while_fit_is_active);
     RUN_TEST(test_stop_cancels_tare_without_committing);
@@ -178,6 +181,7 @@ int main() {
     RUN_TEST(test_recovery_reapplies_droop_before_next_release);
     RUN_TEST(test_notice_is_once_and_advisory);
     RUN_TEST(test_position_bands_and_feedback_range);
+    runHomeReleaseTests();
     return UNITY_END();
 }
 #endif

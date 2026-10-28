@@ -39,6 +39,7 @@ class ProtocolController:
         self.window = window
         self._session: Optional[TreatmentSession] = None
         self._prepared = False
+        self._session_worker = None
 
     def set_state(self, state):
         """Single source of truth for the protocol lifecycle.
@@ -402,6 +403,7 @@ class ProtocolController:
             self._set_phase_from_text("Preparing treatment")
             window.shell.treatment.set_progress(0, duration * 60)
             self._session = session
+            self._session_worker = window.worker
             try:
                 window.threadpool.start(window.worker)
             except Exception:
@@ -558,6 +560,23 @@ class ProtocolController:
         user_stopped = bool(getattr(window, "protocol_stop_requested", False))
         safety_fault_active = getattr(window, "protocol_state", "") == "fault"
         outcome = self._completion_outcome(success, user_stopped, safety_fault_active)
+        worker = self._session_worker
+        if self._timed_phase_completed():
+            failed = (not success or user_stopped or safety_fault_active
+                      or (self._session and self._session.outcome == "completed_cleanup_failed"))
+            outcome = "completed_cleanup_failed" if failed else "completed"
+            if failed:
+                reason = getattr(worker, "_failure_reason", "") or "Treatment cleanup was cancelled"
+                warning = ("Treatment completed, but cleanup needs attention: " + reason)
+                self._session.cleanup_warning = warning
+                self._session.underlying_error = reason
+                window._no_automatic_recovery = True
+                window.initial_setup_complete = False
+                window.arduino.baseline_valid = False
+                window.on_baseline_changed(False)
+                window.arduino.send("X")
+                success = False
+                safety_fault_active = True
         self.latch_session_outcome(outcome)
         captured_settings = self._capture_end_settings()
         window.protocol_timer.stop()
@@ -569,6 +588,12 @@ class ProtocolController:
 
         if window.reset_in_progress:
             return  # The explicit recovery now owns controls/readiness.
+
+        if outcome == "completed_cleanup_failed":
+            # Completion can arrive after an emergency-stop handler changed UI state.
+            window._show_timed_error(self._session.cleanup_warning)
+            window.treatment_panel.set_fault(self._session.cleanup_warning)
+            window.shell.setup.set_reset_enabled(True)
 
         try:
             self._set_phase_from_text(
@@ -606,9 +631,23 @@ class ProtocolController:
     def latch_session_outcome(self, outcome: str) -> None:
         """Latch only in-memory timing/reason before any cancel/reset cleanup."""
         if self._session is not None:
+            if self._timed_phase_completed():
+                self._session.treatment_completed = True
+                self._session.actual_duration_s = self._session.planned_duration_s
+                if outcome != "completed":
+                    outcome = "completed_cleanup_failed"
+                    self.window._no_automatic_recovery = True
+                    reason = (getattr(self._session_worker, "_failure_reason", "")
+                              or "Treatment cleanup was cancelled")
+                    self._session.underlying_error = reason
+                    self._session.cleanup_warning = (
+                        "Treatment completed, but cleanup needs attention: " + reason)
             if not self._prepared:
                 self._session.actual_duration_s = 0
             self._session.latch(outcome)
+
+    def _timed_phase_completed(self) -> bool:
+        return getattr(self._session_worker, "treatment_completed", False) is True
 
     def _capture_end_settings(self) -> Optional[Dict[str, float]]:
         try:
@@ -621,6 +660,10 @@ class ProtocolController:
         """Capture once, then delegate all disk/network work to the cloud executor."""
         session = self._session
         if session is None or session.finalized or session.outcome is None:
+            return
+        if (self._timed_phase_completed() and
+                not self._session_worker.completed.is_set()):
+            # Wait for the worker's final evidence/reason before persisting once.
             return
         window = self.window
         try:

@@ -1,3 +1,4 @@
+import json
 import time
 import threading
 from helpers.logging import setup_logger
@@ -93,6 +94,9 @@ class Protocols(QtCore.QRunnable):
         self.completed = threading.Event()
         self._operations = None
         self._run_success = False
+        self.treatment_completed = False
+        self.outcome = None
+        self.cleanup_warning = ""
         self._failure_reason = ""
         self._terminal_failure = threading.Event()
         self._current_pressure = 0.0
@@ -110,6 +114,9 @@ class Protocols(QtCore.QRunnable):
         self._pulse_revision = 0
         self._applied_pulse_revision = 0
         self._active_lateral_side = None
+        # True while the timed treatment phase runs; check_duration() latches
+        # treatment_completed from it before the final pulse stop.
+        self._live_phase = False
         # Firmware pulsing believed active (a J was sent and no JS since).
         # GUI-thread paths (pause, pulse slider -> 0) consult this before
         # sending JS: on pre-FAILSAFE-6 firmware JS zeroes whichever SMC was
@@ -229,6 +236,10 @@ class Protocols(QtCore.QRunnable):
             now = self._pause_started  # freeze the clock during a pause
 
         self.elapsed_time = now - self.start_time
+        if (self.elapsed_time >= self.duration and self._live_phase
+                and self.is_running and not self._stop_requested.is_set()):
+            # Latch before the final JS: its write can itself fail.
+            self.treatment_completed = True
 
         # Only print status every 15 seconds
         if int(self.elapsed_time) % 15 == 0:
@@ -623,6 +634,7 @@ class Protocols(QtCore.QRunnable):
         if not self.is_running:
             return True
 
+        self._live_phase = True
         pulse_active = False
         pulse_stop_failed = False
         last_keepalive_time = time.time()
@@ -652,6 +664,7 @@ class Protocols(QtCore.QRunnable):
                     last_keepalive_time = time.time()
                 time.sleep(0.2)
         finally:
+            self._live_phase = False
             if pulse_active and self.arduino and not self._send_pulse_stop():
                 self.logger.error("Could not stop pulse while leaving hold phase")
                 pulse_stop_failed = True
@@ -661,17 +674,18 @@ class Protocols(QtCore.QRunnable):
 
     def _release(self, center_first: bool) -> bool:
         """Return to neutral: center laterally if needed, then release."""
+        if not self.is_running or self._stop_requested.is_set():
+            return False
+        self.treatment_completed = True
+        self.arduino.baseline_valid = False
+        self.signals.baseline_changed.emit(False)
         if center_first:
             if not self.set_to_c_distance(0):
                 return self._fail("could not return to center")
             time.sleep(1)  # settle at center before releasing traction
-        if not self.set_to_pressure(0):
-            return self._fail("could not release pressure")
-        self.logger.info("Protocol %s complete", self.protocol)
         self.signals.progress.emit("Retracting and zeroing resting pressure")
-        self.signals.baseline_changed.emit(False)
         try:
-            self._operations.baseline(self.config, retract=True)
+            self._operations.baseline(self.config, final_release=True)
             with self._command_lock:
                 self._check_cancelled()
                 self.arduino.baseline_valid = True
@@ -743,6 +757,7 @@ class Protocols(QtCore.QRunnable):
         pulse_active = False
         pulse_stop_failed = False
         self._active_lateral_side = "left"
+        self._live_phase = True
 
         try:
             self.logger.info(
@@ -812,6 +827,7 @@ class Protocols(QtCore.QRunnable):
                     last_keepalive_time = current_time
                 time.sleep(0.1)
         finally:
+            self._live_phase = False
             self._active_lateral_side = None
             if pulse_active and self.arduino and not self._send_pulse_stop():
                 self.logger.error("Could not stop pulse while leaving protocol 4")
@@ -848,7 +864,7 @@ class Protocols(QtCore.QRunnable):
             self._operations = ControllerOperations(
                 self.arduino, self._send_tracked, self._check_cancelled,
             )
-            self._operations.require_firmware()
+            self._operations.require_firmware(home_release=True)
             # X discards queued commands: enable telemetry AFTER stopping old work.
             if not self._send_command("X") or not self._send_command("HF1"):
                 raise OperationRejected("Cannot prepare controller")
@@ -874,20 +890,32 @@ class Protocols(QtCore.QRunnable):
         except Exception as exc:
             self._fail(str(exc))
         finally:
-            if not self._stop_requested.is_set() and not self._run_success:
-                self._send_command("X")
+            success = self._run_success and not self._stop_requested.is_set()
+            if not success:
+                if not self._stop_requested.is_set():
+                    self._send_command("X")
                 self.arduino.baseline_valid = False
                 self.signals.baseline_changed.emit(False)
+            self.outcome = ("completed" if success else "completed_cleanup_failed"
+                            if self.treatment_completed else "fault"
+                            if self._failure_reason else "stopped")
+            if self.outcome == "completed_cleanup_failed":
+                reason = self._failure_reason or "Treatment cleanup was cancelled"
+                self.cleanup_warning = "Treatment completed, but cleanup needs attention: " + reason
+            self.logger.info("Protocol outcome: %s", json.dumps({
+                "treatment_completed": self.treatment_completed, "outcome": self.outcome,
+                "cleanup_warning": self.cleanup_warning, "error": self._failure_reason,
+            }, sort_keys=True))
             if self._operations is not None:
                 self._operations.close()
                 self._operations = None
             self._disconnect_status()
             self.is_running = False
             self.completed.set()
-            if self._failure_reason and (self._terminal_failure.is_set()
+            if not self.cleanup_warning and self._failure_reason and (self._terminal_failure.is_set()
                                          or not self._stop_requested.is_set()):
                 self.signals.operation_failed.emit(self._failure_reason)
-            self.signals.finished.emit(self._run_success and not self._stop_requested.is_set())
+            self.signals.finished.emit(success)
 
     def stop(self):
         """Safely stop a running protocol and release applied traction.
@@ -901,6 +929,11 @@ class Protocols(QtCore.QRunnable):
         """
         self.logger.info("Initiating protocol stop sequence")
         self.cancel()
+        if self.treatment_completed:
+            self.arduino.send("X")
+            self.arduino.baseline_valid = False
+            self.signals.stopped.emit(True)
+            return
         if self._firmware_stopped:
             # X aborts firmware's autonomous release, and P0 is rejected while
             # the physical button is held. Leave that release in control.

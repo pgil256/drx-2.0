@@ -224,3 +224,69 @@ def test_manual_treatment_keeps_local_start_checks(monkeypatch, qtbot):
     assert controller._session.finalized
     window.current_user = None
     assert controller.start_protocol() is False
+
+
+@pytest.mark.parametrize("stop", ["fault", "operator", "emergency", "none"])
+def test_timed_completion_survives_stop_races_and_uploads_cleanup_once(monkeypatch, qtbot, stop):
+    window, controller, worker = dispatch(monkeypatch)
+    controller._prepared = True
+    worker.treatment_completed = True
+    worker._failure_reason = "HOME_POSITION_CHANGED"
+    monkeypatch.setattr("controllers.protocol_controller.QTimer.singleShot", lambda *a: None)
+    if stop == "fault":
+        controller.stop_without_recovery("HOME_POSITION_CHANGED", fault=True)
+    elif stop == "operator":
+        controller.stop_protocol()
+    elif stop == "emergency":
+        controller.emergency_stop_clicked(None)
+    # A stop may arrive before the queued worker completion; never upload a
+    # generic fault or a successful treatment while its cleanup is unresolved.
+    window.cloud_client.post_treatment_async.assert_not_called()
+    window.protocol_state = "idle"
+    window._show_timed_error.reset_mock()
+    worker.completed.set()
+    finish = worker.signals.finished.connect.call_args.args[0]
+    finish(False)
+    finish(True)
+    window.cloud_client.post_treatment_async.assert_called_once()
+    record = window.cloud_client.post_treatment_async.call_args.args[0]
+    assert record["outcome"] == "completed_cleanup_failed"
+    assert record["treatment_completed"] is True
+    assert record["actual_duration_s"] == record["planned_duration_s"] == 720
+    assert "HOME_POSITION_CHANGED" in record["cleanup_warning"]
+    assert record["underlying_error"] == "HOME_POSITION_CHANGED"
+    window._show_timed_error.assert_called_once_with(record["cleanup_warning"])
+    controller._stop_phase2()
+    controller._emergency_stop_phase2()
+    controller._reset_after_release(0)
+    window.reset_arduino.assert_not_called()
+    worker.stop.assert_not_called()
+    assert window._no_automatic_recovery and window.protocol_state == "fault"
+    assert not window.arduino.baseline_valid
+
+
+def test_successful_final_zero_persists_completed_timed_phase(monkeypatch, qtbot):
+    window, controller, worker = dispatch(monkeypatch)
+    controller._prepared = True
+    worker.treatment_completed = True
+    worker.completed.set()
+    worker.signals.finished.connect.call_args.args[0](True)
+    record = window.cloud_client.post_treatment_async.call_args.args[0]
+    assert record["outcome"] == "completed" and record["treatment_completed"]
+    assert record["cleanup_warning"] == ""
+    assert window.protocol_state == "idle"
+
+
+def test_stop_wins_over_already_queued_success_with_complete_upload_details(monkeypatch, qtbot):
+    window, controller, worker = dispatch(monkeypatch)
+    controller._prepared = True
+    worker.treatment_completed = True
+    worker.completed.set()  # The worker finished, but its Qt signal is still queued.
+    monkeypatch.setattr("controllers.protocol_controller.QTimer.singleShot", lambda *a: None)
+    controller.stop_protocol()
+    worker.signals.finished.connect.call_args.args[0](True)
+    window.cloud_client.post_treatment_async.assert_called_once()
+    record = window.cloud_client.post_treatment_async.call_args.args[0]
+    assert record["outcome"] == "completed_cleanup_failed"
+    assert record["cleanup_warning"].startswith("Treatment completed, but cleanup needs attention:")
+    assert record["underlying_error"] == "Treatment cleanup was cancelled"
