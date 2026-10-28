@@ -415,47 +415,62 @@ class Arduino(QObject):
         probe_sent_at = None
 
         while self._running and self.serial_com and getattr(self.serial_com, "is_open", False):
+            raw_data = ""
             try:
                 self._service_tx_queue()
-
                 if self.serial_com.in_waiting > 0:
                     raw_data = self.serial_com.readline().decode(errors="replace")
-                    if raw_data:
-                        self._trace_serial("RX", raw_data.rstrip("\r\n"))
-                    data = raw_data.strip()
-                    if data:
-                        last_rx = time.time()
-                        probe_sent_at = None
-                        self.handle_com(data)
                 else:
                     time.sleep(0.01)
-
-                # RX-silence watchdog: probe, then declare the link lost.
-                # (The previous implementation extended its own deadline
-                # after every probe write, so a dead link was never
-                # detected -- writes succeed on a UART with the cable cut.)
-                now = time.time()
-                if now - last_rx > self.RX_SILENCE_LIMIT_S:
-                    if probe_sent_at is None:
-                        self.logger.warning(
-                            "No data for %.0fs - probing Arduino", self.RX_SILENCE_LIMIT_S
-                        )
-                        self._write_now("T")
-                        probe_sent_at = now
-                    elif now - probe_sent_at > self.PROBE_TIMEOUT_S:
-                        raise serial.SerialException(
-                            "No response to probe after RX silence"
-                        )
-
-            except serial.SerialException:
+            except (serial.SerialException, OSError):
+                # A USB-serial adapter that disappears raises a raw OSError
+                # from in_waiting's ioctl rather than SerialException. Either
+                # one means the port is gone, not a recoverable glitch.
                 self.logger.exception("Serial connection error")
                 self._handle_link_lost()
                 break
             except Exception:
                 # Do NOT touch last_rx here: a persistently failing loop
-                # must still be able to trip the silence watchdog
+                # must still be able to trip the silence watchdog below.
                 self.logger.exception("Unexpected error in I/O loop")
                 time.sleep(0.1)
+
+            if raw_data:
+                try:
+                    self._trace_serial("RX", raw_data.rstrip("\r\n"))
+                    data = raw_data.strip()
+                    if data:
+                        last_rx = time.time()
+                        probe_sent_at = None
+                        self.handle_com(data)
+                except Exception:
+                    # A parsing bug must not be mistaken for a dead link.
+                    self.logger.exception("Error handling serial line")
+
+            # RX-silence watchdog: probe, then declare the link lost. It sits
+            # outside the try so no exception path can skip it. (An earlier
+            # version extended its own deadline after every probe write, so
+            # a dead link was never detected: writes succeed on a UART with
+            # the cable cut.)
+            now = time.time()
+            if now - last_rx > self.RX_SILENCE_LIMIT_S:
+                if probe_sent_at is None:
+                    self.logger.warning(
+                        "No data for %.0fs - probing Arduino", self.RX_SILENCE_LIMIT_S
+                    )
+                    probe_sent_at = now
+                    try:
+                        self._write_now("T")
+                    except Exception:
+                        self.logger.exception("Serial connection error: probe write failed")
+                        self._handle_link_lost()
+                        break
+                elif now - probe_sent_at > self.PROBE_TIMEOUT_S:
+                    self.logger.error(
+                        "Serial connection error: no response to probe after RX silence"
+                    )
+                    self._handle_link_lost()
+                    break
 
         self.logger.info("I/O loop exited")
 

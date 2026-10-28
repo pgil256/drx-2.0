@@ -14,7 +14,7 @@ were retired with those methods.
 import threading
 import time
 import pytest
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, PropertyMock, patch
 
 from helpers.arduino import Arduino
 
@@ -254,3 +254,74 @@ class TestTrackedQueueSafety:
         assert not handle.written.is_set()
         arduino._service_tx_queue()
         assert handle.written.is_set()
+
+
+@pytest.mark.unit
+class TestIoLoopLinkLoss:
+    """read_from_com() must report a dead port instead of spinning on it.
+
+    Each test runs the loop on the calling thread; the loop ends when it
+    declares the link lost. The timeout turns the old endless loop into a
+    failure instead of a hang.
+    """
+
+    @pytest.fixture
+    def lost(self, arduino):
+        events = []
+        arduino.connection_lost.connect(lambda: events.append("lost"))
+        return events
+
+    @pytest.mark.timeout(10)
+    def test_raw_oserror_from_vanished_device_declares_link_lost(self, arduino, lost):
+        # pyserial's in_waiting is a bare fcntl.ioctl: an unplugged
+        # USB-serial adapter raises OSError(EIO), not SerialException.
+        type(arduino.serial_com).in_waiting = PropertyMock(
+            side_effect=OSError(5, "Input/output error")
+        )
+
+        arduino.read_from_com()
+
+        assert lost == ["lost"]
+        assert arduino.connected is False
+        assert arduino._running is False
+
+    @pytest.mark.timeout(10)
+    def test_persistent_unexpected_error_still_trips_silence_watchdog(
+        self, arduino, lost, monkeypatch
+    ):
+        monkeypatch.setattr(arduino, "RX_SILENCE_LIMIT_S", 0.05)
+        monkeypatch.setattr(arduino, "PROBE_TIMEOUT_S", 0.05)
+        monkeypatch.setattr(
+            arduino, "_service_tx_queue", MagicMock(side_effect=RuntimeError("bug"))
+        )
+
+        arduino.read_from_com()
+
+        arduino.serial_com.write.assert_any_call(b"T\n")
+        assert lost == ["lost"]
+
+    @pytest.mark.timeout(10)
+    def test_failed_probe_write_declares_link_lost(self, arduino, lost, monkeypatch):
+        monkeypatch.setattr(arduino, "RX_SILENCE_LIMIT_S", 0.0)
+        arduino.serial_com.in_waiting = 0
+        arduino.serial_com.write.side_effect = OSError(5, "Input/output error")
+
+        arduino.read_from_com()
+
+        assert lost == ["lost"]
+
+    @pytest.mark.timeout(10)
+    def test_line_handling_error_is_not_a_link_loss(self, arduino, lost, monkeypatch):
+        arduino.serial_com.in_waiting = 1
+        arduino.serial_com.readline.return_value = b"S|1|2|3|4\n"
+
+        def boom(data):
+            arduino._running = False
+            raise ValueError("parser bug")
+
+        monkeypatch.setattr(arduino, "handle_com", boom)
+
+        arduino.read_from_com()
+
+        assert lost == []
+        assert arduino.connected is True
