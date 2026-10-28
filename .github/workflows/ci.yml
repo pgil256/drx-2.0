@@ -224,6 +224,30 @@ jobs:
           path: ~/.platformio
           key: pio-${{ runner.os }}-${{ hashFiles('runtime/arduino/motor/platformio.ini') }}
 
+      # Flash and RAM use against the Mega 2560's limits, for review in the log.
+      # Runs before the compile step: the size target rebuilds the environment
+      # without producing firmware.hex, so the default build must come last.
+      - name: Report firmware size
+        working-directory: runtime/arduino/motor
+        run: pio run -e mega -t size
+
       - name: Compile firmware for target hardware
         working-directory: runtime/arduino/motor
         run: pio run -e mega
+
+      - name: Checksum firmware image
+        working-directory: runtime/arduino/motor/.pio/build/mega
+        run: |
+          sha256sum firmware.hex > firmware.hex.sha256
+          cat firmware.hex.sha256
+
+      # .pio/ is a hidden directory, which upload-artifact skips by default.
+      - name: Upload firmware image
+        uses: actions/upload-artifact@v4
+        with:
+          name: firmware-mega-${{ github.sha }}
+          path: |
+            runtime/arduino/motor/.pio/build/mega/firmware.hex
+            runtime/arduino/motor/.pio/build/mega/firmware.hex.sha256
+          include-hidden-files: true
+          if-no-files-found: error
