@@ -133,7 +133,7 @@ Test each stop in all three states: (1) position move (`I14...`),
 - [ ] **4.2 (B2) UI Stop / `X`** halts each state. Send `X` within 200 ms of
   another command — it must still act instantly (rate-limiter bypass).
 - [ ] **4.3 (B3) Host heartbeat.** Start a pressure ramp, then pull the Pi's
-  serial cable (or `sudo systemctl stop kneespa.service`). Within ~3 s the
+  serial cable (or `sudo systemctl stop kneespa.service`). After ~10 s the
   firmware emits `WARNING: Host heartbeat lost` without interrupting motion.
   Use the physical E-stop to halt, then reconnect.
 - [ ] **4.4 (B4) Load-cell fault.** Start a ramp, unplug the load-cell

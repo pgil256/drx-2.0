@@ -18,7 +18,7 @@ States: (1) position move (`I14...`), (2) pressure ramp (`P30`), (3) pulsing (`J
 
 - [ ] **B1. Physical STOP button** halts motion in state 1, 2, AND 3 (2 and 3 previously ignored it). After the stop, the axial actuator should back off until the load cell reads < 5 lbs (`RELEASED` on the Pi serial log).
 - [ ] **B2. UI Stop / `X`** halts each state. Send `X` immediately after another command (within 200 ms): it must still act instantly (rate-limiter bypass).
-- [ ] **B3. Heartbeat.** Start a pressure ramp, then pull the Pi's serial cable (or `sudo systemctl stop` the app). Within ~3 s the firmware must stop and begin the autonomous release. Reconnect; verify `ERROR: Host heartbeat lost` was emitted.
+- [ ] **B3. Heartbeat.** Start a pressure ramp, then pull the Pi's serial cable (or `sudo systemctl stop` the app). After ~10 s without host traffic the firmware emits `WARNING: Host heartbeat lost` and keeps moving: it does not stop or release. Halt with the physical STOP, then reconnect. (FAILSAFE-2 stopped and released here; the heartbeat has been advisory since `2026-09-17`.)
 - [ ] **B4. Load-cell fault.** Start a pressure ramp, unplug the load-cell connector. Within ~0.5 s: stop + release attempt + `ERROR: Load cell not responding`. (Release will end on travel/timeout bounds since the sensor is dead — verify it stops at the axial floor or after 15 s, not indefinitely.)
 
 ## C. Pressure integrity
