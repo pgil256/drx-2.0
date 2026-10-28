@@ -6,6 +6,8 @@ from types import SimpleNamespace
 import pytest
 from unittest.mock import MagicMock
 
+import controllers.connection_manager as cm_mod
+from config.constants import EMERGENCYSTOP
 from controllers.connection_manager import ConnectionManager
 from fixtures.controllers import ConnectionWindow as StubWindow
 
@@ -92,6 +94,45 @@ class TestResetGating:
         assert w.initial_setup_complete is False
         assert w.threadpool.start.called
         assert w.reset_readings == 1
+
+    def test_reset_releases_estop_line_before_worker(self, manager, monkeypatch):
+        """A physical stop skips the e-stop's automatic phase 3, which is the
+        only other place the line goes HIGH. The operator reset must release
+        it, or the firmware still sees STOP pressed and homing cannot move."""
+        cm, w = manager
+        events = []
+        gpio = MagicMock()
+        gpio.output.side_effect = lambda pin, level: events.append(("gpio", pin, level))
+        monkeypatch.setattr(cm_mod, "GPIO", gpio)
+        w.threadpool.start.side_effect = lambda worker: events.append("worker")
+        w._no_automatic_recovery = True
+        w._physical_stop_active = True
+
+        cm.reset_arduino()
+
+        assert events == [("gpio", EMERGENCYSTOP, gpio.HIGH), "worker"]
+
+    def test_reset_starts_even_if_estop_release_fails(self, manager, monkeypatch):
+        cm, w = manager
+        gpio = MagicMock()
+        gpio.output.side_effect = RuntimeError("gpio unavailable")
+        monkeypatch.setattr(cm_mod, "GPIO", gpio)
+        cm.logger = MagicMock()
+
+        cm.reset_arduino()
+
+        w.threadpool.start.assert_called_once()
+        assert any("EMERGENCYSTOP" in str(c) for c in cm.logger.error.call_args_list)
+
+    def test_refused_reset_leaves_estop_line_alone(self, manager, monkeypatch):
+        cm, w = manager
+        gpio = MagicMock()
+        monkeypatch.setattr(cm_mod, "GPIO", gpio)
+        w.worker = SimpleNamespace(is_running=True, completed=threading.Event())
+
+        cm.reset_arduino()
+
+        gpio.output.assert_not_called()
 
     def test_reset_finished_success(self, manager):
         cm, w = manager
