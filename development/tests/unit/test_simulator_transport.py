@@ -38,7 +38,8 @@ def test_real_worker_finishes_with_fragmented_home_release_and_tare(tmp_path, qt
                 ops.close()
             worker.run()
         try:
-            await asyncio.wait_for(asyncio.to_thread(run), 45)
+            await asyncio.wait_for(
+                asyncio.get_running_loop().run_in_executor(None, run), 45)
             assert worker.outcome == "completed", worker._failure_reason
             assert worker.treatment_completed and link.baseline_valid
             commands = [server.controller._unframe(raw)[0]
@@ -51,7 +52,7 @@ def test_real_worker_finishes_with_fragmented_home_release_and_tare(tmp_path, qt
             assert abs(server.controller.position_a - 100) <= 25
         finally:
             worker.cancel()
-            await asyncio.to_thread(link.disconnect)
+            await asyncio.get_running_loop().run_in_executor(None, link.disconnect)
             await server.close()
     asyncio.run(exercise())
 

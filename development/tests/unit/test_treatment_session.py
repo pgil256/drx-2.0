@@ -245,11 +245,11 @@ def test_timed_completion_survives_stop_races_and_uploads_cleanup_once(monkeypat
     window.protocol_state = "idle"
     window._show_timed_error.reset_mock()
     worker.completed.set()
-    finish = worker.signals.finished.connect.call_args.args[0]
+    finish = worker.signals.finished.connect.call_args[0][0]
     finish(False)
     finish(True)
     window.cloud_client.post_treatment_async.assert_called_once()
-    record = window.cloud_client.post_treatment_async.call_args.args[0]
+    record = window.cloud_client.post_treatment_async.call_args[0][0]
     assert record["outcome"] == "completed_cleanup_failed"
     assert record["treatment_completed"] is True
     assert record["actual_duration_s"] == record["planned_duration_s"] == 720
@@ -270,8 +270,8 @@ def test_successful_final_zero_persists_completed_timed_phase(monkeypatch, qtbot
     controller._prepared = True
     worker.treatment_completed = True
     worker.completed.set()
-    worker.signals.finished.connect.call_args.args[0](True)
-    record = window.cloud_client.post_treatment_async.call_args.args[0]
+    worker.signals.finished.connect.call_args[0][0](True)
+    record = window.cloud_client.post_treatment_async.call_args[0][0]
     assert record["outcome"] == "completed" and record["treatment_completed"]
     assert record["cleanup_warning"] == ""
     assert window.protocol_state == "idle"
@@ -284,9 +284,9 @@ def test_stop_wins_over_already_queued_success_with_complete_upload_details(monk
     worker.completed.set()  # The worker finished, but its Qt signal is still queued.
     monkeypatch.setattr("controllers.protocol_controller.QTimer.singleShot", lambda *a: None)
     controller.stop_protocol()
-    worker.signals.finished.connect.call_args.args[0](True)
+    worker.signals.finished.connect.call_args[0][0](True)
     window.cloud_client.post_treatment_async.assert_called_once()
-    record = window.cloud_client.post_treatment_async.call_args.args[0]
+    record = window.cloud_client.post_treatment_async.call_args[0][0]
     assert record["outcome"] == "completed_cleanup_failed"
     assert record["cleanup_warning"].startswith("Treatment completed, but cleanup needs attention:")
     assert record["underlying_error"] == "Treatment cleanup was cancelled"
