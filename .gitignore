@@ -12,7 +12,8 @@ dist/
 downloads/
 eggs/
 .eggs/
-lib/
+# Root only: PlatformIO's runtime/arduino/motor/lib/ holds project libraries.
+/lib/
 lib64/
 parts/
 sdist/
@@ -105,8 +106,8 @@ cloud.env
 # Design-source scratch ? reference material dropped in the working tree,
 # never part of the app build (the code-built UI lives under main/ui/)
 _ds/
-app/
-assets/
+/app/
+/assets/
 screenshots/
 tweaks-panel.jsx
 .thumbnail
@@ -117,8 +118,6 @@ tweaks-panel.jsx
 *.sqlite3
 *.Zone.Identifier
 *Zone.Identifier
-git
-~/
 
 # MCPs and Claude
 mcps/
@@ -128,22 +127,6 @@ CLAUDE.md
 *.mcp
 *.claude
 model_control_parameters/
-claude_config/
-claude_settings/
-claude_cache/
-claude_logs/
-claude_models/
-claude_training/
-claude_weights/
-claude_checkpoints/
-claude_metrics/
-claude_experiments/
-claude_results/
-claude_outputs/
-claude_tmp/
-claude_temp/
-claude_backup/
-claude_old/
 
 
 
