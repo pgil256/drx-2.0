@@ -1,0 +1,16 @@
+# Monthly update PRs for the CI actions and the test/dev Python pins.
+# The Pi's runtime pins (runtime/raspberry-pi/main/requirements.txt) are held
+# to what Buster's Python 3.7 can install, so they are deliberately not listed.
+# requirements-test.txt also carries Python 3.7 pins (aiohttp, PyQt5, sip,
+# python-dotenv); a bump the Pi cannot install fails the Python 3.7 CI jobs.
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: /
+    schedule:
+      interval: monthly
+
+  - package-ecosystem: pip
+    directory: /development
+    schedule:
+      interval: monthly
