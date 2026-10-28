@@ -8,6 +8,7 @@ from fixtures.nb2 import NB2Controller
 from fixtures.protocols import make_protocol
 from helpers.controller_operations import BaselineError, ControllerOperations, OperationCancelled
 from helpers.firmware_protocol import parse_diagnostic_frame
+from helpers.conversions import lateral_degrees_to_position
 
 pytestmark = pytest.mark.unit
 CONFIG = SimpleNamespace(calibration=-28369, AMarks={"0.0": 100})
@@ -157,6 +158,104 @@ def test_reset_removes_home_release_capability(reset):
 def test_invalid_release_frames_are_rejected(frame):
     with pytest.raises(ValueError):
         parse_diagnostic_frame(frame)
+
+
+def test_position_read_retry_frame_is_typed_and_strict():
+    assert parse_diagnostic_frame("DIAG|I2C|POSITION_FAILED|12|1|3") == (
+        "position_read_failed", {"device": 12, "attempt": 1, "attempts": 3})
+    for frame in ("DIAG|I2C|POSITION_FAILED|12|1", "DIAG|I2C|POSITION_FAILED|11|1|3",
+                  "DIAG|I2C|POSITION_FAILED|12|0|3", "DIAG|I2C|STOP_FAILED|12|1|3"):
+        with pytest.raises(ValueError):
+            parse_diagnostic_frame(frame)
+
+
+def test_position_read_retry_is_logged_not_faulted(caplog):
+    link = NB2Controller()
+    link.handle_com("DIAG|I2C|POSITION_FAILED|12|2|3")
+    assert "position read 2 of 3 failed on controller 12" in caplog.text
+    assert link.baseline_valid
+
+
+def run_lateral_treatment(final_centre):
+    """Finish a lateral treatment; final_centre answers each end-of-run K."""
+    link = NB2Controller()
+    worker = make_protocol(ser=link, protocol="2")
+    link.factor = worker.config.calibration
+    link.a_zero = int(worker.config.AMarks.get("0.0", worker.config.AMarks.get("0")))
+    attempts = []
+    def hook(command, replies):
+        if command.startswith("K") and worker.treatment_completed:
+            attempts.append(len(link.commands) - 1)
+            return final_centre(link, worker, len(attempts), replies)
+        return replies
+    link.hook = hook
+    worker.run()
+    return link, worker, attempts
+
+
+def cleanup_indices(link):
+    release = next(i for i, c in enumerate(link.commands) if c.startswith("R|"))
+    tare = link.commands.index("L1|HOME|" + link.commands[release][2:])
+    return release, tare
+
+
+def test_unconfirmed_final_centering_still_releases_zeroes_and_retries(protocol_clock):
+    def final_centre(link, worker, attempt, replies):
+        return [] if attempt == 1 else replies  # loaded move never reports; unloaded one lands
+    link, worker, attempts = run_lateral_treatment(final_centre)
+    release, tare = cleanup_indices(link)
+    assert len(attempts) == 2
+    assert attempts[0] < release < tare < attempts[1] == len(link.commands) - 1
+    assert worker.outcome == "completed" and worker.treatment_completed
+    assert worker.cleanup_warning == "" and not worker._failure_reason
+    assert link.baseline_valid
+
+
+def test_rejected_final_centering_never_blocks_release_or_completion(protocol_clock):
+    def final_centre(link, worker, attempt, replies):
+        return ["COMMAND_REJECTED|K|POSITION_OUT_OF_TOLERANCE"]
+    link, worker, attempts = run_lateral_treatment(final_centre)
+    release, tare = cleanup_indices(link)
+    assert attempts[0] < release < tare < attempts[1]
+    # The second miss stops the lateral motor and is only logged.
+    assert link.commands[attempts[1]:] == [link.commands[attempts[1]], "X"]
+    assert worker.outcome == "completed"
+    assert worker.cleanup_warning == "" and not worker._failure_reason
+    assert link.baseline_valid
+
+
+def test_lateral_rejection_during_treatment_stays_terminal(protocol_clock):
+    """Only the final centre is best effort; the treatment move still fails hard."""
+    link = NB2Controller()
+    worker = make_protocol(ser=link, protocol="2")
+    link.factor = worker.config.calibration
+    link.a_zero = int(worker.config.AMarks.get("0.0", worker.config.AMarks.get("0")))
+    centre = lateral_degrees_to_position(worker.config.CMarks, 0)[0]
+    def hook(command, replies):
+        if command.startswith("K") and command != "K{}".format(centre):
+            return ["COMMAND_REJECTED|K|POSITION_OUT_OF_TOLERANCE"]
+        return replies
+    link.hook = hook
+    worker.run()
+    assert not worker.treatment_completed
+    assert worker.outcome == "fault"
+    assert "POSITION_OUT_OF_TOLERANCE" in worker._failure_reason
+    assert not any(c.startswith(("R|", "L1|HOME|")) for c in link.commands)
+
+
+@pytest.mark.parametrize("interruption", ["stop", "fault"])
+def test_stop_or_fault_during_final_centering_still_blocks_release(protocol_clock, interruption):
+    def final_centre(link, worker, attempt, replies):
+        if interruption == "stop":
+            worker.cancel()
+            return []
+        return ["FAULT|POSITION_FEEDBACK_INVALID|0|36.61"]
+    link, worker, attempts = run_lateral_treatment(final_centre)
+    assert len(attempts) == 1
+    assert not any(c.startswith(("R|", "L1|HOME|")) for c in link.commands)
+    assert worker.outcome == "completed_cleanup_failed"
+    assert worker.cleanup_warning.startswith("Treatment completed, but cleanup needs attention:")
+    assert not link.baseline_valid
 
 
 @pytest.mark.parametrize("protocol", ["1", "2", "3", "4"])

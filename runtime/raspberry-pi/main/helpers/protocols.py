@@ -117,6 +117,9 @@ class Protocols(QtCore.QRunnable):
         # True while the timed treatment phase runs; check_duration() latches
         # treatment_completed from it before the final pulse stop.
         self._live_phase = False
+        # True only while the best-effort final centre is in flight; a K
+        # rejection then is logged instead of cancelling the cleanup.
+        self._final_centering = False
         # Firmware pulsing believed active (a J was sent and no JS since).
         # GUI-thread paths (pause, pulse slider -> 0) consult this before
         # sending JS: on pre-FAILSAFE-6 firmware JS zeroes whichever SMC was
@@ -187,6 +190,11 @@ class Protocols(QtCore.QRunnable):
         self.cancel(firmware_stopped=True)
 
     def _on_command_rejected(self, result: dict) -> None:
+        if self._final_centering and result["command"] == "K":
+            # The final centre is best effort; the axial release must still run.
+            # The operation's own rejection handler fails just that move.
+            self.logger.warning("Final centre rejected: %s", result["reason"])
+            return
         self._failure_reason = "{}: {}".format(result["command"], result["reason"])
         self._terminal_failure.set()
         self.cancel()
@@ -672,17 +680,46 @@ class Protocols(QtCore.QRunnable):
             return self._fail("could not send final JS")
         return True
 
+    def _centre_after_treatment(self) -> bool:
+        """Best-effort final centre; a miss is logged and never blocks the release.
+
+        Operator stop and controller faults stay authoritative: they cancel the
+        worker, so the cancellation checks around the release still refuse it.
+        """
+        failure_before = self._failure_reason
+        self._final_centering = True
+        try:
+            if self.set_to_c_distance(0):
+                return True
+        finally:
+            self._final_centering = False
+        if self._stop_requested.is_set() or not self.is_running:
+            return False
+        self.logger.warning("Final lateral centering not confirmed: %s",
+                            self._failure_reason or "no confirmation")
+        self._failure_reason = failure_before
+        return False
+
     def _release(self, center_first: bool) -> bool:
-        """Return to neutral: center laterally if needed, then release."""
+        """Return to neutral: center laterally if needed, then release.
+
+        The final centre is best effort (October 4, 2026): an unconfirmed
+        centre must not leave the axial actuator loaded and unzeroed. The
+        verified release and zero always run; the centre is retried once,
+        unloaded, afterwards, and a second miss is only logged.
+        """
         if not self.is_running or self._stop_requested.is_set():
             return False
         self.treatment_completed = True
         self.arduino.baseline_valid = False
         self.signals.baseline_changed.emit(False)
+        centred = True
         if center_first:
-            if not self.set_to_c_distance(0):
-                return self._fail("could not return to center")
-            time.sleep(1)  # settle at center before releasing traction
+            centred = self._centre_after_treatment()
+            if not self.is_running or self._stop_requested.is_set():
+                return False
+            if centred:
+                time.sleep(1)  # settle at center before releasing traction
         self.signals.progress.emit("Retracting and zeroing resting pressure")
         try:
             self._operations.baseline(self.config, final_release=True)
@@ -695,6 +732,12 @@ class Protocols(QtCore.QRunnable):
             return False
         except Exception as exc:
             return self._fail(str(exc))
+        if not centred:
+            # Unloaded, the lateral actuator usually lands. A second miss is
+            # only logged: the next treatment start re-centres anyway.
+            self.signals.progress.emit("Centering lateral actuator")
+            if not self._centre_after_treatment() and not self._stop_requested.is_set():
+                self._send_command("X")
         self.signals.progress.emit("Protocol complete")
         return True
 

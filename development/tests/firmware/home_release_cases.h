@@ -30,11 +30,80 @@ void test_home_residual_load_stops_then_separately_zeroes() {
     TEST_ASSERT_NOT_EQUAL(-1050203, scale.get_offset());
     TEST_ASSERT_TRUE(Serial1.outputContains("CALIBRATION|TARE|OK"));
 }
-void test_home_above_band_retracts_until_first_in_band_read() {
+void test_home_above_band_retracts_to_margin_inside_band() {
     beginHome(126); TEST_ASSERT_EQUAL(-PRESSURE_SPEED, speed(12)); restHome();
-    TEST_ASSERT_FALSE(homeReleaseReady); Wire.position_12 = 125; serviceHomeRelease();
+    TEST_ASSERT_FALSE(homeReleaseReady);
+    // The band edge is not a stopping point: keep retracting to the margin.
+    Wire.position_12 = 125; serviceHomeRelease();
+    TEST_ASSERT_FALSE(homeReleaseStopped); TEST_ASSERT_EQUAL(-PRESSURE_SPEED, speed(12));
+    Wire.position_12 = 115; serviceHomeRelease();
     TEST_ASSERT_TRUE(homeReleaseStopped); TEST_ASSERT_EQUAL(0, speed(12)); restHome();
     TEST_ASSERT_TRUE(homeReleaseReady);
+    TEST_ASSERT_TRUE(Serial1.outputContains("HOME_RELEASE|012345abcdef|100|115|"));
+}
+void test_home_already_in_band_verifies_without_travel() {
+    beginHome(120); TEST_ASSERT_EQUAL(0, speed(12)); TEST_ASSERT_TRUE(homeReleaseStopped);
+    restHome(); TEST_ASSERT_TRUE(homeReleaseReady);
+    TEST_ASSERT_TRUE(Serial1.outputContains("|100|120|"));
+}
+void test_home_rebound_above_band_after_stop_retracts_again() {
+    beginHome(126); Wire.position_12 = 115; serviceHomeRelease();
+    TEST_ASSERT_TRUE(homeReleaseStopped); TEST_ASSERT_EQUAL(0, speed(12));
+    now += 100; sample(36.61); Wire.position_12 = 126; serviceHomeRelease();
+    TEST_ASSERT_TRUE(homeReleaseActive); TEST_ASSERT_FALSE(homeReleaseStopped);
+    TEST_ASSERT_EQUAL(-PRESSURE_SPEED, speed(12));
+    TEST_ASSERT_FALSE(Serial1.outputContains("COMMAND_REJECTED"));
+    now += 100; sample(36.61); Wire.position_12 = 110; serviceHomeRelease();
+    TEST_ASSERT_TRUE(homeReleaseStopped); TEST_ASSERT_EQUAL(0, speed(12));
+    restHome(); TEST_ASSERT_TRUE(homeReleaseReady); TEST_ASSERT_FALSE(pressureFault);
+}
+void test_home_feedback_dropout_is_not_a_verdict() {
+    beginHome(500);
+    // One reading near zero mid-travel stops the motor but is not a verdict.
+    now += 100; sample(36.61); Wire.position_12 = 40; serviceHomeRelease();
+    TEST_ASSERT_TRUE(homeReleaseActive); TEST_ASSERT_EQUAL(0, speed(12));
+    now += 100; sample(36.61); Wire.position_12 = 290; serviceHomeRelease();
+    TEST_ASSERT_TRUE(homeReleaseActive); TEST_ASSERT_EQUAL(-PRESSURE_SPEED, speed(12));
+    // Nor is one reading inside the band.
+    now += 100; sample(36.61); Wire.position_12 = 90; serviceHomeRelease();
+    TEST_ASSERT_TRUE(homeReleaseStopped); TEST_ASSERT_EQUAL(0, speed(12));
+    now += 100; sample(36.61); Wire.position_12 = 280; serviceHomeRelease();
+    TEST_ASSERT_TRUE(homeReleaseActive); TEST_ASSERT_FALSE(homeReleaseStopped);
+    TEST_ASSERT_EQUAL(-PRESSURE_SPEED, speed(12));
+    TEST_ASSERT_FALSE(Serial1.outputContains("COMMAND_REJECTED"));
+    TEST_ASSERT_FALSE(pressureFault);
+    now += 100; sample(36.61); Wire.position_12 = 112; serviceHomeRelease();
+    restHome(); TEST_ASSERT_TRUE(homeReleaseReady);
+}
+void test_home_below_band_blip_recovers_when_reading_returns() {
+    beginHome(); now += 100; sample(36.61); Wire.position_12 = 74; serviceHomeRelease();
+    TEST_ASSERT_TRUE(homeReleaseActive); TEST_ASSERT_FALSE(homeReleaseStopped);
+    now += 100; sample(36.61); Wire.position_12 = 83; serviceHomeRelease();
+    TEST_ASSERT_TRUE(homeReleaseStopped); TEST_ASSERT_EQUAL(0, speed(12));
+    restHome(); TEST_ASSERT_TRUE(homeReleaseReady);
+    TEST_ASSERT_FALSE(Serial1.outputContains("COMMAND_REJECTED"));
+}
+void test_home_position_read_retries_before_fault() {
+    beginHome(); Wire.failTransmissions = POSITION_READ_ATTEMPTS - 1; restHome();
+    TEST_ASSERT_TRUE(homeReleaseReady); TEST_ASSERT_FALSE(pressureFault);
+    TEST_ASSERT_TRUE(Serial1.outputContains("DIAG|I2C|POSITION_FAILED|12|1|3"));
+    TEST_ASSERT_TRUE(Serial1.outputContains("DIAG|I2C|POSITION_FAILED|12|2|3"));
+    TEST_ASSERT_FALSE(Serial1.outputContains("DIAG|I2C|POSITION_FAILED|12|3|3"));
+    TEST_ASSERT_FALSE(Serial1.outputContains("FAULT|"));
+}
+void test_home_position_read_faults_after_consecutive_failures() {
+    beginHome(); Wire.failTransmissions = POSITION_READ_ATTEMPTS; restHome();
+    TEST_ASSERT_TRUE(pressureFault); noHomeSuccess();
+    TEST_ASSERT_TRUE(Serial1.outputContains("DIAG|I2C|POSITION_FAILED|12|3|3"));
+    TEST_ASSERT_TRUE(Serial1.outputContains("FAULT|POSITION_FEEDBACK_INVALID"));
+}
+void test_general_position_read_retries_before_invalid() {
+    smcDeviceNumber = 14; Wire.position_14 = 1570;
+    Wire.failTransmissions = POSITION_READ_ATTEMPTS - 1;
+    TEST_ASSERT_EQUAL(1570, readPosition()); TEST_ASSERT_TRUE(positionReadValid);
+    TEST_ASSERT_TRUE(Serial1.outputContains("DIAG|I2C|POSITION_FAILED|14|2|3"));
+    Wire.failTransmissions = POSITION_READ_ATTEMPTS; readPosition();
+    TEST_ASSERT_FALSE(positionReadValid);
 }
 void test_home_lower_edge_is_inclusive() {
     beginHome(75); restHome(); TEST_ASSERT_TRUE(homeReleaseReady);
@@ -117,7 +186,13 @@ void test_home_stationary_interval_restarts_on_movement() {
     restHome(); TEST_ASSERT_TRUE(homeReleaseReady);
 }
 void test_home_post_stop_overshoot_is_not_corrected() {
+    // Held stopped, never driven outward, rejected once the reading persists.
     beginHome(); Wire.position_12 = 74; restHome();
+    TEST_ASSERT_TRUE(homeReleaseActive); TEST_ASSERT_EQUAL(0, speed(12));
+    TEST_ASSERT_FALSE(Serial1.outputContains("COMMAND_REJECTED"));
+    now += HOME_BELOW_CONFIRM_MS; sample(36.61); serviceHomeRelease();
+    TEST_ASSERT_TRUE(Serial1.outputContains("COMMAND_REJECTED|R|POSITION_OUT_OF_TOLERANCE"));
+    TEST_ASSERT_FALSE(homeReleaseActive); TEST_ASSERT_FALSE(pressureFault);
     TEST_ASSERT_EQUAL(0, speed(12)); noHomeSuccess();
 }
 void test_home_token_required_for_tare() {
@@ -151,7 +226,14 @@ void test_home_unstable_keeps_offset_and_allows_same_token_retry() {
 }
 void runHomeReleaseTests() {
     RUN_TEST(test_home_residual_load_stops_then_separately_zeroes);
-    RUN_TEST(test_home_above_band_retracts_until_first_in_band_read);
+    RUN_TEST(test_home_above_band_retracts_to_margin_inside_band);
+    RUN_TEST(test_home_already_in_band_verifies_without_travel);
+    RUN_TEST(test_home_rebound_above_band_after_stop_retracts_again);
+    RUN_TEST(test_home_feedback_dropout_is_not_a_verdict);
+    RUN_TEST(test_home_below_band_blip_recovers_when_reading_returns);
+    RUN_TEST(test_home_position_read_retries_before_fault);
+    RUN_TEST(test_home_position_read_faults_after_consecutive_failures);
+    RUN_TEST(test_general_position_read_retries_before_invalid);
     RUN_TEST(test_home_lower_edge_is_inclusive);
     RUN_TEST(test_home_below_band_never_drives_outward);
     RUN_TEST(test_home_configured_mark_is_preserved);

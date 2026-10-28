@@ -73,6 +73,7 @@ class ControllerModel:
         self._release_ready = False
         self._release_active = False
         self._release_stopped_at = None
+        self._release_retracting = False
 
         # Track commands received (for assertions)
         self.commands_received: List[str] = []
@@ -186,6 +187,9 @@ class ControllerModel:
                 self._release_token = cmd[2:]
                 self._release_active = True
                 self._release_stopped_at = None
+                # Firmware retracts only from above the band, then stops a
+                # 10-count margin inside it rather than on the edge.
+                self._release_retracting = self.position_a > self._a_zero + 25
 
         elif cmd_type == 'V':
             from helpers.motor_speed import motor_speed_values
@@ -384,9 +388,10 @@ class ControllerModel:
         if step < 1:
             step = 1
         if self._release_active:
-            if self.position_a > self._a_zero + 25:
+            stop_at = self._a_zero + 25 - (10 if self._release_retracting else 0)
+            if self.position_a > stop_at:
                 if self._stalled_actuator != "a":
-                    self.position_a = max(self._a_zero + 25, self.position_a - step)
+                    self.position_a = max(stop_at, self.position_a - step)
             elif self._release_stopped_at is None:
                 self._release_stopped_at = time.time()
             elif time.time() - self._release_stopped_at >= 0.25:

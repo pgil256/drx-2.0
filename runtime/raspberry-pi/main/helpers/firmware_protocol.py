@@ -89,6 +89,14 @@ def parse_diagnostic_frame(frame):
                 raise ValueError("Malformed hardware diagnostics")
             fields = ("a_ok", "b_ok", "c_ok", "stop_pressed", "fit_active")
             return "hardware_diagnostics", dict(zip(fields, (value == "1" for value in parts[2:])))
+        if len(parts) >= 2 and parts[1] == "I2C":
+            # DIAG|I2C|POSITION_FAILED|<device>|<attempt>|<attempts>: one missed
+            # Get Variable read. Without a following FAULT it was recovered.
+            if len(parts) != 6 or parts[2] != "POSITION_FAILED":
+                raise ValueError("Malformed I2C diagnostics")
+            return "position_read_failed", {"device": _integer(parts[3], 12, 14),
+                                             "attempt": _integer(parts[4], 1, 255),
+                                             "attempts": _integer(parts[5], 1, 255)}
         if len(parts) != 10 or parts[1] != "HX711":
             raise ValueError("Malformed HX711 diagnostics")
         values = {"raw": _integer(parts[2], -8388608, 8388607),

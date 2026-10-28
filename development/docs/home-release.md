@@ -2,24 +2,41 @@
 
 The app and firmware must be installed as a compatible pair. Treatment start
 requires `DRX-HX711-NB2` and the `HOME_RELEASE_V1` capability. The firmware version
-is `2026-10-28-DRX2-home-release`. Older three-field identities remain readable,
+is `2026-10-28-DRX2-release-margin`. Older three-field identities remain readable,
 but cannot authorize treatment. Disconnection, reset initiation, `Reset|`, and
 `Ready to Go` invalidate the identity and pressure authorization.
 
-After the timed phase, protocols 1–4 stop pulsing and protocols 2–4 confirm
-lateral centering. The app invalidates its baseline authorization, sends `X`,
+After the timed phase, protocols 1–4 stop pulsing and protocols 2–4 try to
+centre the lateral actuator. That centre is best effort: if it is not
+confirmed, the miss is logged and the release and zero still run, then the
+centre is tried once more unloaded. A second miss sends `X` and is only logged;
+the next treatment start re-centres anyway. An operator stop or controller
+fault during centering still cancels the release. The app invalidates its
+baseline authorization, sends `X`,
 then `R|<12 lowercase hex characters>`. Final cleanup does not send `P0`.
 Pre-treatment zeroing remains `L1|BASELINE`; treatment pressure adjustments keep
 their existing `P` semantics.
 
 Firmware uses the existing configured `AZERO`, with an inclusive ±25-count
-band. It only retracts from above that band. Being below it is a rejection,
-never an outward correction. Fresh calibrated pressure, fresh controller-12
+band. It only retracts from above that band, and stops 10 counts inside it
+(home + 15) rather than on the edge, so rebound or feedback noise after the
+stop stays in band. If a reading after the stop is above the band, it retracts
+again. A reading below the band stops the motor and is held, never corrected
+outward; the release is rejected only if that reading persists for 500 ms. One
+low reading mid-travel is treated as a feedback dropout, not a verdict. A
+release that starts inside the band verifies the stop without travel.
+Fresh calibrated pressure, fresh controller-12
 position, acknowledged stop writes, no unresolved stops, and zero accepted
 motor outputs are required. Position must remain within two counts for at
 least 250 ms after the axial stop. Pressure freshness, pressure limits, I2C,
 motor writes, and the physical stop remain authoritative. Release times out
 after 60 seconds; the host waits up to 62 seconds.
+
+Every controller position read, including those during release and the
+final tare, repeats a failed I2C exchange up to three times before it counts
+as a failure. Each miss is reported as
+`DIAG|I2C|POSITION_FAILED|<device>|<attempt>|<attempts>` and logged by the
+app as a warning. A miss with no following `FAULT|` was recovered.
 
 The release reply is evidence of a stopped home position, not zero pressure:
 

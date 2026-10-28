@@ -104,6 +104,7 @@ class Arduino(QObject):
     firmware_identity = pyqtSignal(dict)
     sensor_diagnostics = pyqtSignal(dict)
     hardware_diagnostics = pyqtSignal(dict)
+    position_read_failed = pyqtSignal(dict)  # One missed I2C read; FAULT follows only if all fail
     pressure_warning = pyqtSignal(dict)
     command_rejected = pyqtSignal(dict)
     fault_emit = pyqtSignal(dict)
@@ -651,6 +652,10 @@ class Arduino(QObject):
                                 self._resolve_v2_ack(seq, "HOME_RELEASE")
                 elif signal == "fault_emit":
                     self.baseline_valid = False
+                elif signal == "position_read_failed":
+                    self.logger.warning(
+                        "Firmware position read %s of %s failed on controller %s",
+                        result["attempt"], result["attempts"], result["device"])
                 elif signal == "calibration_result" and result["operation"] == "tare":
                     # Only the worker's STARTED/OK/DONE transaction grants authority.
                     self.baseline_valid = False

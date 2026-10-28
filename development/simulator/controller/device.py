@@ -32,6 +32,7 @@ class SimulatedController(ControllerModel):
         self._home_ready = False
         self._home_tare = False
         self._home_stopped_at = None
+        self._home_below_since = None
         self._home_position = 0
         self._output: List[Tuple[float, str]] = []
         self.reply_delay_ms = 0
@@ -231,6 +232,7 @@ class SimulatedController(ControllerModel):
                     self._home_active = True
                     self._home_started = self.time_s
                     self._home_stopped_at = None
+                    self._home_below_since = None
                     self.pressure_guard = True
                     self._pressure_ceiling = max(self.pressure, self.pressure_limit) + 10
             elif kind in "IKA":
@@ -472,11 +474,22 @@ class SimulatedController(ControllerModel):
         if not 0 <= self.position_a <= 4095:
             self._trip("POSITION_FEEDBACK_INVALID")
             return
-        if abs(self.position_a - self._a_zero) > 25:
-            if self._home_stopped_at is not None or self.position_a < self._a_zero:
+        if self.position_a < self._a_zero - 25:
+            # Never driven outward: hold stopped and reject only if it persists.
+            self.plant.velocity["a"] = 0
+            self._home_stopped_at = None
+            if self._home_below_since is None:
+                self._home_below_since = self.time_s
+            elif self.time_s - self._home_below_since >= 0.5:
                 self._stop()
                 self._reject("R", "POSITION_OUT_OF_TOLERANCE")
             return
+        self._home_below_since = None
+        if self.position_a > self._a_zero + 25:
+            self._home_stopped_at = None  # above the band: _drive_motors retracts again
+            return
+        if self._home_retracting() and self.position_a > self._a_zero + 25 - 10:
+            return  # stop a margin inside the band, not on its edge
         self.plant.velocity["a"] = 0
         if (self._home_stopped_at is None or
                 abs(self.position_a - self._home_position) > 2):
@@ -537,9 +550,15 @@ class SimulatedController(ControllerModel):
             self._write(f"CALIBRATION|TARE|OK|{offset}|{self._factor:g}\n")
             self._ack("DONE", self._tare_seq)
 
+    def _home_retracting(self) -> bool:
+        return (self._home_stopped_at is None and self._home_below_since is None
+                and self.plant.velocity["a"] < 0)
+
     def _drive_motors(self, dt: float) -> None:
         if self._home_active:
-            self.plant.velocity["a"] = (-215 if self.position_a > self._a_zero + 25 else 0)
+            retract = (self.position_a > self._a_zero + 25 or
+                       (self._home_retracting() and self.position_a > self._a_zero + 25 - 10))
+            self.plant.velocity["a"] = -215 if retract else 0
             return
         for axis in "abc":
             target = getattr(self, "_target_position_" + axis)

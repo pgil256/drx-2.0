@@ -8,7 +8,7 @@
   Native unit tests: development/tests/firmware/ (run_native_tests.sh).
 */
 
-#define VERSION "2026-10-28-DRX2-home-release"
+#define VERSION "2026-10-28-DRX2-release-margin"
 #define HX711_DRIVER "DRX-HX711-NB2"
 #include <math.h>
 #ifndef UNIT_TEST
@@ -156,6 +156,16 @@ unsigned long homeReleaseStarted = 0, homeReleaseStoppedAt = 0;
 uint16_t homeReleasePosition = 0;
 const unsigned long HOME_RELEASE_TIMEOUT = 60000UL;
 const unsigned long HOME_STOP_CONFIRM_MS = 250UL;
+// Final retraction stops this far inside the home band, so rebound or feedback
+// noise after the stop cannot carry the reading back out of it.
+const uint16_t AXIAL_HOME_STOP_MARGIN = 10;
+// A reading below the band must persist this long, held stopped, before the
+// release is rejected; one low reading mid-travel is a feedback dropout.
+const unsigned long HOME_BELOW_CONFIRM_MS = 500UL;
+bool homeReleaseBelow = false;
+unsigned long homeReleaseBelowSince = 0;
+// Get Variable only reads, so a disturbed exchange is repeated before a fault.
+const uint8_t POSITION_READ_ATTEMPTS = 3;
 // Operator-requested notice only: existing limits/timeout continue to govern.
 const uint16_t PRESSURE_PROGRESS_TRAVEL = 2150; // 5 inches at 430 counts/inch.
 const float PRESSURE_PROGRESS_MIN_RISE = 2.0;
@@ -378,7 +388,20 @@ static bool readPositionOnce(uint16_t &out) {
   return valid && !Wire.getWireTimeoutFlag();
 }
 
-// Read actuator position - retries once; on persistent failure returns
+// Repeat a failed Get Variable read up to POSITION_READ_ATTEMPTS times. Each
+// miss is reported so a recovered dropout stays visible in the logs; only
+// consecutive failures reach the caller.
+static bool readPositionRetried(uint16_t &out) {
+  for (uint8_t attempt = 1; ; ++attempt) {
+    if (readPositionOnce(out)) return true;
+    Serial1.print("DIAG|I2C|POSITION_FAILED|"); Serial1.print((int)smcDeviceNumber);
+    Serial1.print("|"); Serial1.print((int)attempt);
+    Serial1.print("|"); Serial1.println((int)POSITION_READ_ATTEMPTS);
+    if (attempt >= POSITION_READ_ATTEMPTS) return false;
+  }
+}
+
+// Read actuator position - retries; on persistent failure returns
 // the last good value for this device and clears positionReadValid so
 // callers do not make safety decisions on garbage (0 used to be both
 // the error value and a legal position)
@@ -389,7 +412,7 @@ uint16_t readPosition() {
   uint8_t device = smcDeviceNumber;
   servicePressure();
   smcDeviceNumber = device;
-  positionReadValid = readPositionOnce(value) || readPositionOnce(value);
+  positionReadValid = readPositionRetried(value);
   servicePressure();
 
   uint8_t idx = 0;
@@ -526,6 +549,7 @@ static void stopDeviceOrReport(uint8_t device) {
 void emergencyStop() {
   Dbg.println("Emergency Stop");
   homeReleaseActive = homeReleaseStopped = homeReleaseReady = homeTareActive = false;
+  homeReleaseBelow = false;
 
   // Aborted motion/pressure commands never get a DONE (v1 behavior);
   // drop the in-flight sequence so a later completion cannot echo it
@@ -771,7 +795,7 @@ void rejectTare(const char *reason) {
 bool readHomePosition(uint16_t &actual) {
   uint8_t savedDevice = smcDeviceNumber;
   smcDeviceNumber = 12;
-  bool valid = readPositionOnce(actual);
+  bool valid = readPositionRetried(actual);
   smcDeviceNumber = savedDevice;
   if (!valid) tripPressureFault("POSITION_FEEDBACK_INVALID");
   // A stop may have changed during the I2C transaction.
@@ -969,13 +993,38 @@ void serviceHomeRelease() {
   }
   uint16_t actual = 0;
   if (!readHomePosition(actual)) return;
-  if (!withinAxialHome(actual)) {
-    if (homeReleaseStopped || actual < AZERO) {
+  if (!withinAxialHome(actual) && actual < AZERO) {
+    // Never drive outward to repair an overshoot during final release. Hold
+    // stopped and reject only if the low reading persists: one low reading
+    // mid-travel is a feedback dropout, not a verdict.
+    homeReleaseStopped = false;
+    if (acceptedMotorSpeeds[0] && (!stopPressureMotor() || pressureFault)) return;
+    if (!homeReleaseBelow) {
+      homeReleaseBelow = true;
+      homeReleaseBelowSince = millis();
+    } else if (millis() - homeReleaseBelowSince >= HOME_BELOW_CONFIRM_MS) {
       emergencyStop();
       rejectCommand("R", "POSITION_OUT_OF_TOLERANCE");
     }
     return;
   }
+  homeReleaseBelow = false;
+  if (!withinAxialHome(actual)) {
+    // Above the band after a stop (rebound, or the stop followed a dropout):
+    // retracting again is the only direction this release ever drives.
+    homeReleaseStopped = false;
+    if (acceptedMotorSpeeds[0] >= 0 && !pendingStopMask) {
+      uint8_t savedDevice = smcDeviceNumber;
+      smcDeviceNumber = 12;
+      setMotorSpeed(-PRESSURE_SPEED);
+      smcDeviceNumber = savedDevice;
+    }
+    return;
+  }
+  // Inside the band while still retracting: stop a margin inside it, not on
+  // the edge, so settling or feedback noise after the stop stays in band.
+  if (acceptedMotorSpeeds[0] < 0 &&
+      (long)actual > (long)AZERO + POSITION_DEADBAND - AXIAL_HOME_STOP_MARGIN) return;
   if (!homeReleaseStopped) {
     if (!stopPressureMotor() || pressureFault || !allMotorOutputsStopped()) return;
     homeReleaseStopped = true;
@@ -1111,7 +1160,7 @@ void processCommand(String cmd) {
       pressureGuardActive = true;
       homeReleaseToken = cmd.substring(2);
       homeReleaseStarted = millis();
-      homeReleaseStopped = false;
+      homeReleaseStopped = homeReleaseBelow = false;
       homeReleaseActive = true;
       uint8_t savedDevice = smcDeviceNumber;
       smcDeviceNumber = 12;
