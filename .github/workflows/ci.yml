@@ -57,12 +57,34 @@ jobs:
         run: python development/scripts/check_limits_sync.py
 
       # On Linux the pty-based integration tests run for real
-      # (they skip on Windows dev machines).
-      - name: Run pytest
+      # (they skip on Windows dev machines). Coverage of the shipped app is
+      # measured here only; there is no threshold yet.
+      - name: Run pytest with coverage
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
-          xvfb-run -a python -m pytest -q
+          xvfb-run -a python -m pytest -q \
+            --cov=runtime/raspberry-pi/main \
+            --cov-config=development/coverage.ini \
+            --cov-report=xml
+
+      - name: Report coverage total
+        if: ${{ !cancelled() }}
+        run: |
+          total="$(python -m coverage report --rcfile=development/coverage.ini --format=total)"
+          echo "Line coverage of runtime/raspberry-pi/main: ${total}%"
+          echo "Line coverage of \`runtime/raspberry-pi/main\`: **${total}%**" >> "$GITHUB_STEP_SUMMARY"
+
+      # coverage.ini writes the XML under .cache/, which upload-artifact
+      # treats as hidden.
+      - name: Upload coverage XML
+        if: ${{ !cancelled() }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage-xml-${{ github.sha }}
+          path: .cache/coverage/coverage.xml
+          include-hidden-files: true
+          if-no-files-found: error
 
   # Rules live in ruff.toml. The Pi runs Python 3.7 while the tests above run
   # 3.12, so this is the step that rejects syntax the device cannot parse.
