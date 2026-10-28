@@ -14,7 +14,7 @@ qrcode==7.4.2
 # CI/dev environment only, where no system Qt is present. Keep the two
 # in step when bumping — a pip PyQt5 newer than the Pi's Qt runtime can
 # fail to load on-device.
-PyQt5>=5.15; python_version >= "3.8"
+PyQt5>=5.15.11; python_version >= "3.8"
 # Python 3.7 (the CI job that runs the suite on the Pi's interpreter): 5.15.9
 # with sip 12.12 is the last pair that ships 3.7 wheels.
 PyQt5==5.15.9; python_version < "3.8"
