@@ -59,11 +59,17 @@ LIMIT_SETTLE_TOLERANCE = 50
 # Static fallback envelope per axis, and the calibrated mark table that is the
 # real authority when present (it is exactly the range the host can command:
 # the degree limits map through these tables).
+#
+# The axial fallback mirrors the firmware clamp (AXIAL_MAX_POS), which sits
+# above the 12-bit feedback ceiling: status frames past 4095 are rejected as
+# corrupt before they get here, so the fallback alone can never warn. The
+# axial check is live only once a technician has measured the axial marks.
 STATIC_POSITION_BOUNDS = {
+    "axial": (0, AXIAL_MAX),
     "horizontal": (HORIZONTAL_MIN, HORIZONTAL_MAX),
     "lateral": (LATERAL_MIN, LATERAL_MAX),
 }
-POSITION_TABLES = {"horizontal": "BMarks", "lateral": "CMarks"}
+POSITION_TABLES = {"axial": "AMarks", "horizontal": "BMarks", "lateral": "CMarks"}
 
 
 class SafetyMonitor:
@@ -96,6 +102,11 @@ class SafetyMonitor:
         lo, hi = STATIC_POSITION_BOUNDS[name]
         config = getattr(self.window, "config", None)
         table = getattr(config, POSITION_TABLES[name], None) if config is not None else None
+        if name == "axial" and getattr(config, "axial_service_calibrated", False) is not True:
+            # Legacy AMarks were never used for axial commands: until the
+            # service wizard measures them, A12<inches> is converted by the
+            # firmware and the table says nothing about legal travel.
+            table = None
         bounds = self._table_bounds(table) if table is not None else None
         if bounds is not None:
             lo, hi = bounds
@@ -150,14 +161,16 @@ class SafetyMonitor:
         if window.initial_setup_complete:
             try:
                 confirmed_breaches = []
+                a_lo, a_hi = self._position_bounds("axial")
+                axial_excursion = max(a_lo - position_a, position_a - a_hi, 0)
                 if self._limit_confirmed(
                     "axial",
-                    position_a > AXIAL_MAX,
-                    max(0, position_a - AXIAL_MAX),
+                    axial_excursion > 0,
+                    axial_excursion,
                 ):
                     confirmed_breaches.append(
-                        f"Axial position limit exceeded "
-                        f"({position_a} > {AXIAL_MAX})"
+                        "Axial position limit exceeded "
+                        f"({position_a} outside {a_lo}-{a_hi})"
                     )
 
                 pressure_breached = pressure > PRESSURE_WARNING_MAX
