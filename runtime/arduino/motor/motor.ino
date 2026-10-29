@@ -157,14 +157,15 @@ float pressureStartForce = 0;
 long tareCmdSeq = -1;
 uint16_t positionTolerance = 0;
 char positionCommandKind = 'I';
-const float PULSE_RELEASE_DROP = 2.0;
+// A pulse release travels back for jerkInterval and ends early only once
+// contact is lost (pressure reads zero).
+const float PULSE_RELEASE_FLOOR = 0.0;
 const unsigned long PULSE_RECOVERY_TIMEOUT = 5000UL;
 int pulseMotorSpeed = 0;
 void servicePressure();
 void reportSensorDiagnostics();
 void tripPressureFault(const char *reason);
 void setPulseSpeed(int speed);
-float pulseReleaseFloor();
 void reportPressureDone(long seq);
 void emitAck(const char *token, long seq);
 void emergencyStop();
@@ -782,10 +783,6 @@ void setPulseSpeed(int speed) {
   pulseMotorSpeed = speed;
 }
 
-float pulseReleaseFloor() {
-  return max(0.0f, desiredPressure - PULSE_RELEASE_DROP);
-}
-
 void tripPressureFault(const char *reason) {
   if (pressureFault) return;
   pressureCalibrated = false;
@@ -854,7 +851,7 @@ void servicePressure() {
       pressureDonePending = true;
     }
     if (jerking && ((jerkDirection > 0 && pressure >= desiredPressure) ||
-                    (jerkDirection < 0 && pressure <= pulseReleaseFloor())))
+                    (jerkDirection < 0 && pressure <= PULSE_RELEASE_FLOOR)))
       setPulseSpeed(0); // Stop at the sampled bound, before telemetry or phase timing.
   }
   if (pressureGuardActive &&
@@ -1810,25 +1807,23 @@ void loop() {
     // Never sleep through a pulse: sample and accept stop commands throughout.
     unsigned long phaseElapsed = millis() - lastJerkTime;
     if (jerkDirection < 0) {
-      // The release may already have stopped at its pressure floor. Never
-      // restart that stroke on rebound; its elapsed-time cap still applies.
+      // The interval sets how long a release travels back. A release that
+      // lost contact has already stopped; never restart it on rebound.
       if (phaseElapsed >= jerkInterval) {
         jerkDirection = 1;
         lastJerkTime = millis();
         setPulseSpeed(pressure < desiredPressure ? pulseSpeed : 0);
       }
     } else if (pressure >= desiredPressure) {
-      setPulseSpeed(0);
-      if (phaseElapsed >= jerkInterval) {
-        jerkDirection = -1;
-        lastJerkTime = millis();
-        setPulseSpeed(-pulseSpeed);
-      }
+      // A recovered load releases at once instead of waiting at target.
+      jerkDirection = -1;
+      lastJerkTime = millis();
+      setPulseSpeed(-pulseSpeed);
     } else if (phaseElapsed >= PULSE_RECOVERY_TIMEOUT) {
       tripPressureFault("PULSE_RECOVERY_TIMEOUT");
     } else {
-      // Keep recovering after 500 ms if needed, and recover any droop after
-      // an early target stop. Only a recovered load permits the next release.
+      // Keep pushing until the load recovers. Only a recovered load permits
+      // the next release.
       setPulseSpeed(pulseSpeed);
     }
   }
