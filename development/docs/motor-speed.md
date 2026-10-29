@@ -5,7 +5,8 @@ loaded from device defaults or the linked patient's plan. Select a protocol usin
 1–4 buttons beside its description. Open **Edit treatment** to change settings
 in the popup. **Motor Speed**, directly below
 **Pulse Rate**, sets axial, lateral, and pulsation output to one percentage.
-Pulse Rate continues to control the interval between pulse strokes.
+Pulse Rate sets how long each pulse release lasts; [firmware.md](firmware.md)
+describes the pulse strokes.
 
 - Motor Speed defaults to **50%** and ranges from 50–100% in 5% increments.
   Percentages refer to the configured output ceiling of 1600 controller units,
