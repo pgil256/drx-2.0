@@ -417,7 +417,7 @@ class HardwareServiceController:
                 self.logger.warning("Service action %s refused: %s", name, reason)
                 self.dialog.show_message(reason, True)
             elif name == "jog":
-                self._jog(self.dialog.current_axis(), value)
+                self._jog(*self._jog_request(value))
             elif name == "record":
                 self._record_mark(self.dialog.current_axis(), float(value))
             elif name == "goto":
@@ -467,6 +467,16 @@ class HardwareServiceController:
             "Load-cell factor staged. Remove the reference load before resetting; "
             "verify against the reference again after reset."
         )
+
+    def _jog_request(self, value: object) -> tuple:
+        """Jogs name their actuator so the load-cell step can tension the axial axis."""
+        if isinstance(value, dict):
+            axis, step = value.get("axis"), value.get("step")
+        else:
+            axis, step = self.dialog.current_axis(), value
+        if axis not in SERVICE_AXES:
+            raise ValueError("Choose an actuator to jog.")
+        return axis, step
 
     def _jog(self, axis: str, step: object) -> None:
         if step not in (-200, -50, 50, 200):

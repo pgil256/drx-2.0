@@ -65,7 +65,7 @@ class TestHardwareServiceDialog:
         extend = next(button for button in dialog._actions if button.text() == "Brief extend")
         extend.click()
         assert len(confirmations) == 3
-        assert actions == [("jog", 50)]
+        assert actions == [("jog", {"axis": "axial", "step": 50})]
         assert all("no patient" in args[2] for args in confirmations)
 
     def test_selected_mark_move_requires_confirmation(self, service_dialog, monkeypatch):
@@ -167,6 +167,22 @@ class TestHardwareServiceDialog:
             assert page.horizontalScrollBar().maximum() == 0, index
         assert dialog.stop_button.geometry().height() >= 44
         assert dialog.close_button.isVisible()
+
+    @pytest.mark.parametrize("service_dialog", ["calibration", "tests"], indirect=True)
+    def test_load_cell_step_offers_named_axial_jogs(self, service_dialog, monkeypatch):
+        dialog = service_dialog
+        dialog.set_available(True, False)
+        actions = []
+        dialog.action_requested.connect(lambda *args: actions.append(args))
+        monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.Yes)
+        dialog.steps.setCurrentRow([key for key, _ in dialog._steps].index("loadcell"))
+        jogs = [button for button in dialog._actions if button.text().startswith("Axial jog")]
+        assert [button.text() for button in jogs] == [
+            "Axial jog -200", "Axial jog -50", "Axial jog +50", "Axial jog +200",
+        ]
+        assert all(button.isEnabled() for button in jogs)
+        jogs[2].click()
+        assert actions == [("jog", {"axis": "axial", "step": 50})]
 
     def test_movement_status_line_explains_the_lock(self, service_dialog):
         dialog = service_dialog

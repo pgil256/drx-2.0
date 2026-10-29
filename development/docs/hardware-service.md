@@ -146,9 +146,11 @@ After any leg service movement, reset Arduino and then use the leg-length row's
 **Reset** control to restore its position estimate before normal leg jogs.
 
 **Load cell.** With the device stationary and unloaded, capture the raw unloaded
-sample. Apply a known reference force with suitable bench equipment, let it
-settle, and capture the known-force sample. Enter the independently known force
-in pounds and calculate the proposed load-cell factor:
+sample. Apply a known reference force with suitable bench equipment: the step
+has its own axial jogs so the actuator can tension the reference gauge or
+fixture, under the same confirmation, envelope and fresh-feedback rules as the
+axis steps. Let the reading settle and capture the known-force sample. Enter the
+independently known force in pounds and calculate the proposed load-cell factor:
 
 ```text
 counts_per_pound = (loaded_raw - unloaded_raw) / reference_pounds

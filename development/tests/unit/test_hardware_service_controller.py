@@ -482,6 +482,23 @@ def test_refused_action_shows_the_lock_reason(service):
     assert "Confirm preparation" in c.dialog.message.text()
 
 
+@pytest.mark.parametrize("service", ["calibration", "tests"], indirect=True)
+def test_load_cell_step_jogs_the_axial_actuator_by_name(service):
+    c, w, _, feed = service
+    prepare(c, feed)
+    select(c, "loadcell")
+    c.action("jog", {"axis": "axial", "step": 50})
+    assert w.arduino.commands[-1] == "I12550"
+    assert c.move_axis == "axial"
+    w.arduino.done_emit.emit()
+    feed(a=550)
+    assert c.handle is None
+    assert c.movement_evidence["axial"] == {1}
+    c.action("jog", {"axis": "", "step": 50})
+    assert "Choose an actuator" in c.dialog.message.text()
+    assert [command for command in w.arduino.commands if command.startswith("I")] == ["I12550"]
+
+
 def test_jog_below_the_axial_zero_mark_is_refused_with_the_reason(service):
     c, w, _, feed = service
     prepare(c, feed)

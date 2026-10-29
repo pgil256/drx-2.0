@@ -219,6 +219,15 @@ class HardwareServiceDialog(QDialog):
             return
         self.action_requested.emit(action, payload() if callable(payload) else payload)
 
+    def _jog_row(self, axis: str, prefix: str = "Jog") -> QHBoxLayout:
+        """Bounded jogs name their actuator, so any step can move a specific axis."""
+        row = QHBoxLayout()
+        for delta in (-200, -50, 50, 200):
+            row.addWidget(self._button(
+                f"{prefix} {delta:+d}", "jog", {"axis": axis, "step": delta}, movement=True,
+            ))
+        return row
+
     def _build_preparation(self) -> None:
         layout = self._page(
             "Prepare the device",
@@ -291,10 +300,7 @@ class HardwareServiceDialog(QDialog):
                 "Existing table values are unverified until recorded during this session. "
                 "Do not record a point that cannot be reached safely."
             ))
-        jog = QHBoxLayout()
-        for delta in (-200, -50, 50, 200):
-            jog.addWidget(self._button(f"Jog {delta:+d}", "jog", delta, movement=True))
-        layout.addLayout(jog)
+        layout.addLayout(self._jog_row(axis))
         layout.addWidget(self._label(
             "Jog sizes are position counts. Each jog requires confirmation; the controller "
             "checks the travel envelope and fresh sensor readings."
@@ -384,6 +390,12 @@ class HardwareServiceDialog(QDialog):
         layout.addWidget(self._button("1. Capture unloaded raw sample", "pressure_capture", "zero"))
         self.pressure_zero = self._label("Unloaded sample: not captured")
         layout.addWidget(self.pressure_zero)
+        layout.addWidget(self._label(
+            "Apply the reference force with the axial actuator: jog it against the reference "
+            "gauge or fixture until the gauge shows the known force, then let the reading "
+            "settle. Each jog asks for confirmation and needs fresh, stable readings."
+        ))
+        layout.addLayout(self._jog_row("axial", prefix="Axial jog"))
         layout.addWidget(self._button(
             "2. Capture known-force raw sample", "pressure_capture", "loaded"
         ))
