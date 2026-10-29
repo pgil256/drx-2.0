@@ -15,16 +15,23 @@ firmware native tests 8 suites / 165 tests; Mega build warning-free;
   `COMMAND_REJECTED|L5|INVALID_FORMAT`, plus dead-code and comment cleanup.
   Added 2026-10-28: after a serial line overflows the 100-byte command buffer,
   the rest of that line is discarded instead of running as a command, and the
-  rejection is reported once. `VERSION` is `2026-10-28-DRX2-NB2-SERVICE`.
-- **Image:** Mega hex sha256 `298242468e76b3a5b8e2581a7c530b99826d59c781f6516fca540adcb81aba24`,
-  flash 34,232 bytes, RAM 2,689 bytes, built with the pinned `atmelavr@5.3.0`.
-  CI's firmware job uploads the same image with its checksum. The `L5` and
-  overflow changes alter behavior; the cleanup commits leave the code identical
-  (at most the LTO trampoline order moves).
+  rejection is reported once. Also added 2026-10-28: a pulse release travels
+  back for the whole Pulse Rate interval and stops early only when pressure
+  reaches zero (it used to stop 2 lb under target), and a push releases as soon
+  as it reaches target (it used to hold there until the interval ended).
+  `VERSION` is `2026-10-28-DRX2-NB2-SERVICE`.
+- **Image:** Mega hex sha256 `4f60c34727418eb6b55a02d3ed39a3a4c8e69415a61b7d7e37d8f784e6c9d2bf`,
+  flash 34,148 bytes, RAM 2,689 bytes, built with the pinned `atmelavr@5.3.0`.
+  CI's firmware job uploads the same image with its checksum. The `L5`,
+  overflow and pulse changes alter behavior; the cleanup commits leave the code
+  identical (at most the LTO trampoline order moves).
 - **The Pi does not need this flash:** it already sends only `L5|a|b`, and it
   checks the HX711 driver identity, not the version string.
 - **Decide:** when to flash, after the deployment bench checks in
   `development/docs/hardware-service.md#verification-before-deployment`.
+  For the pulse change, also run the slowest Pulse Rates (0.2/sec is a
+  5-second release): a release that unloads the leg must get back to target
+  within 5 seconds, or the firmware latches `PULSE_RECOVERY_TIMEOUT`.
 - **Also decide:** whether motion should continue when the app dies. The
   host heartbeat only warns, so after an app abort a pressure ramp runs to its
   target or its 90-second deadline, and pulsing continues until the restarted
