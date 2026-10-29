@@ -17,8 +17,10 @@ across the top of the page was distracting during runs, so
 """
 from typing import Callable, Optional
 
-from PyQt5.QtCore import Qt, QEvent, pyqtSignal
+from PyQt5.QtCore import QSize, Qt, QEvent, pyqtSignal
 from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QWidget
+
+from ui.theme import close_icon
 
 _BASE_STYLE = """
 QFrame#treatmentPanel {{
@@ -51,8 +53,9 @@ QPushButton {
     color: white;
     border: 2px solid white;
     border-radius: 8px;
-    font-size: 30px;
-    font-weight: bold;
+    padding: 0;
+    min-width: 44px;
+    min-height: 44px;
 }
 QPushButton:pressed {
     background-color: rgba(255, 255, 255, 80);
@@ -105,8 +108,11 @@ class TreatmentStatusPanel(QFrame):
         self.stop_button.setStyleSheet(_STOP_STYLE)
         self.stop_button.clicked.connect(self.stop_requested.emit)
 
-        self.dismiss_button = QPushButton("×")
+        # A drawn × — the text glyph rendered as a tick at this size.
+        self.dismiss_button = QPushButton()
         self.dismiss_button.setObjectName("dismissWarningButton")
+        self.dismiss_button.setIcon(close_icon("#ffffff", 22))
+        self.dismiss_button.setIconSize(QSize(22, 22))
         self.dismiss_button.setFixedSize(48, 48)
         self.dismiss_button.setCursor(Qt.PointingHandCursor)
         self.dismiss_button.setToolTip("Dismiss this advisory warning")

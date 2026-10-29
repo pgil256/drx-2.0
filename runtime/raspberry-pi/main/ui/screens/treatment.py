@@ -264,8 +264,11 @@ class TreatmentScreen(QWidget):
         labels = {"max_pressure": "Pressure limit", "max_left": "Left angle",
                   "max_right": "Right angle", "pulse_rate": "Pulse rate",
                   "motor_speed": "Motor speed"}
+        # The always-shown settings lead each row; the angle cells (hidden per
+        # protocol, space retained) trail, so no protocol leaves an empty slot
+        # before a visible value.
         positions = {"duration": (0, 0), "max_pressure": (0, 1), "pulse_rate": (0, 2),
-                     "max_left": (1, 0), "max_right": (1, 1), "motor_speed": (1, 2)}
+                     "motor_speed": (1, 0), "max_left": (1, 1), "max_right": (1, 2)}
         for key, label, _value, _low, _high, _step, _unit in TREATMENT_SETTING_SPECS:
             row = QWidget()
             policy = row.sizePolicy()

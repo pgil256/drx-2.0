@@ -135,8 +135,28 @@ class _ActuatorRow(QWidget):
             unit=cfg["unit"], with_steps=True,
         )
         self.slider.set_accessible_label(cfg["name"] + " target")
-        self.slider._value_label.setFixedWidth(90)
         layout.addWidget(self.slider, 1)
+
+        # The selected target gets the same captioned column as the sensor
+        # reading beside it, so "2 in" next to "Measured 1.2 in" cannot be
+        # mistaken for a typo. The slider keeps updating the value label.
+        target = QWidget()
+        target_layout = QVBoxLayout(target)
+        target_layout.setContentsMargins(0, 0, 0, 0)
+        target_layout.setSpacing(0)
+        target_layout.setAlignment(Qt.AlignVCenter)
+        self._target_caption = _label("Target", 16)
+        value_label = self.slider._value_label
+        self.slider.layout().removeWidget(value_label)
+        value_label.setParent(target)
+        value_label.setFont(mono_font(size=22, weight=600))
+        value_label.setMinimumWidth(0)
+        for label in (self._target_caption, value_label):
+            label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
+            label.setMinimumHeight(label.minimumSizeHint().height())
+            target_layout.addWidget(label)
+        target.setFixedWidth(96)
+        layout.addWidget(target)
 
         self.readout = _PosRow(cfg["unit"], self._key == "leg_length")
         layout.addWidget(self.readout)
