@@ -1,8 +1,10 @@
-"""Choose the legacy or new KneeSpa app at login and match the Mega firmware to it.
+"""Choose the legacy or new KneeSpa app at login and flash the Mega to match.
 
 The chooser is independent of runtime/ so it still starts when either app is
-broken. It flashes only registered images, only after a touch confirmation,
-and starts an app only after avrdude has verified the matching firmware.
+broken. Selecting a version builds that version's firmware from its source
+tree (the last build is reused while the source is unchanged), writes it to
+the Mega unless the board already verifies identical, verifies it, and only
+then starts the app.
 """
 
 import argparse
@@ -21,10 +23,13 @@ import time
 from typing import Callable, Dict, List, Optional, Tuple
 
 VERSIONS = ("legacy", "new")
-FLASH_BYTES = 262144
 # The Mega 2560's 8 KB bootloader starts here; the bootloader cannot rewrite it.
 BOOTLOADER_START = 0x3E000
 SERVICE = "kneespa.service"
+MEGA_FQBN = "arduino:avr:mega:cpu=atmega2560"
+BUILDERS = ("", "platformio", "arduino")
+SOURCE_SUFFIXES = (".ino", ".h", ".hpp", ".c", ".cpp", ".ini")
+BUILD_TIMEOUT = 900
 VERIFY_TIMEOUT = 90
 WRITE_TIMEOUT = 240
 READ_TIMEOUT = 240
@@ -45,10 +50,11 @@ def state_dir(app_dir: Path) -> Path:
 
 
 class Settings:
-    """versions.cfg plus the registered images beside it."""
+    """versions.cfg: chooser options plus each version's firmware source and launch command."""
 
-    def __init__(self, state: Path) -> None:
+    def __init__(self, state: Path, app_dir: Optional[Path] = None) -> None:
         self.state = state
+        self.app_dir = app_dir or default_app_dir()
         self.root = state / "version-chooser"
         self.path = self.root / "versions.cfg"
         if not self.path.is_file():
@@ -71,9 +77,14 @@ class Settings:
         self.port = chooser.get("port", "").strip()
         self.avrdude = chooser.get("avrdude", "").strip()
         self.avrdude_config = chooser.get("avrdude_config", "").strip()
+        self.pio = chooser.get("pio", "").strip()
+        self.arduino = chooser.get("arduino", "").strip()
         self.labels: Dict[str, str] = {}
         self.commands: Dict[str, List[str]] = {}
         self.directories: Dict[str, str] = {}
+        self.sources: Dict[str, str] = {}
+        self.images: Dict[str, str] = {}
+        self.builders: Dict[str, str] = {}
         for version in VERSIONS:
             section = parser[version]
             self.labels[version] = section.get("label", "").strip() or version.title()
@@ -83,12 +94,15 @@ class Settings:
                 raise ChooserError("[{}] command in {} has unbalanced quotes.".format(
                     version, self.path)) from None
             self.directories[version] = section.get("directory", "").strip()
+            self.sources[version] = section.get("source", "").strip()
+            self.images[version] = section.get("image", "").strip()
+            self.builders[version] = section.get("builder", "").strip().lower()
+            if self.builders[version] not in BUILDERS:
+                raise ChooserError("[{}] builder in {} must be blank, {} or {}.".format(
+                    version, self.path, *BUILDERS[1:]))
 
-    def image(self, version: str) -> Path:
-        return self.root / "images" / (version + ".hex")
-
-    def checksum_file(self, version: str) -> Path:
-        return self.root / "images" / (version + ".sha256")
+    def build_dir(self, version: str) -> Path:
+        return self.root / "build" / version
 
     @property
     def last_choice_file(self) -> Path:
@@ -104,20 +118,6 @@ class Settings:
     def save_choice(self, version: str) -> None:
         self.last_choice_file.write_text(version + "\n", encoding="utf-8")
 
-    def checked_image(self, version: str) -> Path:
-        """Return the registered image only if it still matches its recorded checksum."""
-        image, record = self.image(version), self.checksum_file(version)
-        if not image.is_file() or not record.is_file():
-            raise ChooserError(
-                "No {} firmware image is registered. Run: python3 version_chooser.py "
-                "register {} FILE.hex".format(self.labels[version], version))
-        expected = record.read_text(encoding="ascii").split()[0].lower() if \
-            record.stat().st_size else ""
-        if sha256(image) != expected:
-            raise ChooserError("The registered {} firmware image changed or is damaged. "
-                               "Register it again.".format(self.labels[version]))
-        return image
-
     def launch_command(self, version: str) -> Tuple[List[str], str]:
         command, directory = self.commands[version], self.directories[version]
         if not command:
@@ -126,6 +126,24 @@ class Settings:
             raise ChooserError("The {} directory does not exist: {}".format(
                 self.labels[version], directory))
         return command, directory
+
+    def firmware_source(self, version: str) -> Tuple[Optional[Path], Optional[Path]]:
+        """Return (prebuilt image, source tree); exactly one of them is set."""
+        image, source = self.images[version], self.sources[version]
+        if image:
+            path = Path(image)
+            if not path.is_file():
+                raise ChooserError("The {} firmware image does not exist: {}".format(
+                    self.labels[version], image))
+            return path, None
+        if not source:
+            raise ChooserError("Set source (the firmware folder) for [{}] in {}.".format(
+                version, self.path))
+        path = Path(source)
+        if not path.is_dir():
+            raise ChooserError("The {} firmware folder does not exist: {}".format(
+                self.labels[version], source))
+        return None, path
 
 
 def sha256(path: Path) -> str:
@@ -136,10 +154,10 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
-def read_hex(path: Path) -> Tuple[bytearray, int, bool]:
-    """Return (flash image, end address, has bootloader data) for an Intel HEX file."""
-    data, present = bytearray(b"\xff" * FLASH_BYTES), bytearray(FLASH_BYTES)
-    base, ended, end, bootloader = 0, False, 0, False
+def check_hex(path: Path) -> int:
+    """Validate an Intel HEX application image for the Mega 2560; return its byte count."""
+    present = bytearray(BOOTLOADER_START)
+    base, ended, count = 0, False, 0
     try:
         if path.stat().st_size > 4 * 1024 * 1024:
             raise ValueError("too large")
@@ -156,79 +174,186 @@ def read_hex(path: Path) -> Tuple[bytearray, int, bool]:
             payload = record[4:-1]
             if kind == 0:
                 first = base + address
-                if first + size > FLASH_BYTES:
-                    raise ValueError("beyond the Mega's flash")
-                for offset, value in enumerate(payload):
+                if first + size > BOOTLOADER_START:
+                    raise ValueError("data in the bootloader region or beyond the flash")
+                for offset in range(size):
                     if present[first + offset]:
                         raise ValueError("overlapping data")
                     present[first + offset] = 1
-                    data[first + offset] = value
-                if size:
-                    end = max(end, first + size)
-                    bootloader = bootloader or first + size > BOOTLOADER_START
+                count += size
             elif kind == 1 and size == 0:
                 ended = True
             elif kind in (2, 4) and size == 2:
                 base = int.from_bytes(payload, "big") << (4 if kind == 2 else 16)
             elif kind not in (3, 5) or size != 4:
                 raise ValueError("unsupported record")
-        if not ended or not end or not present[0]:
+        if not ended or not count or not present[0]:
             raise ValueError("incomplete image")
     except (OSError, UnicodeError, ValueError) as error:
-        raise ChooserError("{} is not a usable Mega 2560 HEX file ({}).".format(
+        raise ChooserError("{} is not a usable Mega 2560 application image ({}).".format(
             path, error)) from None
-    return data, end, bootloader
+    return count
 
 
-def write_hex(data: bytes, path: Path) -> None:
-    """Write data from address 0 as Intel HEX with extended linear addresses."""
-    lines = []
-    for offset in range(0, len(data), 16):
-        if offset and offset % 0x10000 == 0:
-            record = bytes([2, 0, 0, 4]) + (offset >> 16).to_bytes(2, "big")
-            lines.append(":" + (record + bytes([-sum(record) & 255])).hex().upper())
-        chunk = data[offset:offset + 16]
-        record = bytes([len(chunk)]) + (offset & 0xFFFF).to_bytes(2, "big") + b"\x00" + chunk
-        lines.append(":" + (record + bytes([-sum(record) & 255])).hex().upper())
-    lines.append(":00000001FF")
-    path.write_text("\n".join(lines) + "\n", encoding="ascii")
+def source_hash(source: Path) -> str:
+    """Hash the firmware sources so an unchanged tree reuses its last build."""
+    digest = hashlib.sha256()
+    files = sorted(
+        path for path in source.rglob("*")
+        if path.is_file() and path.suffix in SOURCE_SUFFIXES
+        and not any(part.startswith(".") for part in path.relative_to(source).parts))
+    if not files:
+        raise ChooserError("No firmware source files in {}.".format(source))
+    for path in files:
+        digest.update(path.relative_to(source).as_posix().encode("utf-8") + b"\0")
+        digest.update(path.read_bytes() + b"\0")
+    return digest.hexdigest()
 
 
-def register(settings: Settings, version: str, source: Path) -> str:
-    """Copy an image into place; a full-flash backup loses its bootloader region."""
-    data, end, bootloader = read_hex(source)
-    settings.image(version).parent.mkdir(parents=True, exist_ok=True)
-    with tempfile.NamedTemporaryFile(dir=str(settings.image(version).parent), suffix=".hex",
-                                     delete=False) as handle:
-        staged = Path(handle.name)
-    size = end
+def executable(path: str) -> bool:
+    return bool(path) and os.path.isfile(path) and os.access(path, os.X_OK)
+
+
+def find_pio(settings: Settings) -> str:
+    """Same search as devices/flash_firmware.sh and the app's release installer."""
+    for candidate in (settings.pio, os.environ.get("KNEESPA_PIO", ""), shutil.which("pio") or "",
+                      str(Path.home() / ".platformio/penv/bin/pio"),
+                      str(Path.home() / ".local/share/kneespa/platformio/bin/pio")):
+        if executable(candidate):
+            return candidate
+    raise ChooserError("PlatformIO was not found. Run Flash KneeSpa Firmware once to install it, "
+                       "or set pio in versions.cfg.")
+
+
+def find_arduino(settings: Settings) -> str:
+    """Return arduino-cli, or the directory of an Arduino IDE whose arduino-builder compiles."""
+    for candidate in (settings.arduino, shutil.which("arduino-cli") or "",
+                      str(Path.home() / ".local/bin/arduino-cli")):
+        if executable(candidate):
+            return candidate
+    directories = [settings.arduino] if settings.arduino else []
+    directories += sorted(glob.glob("/opt/arduino-*"), reverse=True) + ["/usr/share/arduino"]
+    for directory in directories:
+        if executable(os.path.join(directory, "arduino-builder")):
+            return directory
+    raise ChooserError("No Arduino toolchain was found (arduino-cli, or an Arduino IDE under "
+                       "/opt). Set arduino in versions.cfg to one of them.")
+
+
+def ide_version(ide: Path) -> str:
+    """arduino-builder wants the IDE version as digits: 1.8.15 is 10815."""
     try:
-        if bootloader:
-            # avrdude's flash:r backups include the bootloader and blank space.
-            application = bytes(data[:BOOTLOADER_START]).rstrip(b"\xff")
-            if not application:
-                raise ChooserError("{} holds no application firmware.".format(source))
-            write_hex(application, staged)
-            size = len(application)
-            note = "Removed the bootloader region from this flash backup."
-        else:
-            shutil.copyfile(str(source), str(staged))
-            note = "Copied unchanged."
-        digest = sha256(staged)
-        other = [name for name in VERSIONS if name != version]
-        for name in other:
-            record = settings.checksum_file(name)
-            if record.is_file() and record.read_text(encoding="ascii").split()[:1] == [digest]:
-                raise ChooserError("This image is already registered as {}.".format(
-                    settings.labels[name]))
-        os.replace(str(staged), str(settings.image(version)))
-    except BaseException:
-        staged.unlink()
-        raise
-    settings.checksum_file(version).write_text(
-        "{}  {}.hex\n".format(digest, version), encoding="ascii")
-    return "{} firmware registered ({} bytes, sha256 {}). {}".format(
-        settings.labels[version], size, digest, note)
+        parts = ide.joinpath("lib/version.txt").read_text(encoding="ascii").strip().split(".")
+        major, minor, patch = (int(re.match(r"\d+", part).group()) for part in parts[:3])
+        return str(major * 10000 + minor * 100 + patch)
+    except (OSError, ValueError, AttributeError):
+        return "10815"
+
+
+def sketchbook() -> Path:
+    try:
+        for line in Path.home().joinpath(".arduino15/preferences.txt").read_text(
+                encoding="utf-8").splitlines():
+            if line.startswith("sketchbook.path="):
+                return Path(line.split("=", 1)[1].strip())
+    except OSError:
+        pass
+    return Path.home() / "Arduino"
+
+
+def build_plan(settings: Settings, source: Path, build: Path,
+               builder: str = "") -> Tuple[List[str], Dict[str, str], Path]:
+    """Return (command, extra environment, produced HEX) for one firmware source tree."""
+    if builder == "platformio" and not (source / "platformio.ini").is_file():
+        raise ChooserError("{} has no platformio.ini for the platformio builder.".format(source))
+    if builder == "platformio" or (not builder and (source / "platformio.ini").is_file()):
+        # Share Flash KneeSpa Firmware's workspace: its downloaded libraries make
+        # the build work without internet, and both tools produce the same HEX.
+        workspace = settings.app_dir / ".cache" / "firmware-platformio"
+        environment = {
+            "PLATFORMIO_CORE_DIR": os.environ.get("PLATFORMIO_CORE_DIR",
+                                                  str(Path.home() / ".platformio")),
+            "PLATFORMIO_WORKSPACE_DIR": str(workspace),
+            "PLATFORMIO_BUILD_DIR": str(workspace / "build"),
+        }
+        command = [find_pio(settings), "run", "--project-dir", str(source),
+                   "--environment", "mega"]
+        return command, environment, workspace / "build" / "mega" / "firmware.hex"
+    sketches = sorted(source.glob("*.ino"))
+    if len(sketches) != 1:
+        raise ChooserError("{} must hold one .ino sketch or a platformio.ini.".format(source))
+    sketch = sketches[0]
+    tool = find_arduino(settings)
+    if os.path.isdir(tool):
+        ide = Path(tool)
+        hardware = [str(ide / "hardware")]
+        tools = [str(ide / "tools-builder"), str(ide / "hardware" / "tools" / "avr")]
+        packages = Path.home() / ".arduino15" / "packages"
+        if packages.is_dir():
+            hardware.append(str(packages))
+            tools.append(str(packages))
+        command = [str(ide / "arduino-builder"), "-compile", "-fqbn", MEGA_FQBN,
+                   "-ide-version", ide_version(ide), "-build-path", str(build),
+                   "-built-in-libraries", str(ide / "libraries"),
+                   "-libraries", str(sketchbook() / "libraries"), "-warnings", "none"]
+        for directory in hardware:
+            command += ["-hardware", directory]
+        for directory in tools:
+            command += ["-tools", directory]
+        command.append(str(sketch))
+    else:
+        command = [tool, "compile", "--fqbn", MEGA_FQBN, "--build-path", str(build),
+                   str(source)]
+    return command, {}, build / (sketch.name + ".hex")
+
+
+Runner = Callable[..., int]
+
+
+def run_logged(command: List[str], timeout: int, log: Path,
+               environment: Optional[Dict[str, str]] = None) -> int:
+    with log.open("ab") as output:
+        output.write(("$ " + " ".join(shlex.quote(part) for part in command) + "\n").encode())
+        output.flush()
+        try:
+            return subprocess.run(command, stdin=subprocess.DEVNULL, stdout=output,
+                                  stderr=subprocess.STDOUT, timeout=timeout,
+                                  env=environment).returncode
+        except subprocess.TimeoutExpired:
+            output.write("Timed out after {} s.\n".format(timeout).encode())
+            return 124
+        except OSError as error:
+            output.write("Cannot run: {}\n".format(error).encode())
+            return 127
+
+
+def build_firmware(settings: Settings, version: str, runner: Runner,
+                   log: Path) -> Tuple[Path, bool]:
+    """Return (validated image, whether it was built now) for one version."""
+    image, source = settings.firmware_source(version)
+    if image is not None:
+        check_hex(image)
+        return image, False
+    build = settings.build_dir(version)
+    build.mkdir(parents=True, exist_ok=True)
+    command, extra, produced = build_plan(settings, source, build, settings.builders[version])
+    digest = source_hash(source)
+    stamp = build / "source.sha256"
+    if produced.is_file() and stamp.is_file() and \
+            stamp.read_text(encoding="ascii").strip() == digest:
+        check_hex(produced)
+        return produced, False
+    if stamp.exists():
+        stamp.unlink()
+    environment = dict(os.environ, **extra) if extra else None
+    if runner(command, BUILD_TIMEOUT, log, environment):
+        raise ChooserError("Building the {} firmware failed. Fix its source or toolchain and "
+                           "try again. Log: {}".format(settings.labels[version], log))
+    if not produced.is_file():
+        raise ChooserError("The build produced no {}.".format(produced))
+    check_hex(produced)
+    stamp.write_text(digest + "\n", encoding="ascii")
+    return produced, True
 
 
 def find_port(configured: str) -> str:
@@ -259,33 +384,14 @@ def find_avrdude(settings: Settings) -> Tuple[str, str]:
         candidates = [(shutil.which("avrdude") or "", "/etc/avrdude.conf")]
         core = os.environ.get("PLATFORMIO_CORE_DIR", str(Path.home() / ".platformio"))
         for root in sorted(glob.glob(os.path.join(core, "packages", "tool-avrdude*"))):
-            for executable in ("avrdude", "bin/avrdude"):
+            for binary in ("avrdude", "bin/avrdude"):
                 for config in ("avrdude.conf", "etc/avrdude.conf"):
-                    candidates.append((os.path.join(root, executable),
-                                       os.path.join(root, config)))
-    for executable, config in candidates:
-        if executable and os.access(executable, os.X_OK) and os.path.isfile(config):
-            return executable, config
+                    candidates.append((os.path.join(root, binary), os.path.join(root, config)))
+    for binary, config in candidates:
+        if executable(binary) and os.path.isfile(config):
+            return binary, config
     raise ChooserError("avrdude was not found. Run Flash KneeSpa Firmware once to install it, "
                        "or set avrdude in versions.cfg.")
-
-
-Runner = Callable[[List[str], int, Path], int]
-
-
-def run_logged(command: List[str], timeout: int, log: Path) -> int:
-    with log.open("ab") as output:
-        output.write(("$ " + " ".join(shlex.quote(part) for part in command) + "\n").encode())
-        output.flush()
-        try:
-            return subprocess.run(command, stdin=subprocess.DEVNULL, stdout=output,
-                                  stderr=subprocess.STDOUT, timeout=timeout).returncode
-        except subprocess.TimeoutExpired:
-            output.write("Timed out after {} s.\n".format(timeout).encode())
-            return 124
-        except OSError as error:
-            output.write("Cannot run: {}\n".format(error).encode())
-            return 127
 
 
 class Mega:
@@ -333,13 +439,15 @@ def service_active() -> bool:
     return subprocess.run(["systemctl", "is-active", "--quiet", SERVICE]).returncode == 0
 
 
+Progress = Callable[[str], None]
+
+
 class Session:
-    """One pass from choice to launch; the UI calls these steps on a worker thread."""
+    """One pass from choice to launch; the UI runs it on a worker thread."""
 
     def __init__(self, settings: Settings, runner: Runner = run_logged) -> None:
         self.settings, self.runner = settings, runner
         self.lock: Optional[object] = None
-        self.mega: Optional[Mega] = None
         self.record: Optional[Path] = None
 
     def acquire(self) -> None:
@@ -363,15 +471,15 @@ class Session:
         if port_in_use(["/dev/serial0"]):
             raise ChooserError("Another program is using /dev/serial0. Close KneeSpa first.")
 
-    def check(self, version: str) -> str:
-        """Return 'ready', 'switch' (board holds the other image) or 'unknown'."""
+    def run(self, version: str, progress: Progress) -> str:
+        """Build, flash and verify the version's firmware; return what was done."""
+        label = self.settings.labels[version]
         self.acquire()
         self.settings.launch_command(version)
-        image = self.settings.checked_image(version)
         if (self.settings.state / "updates" / "firmware-recovery.json").exists():
             # KneeSpa 2.0 finishes its own interrupted firmware update on startup.
             if version == "new":
-                return "ready"
+                return "recovering"
             raise ChooserError("A firmware update from {} has not finished. Choose it so the "
                                "update can complete; the chooser will not change the firmware "
                                "until then.".format(self.settings.labels["new"]))
@@ -380,36 +488,32 @@ class Session:
             raise ChooserError("Another program is using {}. Close any serial monitor."
                                .format(port))
         avrdude, config = find_avrdude(self.settings)
-        stamp = time.strftime("%Y%m%d-%H%M%S")
         firmware = self.settings.state / "firmware"
         firmware.mkdir(parents=True, exist_ok=True)
+        stamp = time.strftime("%Y%m%d-%H%M%S")
         self.record = Path(tempfile.mkdtemp(prefix=stamp + "-choose-" + version + "-",
                                             dir=str(firmware)))
-        self.mega = Mega(avrdude, config, port, self.record / "avrdude.log", self.runner)
-        if self.mega.matches(image):
-            # Keep records only for boots that needed attention.
-            shutil.rmtree(str(self.record), ignore_errors=True)
-            self.record = None
-            return "ready"
-        other = VERSIONS[1 - VERSIONS.index(version)]
-        try:
-            other_image = self.settings.checked_image(other)
-        except ChooserError:
-            other_image = None
-        if other_image is not None and self.mega.matches(other_image):
-            return "switch"
-        # Proves the board answers, and keeps what it held before replacing it.
-        self.mega.backup(self.record / "previous.hex")
-        return "unknown"
-
-    def switch(self, version: str) -> None:
-        if self.mega is None:
-            raise ChooserError("Check the firmware before switching it.")
-        image = self.settings.checked_image(version)
-        self.mega.write(image)
-        if not self.mega.matches(image):
+        progress("Building the {} firmware…".format(label))
+        image, built = build_firmware(self.settings, version, self.runner,
+                                      self.record / "build.log")
+        mega = Mega(avrdude, config, port, self.record / "avrdude.log", self.runner)
+        progress("Checking the firmware on the Mega…")
+        if mega.matches(image):
+            if not built:
+                # Keep records only for starts that changed something.
+                shutil.rmtree(str(self.record), ignore_errors=True)
+                self.record = None
+            return "verified"
+        progress("Backing up the firmware on the Mega…")
+        mega.backup(self.record / "previous.hex")
+        progress("Writing and verifying the {} firmware. Do not turn off the device or "
+                 "unplug the Mega.".format(label))
+        mega.write(image)
+        if not mega.matches(image):
             raise ChooserError("The firmware did not verify after writing. Do not use the "
-                               "device. Log: {}".format(self.mega.log))
+                               "device. Log: {}".format(mega.log))
+        shutil.copyfile(str(image), str(self.record / "current.hex"))
+        return "written"
 
     def finish(self, version: str) -> Tuple[List[str], str]:
         self.settings.save_choice(version)
@@ -431,15 +535,16 @@ def make_window(settings: Settings, session: Optional[Session] = None) -> object
                                  QWidget)
 
     class Task(QThread):
+        progress = pyqtSignal(str)
         done = pyqtSignal(object, str)
 
-        def __init__(self, work: Callable[[], object]) -> None:
+        def __init__(self, work: Callable[[Progress], object]) -> None:
             super().__init__()
             self.work = work
 
         def run(self) -> None:
             try:
-                self.done.emit(self.work(), "")
+                self.done.emit(self.work(self.progress.emit), "")
             except ChooserError as error:
                 self.done.emit(None, str(error))
             except Exception as error:  # Shown on screen instead of a silent exit.
@@ -453,8 +558,7 @@ def make_window(settings: Settings, session: Optional[Session] = None) -> object
                 "QWidget { background: #10233a; color: white; font-size: 24px; }"
                 "QPushButton { background: #2f6fb0; border-radius: 12px; padding: 24px;"
                 " font-size: 30px; min-height: 110px; }"
-                "QPushButton:pressed { background: #1d4e80; }"
-                "QPushButton#danger { background: #b05a2f; }")
+                "QPushButton:pressed { background: #1d4e80; }")
             self.title = QLabel()
             self.title.setStyleSheet("font-size: 36px; font-weight: bold;")
             self.message = QLabel()
@@ -477,7 +581,7 @@ def make_window(settings: Settings, session: Optional[Session] = None) -> object
             self.choices()
 
         def page(self, title: str, message: str,
-                 buttons: List[Tuple[str, Callable[[], None], bool]]) -> None:
+                 buttons: List[Tuple[str, Callable[[], None]]]) -> None:
             self.timer.stop()
             self.title.setText(title)
             self.message.setText(message)
@@ -485,16 +589,14 @@ def make_window(settings: Settings, session: Optional[Session] = None) -> object
                 widget = self.buttons.takeAt(0).widget()
                 if widget is not None:
                     widget.deleteLater()
-            for label, action, danger in buttons:
+            for label, action in buttons:
                 button = QPushButton(label)
-                if danger:
-                    button.setObjectName("danger")
                 button.clicked.connect(action)
                 self.buttons.addWidget(button)
 
         def choices(self) -> None:
             self.page("Choose KneeSpa version", "", [
-                (settings.labels[version], lambda _=False, v=version: self.choose(v), False)
+                (settings.labels[version], lambda _=False, v=version: self.choose(v))
                 for version in VERSIONS])
             last = settings.last_choice()
             if last and settings.timeout:
@@ -515,41 +617,14 @@ def make_window(settings: Settings, session: Optional[Session] = None) -> object
                 self.timer.stop()
                 self.message.setText("")
 
-        def run(self, work: Callable[[], object], then: Callable[[object], None]) -> None:
-            self.task = Task(work)
-            self.task.done.connect(lambda result, error: self.failed(error) if error
-                                   else then(result))
-            self.task.start()
-
         def choose(self, version: str) -> None:
             self.version = version
-            self.page("Checking firmware", "Checking that the Mega has the {} firmware…"
-                      .format(settings.labels[version]), [])
-            self.run(lambda: self.session.check(version), self.checked)
-
-        def checked(self, state: object) -> None:
-            label = settings.labels[self.version]
-            if state == "ready":
-                self.start()
-                return
-            if state == "switch":
-                text = "The Mega has the {} firmware.".format(
-                    settings.labels[VERSIONS[1 - VERSIONS.index(self.version)]])
-            else:
-                text = ("The Mega has firmware that matches neither version. It may have "
-                        "been updated from KneeSpa 2.0 or the Flash KneeSpa Firmware "
-                        "shortcut. A backup was saved in {}.".format(self.session.record))
-            self.page("Firmware switch needed", text + "\n\nWriting the {} firmware takes "
-                      "under a minute and resets the Mega. Make sure nobody is on the "
-                      "device.".format(label), [
-                          ("Back", self.choices, False),
-                          ("Write {} firmware".format(label), self.switch, True)])
-
-        def switch(self) -> None:
-            self.page("Writing firmware", "Writing and verifying the {} firmware. Do not "
-                      "turn off the device or unplug the Mega.".format(
-                          settings.labels[self.version]), [])
-            self.run(lambda: self.session.switch(self.version), lambda _: self.start())
+            self.page("Preparing {}".format(settings.labels[version]), "", [])
+            self.task = Task(lambda progress: self.session.run(version, progress))
+            self.task.progress.connect(self.message.setText)
+            self.task.done.connect(lambda result, error: self.failed(error) if error
+                                   else self.start())
+            self.task.start()
 
         def start(self) -> None:
             try:
@@ -562,8 +637,8 @@ def make_window(settings: Settings, session: Optional[Session] = None) -> object
 
         def failed(self, error: str) -> None:
             self.page("Cannot start", error, [
-                ("Back", self.choices, False),
-                ("Try again", lambda _=False: self.choose(self.version), False)])
+                ("Back", self.choices),
+                ("Try again", lambda _=False: self.choose(self.version))])
 
     return Window()
 
@@ -586,14 +661,14 @@ def status(settings: Settings) -> int:
     """Print setup problems without touching the Mega."""
     problems = 0
     for version in VERSIONS:
-        for check in (settings.checked_image, settings.launch_command):
+        checks = [lambda v=version: settings.launch_command(v)]
+        checks.append(lambda v=version: print("[{}] {}".format(v, firmware_summary(settings, v))))
+        for check in checks:
             try:
-                check(version)
+                check()
             except ChooserError as error:
                 problems += 1
                 print("[{}] {}".format(version, error))
-        if settings.image(version).is_file():
-            print("[{}] image {}".format(version, settings.image(version)))
     for check in (lambda: print("Mega port:", find_port(settings.port)),
                   lambda: print("avrdude:", " ".join(find_avrdude(settings)))):
         try:
@@ -606,19 +681,41 @@ def status(settings: Settings) -> int:
     return 1 if problems else 0
 
 
+def firmware_summary(settings: Settings, version: str) -> str:
+    image, source = settings.firmware_source(version)
+    if image is not None:
+        return "image {} ({} bytes)".format(image, check_hex(image))
+    command, _, produced = build_plan(settings, source, settings.build_dir(version),
+                                      settings.builders[version])
+    state = "built" if produced.is_file() else "not built yet"
+    return "source {} with {} ({})".format(source, command[0], state)
+
+
+def build(settings: Settings, version: str) -> int:
+    """Build (or reuse) one version's firmware without touching the Mega."""
+    log = settings.build_dir(version) / "build.log"
+    log.parent.mkdir(parents=True, exist_ok=True)
+    if log.exists():
+        log.unlink()
+    image, built = build_firmware(settings, version, run_logged, log)
+    print("{} firmware {}: {} ({} bytes, sha256 {})".format(
+        settings.labels[version], "built" if built else "unchanged", image, check_hex(image),
+        sha256(image)))
+    return 0
+
+
 def main(argv: Optional[List[str]] = None) -> int:
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     commands = parser.add_subparsers(dest="command")
-    add = commands.add_parser("register", help="install the firmware image for one version")
+    add = commands.add_parser("build", help="build one version's firmware without flashing")
     add.add_argument("version", choices=VERSIONS)
-    add.add_argument("hex", type=Path)
     commands.add_parser("status", help="check the setup without touching the Mega")
     args = parser.parse_args(argv)
     try:
-        settings = Settings(state_dir(default_app_dir()))
-        if args.command == "register":
-            print(register(settings, args.version, args.hex))
-            return 0
+        app_dir = default_app_dir()
+        settings = Settings(state_dir(app_dir), app_dir)
+        if args.command == "build":
+            return build(settings, args.version)
         if args.command == "status":
             return status(settings)
     except ChooserError as error:

@@ -1,11 +1,9 @@
 # KneeSpa version chooser settings.
 # install.sh copies this to devices/local/raspberry-pi/version-chooser/versions.cfg
-# once; edit that copy on the Pi. Firmware images are not set here: register
-# them with `python3 version_chooser.py register legacy|new FILE.hex`.
+# once; edit that copy on the Pi.
 
 [chooser]
 # Seconds before the last-used version starts by itself; 0 always waits for a touch.
-# A firmware switch always waits for a touch.
 timeout = 15
 # Mega USB port. Blank selects the single Arduino Mega 2560 or /dev/ttyACM* device.
 port =
@@ -14,6 +12,12 @@ port =
 # only avrdude is set.
 avrdude =
 avrdude_config =
+# Build tools. pio: PlatformIO, for a source folder with platformio.ini (blank
+# searches PATH and the Flash KneeSpa Firmware installation). arduino: arduino-cli,
+# or an Arduino IDE folder such as /opt/arduino-1.8.15, for a plain sketch folder
+# (blank searches PATH, ~/.local/bin and /opt).
+pio =
+arduino =
 
 [legacy]
 label = Legacy KneeSpa
@@ -21,8 +25,20 @@ label = Legacy KneeSpa
 # and the directory to start it in. Quote paths that contain spaces.
 command =
 directory =
+# The folder holding this version's motor firmware source (one .ino sketch, or a
+# PlatformIO project). It is built on the Pi and reused until the source changes.
+# To flash a fixed file instead, set image to a .hex path and leave source blank.
+source =
+image =
+# Blank picks platformio when the folder has a platformio.ini, else arduino.
+# PlatformIO downloads its libraries, so a Pi without internet needs
+# builder = arduino (the image then differs from CI's by compiler, not source).
+builder =
 
 [new]
 label = KneeSpa 2.0
 command = /bin/bash /home/pi/drx/devices/maintenance/raspberry-pi/desktop/launch_kneespa.sh
 directory = /home/pi/drx
+source = /home/pi/drx/runtime/arduino/motor
+image =
+builder =
