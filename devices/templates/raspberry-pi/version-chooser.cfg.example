@@ -1,0 +1,28 @@
+# KneeSpa version chooser settings.
+# install.sh copies this to devices/local/raspberry-pi/version-chooser/versions.cfg
+# once; edit that copy on the Pi. Firmware images are not set here: register
+# them with `python3 version_chooser.py register legacy|new FILE.hex`.
+
+[chooser]
+# Seconds before the last-used version starts by itself; 0 always waits for a touch.
+# A firmware switch always waits for a touch.
+timeout = 15
+# Mega USB port. Blank selects the single Arduino Mega 2560 or /dev/ttyACM* device.
+port =
+# Blank searches PATH, then PlatformIO's tool-avrdude package (installed by
+# Flash KneeSpa Firmware). avrdude_config defaults to /etc/avrdude.conf when
+# only avrdude is set.
+avrdude =
+avrdude_config =
+
+[legacy]
+label = Legacy KneeSpa
+# The legacy app's start command, exactly as its old shortcut or service ran it,
+# and the directory to start it in. Quote paths that contain spaces.
+command =
+directory =
+
+[new]
+label = KneeSpa 2.0
+command = /bin/bash /home/pi/drx/devices/maintenance/raspberry-pi/desktop/launch_kneespa.sh
+directory = /home/pi/drx
