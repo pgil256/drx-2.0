@@ -234,6 +234,7 @@ class DeviceScreen(QWidget):
         self.history_table.setSelectionBehavior(QAbstractItemView.SelectRows)
         self.history_table.setSelectionMode(QAbstractItemView.SingleSelection)
         self.history_table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        self.history_table.setShowGrid(False)
         self.history_table.verticalHeader().hide()
         self.history_table.verticalHeader().setDefaultSectionSize(60)
         self.history_table.verticalHeader().setMinimumSectionSize(60)

@@ -86,19 +86,15 @@ class HardwareServiceDialog(QDialog):
         self.resize(1080, 700)
         self.setMinimumSize(900, 620)
         self.setFont(sans_font(size="--text-base"))
+        # Lists, combos, spin boxes and tables take the theme's rules (app.qss).
         self.setStyleSheet(
             f"QDialog {{ background: {resolve('--surface-page')}; }}"
             "QScrollArea { border: none; background: transparent; }"
             "QScrollArea > QWidget > QWidget { background: transparent; }"
-            "QListWidget { background: white; border: 1px solid #dbe3e8;"
-            " border-radius: 10px; padding: 4px; }"
-            "QListWidget::item { min-height: 36px; padding: 4px 8px; }"
-            "QListWidget::item:selected { background: #e1f5fb; color: #075970; }"
-            "QComboBox { min-height: 48px; padding: 0 10px; background: white; }"
-            "QDoubleSpinBox { min-height: 48px; padding: 0 112px 0 12px; background: white; }"
-            "QPlainTextEdit, QTableWidget { background: white; border: 1px solid #ccd8df; }"
+            f"QPlainTextEdit {{ background: {resolve('--white')};"
+            f" border: 1px solid {resolve('--border-divider')};"
+            f" border-radius: {resolve('--radius-xs')}; padding: 8px; }}"
             "QCheckBox { spacing: 12px; padding: 6px 0; }"
-            "QCheckBox::indicator { width: 24px; height: 24px; }"
         )
 
         root = QVBoxLayout(self)
@@ -543,6 +539,7 @@ class HardwareServiceDialog(QDialog):
         table.verticalHeader().setDefaultSectionSize(56)
         table.verticalHeader().setMinimumSectionSize(48)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.setShowGrid(False)
         table.setWordWrap(True)
         return table
 
