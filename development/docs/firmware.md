@@ -33,6 +33,15 @@ warns and continues correcting; the host's bounded waits/retries can fail the
 protocol. The paired pressure constants are checked by
 `development/scripts/check_limits_sync.py`.
 
+Pulsing (`J<ms>`) alternates axial release and push strokes around the
+pressure target. A release reverses for the whole interval and stops early only
+if pressure reads zero (contact lost); it does not restart on rebound. The push
+that follows drives forward until pressure is back at target, then starts the
+next release at once instead of waiting out the interval. A push that has not
+reached target within 5 seconds latches `FAULT|PULSE_RECOVERY_TIMEOUT`. A full
+pulse takes the interval plus the push, so the app's Pulse Rate (interval =
+1000 ms divided by pulses/sec) is the fastest rate a pulse can reach.
+
 # Treatment motor speed
 
 The app's Motor Speed controls require this firmware's `V<axial%>,<lateral%>,<pulse%>`

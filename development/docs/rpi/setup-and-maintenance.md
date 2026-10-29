@@ -31,6 +31,8 @@ perform those operations with the device unoccupied.
 | [desktop/launch_kneespa.sh](../../../devices/maintenance/raspberry-pi/desktop/launch_kneespa.sh) | Pi desktop session | Starts KneeSpa with interpreter selection, duplicate-launch lock and startup logs. |
 | [runtime/raspberry-pi/launch.sh](../../../runtime/raspberry-pi/launch.sh) | Pi desktop session | Simpler runtime launcher; does not provide the desktop launcher's lock or startup-log wrapper. |
 | [flash_firmware.sh](../../../devices/flash_firmware.sh) | Pi | Builds, backs up, writes and verifies the Arduino Mega firmware over USB. |
+| [version-chooser/install.sh](../../../devices/maintenance/raspberry-pi/version-chooser/install.sh) | Pi | Installs the login-time menu that starts the legacy or new app with matching Mega firmware. See [its README](../../../devices/maintenance/raspberry-pi/version-chooser/README.md). |
+| [version-chooser/version_chooser.py](../../../devices/maintenance/raspberry-pi/version-chooser/version_chooser.py) | Pi | The chooser itself; `register` installs a firmware image, `status` checks the setup without touching the Mega. |
 | [install_display_diagnostics.sh](../../../devices/maintenance/raspberry-pi/install_display_diagnostics.sh) | Pi desktop | Installs baseline/failure diagnostic shortcuts and a collector in `~/.local/bin`. |
 | [collect_display_diagnostics.sh](../../../devices/maintenance/raspberry-pi/collect_display_diagnostics.sh) | Pi | Captures display, touch, USB and power evidence without reconfiguring hardware. |
 | [test_sound_output.sh](../../../devices/maintenance/raspberry-pi/test_sound_output.sh) | Pi desktop / terminal | Interactive speaker and VLC tests; unmutes the output and sets volume to 65%. |
@@ -58,7 +60,7 @@ files of the current commit and keeps the scripts' executable permissions and LF
 line endings, also on Windows:
 
 ```bash
-git archive --format=tar.gz -o kneespa-pi-desktop-setup.tar.gz HEAD -- "devices/Install KneeSpa.desktop" devices/install_kneespa_desktop.sh devices/flash_firmware.sh devices/maintenance/raspberry-pi/firmware.md devices/maintenance/raspberry-pi/desktop
+git archive --format=tar.gz -o kneespa-pi-desktop-setup.tar.gz HEAD -- "devices/Install KneeSpa.desktop" devices/install_kneespa_desktop.sh devices/flash_firmware.sh devices/maintenance/raspberry-pi/firmware.md devices/maintenance/raspberry-pi/desktop devices/maintenance/raspberry-pi/version-chooser devices/templates/raspberry-pi/version-chooser.cfg.example
 ```
 
 These bundles supplement the existing application; they are not full device
