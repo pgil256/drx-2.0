@@ -40,7 +40,9 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from ui.theme import GLYPH, compress_icon, expand_icon, pause_icon, play_icon
+from ui.theme import (
+    chevron_icon, close_icon, compress_icon, expand_icon, pause_icon, play_icon,
+)
 from ui.widgets.ds._common import image_path, mono_font, resolve, sans_font
 
 from ._overlay import Overlay
@@ -56,6 +58,19 @@ from .vlc_engine import (
 
 _VIDEO_CARD_WIDTH = 800
 _TOUCH_CONTROL_SIZE = 48
+
+# Round translucent icon buttons on the dark title bar (close, full screen).
+# The size lives in the rule: the theme's QPushButton rule carries a min-height,
+# and every re-polish (e.g. the card's frame style) re-applies that geometry,
+# which lowered a setFixedSize() minimum back to 24px and let the title-bar
+# layout squash the button.
+_HEADER_ICON_BUTTON_CSS = (
+    "QPushButton { border: none; border-radius: 24px; padding: 0; color: #ffffff;"
+    " min-width: 48px; max-width: 48px; min-height: 48px; max-height: 48px;"
+    " background: rgba(255,255,255,0.15); }"
+    " QPushButton:hover { background: rgba(255,255,255,0.28); }"
+    " QPushButton:pressed { background: rgba(255,255,255,0.40); }"
+)
 
 
 def _fmt(seconds):
@@ -156,25 +171,16 @@ class VideoModal(Overlay):
         self._video_list.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOn)
         self._video_list.setVerticalScrollMode(QListWidget.ScrollPerPixel)
         self._video_list.verticalScrollBar().setAccessibleName("Scroll video playlist")
-        # Override the theme's handle border too, so the touch-sized thumb stays visible.
+        # Each clip is its own outlined row; the theme's list and scrollbar
+        # rules (app.qss) supply the selection colours and the slim touch thumb.
         self._video_list.setStyleSheet(
-            "QListWidget { background: #ffffff; color: #172b3b; border: none; }"
-            "QListWidget::item { padding: 10px 14px; border: 1px solid #d9e2e8;"
-            " border-radius: 8px; margin-bottom: 6px; }"
-            "QListWidget::item:hover { background: #f0f7fb; }"
-            "QListWidget::item:selected { background: #e4f3fb; color: #123a52;"
-            " border-color: #1678a5; }"
-            f"QScrollBar:vertical {{ width: {_TOUCH_CONTROL_SIZE}px;"
-            " background: #f0f7fb; border: none; border-radius: 12px; margin: 0; }"
-            "QScrollBar::handle:vertical { background: #1678a5;"
-            " border: 4px solid #f0f7fb; border-radius: 12px; min-height: 64px; }"
-            "QScrollBar::handle:vertical:hover, QScrollBar::handle:vertical:pressed"
-            " { background: #123a52; }"
-            "QScrollBar::handle:vertical:disabled { background: #d9e2e8; }"
-            "QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical"
-            " { height: 0; background: none; }"
-            "QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical"
-            " { background: none; }"
+            f"QListWidget {{ background: {resolve('--white')}; border: none; padding: 0; }}"
+            f"QListWidget::item {{ padding: 10px 14px; color: {resolve('--ink-800')};"
+            f" border: 1px solid {resolve('--gray-300')};"
+            f" border-radius: {resolve('--radius-md')}; margin-bottom: 6px; }}"
+            f"QListWidget::item:hover {{ background: {resolve('--blue-050')}; }}"
+            f"QListWidget::item:selected {{ background: {resolve('--blue-100')};"
+            f" color: {resolve('--ink-900')}; border-color: {resolve('--color-primary')}; }}"
         )
         for index, title in enumerate(self._engine.titles()):
             item = QListWidgetItem(f"{index + 1:02d}   {title}")
@@ -239,16 +245,16 @@ class VideoModal(Overlay):
         title.setFont(sans_font(size="--text-base", weight=600))
         title.setStyleSheet("color: #ffffff; background: transparent;")
         self._header_title = title
-        close = QPushButton(GLYPH["close"])
+        close = QPushButton()
         close.setCursor(Qt.PointingHandCursor)
-        close.setFixedSize(48, 48)
         close.setAccessibleName("Close video")
-        close.setFont(sans_font(size="--text-base", weight=600))
-        close.setStyleSheet(
-            "QPushButton { border: none; border-radius: 16px; padding: 0; color: #ffffff;"
-            " background: rgba(255,255,255,0.15); }"
-            " QPushButton:hover { background: rgba(255,255,255,0.28); }"
-        )
+        close.setToolTip("Close")
+        close.setIcon(close_icon("#ffffff", 20))
+        close.setIconSize(QSize(20, 20))
+        close.setStyleSheet(_HEADER_ICON_BUTTON_CSS)
+        # After the stylesheet: polishing a rule with geometry resets the
+        # widget's min/max size, which previously left this button 24px tall.
+        close.setFixedSize(48, 48)
         close.clicked.connect(self.close_overlay)
         h.addWidget(title)
         h.addStretch(1)
@@ -258,24 +264,21 @@ class VideoModal(Overlay):
         self._library_btn.setCursor(Qt.PointingHandCursor)
         self._library_btn.setFont(sans_font(size="--text-base", weight=600))
         self._library_btn.setStyleSheet(
-            "QPushButton { color: #ffffff; background: #38424b;"
-            " border: none; border-radius: 10px; padding: 0 14px; }"
-            "QPushButton:hover { background: #46535e; }"
+            "QPushButton { color: #ffffff; background: rgba(255,255,255,0.15);"
+            " border: none; border-radius: 10px; padding: 0 14px; min-height: 48px; }"
+            " QPushButton:hover { background: rgba(255,255,255,0.28); }"
+            " QPushButton:pressed { background: rgba(255,255,255,0.40); }"
         )
         self._library_btn.clicked.connect(self._show_library)
         h.addWidget(self._library_btn)
         self._fs_btn = QPushButton()
         self._fs_btn.setCursor(Qt.PointingHandCursor)
-        self._fs_btn.setFixedSize(48, 48)
         self._fs_btn.setAccessibleName("Toggle video fullscreen")
         self._fs_btn.setIconSize(QSize(16, 16))
         self._fs_btn.setIcon(expand_icon("#ffffff", 16))
         self._fs_btn.setToolTip("Full screen")
-        self._fs_btn.setStyleSheet(
-            "QPushButton { border: none; border-radius: 16px; padding: 0; color: #ffffff;"
-            " background: rgba(255,255,255,0.15); }"
-            " QPushButton:hover { background: rgba(255,255,255,0.28); }"
-        )
+        self._fs_btn.setStyleSheet(_HEADER_ICON_BUTTON_CSS)
+        self._fs_btn.setFixedSize(48, 48)
         self._fs_btn.clicked.connect(self._toggle_fullscreen)
         h.addWidget(self._fs_btn)
         h.addWidget(close)
@@ -377,7 +380,8 @@ class VideoModal(Overlay):
         h.setContentsMargins(0, 0, 0, 0)
         h.setSpacing(14)
 
-        self._prev_btn = self._skip_button(GLYPH["jog_rev_fast"])
+        self._prev_btn = self._skip_button(chevron_icon("left", resolve("--ink-700"), 22,
+                                                        double=True))
         self._prev_btn.clicked.connect(lambda: self._skip(-1))
         h.addWidget(self._prev_btn)
 
@@ -394,7 +398,8 @@ class VideoModal(Overlay):
         self._small_play.clicked.connect(self._toggle)
         h.addWidget(self._small_play)
 
-        self._next_btn = self._skip_button(GLYPH["jog_fwd_fast"])
+        self._next_btn = self._skip_button(chevron_icon("right", resolve("--ink-700"), 22,
+                                                        double=True))
         self._next_btn.clicked.connect(lambda: self._skip(+1))
         h.addWidget(self._next_btn)
 
@@ -457,14 +462,6 @@ class VideoModal(Overlay):
         self._output_combo.setMaximumWidth(250)
         self._output_combo.setFixedHeight(_TOUCH_CONTROL_SIZE)
         self._output_combo.setFont(sans_font(size="--text-sm"))
-        self._output_combo.setStyleSheet(
-            "QComboBox { border: 1px solid "
-            f"{resolve('--gray-400')}; border-radius: 8px; padding: 8px 12px;"
-            " background: #ffffff; }"
-            " QComboBox:disabled { color: "
-            f"{resolve('--gray-600')}; background: {resolve('--gray-200')}; }}"
-            " QComboBox QAbstractItemView::item { min-height: 40px; padding: 6px; }"
-        )
         if self._audio_devices:
             selected = 0
             offset = 0
@@ -531,12 +528,13 @@ class VideoModal(Overlay):
         return audio_row
 
     @staticmethod
-    def _skip_button(glyph):
-        """A quiet prev/next transport button (« / » skip glyphs)."""
-        btn = QPushButton(glyph)
+    def _skip_button(icon):
+        """A quiet prev/next transport button with a drawn double chevron."""
+        btn = QPushButton()
         btn.setCursor(Qt.PointingHandCursor)
         btn.setFixedSize(_TOUCH_CONTROL_SIZE, _TOUCH_CONTROL_SIZE)
-        btn.setFont(sans_font(size="--text-lg", weight=600))
+        btn.setIcon(icon)
+        btn.setIconSize(QSize(22, 22))
         btn.setStyleSheet(
             "QPushButton { border: none; border-radius: 8px;"
             f" color: {resolve('--ink-700')}; background: {resolve('--gray-300')};"

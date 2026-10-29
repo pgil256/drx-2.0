@@ -3,13 +3,13 @@
 import math
 from typing import Dict, List, Optional
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from config.constants import (
     ACTUATORS, DEFAULT_HORIZONTAL_POSITION, LEG_LENGTH_MAX, LEG_LENGTH_MIN, PRESSURE_MAX,
 )
-from ui.theme import GLYPH
+from ui.theme import chevron_icon, rotate_icon
 from ui.widgets.common import hline
 from ui.widgets.ds import DSButton, DSCard, DSSlider
 from ui.widgets.ds._common import mono_font, resolve, sans_font
@@ -106,17 +106,22 @@ class _ActuatorRow(QWidget):
         self.safety_buttons: List[QWidget] = []
         jogs = QHBoxLayout()
         jogs.setSpacing(8)
+        ink = resolve("--ink-800")
         specs = [
-            ("jog_rev_fast", "rev_fast", -self._step * 4, "Fast reverse"),
-            ("jog_rev", "rev", -self._step, "Reverse"),
-            ("jog_fwd", "fwd", self._step, "Forward"),
-            ("jog_fwd_fast", "fwd_fast", self._step * 4, "Fast forward"),
-            ("reset", "reset", None, "Return / release"),
+            (chevron_icon("left", ink, 22, double=True), "rev_fast", -self._step * 4,
+             "Fast reverse"),
+            (chevron_icon("left", ink, 22), "rev", -self._step, "Reverse"),
+            (chevron_icon("right", ink, 22), "fwd", self._step, "Forward"),
+            (chevron_icon("right", ink, 22, double=True), "fwd_fast", self._step * 4,
+             "Fast forward"),
+            (rotate_icon(ink, 22), "reset", None, "Return / release"),
         ]
-        for glyph, action, delta, name in specs:
-            button = QPushButton(GLYPH[glyph])
+        for icon, action, delta, name in specs:
+            # Drawn icons: the Plex guillemet substitutes read as punctuation.
+            button = QPushButton()
+            button.setIcon(icon)
+            button.setIconSize(QSize(22, 22))
             button.setFixedSize(56, 56)
-            button.setFont(sans_font(size=22, weight=600))
             button.setAccessibleName(f"{cfg['name']}: {name}")
             button.setToolTip(name)
             button.setStyleSheet("QPushButton { padding: 0; }")
