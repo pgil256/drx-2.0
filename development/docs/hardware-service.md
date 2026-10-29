@@ -79,6 +79,13 @@ emergency stop, operator presence, and visual inspection. Confirm that measuring
 tools are available or that unsupported checks will be skipped. Opening the
 wizard and selecting a step do not request movement.
 
+Movement stays locked until every preparation item is ticked and **Confirm
+preparation & begin** is pressed. The status line under the live readings says
+on every step why movement is unavailable (preparation not confirmed, a fault
+that needs **Setup → Reset Arduino**, missing `D` diagnostics, or position
+feedback that has not settled) and reports when a move may be requested. A
+refused jog shows that reason, or the envelope it would leave, in the message.
+
 **Connection and sensors.** Read the connection and diagnostics, inspect the
 stationary position and load readings, and watch for instability or implausible
 values. Later movement should produce corresponding position changes. Record
@@ -139,9 +146,11 @@ After any leg service movement, reset Arduino and then use the leg-length row's
 **Reset** control to restore its position estimate before normal leg jogs.
 
 **Load cell.** With the device stationary and unloaded, capture the raw unloaded
-sample. Apply a known reference force with suitable bench equipment, let it
-settle, and capture the known-force sample. Enter the independently known force
-in pounds and calculate the proposed load-cell factor:
+sample. Apply a known reference force with suitable bench equipment: the step
+has its own axial jogs so the actuator can tension the reference gauge or
+fixture, under the same confirmation, envelope and fresh-feedback rules as the
+axis steps. Let the reading settle and capture the known-force sample. Enter the
+independently known force in pounds and calculate the proposed load-cell factor:
 
 ```text
 counts_per_pound = (loaded_raw - unloaded_raw) / reference_pounds

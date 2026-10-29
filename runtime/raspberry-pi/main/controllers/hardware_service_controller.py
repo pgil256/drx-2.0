@@ -183,6 +183,54 @@ class HardwareServiceController:
             not self.blocked() and self.handle is None and self.stable() and self.hardware_ready()
         )
 
+    def movement_block_reason(self) -> Optional[str]:
+        """Say on every step why a service move is unavailable; None when ready."""
+        w = self.window
+        if self.handle is not None:
+            return "Moving. Wait for the move to settle; STOP remains available."
+        if self.aborted:
+            return ("Movement is locked for the rest of this session. Close the wizard and "
+                    "reset Arduino from Setup before further movement.")
+        if not self.prepared:
+            return ("Movement is locked until preparation is confirmed: tick every item on "
+                    "step 1 and press \"Confirm preparation & begin\".")
+        if not self.owns_session():
+            return "Movement is locked: this login no longer owns the service session."
+        if w.protocol_state != "idle":
+            return (f"Movement is locked while the device is in the {w.protocol_state} state. "
+                    "Close the wizard and reset Arduino from Setup.")
+        if getattr(w, "_physical_stop_active", False):
+            return "Movement is locked: the physical emergency stop is active."
+        if self.arduino is None or w.arduino is not self.arduino or not self.arduino.connected:
+            return "Movement is locked: the Arduino is not connected."
+        now = time.monotonic()
+        if not self.last_hardware:
+            return ("Waiting for hardware diagnostics: the firmware has not answered the D "
+                    "probe. Matching service firmware is required.")
+        if now - self.last_hardware > 3.0:
+            return "Waiting for fresh hardware diagnostics from the firmware."
+        silent = [axis for axis, key in (("axial", "a_ok"), ("horizontal", "b_ok"),
+                                         ("lateral", "c_ok")) if self.hardware.get(key) is not True]
+        if silent:
+            return "Position controller not responding: " + ", ".join(silent) + "."
+        if self.hardware.get("stop_pressed") is not False:
+            return "Movement is locked: the physical stop input reads pressed."
+        if self.hardware.get("fit_active") is not False:
+            return "Movement is locked: the leg-length actuator output is active."
+        if (len(self.samples) < 3 or now - self.last_status > CALIBRATION_STATUS_MAX_AGE_S
+                or self.samples[-1][0] - self.samples[0][0] < 0.2):
+            return "Waiting for fresh position feedback: three readings within two seconds."
+        unsettled = [
+            axis for axis, spec in SERVICE_AXES.items()
+            if max(s[spec["status_index"] + 1] for s in self.samples)
+            - min(s[spec["status_index"] + 1] for s in self.samples) > CALIBRATION_SETTLE_COUNTS
+        ]
+        if unsettled:
+            return "Waiting for position readings to settle: " + ", ".join(unsettled) + "."
+        if not self.ready():
+            return "Movement is unavailable."
+        return None
+
     def measurement_ready(self) -> bool:
         """Read-only load-cell repair remains available after failed initial setup."""
         return (
@@ -314,6 +362,7 @@ class HardwareServiceController:
             self.abort("Service session ownership changed.")
         self.dialog.set_available(self.ready(), self.handle is not None, self.aborted)
         self.dialog.set_measurement_available(self.measurement_ready())
+        self.dialog.set_movement_status(self.movement_block_reason())
 
     def finish_move(self, message: str) -> None:
         if self.move_axis == "leg":
@@ -329,6 +378,7 @@ class HardwareServiceController:
             return
         if self.dialog is None or not self.owns_session():
             return
+        self.logger.info("Service action %s %r", name, value)
         if self.mode == "tests" and name not in {
             "begin", "check_link", "result", "bench_result", "export", "stop_check",
             "pressure_capture", "jog", "leg",
@@ -361,11 +411,13 @@ class HardwareServiceController:
                     return
                 self._stage_load_cell_factor(value)
             elif not self.ready():
-                self.dialog.show_message(
-                    "Fresh, stable readings and completed preparation required.", True,
+                reason = self.movement_block_reason() or (
+                    "Fresh, stable readings and completed preparation required."
                 )
+                self.logger.warning("Service action %s refused: %s", name, reason)
+                self.dialog.show_message(reason, True)
             elif name == "jog":
-                self._jog(self.dialog.current_axis(), value)
+                self._jog(*self._jog_request(value))
             elif name == "record":
                 self._record_mark(self.dialog.current_axis(), float(value))
             elif name == "goto":
@@ -380,7 +432,11 @@ class HardwareServiceController:
             elif name == "leg":
                 self.move_leg(str(value))
         except (ValueError, KeyError, TypeError) as exc:
-            self.dialog.show_message(f"Check the measurements and required captures: {exc}", True)
+            prefix = "" if name in ("jog", "goto", "leg") else (
+                "Check the measurements and required captures: "
+            )
+            self.logger.warning("Service action %s failed: %s", name, exc)
+            self.dialog.show_message(f"{prefix}{exc}", True)
         self.tick()
 
     def _record_preparation(self) -> None:
@@ -411,6 +467,16 @@ class HardwareServiceController:
             "Load-cell factor staged. Remove the reference load before resetting; "
             "verify against the reference again after reset."
         )
+
+    def _jog_request(self, value: object) -> tuple:
+        """Jogs name their actuator so the load-cell step can tension the axial axis."""
+        if isinstance(value, dict):
+            axis, step = value.get("axis"), value.get("step")
+        else:
+            axis, step = self.dialog.current_axis(), value
+        if axis not in SERVICE_AXES:
+            raise ValueError("Choose an actuator to jog.")
+        return axis, step
 
     def _jog(self, axis: str, step: object) -> None:
         if step not in (-200, -50, 50, 200):
@@ -448,7 +514,13 @@ class HardwareServiceController:
             marks = self.window.config.AMarks
             low = max(low, int(marks.get("0.0", marks.get("0", 0))))
         if not low <= target <= high:
-            raise ValueError(f"Move must remain within {low}–{high} counts.")
+            label = SERVICE_AXES[axis]["label"]
+            limit = (" The saved axial zero mark is the lower limit until the next reset."
+                     if axis == "axial" and target < low else "")
+            raise ValueError(
+                f"{label} target {target} is outside the service envelope "
+                f"{low}–{high} counts.{limit}"
+            )
         origin = self.position(axis)
         self.start_move(f"{SERVICE_AXES[axis]['prefix']}{target}", axis, target, target - origin)
 
@@ -635,6 +707,7 @@ class HardwareServiceController:
             advice = "Software STOP unavailable. Use the physical emergency stop."
         self.dialog.show_message(f"{reason} {advice}", True)
         self.dialog.set_available(False, False, True)
+        self.dialog.set_movement_status(self.movement_block_reason())
 
     def on_error(self, reason: str) -> None:
         if "Stop button" in reason:

@@ -441,3 +441,71 @@ def test_report_keeps_reference_and_proposed_unsaved_settings(service):
     assert report["reference_force_lb"] == 10
     assert not report["configuration_saved"]
     assert any("Load-cell" in change[0] for change in report["proposed_changes"])
+
+
+def test_movement_lock_reason_names_each_gate(service):
+    c, w, clock, feed = service
+    c.tick()
+    assert "Confirm preparation" in c.movement_block_reason()
+    assert "Confirm preparation" in c.dialog.movement_status.text()
+    c.action("begin")
+    assert "hardware diagnostics" in c.movement_block_reason()
+    feed()
+    assert c.movement_block_reason() is None
+    assert c.ready()
+    assert "Movement available" in c.dialog.movement_status.text()
+    c.hardware["b_ok"] = False
+    assert "horizontal" in c.movement_block_reason()
+    feed(a=500, count=2)
+    feed(a=530, count=2)
+    assert "settle: axial" in c.movement_block_reason()
+    feed(count=5)
+    clock[0] += 3
+    c.last_hardware = clock[0]
+    assert "position feedback" in c.movement_block_reason()
+    feed()
+    w.protocol_state = "fault"
+    assert "fault state" in c.movement_block_reason()
+    assert not c.ready()
+    w.protocol_state = "idle"
+    c.abort("Stationary stop check")
+    assert "locked for the rest of this session" in c.movement_block_reason()
+    assert "locked for the rest of this session" in c.dialog.movement_status.text()
+
+
+def test_refused_action_shows_the_lock_reason(service):
+    c, w, _, feed = service
+    feed()
+    select(c, "axial")
+    c.action("jog", 50)
+    assert not any(command.startswith("I") for command in w.arduino.commands)
+    assert "Confirm preparation" in c.dialog.message.text()
+
+
+@pytest.mark.parametrize("service", ["calibration", "tests"], indirect=True)
+def test_load_cell_step_jogs_the_axial_actuator_by_name(service):
+    c, w, _, feed = service
+    prepare(c, feed)
+    select(c, "loadcell")
+    c.action("jog", {"axis": "axial", "step": 50})
+    assert w.arduino.commands[-1] == "I12550"
+    assert c.move_axis == "axial"
+    w.arduino.done_emit.emit()
+    feed(a=550)
+    assert c.handle is None
+    assert c.movement_evidence["axial"] == {1}
+    c.action("jog", {"axis": "", "step": 50})
+    assert "Choose an actuator" in c.dialog.message.text()
+    assert [command for command in w.arduino.commands if command.startswith("I")] == ["I12550"]
+
+
+def test_jog_below_the_axial_zero_mark_is_refused_with_the_reason(service):
+    c, w, _, feed = service
+    prepare(c, feed)
+    w.config.AMarks["0"] = 480  # the running firmware keeps this zero until reset
+    select(c, "axial")
+    c.action("jog", -50)
+    assert not any(command.startswith("I") for command in w.arduino.commands)
+    assert "zero mark" in c.dialog.message.text()
+    c.action("jog", 50)
+    assert w.arduino.commands[-1] == "I12550"
