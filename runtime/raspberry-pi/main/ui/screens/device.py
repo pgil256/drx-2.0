@@ -12,9 +12,13 @@ from PyQt5.QtWidgets import (
 )
 
 from config.constants import APP_VERSION
+from ui.widgets.common import KeyValueLabel
 from ui.widgets.ds import DSButton, DSCard
 from ui.widgets.ds._common import resolve, sans_font
 from ui.widgets.ds.slider import _TouchSlider
+
+_ROW_GAP = 12
+_BUTTON_MIN_WIDTH = 180
 
 
 class DeviceScreen(QWidget):
@@ -56,7 +60,11 @@ class DeviceScreen(QWidget):
         self._comfort(settings)
         self._system(settings)
         self._service()
+        # Controller feedback line ("Working…", "Diagnostics saved: …"): quiet
+        # and muted so it reads as status, not as another card of content.
         self.status = self._label("Device settings are ready.")
+        self.status.setFont(sans_font(size="--text-sm"))
+        self.status.setStyleSheet(f"color: {resolve('--text-muted')}; padding: 2px 4px 0 4px;")
         root.addWidget(self.status)
         self._select_section(0)
 
@@ -66,6 +74,16 @@ class DeviceScreen(QWidget):
         label.setTextFormat(Qt.PlainText)
         label.setWordWrap(True)
         label.setFont(sans_font(size="--text-base"))
+        return label
+
+    @staticmethod
+    def _note(text: str) -> QLabel:
+        """Secondary copy under a control, in the smaller arm's-length size."""
+        label = QLabel(text)
+        label.setTextFormat(Qt.PlainText)
+        label.setWordWrap(True)
+        label.setFont(sans_font(size="--text-sm"))
+        label.setStyleSheet(f"color: {resolve('--text-muted')};")
         return label
 
     def _page(self) -> QGridLayout:
@@ -83,23 +101,46 @@ class DeviceScreen(QWidget):
         self._sections.addWidget(scroll)
         return layout
 
+    @staticmethod
+    def _card(title: str) -> DSCard:
+        """A card whose content stays at the top when the grid stretches it."""
+        card = DSCard(title)
+        card.body_layout.setSpacing(10)
+        return card
+
+    @staticmethod
+    def _finish(card: DSCard) -> None:
+        card.body_layout.addStretch(1)
+
     def _value(self, card: DSCard, key: str, text: str) -> QLabel:
-        label = self._label(text)
+        label = KeyValueLabel(text)
         self.values[key] = label
         card.add_widget(label)
         return label
 
     @staticmethod
-    def _card_button(card: DSCard, title: str, variant: str = "secondary") -> DSButton:
-        """Add a compact, centered action with a generous touch target."""
+    def _button(title: str, variant: str = "secondary") -> DSButton:
         button = DSButton(title, variant=variant)
-        button.setMinimumWidth(200)
-        card.body_layout.addWidget(button, 0, Qt.AlignHCenter)
+        button.setMinimumWidth(_BUTTON_MIN_WIDTH)
         return button
 
-    def _action(self, card: DSCard, title: str, key: str,
-                payload: object = None, variant: str = "secondary") -> DSButton:
-        button = self._card_button(card, title, variant)
+    @staticmethod
+    def _row(card: DSCard, *widgets: QWidget, stretch_last: bool = False) -> QHBoxLayout:
+        """A left-aligned action row (centred stacks read as a dialog footer)."""
+        row = QHBoxLayout()
+        row.setSpacing(_ROW_GAP)
+        for index, widget in enumerate(widgets):
+            last = index == len(widgets) - 1
+            row.addWidget(widget, 1 if (stretch_last and last) else 0)
+        if not stretch_last:
+            row.addStretch(1)
+        card.add_layout(row)
+        return row
+
+    def _action(self, title: str, key: str, payload: object = None,
+                variant: str = "secondary") -> DSButton:
+        """A registered action button; the caller places it in a row."""
+        button = self._button(title, variant)
         button.clicked.connect(lambda: self.action_requested.emit(
             key, payload() if callable(payload) else payload,
         ))
@@ -108,50 +149,62 @@ class DeviceScreen(QWidget):
 
     def _overview(self) -> None:
         layout = self._page()
-        power = DSCard("App and device power")
+        power = self._card("App and device power")
         power.add_widget(self._label("Finish treatment and device service before restarting."))
-        self._action(power, "Restart App", "restart_app", variant="secondary")
-        self._action(power, "Restart Device", "reboot", variant="secondary")
-        self._action(power, "Shut Down", "poweroff", variant="destructive")
+        self._row(
+            power,
+            self._action("Restart App", "restart_app"),
+            self._action("Restart Device", "reboot"),
+            self._action("Shut Down", "poweroff", variant="destructive"),
+        )
+        self._finish(power)
         layout.addWidget(power, 0, 0)
-        identity = DSCard("Device information")
+        identity = self._card("Device information")
         self._version = self._value(identity, "version", f"Software version: {APP_VERSION}")
         self._firmware = self._value(identity, "firmware", "Firmware version: Not checked")
         self._device_id = self._value(identity, "device_id", "Device ID: Unavailable")
         self._device_id.setTextInteractionFlags(Qt.TextSelectableByMouse)
+        self._finish(identity)
         layout.addWidget(identity, 1, 0)
-        health = DSCard("Connections and records")
+        health = self._card("Connections and records")
         self._value(health, "controller", "Arduino: Not checked")
         self._value(health, "internet", "Internet: Test connection to check")
         self._value(health, "cloud", "Cloud: Not checked")
         self._value(health, "pending", "Pending uploads: Not checked")
         self._value(health, "last_sync", "Last successful sync: Not recorded yet")
-        refresh = self._card_button(health, "Refresh device status")
+        refresh = self._button("Refresh device status")
         refresh.clicked.connect(self.refresh_requested)
+        self._row(health, refresh)
+        self._finish(health)
         layout.addWidget(health, 0, 1, 2, 1)
         layout.setRowStretch(2, 1)
 
     def _connections(self, layout: QGridLayout) -> None:
-        network = DSCard("Network")
+        network = self._card("Network")
         self._value(network, "network", "Network: Not checked")
         self._value(network, "addresses", "IP addresses: Not checked")
         self._value(network, "wifi_backend", "Wi-Fi setup: Not checked")
-        self._action(network, "Test Connection", "test_connection", variant="primary")
-        self._action(network, "Set Up Wi-Fi", "wifi")
-        network.add_widget(self._label(
+        self._row(
+            network,
+            self._action("Test Connection", "test_connection", variant="primary"),
+            self._action("Set Up Wi-Fi", "wifi"),
+        )
+        network.add_widget(self._note(
             "Network changes require administrator or technician access."))
+        self._finish(network)
         layout.addWidget(network, 0, 0)
-        sync = DSCard("Cloud synchronization")
+        sync = self._card("Cloud synchronization")
         self._value(sync, "sync_detail", "Check device status for upload information.")
         self._value(sync, "sync_time", "Last successful sync: Not recorded yet")
-        self._action(sync, "Sync", "retry_sync", variant="primary")
-        sync.add_widget(self._label(
+        self._row(sync, self._action("Sync", "retry_sync", variant="primary"))
+        sync.add_widget(self._note(
             "Treatment records stay on the device until the server acknowledges receipt."
         ))
+        self._finish(sync)
         layout.addWidget(sync, 0, 1)
 
     def _comfort(self, layout: QGridLayout) -> None:
-        controls = DSCard("Sound and display")
+        controls = self._card("Sound and display")
         self.sliders = {}
         self.setting_labels = {}
         self.setting_details = {}
@@ -163,6 +216,7 @@ class DeviceScreen(QWidget):
             grid.setContentsMargins(0, 4, 0, 4)
             grid.addWidget(self._label(title), 0, 0)
             value = self._label("Unavailable")
+            value.setFont(sans_font(size="--text-base", weight=600))
             value.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             grid.addWidget(value, 0, 1)
             slider = _TouchSlider(Qt.Horizontal)
@@ -173,15 +227,16 @@ class DeviceScreen(QWidget):
             slider.setTracking(False)
             slider.valueChanged.connect(lambda v, k=key: self._changed(k, v))
             grid.addWidget(slider, 1, 0, 1, 2)
-            detail = self._label("Checking device controls…")
+            detail = self._note("Checking device controls…")
             grid.addWidget(detail, 2, 0, 1, 2)
             self.sliders[key] = slider
             self.setting_labels[key] = value
             self.setting_details[key] = detail
             controls.add_widget(host)
-        self._action(controls, "Test Sound", "test_sound")
+        self._row(controls, self._action("Test Sound", "test_sound"))
+        self._finish(controls)
         layout.addWidget(controls, 1, 0)
-        idle = DSCard("Screen timeout")
+        idle = self._card("Screen timeout")
         idle.add_widget(self._label(
             "Dim after inactivity while the device is idle. Touch to restore brightness; "
             "the first touch only wakes the display. The screen stays bright during treatment "
@@ -192,40 +247,45 @@ class DeviceScreen(QWidget):
         self.idle_timeout.setAccessibleName("Idle dimming timeout")
         for minutes in (0, 1, 2, 5, 10, 15, 30):
             self.idle_timeout.addItem("Never" if minutes == 0 else f"{minutes} minutes", minutes)
-        idle.add_widget(self.idle_timeout)
-        self._action(idle, "Save Dimming Timeout", "idle_timeout", self.idle_timeout.currentData)
+        self._row(
+            idle, self.idle_timeout,
+            self._action("Save Dimming Timeout", "idle_timeout", self.idle_timeout.currentData),
+        )
         self._value(idle, "dimming", "Uses the display backlight when available.")
+        self._finish(idle)
         layout.addWidget(idle, 1, 1)
 
     def _service(self) -> None:
         layout = self._page()
-        tasks = DSCard("Hardware tests and calibration")
+        tasks = self._card("Hardware tests and calibration")
         tasks.add_widget(self._label("Keep the device unoccupied throughout service."))
-        self.hardware_button = self._card_button(tasks, "Hardware Tests", variant="primary")
+        self.hardware_button = self._button("Hardware Tests", variant="primary")
         self.hardware_button.clicked.connect(self.hardware_tests_requested)
-        tasks.add_widget(self._label(
+        self._row(tasks, self.hardware_button, self._note(
             "Check movement, sensors, stops and mechanical condition. "
             "Record pass/fail observations."
-        ))
-        self.calibration_button = self._card_button(tasks, "Calibration")
+        ), stretch_last=True)
+        self.calibration_button = self._button("Calibration")
         self.calibration_button.clicked.connect(self.calibration_requested)
-        tasks.add_widget(self._label(
+        self._row(tasks, self.calibration_button, self._note(
             "Measure position marks and the load-cell factor. Review and save calibration changes."
-        ))
-        self._action(tasks, "Lock Service", "lock_service", variant="ghost")
+        ), stretch_last=True)
+        self._row(tasks, self._action("Lock Service", "lock_service", variant="ghost"))
+        self._finish(tasks)
         layout.addWidget(tasks, 0, 0)
-        updates = DSCard("Software and firmware")
+        updates = self._card("Software and firmware")
         self.release_status = self._value(
             updates, "release_status", "Sign in to the cloud to check the latest releases.")
-        self._action(updates, "Check Latest Releases", "check_releases")
+        self._row(updates, self._action("Check Latest Releases", "check_releases"))
         self.software_release = self._value(updates, "software_release", "Software: Not checked")
-        self._action(updates, "Flash Software", "flash_software")
+        self._row(updates, self._action("Flash Software", "flash_software"))
         self.firmware_release = self._value(updates, "firmware_release", "Firmware: Not checked")
-        self._action(updates, "Flash Firmware", "flash_firmware")
+        self._row(updates, self._action("Flash Firmware", "flash_firmware"))
         self.actions["flash_software"].setEnabled(False)
         self.actions["flash_firmware"].setEnabled(False)
+        self._finish(updates)
         layout.addWidget(updates, 0, 1)
-        history = DSCard("Service history")
+        history = self._card("Service history")
         self._value(history, "last_test", "Last hardware test: Not recorded yet")
         self._value(history, "last_calibration", "Last calibration save: Not recorded yet")
         self.history_table = QTableWidget(0, 4)
@@ -238,13 +298,17 @@ class DeviceScreen(QWidget):
         self.history_table.verticalHeader().hide()
         self.history_table.verticalHeader().setDefaultSectionSize(60)
         self.history_table.verticalHeader().setMinimumSectionSize(60)
-        self.history_table.setMinimumHeight(200)
+        self.history_table.setMinimumHeight(120)
         self.history_table.setFont(sans_font(size="--text-base"))
         history.add_widget(self.history_table)
-        self._action(history, "View Selected Report", "view_report", self.selected_report)
-        self._action(history, "Export Diagnostics", "export_diagnostics")
+        self._row(
+            history,
+            self._action("View Selected Report", "view_report", self.selected_report),
+            self._action("Export Diagnostics", "export_diagnostics"),
+        )
+        self._finish(history)
         layout.addWidget(history, 1, 0)
-        backups = DSCard("Calibration backups")
+        backups = self._card("Calibration backups")
         backups.add_widget(self._label(
             "Backups contain calibration for this device. Restore requires technician access, "
             "creates a backup first, and requires an unloaded reset and verification afterward."
@@ -255,21 +319,29 @@ class DeviceScreen(QWidget):
         self.backup_choice.setSizeAdjustPolicy(QComboBox.AdjustToMinimumContentsLengthWithIcon)
         self.backup_choice.setMinimumContentsLength(12)
         backups.add_widget(self.backup_choice)
-        self._action(backups, "Back Up Calibration", "backup_calibration")
-        self._action(backups, "Review and Restore Backup", "restore_calibration",
-                     self.backup_choice.currentData)
+        self._row(
+            backups,
+            self._action("Back Up Calibration", "backup_calibration"),
+            self._action("Review and Restore Backup", "restore_calibration",
+                         self.backup_choice.currentData),
+        )
+        self._finish(backups)
         layout.addWidget(backups, 1, 1)
         layout.setRowStretch(2, 1)
 
     def _system(self, layout: QGridLayout) -> None:
-        clock = DSCard("Date and time")
+        clock = self._card("Date and time")
         self._value(clock, "clock", "Current time: Not checked")
         self._value(clock, "timezone", "Time zone: Not checked")
         self._value(clock, "ntp", "Automatic time: Not checked")
-        self._action(clock, "Change Time Zone", "timezone")
-        self._action(clock, "Enable Automatic Time", "sync_clock")
+        self._row(
+            clock,
+            self._action("Change Time Zone", "timezone"),
+            self._action("Enable Automatic Time", "sync_clock"),
+        )
+        self._finish(clock)
         layout.addWidget(clock, 2, 0)
-        session = DSCard("Automatic logout")
+        session = self._card("Automatic logout")
         session.add_widget(self._label(
             "Log out after inactivity. The timer waits for treatment, motion, reset and "
             "service work to finish before starting a fresh inactivity period."
@@ -279,9 +351,11 @@ class DeviceScreen(QWidget):
         self.logout_timeout.setAccessibleName("Automatic logout timer")
         for minutes in (0, 1, 5, 10, 15, 30, 60):
             self.logout_timeout.addItem("Never" if minutes == 0 else f"{minutes} minutes", minutes)
-        session.add_widget(self.logout_timeout)
-        self._action(session, "Save Logout Timer", "logout_timeout",
-                     self.logout_timeout.currentData)
+        self._row(
+            session, self.logout_timeout,
+            self._action("Save Logout Timer", "logout_timeout", self.logout_timeout.currentData),
+        )
+        self._finish(session)
         layout.addWidget(session, 2, 1)
         layout.setRowStretch(3, 1)
 
@@ -370,6 +444,7 @@ class DeviceScreen(QWidget):
             if row["file"] == selected:
                 self.history_table.selectRow(index)
         self.history_table.resizeRowsToContents()
+        self._fit_history_table()
         if rows and self.history_table.currentRow() < 0:
             self.history_table.selectRow(0)
         choice = self.backup_choice.currentData()
@@ -397,6 +472,13 @@ class DeviceScreen(QWidget):
                      f"{matches[0]['result']}"
                      if matches else "Not recorded yet")
             self.values[key].setText(f"{title}: {value}")
+
+    def _fit_history_table(self) -> None:
+        """Size the table to its rows so no blank grid trails the last entry."""
+        table = self.history_table
+        rows = sum(table.rowHeight(row) for row in range(table.rowCount()))
+        wanted = table.horizontalHeader().height() + rows + 2 * table.frameWidth() + 2
+        table.setFixedHeight(max(120, min(wanted, 360)))
 
     def selected_report(self) -> str:
         row = self.history_table.currentRow()
