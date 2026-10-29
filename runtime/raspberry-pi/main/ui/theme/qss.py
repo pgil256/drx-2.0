@@ -22,6 +22,10 @@ from .tokens import TOKENS
 _THEME_DIR = os.path.dirname(os.path.abspath(__file__))
 _APP_QSS_PATH = os.path.join(_THEME_DIR, "app.qss")
 _FONT_DIR = os.path.join(_THEME_DIR, "fonts")
+#: PNG sub-control images referenced from app.qss as ``url(theme:/name.png)``;
+#: regenerate them with ``development/tools/make_theme_icons.py``.
+ICON_DIR = os.path.join(_THEME_DIR, "icons")
+_ICON_URL_PREFIX = "url(theme:/"
 
 _VAR_RE = re.compile(r"var\(\s*(--[A-Za-z0-9_-]+)\s*\)")
 _COMMENT_RE = re.compile(r"/\*.*?\*/", re.S)
@@ -97,9 +101,18 @@ def qss(template):
 
 
 def load_app_qss():
-    """Return the global ``app.qss`` stylesheet, fully resolved."""
+    """Return the global ``app.qss`` stylesheet, fully resolved.
+
+    ``url(theme:/x.png)`` references become absolute paths into ``icons/``;
+    Qt resolves a relative ``url()`` against the working directory, which is
+    not the theme directory on the Pi or in tests.
+    """
     with open(_APP_QSS_PATH, encoding="utf-8") as fh:
-        return qss(fh.read())
+        text = qss(fh.read())
+    # Qt accepts forward slashes on every platform, and a backslash would be
+    # read as an escape inside the QSS string.
+    icon_url = "url(" + ICON_DIR.replace("\\", "/") + "/"
+    return text.replace(_ICON_URL_PREFIX, icon_url)
 
 
 def load_fonts():

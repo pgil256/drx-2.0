@@ -7,7 +7,7 @@ from typing import Optional
 from PyQt5.QtCore import Qt, QTimer, pyqtSignal
 from PyQt5.QtWidgets import QGridLayout, QHBoxLayout, QLabel, QVBoxLayout, QWidget
 
-from ui.widgets.common import image_label
+from ui.widgets.common import KeyValueLabel, image_label
 from ui.widgets.ds import DSButton, DSCard
 from ui.widgets.ds._common import image_path, resolve, sans_font
 
@@ -44,16 +44,18 @@ class ProfileScreen(QWidget):
         grid = QGridLayout()
         grid.setSpacing(20)
         account = DSCard("Account details")
-        self._email = self._label("Email: Not provided")
-        self._access = self._label("Access: Signed out")
-        self._clinic = self._label("Cloud clinic: No staff session")
+        account.body_layout.setSpacing(10)
+        self._email = KeyValueLabel("Email: Not provided")
+        self._access = KeyValueLabel("Access: Signed out")
+        self._clinic = KeyValueLabel("Cloud clinic: No staff session")
         for label in (self._email, self._access, self._clinic):
             account.add_widget(label)
         grid.addWidget(account, 0, 0)
         session = DSCard("Current session")
-        self._login = self._label("Logged in: —")
-        self._duration = self._label("Session duration: —")
-        self._automatic = self._label("Automatic logout: Never")
+        session.body_layout.setSpacing(10)
+        self._login = KeyValueLabel("Logged in: —")
+        self._duration = KeyValueLabel("Session duration: —")
+        self._automatic = KeyValueLabel("Automatic logout: Never")
         for label in (self._login, self._duration, self._automatic):
             session.add_widget(label)
         grid.addWidget(session, 0, 1)

@@ -12,6 +12,8 @@ Two strategies cover them:
 * :func:`play_icon` / :func:`pause_icon` — crisp, recolorable ``QIcon``s drawn
   with ``QPainter`` for the prominent START / PAUSE / video transport controls,
   where a real triangle/bars pair carries more weight than a substitute glyph.
+* :func:`chevron_icon` / :func:`close_icon` / :func:`rotate_icon` — drawn
+  equivalents of the jog, close and reset glyphs for icon-only buttons.
 
 All of this is font-independent, so the device renders identically regardless of
 which fonts happen to be installed.
@@ -78,6 +80,79 @@ def pause_icon(color="#ffffff", size=22):
     radius = bar_w * 0.4
     p.drawRoundedRect(QRectF(left_x, top, bar_w, bottom - top), radius, radius)
     p.drawRoundedRect(QRectF(right_x, top, bar_w, bottom - top), radius, radius)
+    p.end()
+    return QIcon(pm)
+
+
+# ── Control glyph icons ──────────────────────────────────────────────────────
+# Drawn replacements for the GLYPH text substitutes on controls where a
+# punctuation-sized ‹ » × ↺ reads as a typo rather than a control: the Setup
+# jog cluster, stepper arrows, modal close buttons and the video skip buttons.
+
+def _stroke_pen(color, width):
+    pen = QPen(QColor(color))
+    pen.setWidthF(width)
+    pen.setCapStyle(Qt.RoundCap)
+    pen.setJoinStyle(Qt.RoundJoin)
+    return pen
+
+
+def chevron_icon(direction="right", color="#ffffff", size=22, double=False):
+    """A line chevron (‹ ›) or double chevron (« ») as a recolorable QIcon.
+
+    ``direction`` is one of right · left · up · down.
+    """
+    pm = _pixmap(size)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    p.setPen(_stroke_pen(color, size * 0.1))
+    p.setBrush(Qt.NoBrush)
+    p.translate(size / 2.0, size / 2.0)
+    p.rotate({"right": 0, "down": 90, "left": 180, "up": 270}.get(direction, 0))
+    half = size * 0.14   # chevron depth (along the pointing axis)
+    span = size * 0.26   # chevron half-height
+    offsets = (-half * 1.15, half * 1.15) if double else (0.0,)
+    for offset in offsets:
+        _poly(p, [(offset - half, -span), (offset + half, 0), (offset - half, span)])
+    p.end()
+    return QIcon(pm)
+
+
+def close_icon(color="#ffffff", size=20):
+    """An × drawn as two strokes (the design's ✕ is absent from Plex)."""
+    pm = _pixmap(size)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    p.setPen(_stroke_pen(color, size * 0.11))
+    i = size * 0.27
+    _line(p, i, i, size - i, size - i)
+    _line(p, size - i, i, i, size - i)
+    p.end()
+    return QIcon(pm)
+
+
+def rotate_icon(color="#ffffff", size=22):
+    """A counter-clockwise open-circle arrow (reset / return), the design's ⟲."""
+    import math
+
+    pm = _pixmap(size)
+    p = QPainter(pm)
+    p.setRenderHint(QPainter.Antialiasing, True)
+    p.setPen(_stroke_pen(color, size * 0.1))
+    p.setBrush(Qt.NoBrush)
+    c = size / 2.0
+    r = size * 0.3
+    start, span = 60, 270  # degrees, counter-clockwise from 3 o'clock
+    p.drawArc(QRectF(c - r, c - r, 2 * r, 2 * r), start * 16, span * 16)
+    # Arrow head at the arc's start, pointing along the counter-clockwise travel.
+    theta = math.radians(start)
+    tip_x, tip_y = c + r * math.cos(theta), c - r * math.sin(theta)
+    tx, ty = -math.sin(theta), -math.cos(theta)  # tangent in screen coordinates
+    nx, ny = ty, -tx
+    length = size * 0.17
+    back_x, back_y = tip_x - tx * length, tip_y - ty * length
+    _line(p, tip_x, tip_y, back_x + nx * length * 0.75, back_y + ny * length * 0.75)
+    _line(p, tip_x, tip_y, back_x - nx * length * 0.75, back_y - ny * length * 0.75)
     p.end()
     return QIcon(pm)
 

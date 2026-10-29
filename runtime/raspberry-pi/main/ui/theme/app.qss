@@ -40,23 +40,6 @@ QInputDialog QLabel, QProgressDialog QLabel {
   font-size: var(--text-base);
   padding: var(--space-2) 0 var(--space-4) 0;
 }
-QDialog QComboBox {
-  min-height: 28px;
-  padding: 8px 12px;
-  color: var(--text-strong);
-  background-color: var(--white);
-  border: var(--border-thick) solid var(--border-control);
-  border-radius: var(--radius-md);
-  font-size: var(--text-base);
-}
-QDialog QComboBox:focus { border-color: var(--border-focus); }
-QDialog QComboBox QAbstractItemView {
-  color: var(--text-strong);
-  background-color: var(--white);
-  selection-background-color: var(--color-primary);
-  selection-color: var(--white);
-  font-size: var(--text-base);
-}
 QDialog QPlainTextEdit, QDialog QTextEdit {
   background-color: var(--surface-page);
   color: var(--text-body);
@@ -227,7 +210,20 @@ QLineEdit {
 QLineEdit:focus { border-color: var(--border-focus); }
 QLineEdit:disabled { background: var(--gray-100); color: var(--gray-600); }
 
-/* Full-height, side-by-side step buttons avoid two tiny stacked touch targets. */
+/* Spin boxes share the text-input frame; the step buttons are full-height,
+ * side-by-side touch targets rather than two tiny stacked arrows. */
+QAbstractSpinBox {
+  min-height: 28px;
+  background: var(--white); color: var(--ink-900);
+  border: var(--border-thick) solid var(--border-control);
+  border-radius: var(--radius-xs);
+  padding: var(--space-2) 104px var(--space-2) var(--space-3);
+  font-size: var(--text-base);
+  selection-background-color: var(--color-primary);
+  selection-color: var(--white);
+}
+QAbstractSpinBox:focus { border-color: var(--border-focus); }
+QAbstractSpinBox:disabled { background: var(--gray-100); color: var(--gray-600); }
 QAbstractSpinBox::up-button, QAbstractSpinBox::down-button {
   subcontrol-origin: border; subcontrol-position: center right;
   width: 48px; height: 48px;
@@ -238,7 +234,40 @@ QAbstractSpinBox::down-button { right: 50px; }
 QAbstractSpinBox::up-button:pressed, QAbstractSpinBox::down-button:pressed {
   background: var(--blue-100);
 }
-QComboBox QAbstractItemView::item { min-height: 48px; }
+
+/* ---- Combo boxes (drawn chevron, 48px popup rows) ----
+ * Qt's Fusion combo paints a gradient face and an 8px arrow; this gives it the
+ * text-input frame and a chevron from ui/theme/icons (see make_theme_icons.py). */
+QComboBox {
+  min-height: 28px;
+  padding: var(--space-2) 48px var(--space-2) var(--space-3);
+  color: var(--text-strong);
+  background-color: var(--white);
+  border: var(--border-thick) solid var(--border-control);
+  border-radius: var(--radius-md);
+  font-size: var(--text-base);
+}
+QComboBox:hover { border-color: var(--color-primary); }
+QComboBox:focus, QComboBox:on { border-color: var(--border-focus); }
+QComboBox:disabled { background-color: var(--gray-100); color: var(--gray-600); border-color: var(--gray-300); }
+QComboBox::drop-down {
+  subcontrol-origin: padding; subcontrol-position: center right;
+  width: 44px; border: none; background: transparent;
+}
+QComboBox::down-arrow { image: url(theme:/chevron-down.png); width: 20px; height: 20px; }
+QComboBox::down-arrow:disabled { image: url(theme:/chevron-down-disabled.png); }
+QComboBox QAbstractItemView {
+  color: var(--text-strong);
+  background-color: var(--white);
+  border: var(--border-thin) solid var(--border-control);
+  padding: var(--space-1);
+  outline: none;
+  font-size: var(--text-base);
+  selection-background-color: var(--blue-100);
+  selection-color: var(--text-strong);
+}
+QComboBox QAbstractItemView::item { min-height: 48px; padding: 0 var(--space-3); }
+QComboBox QAbstractItemView::item:hover { background-color: var(--blue-050); }
 
 /* ---- Checkboxes ---- */
 QCheckBox { min-height: 48px; spacing: var(--space-3); font-size: var(--text-base); color: var(--ink-800); }
@@ -248,16 +277,66 @@ QCheckBox::indicator {
   border-radius: var(--radius-xs); background: var(--white);
 }
 QCheckBox::indicator:hover { border-color: var(--color-primary); }
-QCheckBox::indicator:checked { background: var(--color-primary); border-color: var(--color-primary); }
+QCheckBox::indicator:checked {
+  background: var(--color-primary); border-color: var(--color-primary);
+  image: url(theme:/check.png);
+}
+QCheckBox::indicator:disabled { border-color: var(--gray-400); background: var(--gray-100); }
 QCheckBox:disabled { color: var(--gray-600); }
 
-/* Drag-to-scroll is available on reference pages; the rail is also a touch target. */
-QScrollBar:vertical { width: 48px; background: var(--surface-page); margin: 0; }
-QScrollBar::handle:vertical { background: var(--border-control); border: 16px solid var(--surface-page); border-radius: 22px; min-height: 48px; }
+/* ---- Tables and lists ----
+ * One quiet look for the service history, calibration tables, the hardware
+ * wizard's step list and the video playlist: tinted header strip, hairline
+ * rows instead of a grid, and a blue-100 selection the text stays dark on. */
+QTableView, QListView {
+  background-color: var(--white);
+  alternate-background-color: var(--gray-100);
+  color: var(--ink-800);
+  border: var(--border-thin) solid var(--border-divider);
+  border-radius: var(--radius-xs);
+  gridline-color: var(--gray-200);
+  selection-background-color: var(--blue-100);
+  selection-color: var(--text-strong);
+  outline: none;
+  font-size: var(--text-base);
+}
+QTableView::item { padding: var(--space-2) var(--space-3); border: none; border-bottom: var(--border-thin) solid var(--gray-200); }
+QTableView::item:hover { background-color: var(--blue-050); }
+QTableView::item:selected { background-color: var(--blue-100); color: var(--text-strong); }
+QHeaderView { background-color: transparent; border: none; }
+QHeaderView::section {
+  background-color: var(--gray-050);
+  color: var(--text-body);
+  font-size: var(--text-sm);
+  font-weight: 600;
+  padding: var(--space-2) var(--space-3);
+  border: none;
+  border-bottom: var(--border-thin) solid var(--border-divider);
+}
+QTableCornerButton::section { background-color: var(--gray-050); border: none; }
+QListView { padding: var(--space-1); }
+QListView::item { min-height: 48px; padding: var(--space-2) var(--space-3); border-radius: var(--radius-sm); }
+QListView::item:hover { background-color: var(--blue-050); }
+QListView::item:selected { background-color: var(--blue-100); color: var(--text-strong); }
+
+/* ---- Scrollbars ----
+ * The whole 48px rail is a touch target (drag-to-scroll also works on the
+ * reference pages), but only a slim 12px pill is painted: the handle's margin
+ * sits inside its hit rectangle (the slider sub-control still spans the full
+ * rail width), and the transparent groove shows whatever surface is behind it
+ * (page wash, card white or dialog). */
+QScrollBar:vertical { width: 48px; background: transparent; margin: 0; }
+QScrollBar::handle:vertical {
+  background: var(--gray-400); margin: 4px 18px; border-radius: 6px; min-height: 64px;
+}
+QScrollBar::handle:vertical:hover, QScrollBar::handle:vertical:pressed { background: var(--border-control); }
 QScrollBar::add-line:vertical, QScrollBar::sub-line:vertical { height: 0; background: none; }
 QScrollBar::add-page:vertical, QScrollBar::sub-page:vertical { background: none; }
-QScrollBar:horizontal { height: 48px; background: var(--surface-page); margin: 0; }
-QScrollBar::handle:horizontal { background: var(--border-control); border: 16px solid var(--surface-page); border-radius: 22px; min-width: 48px; }
+QScrollBar:horizontal { height: 48px; background: transparent; margin: 0; }
+QScrollBar::handle:horizontal {
+  background: var(--gray-400); margin: 18px 4px; border-radius: 6px; min-width: 64px;
+}
+QScrollBar::handle:horizontal:hover, QScrollBar::handle:horizontal:pressed { background: var(--border-control); }
 
 QScrollArea { background: var(--surface-page); border: none; }
 QScrollBar::add-line:horizontal, QScrollBar::sub-line:horizontal { width: 0; background: none; }

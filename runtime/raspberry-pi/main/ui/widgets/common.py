@@ -6,11 +6,50 @@ an uppercase eyebrow caption, and a hairline divider. Anything component-shaped
 lives in ``ui/widgets/ds`` instead.
 """
 
+from html import escape
+
 from PyQt5.QtCore import Qt, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QFrame, QLabel
 
 from .ds._common import resolve, sans_font
+
+
+class KeyValueLabel(QLabel):
+    """A ``"Key: value"`` line rendered as a muted key and a strong value.
+
+    Controllers keep handing the Device and Profile screens plain
+    ``"Label: value"`` strings; this renders the key in the body colour and the
+    value semibold in the strong colour so a card of them reads as a spec list
+    rather than a wall of equal text. :meth:`text` returns the plain string,
+    so callers and tests see exactly what they set. Text with no ``": "``
+    separator is shown as it is.
+    """
+
+    def __init__(self, text="", parent=None):
+        super().__init__(parent)
+        self._plain = ""
+        self.setTextFormat(Qt.RichText)
+        self.setWordWrap(True)
+        self.setFont(sans_font(size="--text-base"))
+        self.setText(text)
+
+    def setText(self, text):
+        self._plain = text
+        key, separator, value = text.partition(": ")
+        if separator and key and value:
+            html = (
+                f"<span style='color:{resolve('--text-body')};'>{escape(key)}</span>"
+                "&nbsp;&nbsp;"
+                f"<span style='color:{resolve('--text-strong')}; font-weight:600;'>"
+                f"{escape(value)}</span>"
+            )
+        else:
+            html = escape(text)
+        super().setText(html)
+
+    def text(self):
+        return self._plain
 
 
 class ClickableLabel(QLabel):
