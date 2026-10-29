@@ -167,3 +167,11 @@ class TestHardwareServiceDialog:
             assert page.horizontalScrollBar().maximum() == 0, index
         assert dialog.stop_button.geometry().height() >= 44
         assert dialog.close_button.isVisible()
+
+    def test_movement_status_line_explains_the_lock(self, service_dialog):
+        dialog = service_dialog
+        assert dialog.movement_status.isVisibleTo(dialog)
+        dialog.set_movement_status("Movement is locked until preparation is confirmed.")
+        assert dialog.movement_status.text().startswith("Movement is locked")
+        dialog.set_movement_status(None)
+        assert "Movement available" in dialog.movement_status.text()

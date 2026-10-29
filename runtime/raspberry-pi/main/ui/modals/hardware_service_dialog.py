@@ -118,6 +118,10 @@ class HardwareServiceDialog(QDialog):
         self.live.setMinimumHeight(38)
         self.live.setStyleSheet("background: #eaf1f5; padding: 8px; border-radius: 6px;")
         root.addWidget(self.live)
+        self.movement_status = self._label("Movement: waiting for the device.")
+        self.movement_status.setMinimumHeight(24)
+        self.movement_status.setStyleSheet(f"color: {resolve('--amber-500')};")
+        root.addWidget(self.movement_status)
         body = QHBoxLayout()
         body.setSpacing(18)
         self.steps = QListWidget()
@@ -707,6 +711,17 @@ class HardwareServiceDialog(QDialog):
 
     def set_live(self, text: str) -> None:
         self.live.setText(text)
+
+    def set_movement_status(self, reason: Optional[str]) -> None:
+        """Keep the reason movement is unavailable visible on every step."""
+        if reason is None:
+            self.movement_status.setText(
+                "Movement available. Each jog or move asks for confirmation first."
+            )
+            self.movement_status.setStyleSheet(f"color: {resolve('--green-500')};")
+        else:
+            self.movement_status.setText(reason)
+            self.movement_status.setStyleSheet(f"color: {resolve('--amber-500')};")
 
     def set_result(self, step: str, status: str, detail: str) -> None:
         self._results[step] = (status, detail)
