@@ -241,7 +241,7 @@ jobs:
           pip install platformio==6.1.19
 
       - name: Cache PlatformIO packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.platformio
           key: pio-${{ runner.os }}-${{ hashFiles('runtime/arduino/motor/platformio.ini') }}
