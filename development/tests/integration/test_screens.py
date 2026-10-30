@@ -496,6 +496,80 @@ def test_video_returns_to_list_and_reopens_without_autoplay(shell):
     assert not modal._playing and not modal._poll.isActive()
 
 
+def _run_treatment(shell):
+    view = shell.treatment
+    view.set_device_status("Treatment active", "Duration and motor speeds are locked.", False)
+    view.set_run_state(running=True, paused=False)
+    view.set_phase("holding")
+    view.set_pressure_state("Pressure live")
+    view.set_pressure(40.25)
+    view.set_progress(90, 720)
+
+
+def test_video_treatment_strip_hidden_without_a_treatment(shell):
+    shell.show_video()
+    modal = shell.video_modal
+    assert modal._treatment_bar.isHidden()
+    assert modal._stage_frame.height() == 450
+    modal.close_overlay()
+    assert not modal._treatment_poll.isActive()
+
+
+def test_video_treatment_strip_mirrors_live_monitor(shell, qtbot):
+    _run_treatment(shell)
+    shell.show_video()
+    modal = shell.video_modal
+    assert not modal._treatment_bar.isHidden()
+    assert modal._treatment_poll.isActive()
+    assert modal._treatment_phase._label.text() == "Holding…"
+    assert modal._treatment_pressure.text() == "40.2 lbs"
+    assert modal._treatment_remaining.text() == "10:30 left"
+    assert modal._stage_frame.maximumHeight() == 450 - 72
+    # The strip follows the monitor while the video stays open.
+    shell.treatment.set_progress(120, 720)
+    qtbot.waitUntil(lambda: modal._treatment_remaining.text() == "10:00 left", timeout=2000)
+    # Stop/recovery keeps the strip (and its STOP) until the device is ready.
+    shell.treatment.set_run_state(running=False, paused=False)
+    shell.treatment.set_device_status("Stopping / recovering", "Release pending.", False)
+    modal._refresh_treatment()
+    assert not modal._treatment_bar.isHidden()
+    shell.treatment.set_device_status("Ready", "Review settings.", True)
+    modal._refresh_treatment()
+    assert modal._treatment_bar.isHidden()
+    assert modal._stage_frame.maximumHeight() == 450
+
+
+def test_video_treatment_stop_routes_to_treatment_stop_and_closes(shell):
+    _run_treatment(shell)
+    stops = []
+    shell.treatment.estop_requested.connect(lambda: stops.append(True))
+    shell.show_video()
+    modal = shell.video_modal
+    modal._select_video(modal._video_list.item(0))
+    modal._treatment_stop.click()
+    assert stops == [True]
+    assert modal.isHidden() and not modal._playing
+
+
+@pytest.mark.parametrize("fullscreen", [False, True])
+def test_video_card_with_treatment_strip_fits_the_screen(shell, themed_app, fullscreen):
+    shell.setFixedSize(1366, 768)
+    _run_treatment(shell)
+    shell.show_video()
+    modal = shell.video_modal
+    modal._select_video(modal._video_list.item(0))
+    if fullscreen:
+        modal._toggle_fullscreen()
+    themed_app.processEvents()
+    card = modal._card
+    assert card.sizeHint().height() <= 768
+    stop = modal._treatment_stop
+    top_left = stop.mapTo(shell, stop.rect().topLeft())
+    assert shell.rect().contains(top_left)
+    assert stop.width() >= 48 and stop.height() >= 48
+    modal.close_overlay()
+
+
 def test_video_modal_play_toggle(shell):
     states = []
     shell.video_modal.play_toggled.connect(states.append)

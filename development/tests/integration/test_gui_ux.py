@@ -166,16 +166,18 @@ def test_angles_follow_protocol_without_losing_saved_values(shell):
     assert view.settings_values()["max_right"] == 15
 
 
-def test_login_returns_to_setup_and_active_run_guards_video(shell):
+def test_login_returns_to_setup_and_active_run_guards_login_not_video(shell):
     shell.logout()
     shell._on_nav("setup")
     shell.login_succeeded("Operator")
     assert shell._current == "setup"
     shell.set_overlay_guard(lambda: True)
-    shell.show_video()
     shell.show_login()
-    assert shell.video_modal.isHidden()
     assert shell.login_modal.isHidden()
+    # Video carries its own treatment STOP strip, so the guard does not apply.
+    shell.show_video()
+    assert shell.video_modal.isVisible()
+    shell.video_modal.close_overlay()
 
 
 @pytest.mark.parametrize("width", [1360, 1366])

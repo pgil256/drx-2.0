@@ -561,8 +561,26 @@ class TreatmentScreen(QWidget):
 
     def set_phase(self, phase):
         label, tone = PHASES.get(phase, PHASES["idle"])
+        self._phase = phase if phase in PHASES else "idle"
         self._phase_badge.set_text(label)
         self._phase_badge.set_tone(tone)
+
+    def monitor_snapshot(self) -> dict:
+        """Read-only copy of the live monitor for views that mirror it (Video).
+
+        ``active`` covers a running or paused protocol and the stop/recovery
+        that follows it, so a mirrored STOP stays available until recovery.
+        """
+        phase = getattr(self, "_phase", "idle")
+        label, tone = PHASES.get(phase, PHASES["idle"])
+        return {
+            "active": self._running or self._device_label == "Stopping / recovering",
+            "paused": self._paused,
+            "phase": label,
+            "tone": tone,
+            "pressure": self._pressure_stat._value,
+            "remaining": self._time_stat._value,
+        }
 
     def set_progress(self, elapsed_seconds, total_seconds=_TOTAL):
         remaining = max(0, total_seconds - elapsed_seconds)

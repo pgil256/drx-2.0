@@ -98,6 +98,11 @@ class AppShell(QWidget):
 
         self.login_modal.submitted.connect(self.login_attempted)
 
+        # Video may stay open during a treatment: its strip mirrors the
+        # Treatment monitor and its STOP takes the Treatment screen's path.
+        self.video_modal.set_treatment_source(self.treatment.monitor_snapshot)
+        self.video_modal.stop_requested.connect(self.treatment.estop_requested)
+
     def _on_nav(self, key):
         if self._access_role == "patient" and key in ("setup", "device"):
             return
@@ -177,8 +182,11 @@ class AppShell(QWidget):
         self.treatment.set_access_role(role)
 
     def close_nonessential_overlays(self) -> None:
-        """Clear already-open overlays when treatment takes control of the screen."""
-        for modal in (self.login_modal, self.patient_modal, self.video_modal):
+        """Clear already-open overlays when treatment takes control of the screen.
+
+        Video is exempt: during a treatment it shows its own STOP strip.
+        """
+        for modal in (self.login_modal, self.patient_modal):
             if modal.isVisible():
                 modal.close_overlay()
 
@@ -192,8 +200,8 @@ class AppShell(QWidget):
         self.login_modal.open_over(self)
 
     def show_video(self):
-        if self._overlay_guard is not None and self._overlay_guard():
-            return
+        # Not subject to the overlay guard: during a treatment the video card
+        # carries the treatment strip with STOP, so it never hides the stop.
         self.video_modal.open_over(self)
 
     def login_succeeded(self, username, goto=None, title="Clinician",
