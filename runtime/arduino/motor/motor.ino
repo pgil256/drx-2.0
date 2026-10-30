@@ -177,7 +177,9 @@ float pressureStartForce = 0;
 long tareCmdSeq = -1;
 uint16_t positionTolerance = 0;
 char positionCommandKind = 'I';
-const float PULSE_RELEASE_DROP = 2.0;
+// A pulse release travels back for jerkInterval and ends early only once
+// contact is lost (pressure reads zero).
+const float PULSE_RELEASE_FLOOR = 0.0;
 const unsigned long PULSE_RECOVERY_TIMEOUT = 5000UL;
 // The leg is still settling early in pulsing, so recoveries that start within
 // this period get the longer window (operator request, 2026-10-28).
@@ -197,7 +199,6 @@ void servicePressure();
 void reportSensorDiagnostics();
 void tripPressureFault(const char *reason);
 void setPulseSpeed(int speed);
-float pulseReleaseFloor();
 void reportPressureDone(long seq);
 void emitAck(const char *token, long seq);
 void emergencyStop();
@@ -249,6 +250,9 @@ const unsigned long HIGH_FREQ_INTERVAL = 1000; // ms for frequent updates (adjus
 // Command handling
 String commandBuffer = "";
 bool isCommandComplete = false;
+// Set when a line overflows commandBuffer: the rest of that line is
+// dropped up to its newline instead of being run as a new command.
+bool discardingOverlongCommand = false;
 
 // Timer tracking
 unsigned long loopPosition = 0;
@@ -888,10 +892,6 @@ void setPulseSpeed(int speed) {
   pulseMotorSpeed = speed;
 }
 
-float pulseReleaseFloor() {
-  return max(0.0f, desiredPressure - PULSE_RELEASE_DROP);
-}
-
 void tripPressureFault(const char *reason) {
   if (pressureFault) return;
   pressureCalibrated = false;
@@ -972,7 +972,7 @@ void servicePressure() {
       pressureDonePending = true;
     }
     if (jerking && ((jerkDirection > 0 && (pressure >= desiredPressure || pulseRiseReachesTarget)) ||
-                    (jerkDirection < 0 && pressure <= pulseReleaseFloor())))
+                    (jerkDirection < 0 && pressure <= PULSE_RELEASE_FLOOR)))
       setPulseSpeed(0); // Stop at the sampled bound, before telemetry or phase timing.
   }
   if (pressureGuardActive &&
@@ -2059,20 +2059,18 @@ void loop() {
     // Never sleep through a pulse: sample and accept stop commands throughout.
     unsigned long phaseElapsed = millis() - lastJerkTime;
     if (jerkDirection < 0) {
-      // The release may already have stopped at its pressure floor. Never
-      // restart that stroke on rebound; its elapsed-time cap still applies.
+      // The interval sets how long a release travels back. A release that
+      // lost contact has already stopped; never restart it on rebound.
       if (phaseElapsed >= jerkInterval) {
         jerkDirection = 1;
         lastJerkTime = millis();
         setPulseSpeed(pressure < desiredPressure ? pulseSpeed : 0);
       }
     } else if (pressure >= desiredPressure) {
-      setPulseSpeed(0);
-      if (phaseElapsed >= jerkInterval) {
-        jerkDirection = -1;
-        lastJerkTime = millis();
-        setPulseSpeed(-pulseSpeed);
-      }
+      // A recovered load releases at once instead of waiting at target.
+      jerkDirection = -1;
+      lastJerkTime = millis();
+      setPulseSpeed(-pulseSpeed);
     } else if (phaseElapsed >= (lastJerkTime - pulsingStarted < PULSE_SETTLING_PERIOD ?
                                 PULSE_SETTLING_RECOVERY_TIMEOUT : PULSE_RECOVERY_TIMEOUT)) {
       tripPressureFault("PULSE_RECOVERY_TIMEOUT");
@@ -2080,8 +2078,8 @@ void loop() {
       // Coasting toward target; the next sample decides whether to push again.
       setPulseSpeed(0);
     } else {
-      // Keep recovering after 500 ms if needed, and recover any droop after
-      // an early target stop. Only a recovered load permits the next release.
+      // Keep pushing until the load recovers. Only a recovered load permits
+      // the next release.
       setPulseSpeed(pulseSpeed);
     }
   }
@@ -2217,19 +2215,27 @@ void loop() {
     lastHostTraffic = millis();  // any host byte feeds the heartbeat
 
     if (incomingByte == '\n' || incomingByte == '\r') {  // Command complete
+      // The end of an overlong line: the buffer is already empty, so
+      // nothing from that line runs.
+      discardingOverlongCommand = false;
       if (commandBuffer.length() > 0) { // Only process non-empty commands
         isCommandComplete = true;
         break;
       }
+    } else if (discardingOverlongCommand) {
+      // Drop the rest of an overlong line. Its tail used to collect in
+      // the cleared buffer and run as a command at the newline, so a
+      // corrupt line ending in "P80" applied pressure.
     } else {
       // Limit buffer size to prevent overflows
       if (commandBuffer.length() < MAX_COMMAND_LENGTH - 1) {
         commandBuffer += incomingByte;  // Append character to buffer
       } else {
-        // Buffer overflow - reset and report error
+        // Buffer overflow: reject the whole line once and discard it
         Dbg.println("Command buffer overflow");
         Serial1.println("ERROR: Command too long");
         commandBuffer = "";
+        discardingOverlongCommand = true;
       }
     }
   }

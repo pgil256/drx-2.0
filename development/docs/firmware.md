@@ -33,10 +33,22 @@ warns and continues correcting; the host's bounded waits/retries can fail the
 protocol. The paired pressure constants are checked by
 `development/scripts/check_limits_sync.py`.
 
+Pulsing (`J<ms>`) alternates axial release and push strokes around the
+pressure target. A release reverses for the whole interval and stops early only
+if pressure reads zero (contact lost); it does not restart on rebound. The push
+that follows drives forward until pressure is back at target, then starts the
+next release at once instead of waiting out the interval. A push that has not
+reached target within 5 seconds (10 seconds if it starts in the first 30 seconds
+of pulsing) latches `FAULT|PULSE_RECOVERY_TIMEOUT`. A full pulse takes the
+interval plus the push, so the app's Pulse Rate (interval = 1000 ms divided by
+pulses/sec) is the fastest rate a pulse can reach.
+
 # Pulse stroke stop and recovery window
 
 Firmware `2026-10-28-DRX2-pulse-overshoot` changes only pulsing (`J`). It ports
-the drx-demo `2026-10-28-pulse-overshoot` fix. From 10/16 to 10/28, 12 of
+the drx-demo `2026-10-28-pulse-overshoot` fix onto the strokes described above.
+Demo's strokes differ: its release still stops 2 lb under target and its push
+still holds at target until the interval ends. From 10/16 to 10/28, 12 of
 KS-FB's 55 demo runs ended in a pulse safety stop:
 
 - **Six `PRESSURE_LIMIT` stops.** Forward strokes on a stiff leg (high targets,
@@ -51,12 +63,13 @@ KS-FB's 55 demo runs ended in a pulse safety stop:
   first 30 s of pulsing now has 10 s to regain target; later recoveries keep
   5 s. A duplicate `J` does not restart either window.
 
-The +10 lb overshoot limit, the absolute cutoff, the release floor, the sensor
-timeout, the adjustable pulse cadence and speed, and stop handling are
-unchanged. In a synthetic stiff load (15 lb/s, 100 ms actuator lag, 40 lb
-target, `test_nb2`) the peak drops from 42 to 40.5 lb. The real gain depends on
-how far the actuator coasts after a stop, so `PULSE_STOP_LEAD_MS` needs a bench
-check. This version has not been flashed or bench-tested.
+The +10 lb overshoot limit, the absolute cutoff, the sensor timeout, the
+adjustable pulse cadence and speed, and stop handling are unchanged. In a
+synthetic stiff load (15 lb/s, 100 ms actuator lag, 40 lb target, `test_nb2`)
+the peak drops from 42.5 to 41 lb. The real gain depends on how far the actuator
+coasts after a stop, and a lag well past the 100 ms lead still overshoots, so
+`PULSE_STOP_LEAD_MS` needs a bench check. The demo version is on the units, but
+this version, with these strokes, has not been flashed or bench-tested.
 
 # Treatment motor speed
 

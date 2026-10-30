@@ -269,7 +269,7 @@ class SimulatedController(ControllerModel):
                         self._pulse_interval = int(command[1:]) / 1000
                     self.jerking = True
                     self._pulse_phase = self.time_s
-                    self._pulse_direction = -1
+                    self._pulse_direction = -1 if self.pressure >= self.pressure_target else 1
                     self._ack("DONE", seq)
             elif kind == "F":
                 self._fit_command(command, seq)
@@ -607,13 +607,19 @@ class SimulatedController(ControllerModel):
                                if self.pressure_target > 0 else 1)
                 self.plant.velocity["a"] = math.copysign(min(speed, max(4, abs(diff) * 15)), diff)
         elif self.jerking:
-            if self.time_s - self._pulse_phase >= self._pulse_interval:
-                self._pulse_direction *= -1
+            # As in motor.ino: a release runs for the interval and stops early
+            # only once contact is lost; a push releases on reaching target.
+            if self._pulse_direction < 0:
+                if self.time_s - self._pulse_phase >= self._pulse_interval:
+                    self._pulse_direction = 1
+                    self._pulse_phase = self.time_s
+            elif self.pressure >= self.pressure_target:
+                self._pulse_direction = -1
                 self._pulse_phase = self.time_s
             direction = self._pulse_direction
             if self.pressure >= self.pressure_target and direction > 0:
                 direction = 0
-            if self.pressure <= max(0, self.pressure_target - 2) and direction < 0:
+            if self.pressure <= 0 and direction < 0:
                 direction = 0
             self.plant.velocity["a"] = direction * 80 * self.motor_speeds["pulse_speed"] / 50
         if self.fit_moving and self.time_s >= self._fit_end_time:

@@ -22,6 +22,10 @@ then double-click **Install KneeSpa** in the `devices` folder.
 [`flash_firmware.sh`](flash_firmware.sh) builds and flashes the current Mega firmware
 over USB. See [firmware flashing](maintenance/raspberry-pi/firmware.md) for the flow.
 
+To choose between the legacy app and KneeSpa 2.0 at every startup, with each one's
+Mega firmware checked and switched as needed, see the
+[version chooser](maintenance/raspberry-pi/version-chooser/README.md).
+
 Run `bash devices/collect_pi_info.sh` from the project root on the Pi to collect
 OS, hardware, Python package, and firmware-tool versions for update planning.
 The script prints its report without installing packages, changing services, reading

@@ -13,14 +13,41 @@ firmware native tests 8 suites / 165 tests; Mega build warning-free;
 
 - **What is queued:** the `L5` fixed-width form is now rejected with
   `COMMAND_REJECTED|L5|INVALID_FORMAT`, plus dead-code and comment cleanup.
-  `VERSION` is `2026-09-30-DRX2-NB2-SERVICE`.
-- **Image:** Mega hex sha256 `fb840258d10a49e41b341f6cf6100d2eee3b1f386b0082b4c3d1cafbc9bf6306`,
-  flash 33,974 bytes, RAM 2,688 bytes. Only the `L5` change alters behavior; the
-  cleanup commits leave the code identical (at most the LTO trampoline order moves).
-- **The Pi does not need this flash:** it already sends only `L5|a|b`, and it
-  checks the HX711 driver identity, not the version string.
+  Added 2026-10-28: after a serial line overflows the 100-byte command buffer,
+  the rest of that line is discarded instead of running as a command, and the
+  rejection is reported once. Also added 2026-10-28: a pulse release travels
+  back for the whole Pulse Rate interval and stops early only when pressure
+  reaches zero (it used to stop 2 lb under target), and a push releases as soon
+  as it reaches target (it used to hold there until the interval ended).
+  `VERSION` is `2026-10-28-DRX2-NB2-SERVICE`.
+- **Image:** Mega hex sha256 `4f60c34727418eb6b55a02d3ed39a3a4c8e69415a61b7d7e37d8f784e6c9d2bf`,
+  flash 34,148 bytes, RAM 2,689 bytes, built with the pinned `atmelavr@5.3.0`.
+  CI's firmware job uploads the same image with its checksum. The `L5`,
+  overflow and pulse changes alter behavior; the cleanup commits leave the code
+  identical (at most the LTO trampoline order moves).
+- **Superseded by the home-release batch (PR #29):** that merge folds this batch
+  into the verified home release, release margin and position re-read. `VERSION`
+  becomes `2026-10-28-DRX2-release-margin`, and the checksum above describes the
+  earlier image only; CI's firmware job publishes the current image and its
+  checksum. **That image does need the Pi update and the flash together:** the
+  app refuses treatment on firmware without the `HOME_RELEASE_V1` capability.
+  The pulse-overshoot change then moves `VERSION` to
+  `2026-10-28-DRX2-pulse-overshoot`.
+  (Before that batch the Pi did not need this flash: it already sends only
+  `L5|a|b`, and it checks the HX711 driver identity, not the version string.)
 - **Decide:** when to flash, after the deployment bench checks in
   `development/docs/hardware-service.md#verification-before-deployment`.
+  For the pulse change, also run the slowest Pulse Rates (0.2/sec is a
+  5-second release): a release that unloads the leg must get back to target
+  within 5 seconds (10 seconds in the first 30 seconds of pulsing), or the
+  firmware latches `PULSE_RECOVERY_TIMEOUT`. Also check how far the actuator
+  coasts after a pulse stop against `PULSE_STOP_LEAD_MS` (100 ms).
+- **Also decide:** whether motion should continue when the app dies. The
+  host heartbeat only warns, so after an app abort a pressure ramp runs to its
+  target or its 90-second deadline, and pulsing continues until the restarted
+  app's reset sends `Y`. `development/docs/deployment.md` describes the
+  current behavior. Making the heartbeat stop pulsing again would be a
+  firmware change for this batch.
 
 ## 2. UI changes to look at on the Pi or simulator
 

@@ -77,6 +77,17 @@ def monitor():
     return SafetyMonitor(window), window
 
 
+# Measured axial endpoints from the service wizard: 0 in at the firmware's
+# AZERO floor, 4 in at the far end of travel.
+CALIBRATED_AMARKS = {"0.0": 160, "2.0": 1020, "4.0": 1880}
+AXIAL_GROSS_BREACH = 1880 + LIMIT_SETTLE_TOLERANCE + 150
+
+
+def calibrate_axial(window):
+    window.config.axial_service_calibrated = True
+    window.config.AMarks = dict(CALIBRATED_AMARKS)
+
+
 @pytest.mark.unit
 class TestStatusChecks:
     def test_normal_status_passes_and_feeds_panel(self, monitor):
@@ -127,7 +138,8 @@ class TestStatusChecks:
 
     def test_axial_over_limit_warns_without_stopping(self, monitor):
         sm, w = monitor
-        assert sm.on_status(AXIAL_MAX + 100, 2000, 1200, 10.0) is True
+        calibrate_axial(w)
+        assert sm.on_status(AXIAL_GROSS_BREACH, 2000, 1200, 10.0) is True
         assert w.resets == 0
         assert w.states == []
         assert not w.worker.stop.called
@@ -138,8 +150,9 @@ class TestStatusChecks:
         """When both trip at once the operator gets both messages, not one
         ambiguous combined alert."""
         sm, w = monitor
+        calibrate_axial(w)
         pressure = PRESSURE_WARNING_MAX + 5
-        assert sm.on_status(AXIAL_MAX + 100, 2000, 1200, pressure) is True
+        assert sm.on_status(AXIAL_GROSS_BREACH, 2000, 1200, pressure) is True
         assert len(w.alerts) == 1
         assert "Axial position limit exceeded" in w.alerts[0]
         assert "Pressure warning threshold exceeded" in w.alerts[0]
@@ -198,6 +211,49 @@ class TestStatusChecks:
             HORIZONTAL_MIN - LIMIT_SETTLE_TOLERANCE,
             HORIZONTAL_MAX + LIMIT_SETTLE_TOLERANCE,
         )
+
+    # ----- axial band (the old AXIAL_MAX check could never fire) -----
+    def test_axial_check_fires_on_a_value_a_real_frame_can_carry(self, monitor):
+        """Status frames past 4095 are rejected as corrupt, so the old
+        position_a > AXIAL_MAX (4600) comparison was dead code."""
+        sm, w = monitor
+        calibrate_axial(w)
+        for _ in range(3):
+            assert sm.on_status(4095, 2000, 1200, 10.0) is True
+        assert any("Axial position limit exceeded" in a for a in w.alerts)
+        assert "outside 110-1930" in w.alerts[0]
+        assert w.resets == 0 and w.states == []
+
+    def test_calibrated_axial_travel_is_legal(self, monitor):
+        sm, w = monitor
+        calibrate_axial(w)
+        # Both endpoints, the release floor and a settle just past the top.
+        for pos_a in (160, 1020, 1880, 1880 + 40, 160 - 25):
+            for _ in range(4):
+                assert sm.on_status(pos_a, 2000, 1200, 10.0) is True
+        assert w.alerts == []
+
+    def test_axial_below_calibrated_floor_warns(self, monitor):
+        sm, w = monitor
+        calibrate_axial(w)
+        below = 160 - LIMIT_SETTLE_TOLERANCE - 30
+        for _ in range(3):
+            assert sm.on_status(below, 2000, 1200, 10.0) is True
+        assert any("Axial position limit exceeded" in a for a in w.alerts)
+
+    def test_uncalibrated_axial_marks_are_not_trusted(self, monitor):
+        """Legacy AMarks never drove axial commands; the firmware converts
+        A12<inches> itself until the service wizard measures the axis."""
+        sm, w = monitor
+        w.config.axial_service_calibrated = False
+        w.config.AMarks = dict(CALIBRATED_AMARKS)
+        assert sm._position_bounds("axial") == (
+            0 - LIMIT_SETTLE_TOLERANCE,
+            AXIAL_MAX + LIMIT_SETTLE_TOLERANCE,
+        )
+        for _ in range(4):
+            assert sm.on_status(4095, 2000, 1200, 10.0) is True
+        assert w.alerts == []
 
     def test_checks_gated_until_setup_complete(self, monitor):
         """During resets the values are transient; only the panel updates."""

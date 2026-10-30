@@ -127,11 +127,20 @@ void test_repeated_pressure_command_does_not_extend_deadline() {
     TEST_ASSERT_EQUAL(0, pressureMoveStarted);
     TEST_ASSERT_TRUE(measurePressure);
 }
+void test_release_travels_for_the_interval_until_contact_is_lost() {
+    sample(40); processCommand("P40"); processCommand("J500");
+    TEST_ASSERT_EQUAL(-1, jerkDirection);
+    sample(30); tick(); TEST_ASSERT_TRUE(speed(12) < 0); // no fixed-drop floor
+    sample(0); TEST_ASSERT_EQUAL(0, speed(12));
+    sample(1); tick(); TEST_ASSERT_EQUAL(0, speed(12)); // no rebound restart
+    TEST_ASSERT_EQUAL(-1, jerkDirection);
+    tick(300); TEST_ASSERT_EQUAL(1, jerkDirection); TEST_ASSERT_TRUE(speed(12) > 0);
+}
 void recoveryTimesOutAfter(int ticks, bool late) {
     sample(40); processCommand("P40"); processCommand("J200");
     if (late) pulsingStarted -= PULSE_SETTLING_PERIOD;
-    sample(38); TEST_ASSERT_EQUAL(0, speed(12));
-    sample(39); TEST_ASSERT_EQUAL(0, speed(12)); // no rebound restart
+    sample(0); TEST_ASSERT_EQUAL(0, speed(12));
+    sample(1); TEST_ASSERT_EQUAL(0, speed(12)); // no rebound restart
     tick(200); TEST_ASSERT_EQUAL(1, jerkDirection);
     unsigned long recoveryStart=lastJerkTime;
     for (int i=0; i<ticks-1; ++i) { tick(); processCommand("J200"); }
@@ -189,16 +198,18 @@ void test_stiff_load_forward_strokes_stay_near_target() {
         TEST_ASSERT_FALSE(pressureFault); TEST_ASSERT_TRUE(jerking);
         if (i > 1000 && force > peak) peak = force;
     }
-    TEST_ASSERT_TRUE(peak < 41.5); // Stopping only on a reached sample peaks at 42 here.
+    TEST_ASSERT_TRUE(peak < 41.5); // Stopping only on a reached sample peaks at 42.5 here.
     processCommand("JS"); stopped();
 }
-void test_recovery_reapplies_droop_before_next_release() {
+void test_recovered_load_releases_without_waiting_at_target() {
     sample(40); processCommand("P40"); processCommand("J500");
-    sample(38); tick(500);
-    sample(40); TEST_ASSERT_EQUAL(0, speed(12));
-    sample(39); tick(100); TEST_ASSERT_TRUE(speed(12)>0);
-    TEST_ASSERT_EQUAL(1, jerkDirection);
-    sample(40); tick(400); TEST_ASSERT_EQUAL(-1, jerkDirection);
+    sample(30); tick(500);
+    TEST_ASSERT_EQUAL(1, jerkDirection); TEST_ASSERT_TRUE(speed(12) > 0);
+    sample(39); tick(); TEST_ASSERT_TRUE(speed(12) > 0);
+    sample(40); TEST_ASSERT_EQUAL(0, speed(12)); // stops at the sampled bound
+    tick(); // 200 ms into a 500 ms interval
+    TEST_ASSERT_EQUAL(-1, jerkDirection); TEST_ASSERT_TRUE(speed(12) < 0);
+    TEST_ASSERT_EQUAL(now, lastJerkTime);
 }
 void test_notice_is_once_and_advisory() {
     Wire.position_12 = 100; sample(0); processCommand("P40");
@@ -234,11 +245,12 @@ int main() {
     RUN_TEST(test_fresh_sample_does_not_hide_a_service_gap);
     RUN_TEST(test_invalid_sample_stops_all_axes_and_fit);
     RUN_TEST(test_repeated_pressure_command_does_not_extend_deadline);
+    RUN_TEST(test_release_travels_for_the_interval_until_contact_is_lost);
     RUN_TEST(test_pulse_recovery_must_finish_before_release_and_duplicates_do_not_reset);
     RUN_TEST(test_late_pulse_recovery_keeps_five_second_deadline);
     RUN_TEST(test_fast_rise_stops_forward_stroke_one_sample_early);
     RUN_TEST(test_stiff_load_forward_strokes_stay_near_target);
-    RUN_TEST(test_recovery_reapplies_droop_before_next_release);
+    RUN_TEST(test_recovered_load_releases_without_waiting_at_target);
     RUN_TEST(test_notice_is_once_and_advisory);
     RUN_TEST(test_position_bands_and_feedback_range);
     runHomeReleaseTests();

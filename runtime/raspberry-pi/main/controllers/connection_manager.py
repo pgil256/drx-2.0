@@ -9,13 +9,14 @@ stays on the window; this module owns the transitions.
 import time
 import threading
 
+import RPi.GPIO as GPIO
 from PyQt5.QtCore import QTimer, QThread
 from PyQt5.QtWidgets import QApplication
 
 from helpers.arduino import Arduino
 from helpers.logging import setup_logger
 from helpers.reset_worker import ResetWorker
-from config.constants import ARDUINO_SETTINGS, DEFAULT_HORIZONTAL_POSITION
+from config.constants import ARDUINO_SETTINGS, DEFAULT_HORIZONTAL_POSITION, EMERGENCYSTOP
 
 
 class ConnectionManager:
@@ -272,6 +273,12 @@ class ConnectionManager:
         window.protocol.set_busy(True)
         QApplication.processEvents() # Ensure spinner is visible
 
+        # An operator reset is the re-arm action. The UI e-stop drives the
+        # stop line LOW and only its automatic phase 3 drives it HIGH again;
+        # a physical stop skips phase 3, so without this the firmware would
+        # still see STOP pressed and the homing below could never move.
+        self._release_estop_line()
+
         # Create and configure the worker, passing 'self'
         reset_worker = ResetWorker(window.arduino, window.config, window)
         self.reset_worker = reset_worker
@@ -286,6 +293,13 @@ class ConnectionManager:
         self.logger.debug("Starting ResetWorker in threadpool")
         window.threadpool.start(reset_worker)
         window.reset_setup_readings()
+
+    def _release_estop_line(self) -> None:
+        """Drive the hardware EMERGENCYSTOP output to its idle (HIGH) level."""
+        try:
+            GPIO.output(EMERGENCYSTOP, GPIO.HIGH)
+        except Exception as exc:
+            self.logger.error("Could not release EMERGENCYSTOP GPIO before reset: %s", exc)
 
     def _on_reset_finished(self, success, worker=None):
         """Slot called when ResetWorker finishes."""

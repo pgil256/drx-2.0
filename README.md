@@ -131,8 +131,22 @@ bash development/tests/firmware/run_native_tests.sh     # firmware suites (g++ +
 cd runtime/arduino/motor && pio test -e native  # same, via PlatformIO where available
 ```
 
-CI (`.github/workflows/ci.yml`) runs the full Python suite, the firmware
-native tests, and an AVR compile check of `motor.ino` for the Mega 2560.
+CI (`.github/workflows/ci.yml`) runs these jobs on every pull request and
+every push to `main`:
+
+- **Python tests**: the full suite on Python 3.12 under Xvfb, the host/firmware
+  safety-limit sync check, and line coverage of `runtime/raspberry-pi/main`
+  (uploaded as `coverage.xml`; no threshold yet).
+- **Lint**: `ruff check .` with `ruff.toml`, which targets Python 3.7 syntax.
+- **Python 3.7 import check**: in a `python:3.7` container, byte-compiles the
+  shipped code and imports every runtime module.
+- **Python 3.7 tests**: the full suite again on the Pi's interpreter, as a
+  non-root user.
+- **Shell scripts**: `shellcheck` over every tracked `*.sh` file.
+- **Firmware native tests**: g++ and the vendored Unity framework.
+- **Firmware AVR build**: compiles `motor.ino` for the Mega 2560 with pinned
+  PlatformIO packages, prints the size report, and uploads `firmware.hex`
+  with its sha256.
 
 ### Physical touchscreen E2E
 
@@ -249,7 +263,7 @@ rollback when operating a device with older bare-`J` firmware.
 
 **Before flashing firmware to a device**, complete the deployment bench checks in
 [Hardware Tests & Calibration](development/docs/hardware-service.md#verification-before-deployment)
-for the current image (`VERSION` in `motor.ino`, now `2026-09-30-DRX2-NB2-SERVICE`).
+for the current image (`VERSION` in `motor.ino`, now `2026-10-28-DRX2-release-margin`).
 The older [Flash Batch 1 checklist](development/docs/plans/2026-06-11-batch1-hardware-checklist.md)
 was written for `2026-06-11-FAILSAFE-2`. Its watchdog/bootloader recovery check (A2)
 and the position-convention measurements (E1–E3) that later math corrections are
