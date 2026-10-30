@@ -90,11 +90,31 @@ def test_pressure_display_ages_even_if_diagnostics_keep_arriving(shell):
     window = SimpleNamespace(
         shell=shell, _measurement=state, _measurement_fault=None,
         arduino=SimpleNamespace(connected=True), _status_received_at=time.monotonic() - 3,
+        protocol_running=True,
     )
     KneeSpa._refresh_pressure_state(window)
     assert shell.treatment._pressure_stat._value == "—"
     assert shell.treatment._pressure_caption == "Pressure stale"
     assert shell.setup._pos["pressure"]._value.text() == "—"
+
+
+def test_idle_pressure_display_tolerates_the_five_second_status_cadence(shell):
+    import time
+    from helpers.measurement_state import MeasurementState
+
+    state = MeasurementState()
+    state.receive({"valid": True, "age_ms": 0})
+    state.baseline_valid = True
+    window = SimpleNamespace(
+        shell=shell, _measurement=state, _measurement_fault=None,
+        arduino=SimpleNamespace(connected=True), _status_received_at=time.monotonic() - 3,
+        protocol_running=False,
+    )
+    KneeSpa._refresh_pressure_state(window)
+    assert shell.treatment._pressure_caption == "Pressure live"
+    window._status_received_at -= 5
+    KneeSpa._refresh_pressure_state(window)
+    assert shell.treatment._pressure_caption == "Pressure stale"
 
 
 def test_connection_warning_remains_visible_during_active_treatment(shell):

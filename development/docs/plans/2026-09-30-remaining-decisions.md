@@ -31,13 +31,17 @@ firmware native tests 8 suites / 165 tests; Mega build warning-free;
   earlier image only; CI's firmware job publishes the current image and its
   checksum. **That image does need the Pi update and the flash together:** the
   app refuses treatment on firmware without the `HOME_RELEASE_V1` capability.
+  The pulse-overshoot change then moves `VERSION` to
+  `2026-10-28-DRX2-pulse-overshoot`.
   (Before that batch the Pi did not need this flash: it already sends only
   `L5|a|b`, and it checks the HX711 driver identity, not the version string.)
 - **Decide:** when to flash, after the deployment bench checks in
   `development/docs/hardware-service.md#verification-before-deployment`.
   For the pulse change, also run the slowest Pulse Rates (0.2/sec is a
   5-second release): a release that unloads the leg must get back to target
-  within 5 seconds, or the firmware latches `PULSE_RECOVERY_TIMEOUT`.
+  within 5 seconds (10 seconds in the first 30 seconds of pulsing), or the
+  firmware latches `PULSE_RECOVERY_TIMEOUT`. Also check how far the actuator
+  coasts after a pulse stop against `PULSE_STOP_LEAD_MS` (100 ms).
 - **Also decide:** whether motion should continue when the app dies. The
   host heartbeat only warns, so after an app abort a pressure ramp runs to its
   target or its 90-second deadline, and pulsing continues until the restarted

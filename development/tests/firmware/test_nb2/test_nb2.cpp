@@ -33,6 +33,9 @@ void setUp() {
 void tearDown() {}
 void sample(float value) { scale.setRawForUnits(value); servicePressure(); }
 void tick(unsigned long ms=100) { now += ms; lastHostTraffic = now; loop(); }
+// One HX711 conversion: later servicePressure() calls see NOT_READY, as on the
+// Mega between 10 Hz samples, so a rise is measured between real samples.
+void fresh(float value) { scale._ready = true; sample(value); scale._ready = false; }
 int speed(uint8_t device) {
     for (int i=Wire.commandCount-1; i>=0; --i) {
         auto &c = Wire.commands[i];
@@ -133,16 +136,70 @@ void test_release_travels_for_the_interval_until_contact_is_lost() {
     TEST_ASSERT_EQUAL(-1, jerkDirection);
     tick(300); TEST_ASSERT_EQUAL(1, jerkDirection); TEST_ASSERT_TRUE(speed(12) > 0);
 }
-void test_pulse_recovery_must_finish_before_release_and_duplicates_do_not_reset() {
+void recoveryTimesOutAfter(int ticks, bool late) {
     sample(40); processCommand("P40"); processCommand("J200");
+    if (late) pulsingStarted -= PULSE_SETTLING_PERIOD;
     sample(0); TEST_ASSERT_EQUAL(0, speed(12));
     sample(1); TEST_ASSERT_EQUAL(0, speed(12)); // no rebound restart
     tick(200); TEST_ASSERT_EQUAL(1, jerkDirection);
     unsigned long recoveryStart=lastJerkTime;
-    for (int i=0; i<49; ++i) { tick(); processCommand("J200"); }
+    for (int i=0; i<ticks-1; ++i) { tick(); processCommand("J200"); }
     TEST_ASSERT_TRUE(jerking); TEST_ASSERT_EQUAL(recoveryStart, lastJerkTime);
     tick(); TEST_ASSERT_TRUE(pressureFault); stopped();
     TEST_ASSERT_TRUE(Serial1.outputContains("PULSE_RECOVERY_TIMEOUT"));
+}
+// Recoveries starting in the first 30 s of pulsing get 10 s; later ones 5 s.
+void test_pulse_recovery_must_finish_before_release_and_duplicates_do_not_reset() {
+    recoveryTimesOutAfter(100, false);
+}
+void test_late_pulse_recovery_keeps_five_second_deadline() {
+    recoveryTimesOutAfter(50, true);
+}
+void test_fast_rise_stops_forward_stroke_one_sample_early() {
+    sample(40); processCommand("P40"); processCommand("J200");
+    scale._ready = false;
+    now = 200; fresh(38); loop();
+    TEST_ASSERT_EQUAL(1, jerkDirection); TEST_ASSERT_EQUAL(pulseSpeed, speed(12));
+    // A slow rise keeps pushing; a fast one stops a sample before target.
+    now += 100; fresh(38.4); loop();
+    TEST_ASSERT_EQUAL(pulseSpeed, speed(12));
+    now += 100; fresh(39.3);
+    TEST_ASSERT_EQUAL(0, speed(12));
+    loop();
+    TEST_ASSERT_EQUAL(1, jerkDirection); TEST_ASSERT_EQUAL(0, speed(12));
+    // Coasting stalled below target: push again rather than release.
+    now += 100; fresh(39.4); loop();
+    TEST_ASSERT_EQUAL(1, jerkDirection); TEST_ASSERT_EQUAL(pulseSpeed, speed(12));
+    now += 100; fresh(40);
+    TEST_ASSERT_EQUAL(0, speed(12));
+    loop(); // A release still starts only from a sample at target.
+    TEST_ASSERT_EQUAL(-1, jerkDirection); TEST_ASSERT_EQUAL(-pulseSpeed, speed(12));
+    // A rise measured across a sensor gap predicts nothing.
+    now += 200; fresh(38); loop();
+    TEST_ASSERT_EQUAL(1, jerkDirection); TEST_ASSERT_EQUAL(pulseSpeed, speed(12));
+    now += 300; fresh(39.9); loop();
+    TEST_ASSERT_EQUAL(pulseSpeed, speed(12));
+    TEST_ASSERT_FALSE(pressureFault);
+}
+void test_stiff_load_forward_strokes_stay_near_target() {
+    // Synthetic stiff leg: 15 lb/s while pushing, 20 lb/s while releasing, and
+    // the actuator responds 100 ms late. Fresh 10 Hz readings, 10 ms loop.
+    sample(40); processCommand("P40"); processCommand("J500");
+    scale._ready = false;
+    double force = 40, peak = 0;
+    int speeds[10] = {0};
+    for (int i = 1; i <= 18000; ++i) {
+        int lagged = speeds[i % 10];
+        speeds[i % 10] = pulseMotorSpeed;
+        force += (lagged > 0 ? 15.0 : lagged < 0 ? -20.0 : 0.0) * 0.01;
+        now += 10; lastHostTraffic = now;
+        if (i % 10 == 0) fresh(force);
+        loop();
+        TEST_ASSERT_FALSE(pressureFault); TEST_ASSERT_TRUE(jerking);
+        if (i > 1000 && force > peak) peak = force;
+    }
+    TEST_ASSERT_TRUE(peak < 41.5); // Stopping only on a reached sample peaks at 42.5 here.
+    processCommand("JS"); stopped();
 }
 void test_recovered_load_releases_without_waiting_at_target() {
     sample(40); processCommand("P40"); processCommand("J500");
@@ -190,6 +247,9 @@ int main() {
     RUN_TEST(test_repeated_pressure_command_does_not_extend_deadline);
     RUN_TEST(test_release_travels_for_the_interval_until_contact_is_lost);
     RUN_TEST(test_pulse_recovery_must_finish_before_release_and_duplicates_do_not_reset);
+    RUN_TEST(test_late_pulse_recovery_keeps_five_second_deadline);
+    RUN_TEST(test_fast_rise_stops_forward_stroke_one_sample_early);
+    RUN_TEST(test_stiff_load_forward_strokes_stay_near_target);
     RUN_TEST(test_recovered_load_releases_without_waiting_at_target);
     RUN_TEST(test_notice_is_once_and_advisory);
     RUN_TEST(test_position_bands_and_feedback_range);

@@ -94,7 +94,13 @@ def test_measurement_status_never_fabricates_live_zero(monkeypatch):
     assert state.caption(True) == "Pressure zero required"
     state.baseline_valid = True
     assert state.caption(True) == "Pressure live"
+    # Idle status arrives every 5 s, so a 3 s gap is normal until a protocol streams at 1 Hz.
     state.received_at -= 3
+    assert state.caption(True) == "Pressure live"
+    state.protocol_running = True
+    assert state.caption(True) == "Pressure stale"
+    state.protocol_running = False
+    state.received_at -= 5
     assert state.caption(True) == "Pressure stale"
     state.fault = "PRESSURE_LIMIT"
     assert "fault" in state.caption(True)

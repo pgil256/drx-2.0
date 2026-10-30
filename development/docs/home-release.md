@@ -2,7 +2,7 @@
 
 The app and firmware must be installed as a compatible pair. Treatment start
 requires `DRX-HX711-NB2` and the `HOME_RELEASE_V1` capability. The firmware version
-is `2026-10-28-DRX2-release-margin`. Older three-field identities remain readable,
+is `2026-10-28-DRX2-pulse-overshoot`. Older three-field identities remain readable,
 but cannot authorize treatment. Disconnection, reset initiation, `Reset|`, and
 `Ready to Go` invalidate the identity and pressure authorization.
 
