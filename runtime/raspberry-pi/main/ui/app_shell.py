@@ -190,11 +190,6 @@ class AppShell(QWidget):
             if modal.isVisible():
                 modal.close_overlay()
 
-    def close_video(self) -> None:
-        """Dismiss the player so a fault is not left playing over its prompts."""
-        if self.video_modal.isVisible():
-            self.video_modal.close_overlay()
-
     def show_login(self, destination=None):
         if self._overlay_guard is not None and self._overlay_guard():
             return
@@ -208,6 +203,11 @@ class AppShell(QWidget):
         # Not subject to the overlay guard: during a treatment the video card
         # carries the treatment strip with STOP, so it never hides the stop.
         self.video_modal.open_over(self)
+
+    def close_video(self) -> None:
+        """Dismiss the player so a fault is not left playing over its prompts."""
+        if self.video_modal.isVisible():
+            self.video_modal.close_overlay()
 
     def login_succeeded(self, username, goto=None, title="Clinician",
                         is_admin=False):
