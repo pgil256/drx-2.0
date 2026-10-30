@@ -66,7 +66,26 @@ def sign_in(window_run, monkeypatch):  # noqa: F811
 def show_qr(sign_in, qtbot):
     w, controller, _data = sign_in
     w.shell.show_login()
+    w.shell.login_modal._switch.click()  # "Sign in with your phone"
     qtbot.waitUntil(lambda: bool(controller._request) and not controller._busy)
+
+
+def test_sign_in_opens_on_staff_pin_and_requests_qr_only_on_demand(sign_in, qtbot):
+    w, controller, data = sign_in
+    modal = w.shell.login_modal
+    w.shell.show_login()
+    assert modal.isVisible() and not modal.phone_mode()
+    assert modal._keypad.isVisible() and modal._phone.isHidden()
+    assert modal._switch.text() == "Sign in with your phone"
+    qtbot.wait(20)
+    assert not controller._request and not data["calls"]
+    modal._switch.click()
+    qtbot.waitUntil(lambda: bool(controller._request) and not controller._busy)
+    assert modal.phone_mode() and modal._keypad.isHidden()
+    assert modal._switch.text() == "Use local staff PIN"
+    modal.close_overlay()
+    w.shell.show_login()
+    assert not modal.phone_mode()  # every opening starts on the PIN again
 
 
 def approve(sign_in, qtbot):
@@ -252,7 +271,7 @@ def test_patient_change_ends_session_and_requests_fresh_phone_approval(sign_in, 
     qtbot.waitUntil(lambda: not controller._busy)
     assert w.current_user is None and w.cloud_patient is None
     assert not controller.client.token
-    assert w.shell.login_modal.isVisible()
+    assert w.shell.login_modal.isVisible() and w.shell.login_modal.phone_mode()
     assert w.shell.patient_modal.isHidden()
     assert sum(path == REQUESTS for _, path in data["calls"]) == 2
 

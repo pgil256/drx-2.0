@@ -667,7 +667,7 @@ class KneeSpa(QMainWindow):
         if self.current_user.get("machine_sign_in"):
             if self.current_user.get("status") == "patient":
                 self._on_logout()
-                self.shell.show_login()
+                self.shell.show_login(phone=True)
                 return
             if not authorize(self, "patients.view", self._show_patient_modal):
                 return
