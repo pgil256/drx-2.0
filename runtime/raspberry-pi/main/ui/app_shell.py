@@ -182,14 +182,15 @@ class AppShell(QWidget):
             if modal.isVisible():
                 modal.close_overlay()
 
-    def show_login(self, destination=None):
+    def show_login(self, destination=None, phone=False):
+        """Open sign-in on the staff PIN keypad (``phone=True``: QR approval)."""
         if self._overlay_guard is not None and self._overlay_guard():
             return
         if not self._navigation_confirmed("home"):
             return
         self._login_destination = destination if destination in GATED else "protocols"
         self._go("home")
-        self.login_modal.open_over(self)
+        self.login_modal.open_over(self, phone=phone)
 
     def show_video(self):
         if self._overlay_guard is not None and self._overlay_guard():
