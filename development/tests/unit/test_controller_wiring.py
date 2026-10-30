@@ -368,6 +368,17 @@ class TestSetupGo:
         KneeSpa._on_setup_go(stub, "horizontal")
         stub.arduino.send.assert_called_once_with("I131140")
 
+    def test_horizontal_go_clamps_to_zero_degrees(self):
+        stub = make_stub()
+        stub.shell.setup.row_value.return_value = 5
+        stub.config.BMarks = {
+            "-25": 0, "-20": 380, "-15": 760, "-10": 1140,
+            "-5": 1520, "0": 1900, "5": 2280,
+        }
+        KneeSpa._on_setup_go(stub, "horizontal")
+        stub.arduino.send.assert_called_once_with("I131900")
+        assert stub.horizontal_flexion_position == 0
+
     def test_apply_pressure_clamps_above_max(self):
         stub = make_stub()
         stub.shell.setup.row_value.return_value = 95.0  # above PRESSURE_MAX (80)

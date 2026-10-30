@@ -7,11 +7,13 @@ import pytest
 from PyQt5.QtCore import QPoint, QPointF, Qt
 from PyQt5.QtWidgets import QAbstractButton, QScroller
 
+from config.constants import ACTUATORS, SERVICE_AXES
 from kneespa import KneeSpa
 from ui.app_shell import AppShell
 from ui.measurements import calibrated_reading
 from ui.modals.treatment_review import TreatmentReviewDialog
 from ui.presentation import device_presentation
+from ui.screens.content import SAFETY_LIMITS
 from ui.theme.qss import resolve
 from ui.widgets.ds.badge import TONES as BADGE_TONES
 
@@ -120,6 +122,21 @@ def test_ready_clears_recovery_phase_without_losing_outcome(shell, outcome, expe
     assert view._phase_badge._label.text() == expected
     assert view._outcome == outcome
     assert view._readiness.isHidden()
+
+
+def test_horizontal_target_stops_at_zero_degrees(shell):
+    control = shell.setup._rows["horizontal"].slider
+    control.set_value(5)
+    assert shell.setup.row_value("horizontal") == 0
+    control._increment()
+    assert shell.setup.row_value("horizontal") == 0
+    assert ("Horizontal", "-25 to 0", "°") in SAFETY_LIMITS
+    # Calibration and measured readouts keep the full mechanical travel.
+    assert ACTUATORS["HORIZONTAL"]["LIMITS"] == (-25, 5)
+    assert SERVICE_AXES["horizontal"]["measurement_limits"] == (-25, 5)
+    shell.setup.set_measured_position("horizontal", 3)
+    assert shell.setup._pos["horizontal"]._value.text() == "3°"
+    assert shell.setup.row_value("horizontal") == 0
 
 
 def test_slider_responds_across_its_touch_height_without_moving_device(shell, qtbot):
