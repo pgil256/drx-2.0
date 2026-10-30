@@ -4,6 +4,7 @@ Extracted from development/tests/fixtures/fake_arduino.py. Timing defaults
 remain accelerated for existing serial integration tests.
 """
 import threading
+import re
 import time
 from collections import deque
 from typing import List, Optional
@@ -68,6 +69,11 @@ class ControllerModel:
         self._factor = 1.0
         self._a_zero = 0
         self._motion_kind = "I"
+        self._release_token = None
+        self._release_ready = False
+        self._release_active = False
+        self._release_stopped_at = None
+        self._release_retracting = False
 
         # Track commands received (for assertions)
         self.commands_received: List[str] = []
@@ -91,10 +97,12 @@ class ControllerModel:
         self._target_position_c = None
         self._target_pressure = None
         self._pending_commands.clear()
+        self._release_token = None
+        self._release_ready = self._release_active = False
         time.sleep(self.boot_delay)
         self._write("\n")
         self._write("Ready to Go\n")
-        self._write("FIRMWARE|test|DRX-HX711-NB2\n")
+        self._write("FIRMWARE|test|DRX-HX711-NB2|HOME_RELEASE_V1\n")
 
 
     @staticmethod
@@ -156,10 +164,32 @@ class ControllerModel:
         self._current_seq = seq
 
         cmd_type = cmd[0]
+        if self._release_active and cmd_type not in "XTQSH":
+            if cmd != "R|" + self._release_token:
+                self._write(f"COMMAND_REJECTED|{cmd_type}|HOME_RELEASE_ACTIVE\n")
+            return
+        if (self._release_ready and cmd_type not in "TQSH" and
+                not cmd.startswith("L1|HOME|")):
+            self._release_ready = False
 
         if cmd_type == 'T':
             self._ack("OK", self._current_seq)
-            self._write("FIRMWARE|test|DRX-HX711-NB2\n")
+            self._write("FIRMWARE|test|DRX-HX711-NB2|HOME_RELEASE_V1\n")
+
+        elif cmd_type == 'R':
+            if not re.fullmatch(r"R\|[0-9a-f]{12}", cmd):
+                self._write("COMMAND_REJECTED|R|INVALID_TOKEN\n")
+            elif self.b_running or self.measure_pressure or self.jerking or self.fit_moving:
+                self._write("COMMAND_REJECTED|R|MOTION_ACTIVE\n")
+            elif self.position_a < self._a_zero - 25:
+                self._write("COMMAND_REJECTED|R|POSITION_OUT_OF_TOLERANCE\n")
+            else:
+                self._release_token = cmd[2:]
+                self._release_active = True
+                self._release_stopped_at = None
+                # Firmware retracts only from above the band, then stops a
+                # 10-count margin inside it rather than on the edge.
+                self._release_retracting = self.position_a > self._a_zero + 25
 
         elif cmd_type == 'V':
             from helpers.motor_speed import motor_speed_values
@@ -286,6 +316,7 @@ class ControllerModel:
                     self._write("ERROR: Invalid F direction\n")
 
         elif cmd_type == 'X':
+            self._release_active = self._release_ready = False
             self.b_running = False
             self.measure_pressure = False
             self.jerking = False
@@ -320,6 +351,11 @@ class ControllerModel:
                 self._write(f"CALIBRATION|SET|{self._factor}\n")
                 self._ack("DONE", self._current_seq)
             elif stage == '1':
+                if cmd.startswith("L1|HOME|") and (
+                        not self._release_ready or cmd != "L1|HOME|" + self._release_token):
+                    self._write("CALIBRATION|TARE|REJECTED|HOME_CONFIRMATION_REQUIRED\n")
+                    return
+                self._release_ready = False
                 self._write("CALIBRATION|TARE|STARTED\n")
                 self.pressure = 0
                 self._write(f"CALIBRATION|TARE|OK|0|{self._factor}\n")
@@ -351,6 +387,19 @@ class ControllerModel:
         step = int(self.movement_speed * dt)
         if step < 1:
             step = 1
+        if self._release_active:
+            stop_at = self._a_zero + 25 - (10 if self._release_retracting else 0)
+            if self.position_a > stop_at:
+                if self._stalled_actuator != "a":
+                    self.position_a = max(stop_at, self.position_a - step)
+            elif self._release_stopped_at is None:
+                self._release_stopped_at = time.time()
+            elif time.time() - self._release_stopped_at >= 0.25:
+                self._release_active = False
+                self._release_ready = True
+                self._write(f"HOME_RELEASE|{self._release_token}|{self._a_zero}|"
+                            f"{self.position_a}|{self.pressure:.2f}|0|{self._factor}\n")
+            return
 
         for attr, target_attr in [
             ("position_a", "_target_position_a"),

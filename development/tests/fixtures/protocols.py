@@ -17,10 +17,11 @@ def make_arduino() -> MagicMock:
         "done_emit", "error_emit", "status_emit",
         "motion_done", "calibration_result", "zeros_emit", "ready_to_go_emit",
         "command_rejected", "fault_emit", "connection_lost", "firmware_driver",
-        "baseline_valid", "_signal_owner",
+        "baseline_valid", "_signal_owner", "home_release_result", "firmware_capabilities",
     ])
     arduino.protocol_v2 = False
     arduino.firmware_driver = "DRX-HX711-NB2"
+    arduino.firmware_capabilities = frozenset({"HOME_RELEASE_V1"})
     arduino.baseline_valid = True
     arduino.connected = True
     arduino.ready_event = threading.Event()
@@ -33,7 +34,7 @@ def make_arduino() -> MagicMock:
     arduino._signal_owner = signal_owner
     for name in ("done_emit", "error_emit", "status_emit", "motion_done",
                  "calibration_result", "zeros_emit", "ready_to_go_emit", "command_rejected",
-                 "fault_emit", "connection_lost"):
+                 "fault_emit", "connection_lost", "home_release_result"):
         signal = MagicMock(spec_set=["connect", "disconnect", "emit"])
         for method in ("connect", "disconnect", "emit"):
             getattr(signal, method).side_effect = getattr(getattr(signal_owner, name), method)

@@ -22,9 +22,12 @@ def test_full_protocol_orders_preparation_and_final_baseline(protocol_clock, v2,
     assert prepared and prepared[0][-2:] == ["L1|BASELINE", "V50,50,50"]
     assert not any(c.startswith("P") for c in prepared[0])
     assert finished[0][0] and worker.completed.is_set() and link.baseline_valid
-    assert link.commands[-4:] == ["P0|0", "X", "I120", "L1|BASELINE"]
+    assert link.commands[-3] == "X"
+    assert link.commands[-2].startswith("R|")
+    assert link.commands[-1] == "L1|HOME|" + link.commands[-2][2:]
     pressure = [c for c in link.commands if c.startswith("P")]
-    assert pressure == ["P20|50", "P30|50", "P40|50", "P50|50", "P0|0"]
+    assert pressure == ["P20|50", "P30|50", "P40|50", "P50|50"]
+    assert worker.treatment_completed and worker.outcome == "completed"
     if pulse:
         assert "J250" in link.commands and "JS" in link.commands
 
@@ -47,12 +50,17 @@ def test_failed_stage_never_reports_success_or_replays(protocol_clock, stage):
         fail = ((stage == "center" and command.startswith("K"))
                 or (stage == "baseline" and baseline_count == 1 and command.startswith("L1"))
                 or (stage == "pressure" and command.startswith("P"))
-                or (stage == "final_home" and command == "I120")
-                or (stage == "final_baseline" and baseline_count == 2 and command.startswith("L1")))
+                or (stage == "final_home" and command.startswith("R|"))
+                or (stage == "final_baseline" and command.startswith("L1|HOME|")))
         return [] if fail else replies
     link.hook = hook
     worker.run()
-    assert finished == [False] and failures and worker.completed.is_set()
+    assert finished == [False] and worker.completed.is_set()
+    if stage.startswith("final_"):
+        assert worker.treatment_completed and worker.outcome == "completed_cleanup_failed"
+        assert worker.cleanup_warning
+    else:
+        assert failures
     assert not link.baseline_valid
     assert link.commands[-1] == "X"
     assert "Y" not in link.commands
@@ -86,7 +94,13 @@ def test_measurement_status_never_fabricates_live_zero(monkeypatch):
     assert state.caption(True) == "Pressure zero required"
     state.baseline_valid = True
     assert state.caption(True) == "Pressure live"
+    # Idle status arrives every 5 s, so a 3 s gap is normal until a protocol streams at 1 Hz.
     state.received_at -= 3
+    assert state.caption(True) == "Pressure live"
+    state.protocol_running = True
+    assert state.caption(True) == "Pressure stale"
+    state.protocol_running = False
+    state.received_at -= 5
     assert state.caption(True) == "Pressure stale"
     state.fault = "PRESSURE_LIMIT"
     assert "fault" in state.caption(True)

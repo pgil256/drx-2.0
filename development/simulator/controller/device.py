@@ -5,6 +5,7 @@ adds real-time plant/sensor state and explicit preparation/stop behavior. It is
 identified as an emulator; native-sketch testing is a separate fidelity level.
 """
 import math
+import re
 from typing import List, Optional, Tuple
 
 from simulator.controller.serial_model import ControllerModel
@@ -24,6 +25,15 @@ class SimulatedController(ControllerModel):
         self._boot_until = 0.0
         self._tare_until = 0.0
         self._tare_seq = None
+        self._tare_samples = []
+        self._tare_last_sample = 0.0
+        self._home_token = None
+        self._home_active = False
+        self._home_ready = False
+        self._home_tare = False
+        self._home_stopped_at = None
+        self._home_below_since = None
+        self._home_position = 0
         self._output: List[Tuple[float, str]] = []
         self.reply_delay_ms = 0
         self.events: List[dict] = []
@@ -81,6 +91,7 @@ class SimulatedController(ControllerModel):
         self.pressure = self.plant.reported_force * ratio
 
     def _stop(self) -> None:
+        self._home_active = self._home_ready = self._home_tare = False
         self.plant.velocity = dict.fromkeys("abc", 0.0)
         self.plant.fit_velocity = 0.0
         self.b_running = self.measure_pressure = self.jerking = self.fit_moving = False
@@ -121,6 +132,10 @@ class SimulatedController(ControllerModel):
         if name == "physical_stop":
             pressed = bool(value)
             if pressed and not self.stop_pressed:
+                if self._home_active or self._home_ready or self._home_tare:
+                    self.stop_pressed = pressed
+                    self._trip("STOP_BUTTON")
+                    return
                 active = self.b_running or self.measure_pressure or self.jerking or self.fit_moving
                 self._stop()
                 if active or self.pressure > 5:
@@ -140,7 +155,7 @@ class SimulatedController(ControllerModel):
 
     def _identity(self) -> None:
         driver = "UNKNOWN" if self.plant.faults.get("identity_mismatch") else "DRX-HX711-NB2"
-        self._write(f"FIRMWARE|simulator-v1|{driver}\n")
+        self._write(f"FIRMWARE|simulator-v1|{driver}|HOME_RELEASE_V1\n")
 
     def _diagnostics(self) -> None:
         raw = int(self.plant.raw_force * self.plant.profile["scale_factor"])
@@ -166,7 +181,7 @@ class SimulatedController(ControllerModel):
             return
         self._current_seq = seq
         kind = command[0]
-        moving = kind in "PIKA" or (kind == "J" and command != "JS")
+        moving = kind in "PIKAR" or (kind == "J" and command != "JS")
         moving = moving or (kind == "F" and command != "F0")
         if moving and self.fault:
             self._reject(kind, "FAULT_LATCHED")
@@ -177,6 +192,15 @@ class SimulatedController(ControllerModel):
         if moving and self._tare_until:
             self._reject(kind, "TARE_BUSY")
             return
+        if self._home_active and kind not in "XTQSHD":
+            if command != "R|" + self._home_token:
+                self._reject(kind, "HOME_RELEASE_ACTIVE")
+            return
+        if (self._home_ready and kind not in "TQSHD" and command not in ("L4", "L6")
+                and not command.startswith("L1|HOME|")):
+            self._home_ready = False
+            if self._home_tare:
+                self._reject_tare("HOME_CONFIRMATION_REQUIRED")
         try:
             if kind == "T":
                 self._ack("OK", seq)
@@ -193,6 +217,24 @@ class SimulatedController(ControllerModel):
                 self._ack("DONE", seq)
             elif kind == "P":
                 self._pressure_command(command, seq)
+            elif kind == "R":
+                if not re.fullmatch(r"R\|[0-9a-f]{12}", command):
+                    self._reject("R", "INVALID_TOKEN")
+                elif (self.b_running or self.measure_pressure or self.jerking or self.fit_moving
+                      or self.releasing or any(self.plant.velocity.values())):
+                    self._reject("R", "MOTION_ACTIVE")
+                elif not self.calibrated or self.plant.sensor_age > 0.5:
+                    self._reject("R", "PRESSURE_UNAVAILABLE")
+                elif self.position_a < self._a_zero - 25:
+                    self._reject("R", "POSITION_OUT_OF_TOLERANCE")
+                else:
+                    self._home_token = command[2:]
+                    self._home_active = True
+                    self._home_started = self.time_s
+                    self._home_stopped_at = None
+                    self._home_below_since = None
+                    self.pressure_guard = True
+                    self._pressure_ceiling = max(self.pressure, self.pressure_limit) + 10
             elif kind in "IKA":
                 if self.measure_pressure or self.jerking or self.releasing:
                     self._ack("BUSY", seq)
@@ -303,11 +345,18 @@ class SimulatedController(ControllerModel):
             self._ack("DONE", seq)
         elif stage == "1":
             self.calibrated = False
-            if command != "L1|BASELINE":
+            final = command.startswith("L1|HOME|")
+            if final and (not self._home_ready or command != "L1|HOME|" + self._home_token):
+                self._reject_tare("HOME_CONFIRMATION_REQUIRED")
+                return
+            if not final and command != "L1|BASELINE":
                 self._write("CALIBRATION|TARE|REJECTED|BASELINE_REQUEST_REQUIRED\n")
                 return
             self._write("CALIBRATION|TARE|STARTED\n")
-            self._tare_until = self.time_s + 0.8
+            self._home_tare = final
+            self._tare_until = self.time_s + 30
+            self._tare_samples = []
+            self._tare_last_sample = self.time_s - 0.1
             self._tare_seq = seq
         elif stage == "5":
             if command[2:3] != "|":
@@ -408,23 +457,109 @@ class SimulatedController(ControllerModel):
                 self._trip("PRESSURE_LIMIT")
             elif self.measure_pressure and self.time_s - self._pressure_started > 90:
                 self._trip("PRESSURE_MOVE_TIMEOUT")
-        if self._tare_until and self.time_s >= self._tare_until:
-            self._tare_until = 0
-            if self.plant.faults.get("tare_failure") or self.plant.sensor_age > 0.5:
-                self._write("CALIBRATION|TARE|REJECTED|SENSOR_TIMEOUT\n")
-            else:
-                self.plant.tare_force = self.plant.raw_force
-                self.calibrated = True
-                offset = int(self.plant.tare_force * self.plant.profile["scale_factor"])
-                self._write(f"CALIBRATION|TARE|OK|{offset}|{self._factor:g}\n")
-                self._ack("DONE", self._tare_seq)
+        self._service_home_release()
+        self._service_tare()
         interval = self.hf_interval if self.high_frequency_status else self.idle_status_interval
         if self.time_s - self._last_periodic_status >= interval:
             self._send_status()
             self._diagnostics()
             self._last_periodic_status = self.time_s
 
+    def _service_home_release(self) -> None:
+        if not self._home_active or self.fault:
+            return
+        if self.time_s - self._home_started >= 60:
+            self._trip("HOME_RELEASE_TIMEOUT")
+            return
+        if not 0 <= self.position_a <= 4095:
+            self._trip("POSITION_FEEDBACK_INVALID")
+            return
+        if self.position_a < self._a_zero - 25:
+            # Never driven outward: hold stopped and reject only if it persists.
+            self.plant.velocity["a"] = 0
+            self._home_stopped_at = None
+            if self._home_below_since is None:
+                self._home_below_since = self.time_s
+            elif self.time_s - self._home_below_since >= 0.5:
+                self._stop()
+                self._reject("R", "POSITION_OUT_OF_TOLERANCE")
+            return
+        self._home_below_since = None
+        if self.position_a > self._a_zero + 25:
+            self._home_stopped_at = None  # above the band: _drive_motors retracts again
+            return
+        if self._home_retracting() and self.position_a > self._a_zero + 25 - 10:
+            return  # stop a margin inside the band, not on its edge
+        self.plant.velocity["a"] = 0
+        if (self._home_stopped_at is None or
+                abs(self.position_a - self._home_position) > 2):
+            self._home_position = self.position_a
+            self._home_stopped_at = self.time_s
+        elif self.time_s - self._home_stopped_at >= 0.25:
+            self._home_active = self.pressure_guard = False
+            self._home_ready = True
+            self._home_position = self.position_a
+            offset = int(self.plant.tare_force * self.plant.profile["scale_factor"])
+            self._write(f"HOME_RELEASE|{self._home_token}|{self._a_zero}|{self.position_a}|"
+                        f"{self.pressure:.2f}|{offset}|{self._factor:.6f}\n")
+
+    def _reject_tare(self, reason: str) -> None:
+        self._tare_until = 0
+        self._home_tare = False
+        self.calibrated = False
+        if reason != "UNSTABLE":
+            self._home_ready = False
+        self._write(f"CALIBRATION|TARE|REJECTED|{reason}\n")
+
+    def _service_tare(self) -> None:
+        if not self._tare_until:
+            return
+        if self.stop_pressed or self.fault:
+            self._reject_tare("STOP_BUTTON")
+            return
+        if self.time_s >= self._tare_until:
+            self._reject_tare("SENSOR_TIMEOUT" if self.plant.sensor_age > 0.5 else "UNSTABLE")
+            return
+        if self.plant.faults.get("tare_failure"):
+            self._reject_tare("SENSOR_TIMEOUT")
+            return
+        if self.plant.sensor_age > 0.5:
+            self._tare_samples = []
+            return
+        if self.time_s - self._tare_last_sample < 0.1:
+            return
+        self._tare_last_sample = self.time_s
+        if self._home_tare and (not self._home_ready or
+                abs(self.position_a - self._a_zero) > 25 or
+                abs(self.position_a - self._home_position) > 2 or
+                any(self.plant.velocity.values())):
+            self._reject_tare("HOME_POSITION_CHANGED")
+            return
+        raw_force = self.plant.raw_force + float(self.plant.faults.get("pressure_bias", 0))
+        values = [value for _, value in self._tare_samples] + [raw_force]
+        if max(values) - min(values) > 0.5:
+            self._tare_samples = []
+        self._tare_samples.append((self.time_s, raw_force))
+        if len(self._tare_samples) >= 10 and self.time_s - self._tare_samples[0][0] >= 0.9:
+            self.plant.tare_force = sum(value for _, value in self._tare_samples) / len(
+                self._tare_samples)
+            self._tare_until = 0
+            self._home_tare = self._home_ready = False
+            self.calibrated = True
+            offset = int(self.plant.tare_force * self.plant.profile["scale_factor"])
+            self._write(f"CALIBRATION|TARE|OK|{offset}|{self._factor:g}\n")
+            self._ack("DONE", self._tare_seq)
+
+    def _home_retracting(self) -> bool:
+        return (self._home_stopped_at is None and self._home_below_since is None
+                and self.plant.velocity["a"] < 0)
+
     def _drive_motors(self, dt: float) -> None:
+        if self._home_active:
+            retract = (self.position_a > self._a_zero + 25 or
+                       (self._home_retracting() and self.position_a > self._a_zero + 25 - 10))
+            self.plant.velocity["a"] = -215 if retract else 0
+            return
         for axis in "abc":
             target = getattr(self, "_target_position_" + axis)
             if target is None:

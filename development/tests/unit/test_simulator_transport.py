@@ -10,6 +10,54 @@ from simulator.session.recording import check_replay
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("v2", [False, True])
+def test_real_worker_finishes_with_fragmented_home_release_and_tare(tmp_path, qtbot, v2):
+    """The production queue/parser/worker talk to the actual simulator byte stream."""
+    import serial
+    from fixtures.protocols import make_protocol
+    from helpers.arduino import Arduino
+    from helpers.controller_operations import ControllerOperations
+
+    async def exercise():
+        server = SimulatorServer(tmp_path / "home-release")
+        manifest = await server.start()
+        server.link_faults["fragment_bytes"] = 3
+        link = Arduino(transport_factory=serial.serial_for_url, port=manifest["serial_url"])
+        link.protocol_v2 = v2
+        worker = make_protocol(ser=link, protocol="4", use_pulse=True, pulse_rate=2,
+                               max_pressure=20, max_left=0, max_right=0)
+        worker.duration = 10
+        worker.config.calibration = server.controller._factor
+        worker.config.AMarks = {"0.0": 100}
+        def run():
+            assert link.connect_to_arduino(max_retries=1)
+            ops = ControllerOperations(link, link.send_tracked, lambda: None)
+            try:
+                ops.perform("L5|100|1900", ("zeros", 100, 1900), 3)
+            finally:
+                ops.close()
+            worker.run()
+        try:
+            await asyncio.wait_for(
+                asyncio.get_running_loop().run_in_executor(None, run), 45)
+            assert worker.outcome == "completed", worker._failure_reason
+            assert worker.treatment_completed and link.baseline_valid
+            commands = [server.controller._unframe(raw)[0]
+                        for raw in server.controller.commands_received]
+            releases = [c for c in commands if c.startswith("R|")]
+            assert len(releases) == 1
+            assert "L1|HOME|" + releases[0][2:] in commands
+            assert not any(c.startswith("P0") for c in commands)
+            assert server.controller.calibrated
+            assert abs(server.controller.position_a - 100) <= 25
+        finally:
+            worker.cancel()
+            await asyncio.get_running_loop().run_in_executor(None, link.disconnect)
+            await server.close()
+    asyncio.run(exercise())
+
+
+@pytest.mark.unit
 def test_completion_faults_fragmentation_and_local_cloud(tmp_path):
     async def exercise():
         server = SimulatorServer(tmp_path / "wire")

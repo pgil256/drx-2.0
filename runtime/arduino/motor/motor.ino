@@ -8,7 +8,7 @@
   Native unit tests: development/tests/firmware/ (run_native_tests.sh).
 */
 
-#define VERSION "2026-10-28-DRX2-NB2-SERVICE"
+#define VERSION "2026-10-28-DRX2-pulse-overshoot"
 #define HX711_DRIVER "DRX-HX711-NB2"
 #include <math.h>
 #ifndef UNIT_TEST
@@ -136,8 +136,8 @@ long lastRawPressure = 0;
 unsigned long maxPressurePollGap = 0, lastPressurePoll = 0, lastPressureReadUs = 0;
 bool pressurePollStarted = false;
 // Allow post-home load relaxation, but never extend the overall deadline when
-// a candidate window is discarded. The app/probe allow 10 s for this reply.
-const unsigned long TARE_TIMEOUT_MS = 8000;
+// a candidate window is discarded. The app allows 32 s for this reply.
+const unsigned long TARE_TIMEOUT_MS = 30000;
 const unsigned long TARE_MIN_SPAN_MS = 900;
 const uint8_t TARE_MIN_SAMPLES = 10;
 const float TARE_MAX_RANGE_LB = 0.5;
@@ -146,6 +146,26 @@ unsigned long tareStarted = 0, tareFirstSample = 0;
 uint16_t tareCount = 0;
 int64_t tareSum = 0;
 long tareMin = 0, tareMax = 0;
+// Accepted writes and unresolved stop requests are independent of motion flags.
+int16_t acceptedMotorSpeeds[3] = {0, 0, 0};
+uint8_t pendingStopMask = 0;
+bool homeReleaseActive = false, homeReleaseStopped = false;
+bool homeReleaseReady = false, homeTareActive = false, checkingHomeTare = false;
+String homeReleaseToken = "";
+unsigned long homeReleaseStarted = 0, homeReleaseStoppedAt = 0;
+uint16_t homeReleasePosition = 0;
+const unsigned long HOME_RELEASE_TIMEOUT = 60000UL;
+const unsigned long HOME_STOP_CONFIRM_MS = 250UL;
+// Final retraction stops this far inside the home band, so rebound or feedback
+// noise after the stop cannot carry the reading back out of it.
+const uint16_t AXIAL_HOME_STOP_MARGIN = 10;
+// A reading below the band must persist this long, held stopped, before the
+// release is rejected; one low reading mid-travel is a feedback dropout.
+const unsigned long HOME_BELOW_CONFIRM_MS = 500UL;
+bool homeReleaseBelow = false;
+unsigned long homeReleaseBelowSince = 0;
+// Get Variable only reads, so a disturbed exchange is repeated before a fault.
+const uint8_t POSITION_READ_ATTEMPTS = 3;
 // Operator-requested notice only: existing limits/timeout continue to govern.
 const uint16_t PRESSURE_PROGRESS_TRAVEL = 2150; // 5 inches at 430 counts/inch.
 const float PRESSURE_PROGRESS_MIN_RISE = 2.0;
@@ -161,6 +181,19 @@ char positionCommandKind = 'I';
 // contact is lost (pressure reads zero).
 const float PULSE_RELEASE_FLOOR = 0.0;
 const unsigned long PULSE_RECOVERY_TIMEOUT = 5000UL;
+// The leg is still settling early in pulsing, so recoveries that start within
+// this period get the longer window (operator request, 2026-10-28).
+const unsigned long PULSE_SETTLING_PERIOD = 30000UL;
+const unsigned long PULSE_SETTLING_RECOVERY_TIMEOUT = 10000UL;
+unsigned long pulsingStarted = 0;
+// A forward stroke stops on a sample, and a stiff leg keeps gaining force for
+// about one sample interval after it. Stop once the current rise would carry
+// the next sample to target, so the stroke lands on target instead of past it.
+const unsigned long PULSE_STOP_LEAD_MS = 100;
+const unsigned long PULSE_RISE_MAX_GAP_MS = 250;
+bool pulseRiseReachesTarget = false;
+float previousPressure = 0;
+unsigned long previousPressureAt = 0;
 int pulseMotorSpeed = 0;
 void servicePressure();
 void reportSensorDiagnostics();
@@ -309,6 +342,9 @@ uint8_t setMotorSpeed(int16_t speed) {
   // Clamp speed to valid range
   if (speed > 3200) speed = 3200;
   if (speed < -3200) speed = -3200;
+  int16_t signedSpeed = speed;
+  uint8_t device = smcDeviceNumber;
+  if (speed != 0) homeReleaseReady = false;
 
   // Log speed setting
   Dbg.print("Set motor speed on: ");
@@ -324,12 +360,29 @@ uint8_t setMotorSpeed(int16_t speed) {
   }
 
   // Send command to motor controller
-  exitSafeStart();
+  Wire.clearWireTimeoutFlag();
+  Wire.beginTransmission(device);
+  bool wrote = Wire.write(0x83) == 1;
+  uint8_t safeStartResult = Wire.endTransmission();
+  bool safeStartOK = wrote && safeStartResult == 0 && !Wire.getWireTimeoutFlag();
   Wire.beginTransmission(smcDeviceNumber);
-  Wire.write(cmd);
-  Wire.write(speed & 0x1F);
-  Wire.write(speed >> 5 & 0x7F);
-  return Wire.endTransmission();
+  wrote = Wire.write(cmd) == 1;
+  wrote = (Wire.write(speed & 0x1F) == 1) && wrote;
+  wrote = (Wire.write(speed >> 5 & 0x7F) == 1) && wrote;
+  uint8_t result = Wire.endTransmission();
+  if (!wrote || Wire.getWireTimeoutFlag() || !safeStartOK) result = result ? result : 4;
+  if (device >= 12 && device <= 14) {
+    uint8_t bit = 1 << (device - 12);
+    if (result == 0) {
+      acceptedMotorSpeeds[device - 12] = signedSpeed;
+      if (signedSpeed == 0) pendingStopMask &= ~bit;
+    } else {
+      pendingStopMask |= bit;
+      homeReleaseReady = false;
+      if (homeReleaseActive || homeTareActive) tripPressureFault("MOTOR_WRITE_FAILED");
+    }
+  }
+  return result;
 }
 
 // Read actuator position once over I2C; returns true on success
@@ -352,7 +405,20 @@ static bool readPositionOnce(uint16_t &out) {
   return valid && !Wire.getWireTimeoutFlag();
 }
 
-// Read actuator position - retries once; on persistent failure returns
+// Repeat a failed Get Variable read up to POSITION_READ_ATTEMPTS times. Each
+// miss is reported so a recovered dropout stays visible in the logs; only
+// consecutive failures reach the caller.
+static bool readPositionRetried(uint16_t &out) {
+  for (uint8_t attempt = 1; ; ++attempt) {
+    if (readPositionOnce(out)) return true;
+    Serial1.print("DIAG|I2C|POSITION_FAILED|"); Serial1.print((int)smcDeviceNumber);
+    Serial1.print("|"); Serial1.print((int)attempt);
+    Serial1.print("|"); Serial1.println((int)POSITION_READ_ATTEMPTS);
+    if (attempt >= POSITION_READ_ATTEMPTS) return false;
+  }
+}
+
+// Read actuator position - retries; on persistent failure returns
 // the last good value for this device and clears positionReadValid so
 // callers do not make safety decisions on garbage (0 used to be both
 // the error value and a legal position)
@@ -360,8 +426,10 @@ uint16_t lastGoodPosition[3] = {0, 0, 0};  // indexed by device - 12
 
 uint16_t readPosition() {
   uint16_t value = 0;
+  uint8_t device = smcDeviceNumber;
   servicePressure();
-  positionReadValid = readPositionOnce(value) || readPositionOnce(value);
+  smcDeviceNumber = device;
+  positionReadValid = readPositionRetried(value);
   servicePressure();
 
   uint8_t idx = 0;
@@ -497,6 +565,8 @@ static void stopDeviceOrReport(uint8_t device) {
 // Emergency stop all actuators
 void emergencyStop() {
   Dbg.println("Emergency Stop");
+  homeReleaseActive = homeReleaseStopped = homeReleaseReady = homeTareActive = false;
+  homeReleaseBelow = false;
 
   // Aborted motion/pressure commands never get a DONE (v1 behavior);
   // drop the in-flight sequence so a later completion cannot echo it
@@ -676,7 +746,8 @@ void reportFirmwareIdentity() {
   Serial1.print("FIRMWARE|");
   Serial1.print(VERSION);
   Serial1.print("|");
-  Serial1.println(HX711_DRIVER);
+  Serial1.print(HX711_DRIVER);
+  Serial1.println("|HOME_RELEASE_V1");
 }
 
 void reportSensorDiagnostics() {
@@ -729,13 +800,49 @@ void reportHardwareDiagnostics() {
 }
 
 void rejectTare(const char *reason) {
+  // Only an explicit instability rejection permits a bounded stationary retry.
+  if (String(reason) != "UNSTABLE") homeReleaseReady = false;
+  homeTareActive = false;
   tareActive = false;
   pressureCalibrated = false;
   Serial1.print("CALIBRATION|TARE|REJECTED|");
   Serial1.println(reason);
 }
 
+bool readHomePosition(uint16_t &actual) {
+  uint8_t savedDevice = smcDeviceNumber;
+  smcDeviceNumber = 12;
+  bool valid = readPositionRetried(actual);
+  smcDeviceNumber = savedDevice;
+  if (!valid) tripPressureFault("POSITION_FEEDBACK_INVALID");
+  // A stop may have changed during the I2C transaction.
+  if (digitalRead(STOP_PIN) == LOW) tripPressureFault("STOP_BUTTON");
+  return valid && !pressureFault;
+}
+
+bool withinAxialHome(uint16_t actual) {
+  return abs((long)actual - (long)AZERO) <= POSITION_DEADBAND;
+}
+
+bool allMotorOutputsStopped() {
+  return !pendingStopMask && !acceptedMotorSpeeds[0] &&
+         !acceptedMotorSpeeds[1] && !acceptedMotorSpeeds[2];
+}
+
 void acceptTareSample(long raw) {
+  if (homeTareActive) {
+    uint16_t actual = 0;
+    // Keep stop/fault checks active while excluding recursive pressure reads.
+    checkingHomeTare = true;
+    bool valid = readHomePosition(actual);
+    checkingHomeTare = false;
+    if (!valid || !tareActive) return;
+    if (!homeReleaseReady || !withinAxialHome(actual) ||
+        abs((long)actual - homeReleasePosition) > 2 || !allMotorOutputsStopped()) {
+      rejectTare("HOME_POSITION_CHANGED");
+      return;
+    }
+  }
   if (tareCount > 0) {
     if (raw < tareMin) tareMin = raw;
     if (raw > tareMax) tareMax = raw;
@@ -755,6 +862,7 @@ void acceptTareSample(long raw) {
   if (tareCount >= TARE_MIN_SAMPLES && millis() - tareFirstSample >= TARE_MIN_SPAN_MS) {
     scale.set_offset((long)(tareSum / tareCount));
     tareActive = false;
+    homeTareActive = homeReleaseReady = false;
     pressureCalibrated = true;
     signedPressure = scale.units(raw);
     pressure = fabs(signedPressure) < 0.5 ? 0 : fabs(signedPressure);
@@ -767,11 +875,12 @@ void acceptTareSample(long raw) {
   }
 }
 
-void stopPressureMotor() {
+bool stopPressureMotor() {
   uint8_t savedDevice = smcDeviceNumber;
   smcDeviceNumber = 12;
-  setMotorSpeed(0);
+  uint8_t result = setMotorSpeed(0);
   smcDeviceNumber = savedDevice;
+  return result == 0;
 }
 
 void setPulseSpeed(int speed) {
@@ -798,6 +907,12 @@ void tripPressureFault(const char *reason) {
 
 void servicePressure() {
   if (pressureFault) return;
+  if ((homeReleaseActive || homeReleaseReady || homeTareActive) &&
+      digitalRead(STOP_PIN) == LOW) {
+    tripPressureFault("STOP_BUTTON");
+    return;
+  }
+  if (checkingHomeTare) return;
   unsigned long now = millis();
   // A fresh read must not erase a preceding sensor-service gap.
   if (pressureGuardActive && pressurePollStarted &&
@@ -829,6 +944,12 @@ void servicePressure() {
       return;
     }
     pressure = sample < 0.5 ? 0 : sample;
+    unsigned long sinceLast = now - previousPressureAt;
+    pulseRiseReachesTarget = jerking && jerkDirection > 0 && pressureSampleValid &&
+        sinceLast > 0 && sinceLast <= PULSE_RISE_MAX_GAP_MS && pressure > previousPressure &&
+        pressure + (pressure - previousPressure) * PULSE_STOP_LEAD_MS / sinceLast >= desiredPressure;
+    previousPressure = pressure;
+    previousPressureAt = now;
     // A sensor gap cannot count toward the duration of a stable window.
     if (tareActive && now - lastPressureSample > PRESSURE_SAMPLE_TIMEOUT)
       tareCount = 0;
@@ -850,7 +971,7 @@ void servicePressure() {
       pressureCeiling = protocolPressureLimit + PRESSURE_OVERSHOOT_LIMIT;
       pressureDonePending = true;
     }
-    if (jerking && ((jerkDirection > 0 && pressure >= desiredPressure) ||
+    if (jerking && ((jerkDirection > 0 && (pressure >= desiredPressure || pulseRiseReachesTarget)) ||
                     (jerkDirection < 0 && pressure <= PULSE_RELEASE_FLOOR)))
       setPulseSpeed(0); // Stop at the sampled bound, before telemetry or phase timing.
   }
@@ -880,6 +1001,75 @@ void rejectCommand(const char *command, const char *reason) {
 }
 
 void updatePressure() { servicePressure(); }
+
+void serviceHomeRelease() {
+  if (!homeReleaseActive || pressureFault) return;
+  servicePressure();
+  if (pressureFault || !homeReleaseActive) return;
+  if (millis() - homeReleaseStarted >= HOME_RELEASE_TIMEOUT) {
+    tripPressureFault("HOME_RELEASE_TIMEOUT");
+    return;
+  }
+  uint16_t actual = 0;
+  if (!readHomePosition(actual)) return;
+  if (!withinAxialHome(actual) && actual < AZERO) {
+    // Never drive outward to repair an overshoot during final release. Hold
+    // stopped and reject only if the low reading persists: one low reading
+    // mid-travel is a feedback dropout, not a verdict.
+    homeReleaseStopped = false;
+    if (acceptedMotorSpeeds[0] && (!stopPressureMotor() || pressureFault)) return;
+    if (!homeReleaseBelow) {
+      homeReleaseBelow = true;
+      homeReleaseBelowSince = millis();
+    } else if (millis() - homeReleaseBelowSince >= HOME_BELOW_CONFIRM_MS) {
+      emergencyStop();
+      rejectCommand("R", "POSITION_OUT_OF_TOLERANCE");
+    }
+    return;
+  }
+  homeReleaseBelow = false;
+  if (!withinAxialHome(actual)) {
+    // Above the band after a stop (rebound, or the stop followed a dropout):
+    // retracting again is the only direction this release ever drives.
+    homeReleaseStopped = false;
+    if (acceptedMotorSpeeds[0] >= 0 && !pendingStopMask) {
+      uint8_t savedDevice = smcDeviceNumber;
+      smcDeviceNumber = 12;
+      setMotorSpeed(-PRESSURE_SPEED);
+      smcDeviceNumber = savedDevice;
+    }
+    return;
+  }
+  // Inside the band while still retracting: stop a margin inside it, not on
+  // the edge, so settling or feedback noise after the stop stays in band.
+  if (acceptedMotorSpeeds[0] < 0 &&
+      (long)actual > (long)AZERO + POSITION_DEADBAND - AXIAL_HOME_STOP_MARGIN) return;
+  if (!homeReleaseStopped) {
+    if (!stopPressureMotor() || pressureFault || !allMotorOutputsStopped()) return;
+    homeReleaseStopped = true;
+    homeReleaseStoppedAt = millis();
+    homeReleasePosition = actual;
+    return;
+  }
+  if (abs((long)actual - homeReleasePosition) > 2) {
+    homeReleasePosition = actual;
+    homeReleaseStoppedAt = millis();
+    return;
+  }
+  if (millis() - homeReleaseStoppedAt < HOME_STOP_CONFIRM_MS) return;
+  servicePressure();
+  if (pressureFault || !allMotorOutputsStopped()) return;
+  homeReleaseActive = false;
+  homeReleaseReady = true;
+  homeReleasePosition = actual;
+  pressureGuardActive = false;
+  Serial1.print("HOME_RELEASE|"); Serial1.print(homeReleaseToken);
+  Serial1.print("|"); Serial1.print(AZERO);
+  Serial1.print("|"); Serial1.print(actual);
+  Serial1.print("|"); Serial1.print(pressure, 2);
+  Serial1.print("|"); Serial1.print(scale.get_offset());
+  Serial1.print("|"); Serial1.println(scale.get_scale(), 6);
+}
 
 
 uint16_t clampPositionTarget(uint8_t deviceNumber, uint16_t target) {
@@ -920,6 +1110,13 @@ void processCommand(String cmd) {
   }
 
   char commandType = cmd[0];
+  if (homeReleaseActive && commandType != 'X' && commandType != 'T' &&
+      commandType != 'Q' && commandType != 'S' && commandType != 'H' && commandType != 'D') {
+    if (commandType == 'R' && cmd == String("R|") + homeReleaseToken) return;
+    char kind[2] = {commandType, 0};
+    rejectCommand(kind, "HOME_RELEASE_ACTIVE");
+    return;
+  }
   if (pressureFault && commandType != 'Y' && commandType != 'X' &&
       commandType != 'T' && commandType != 'Q' && commandType != 'S' && commandType != 'D' &&
       commandType != 'H' && cmd != "JS" && cmd != "F0") {
@@ -928,13 +1125,19 @@ void processCommand(String cmd) {
     return;
   }
   if (tareActive && (commandType == 'P' || commandType == 'I' || commandType == 'K' ||
-      commandType == 'A' || (commandType == 'J' && cmd != "JS") ||
+      commandType == 'A' || commandType == 'R' || (commandType == 'J' && cmd != "JS") ||
       (commandType == 'F' && cmd != "F0"))) {
     char kind[2] = {commandType, 0};
     rejectCommand(kind, "TARE_BUSY");
     return;
   }
   String parameter = "";
+  if (homeReleaseReady && commandType != 'T' && commandType != 'Q' &&
+      commandType != 'S' && commandType != 'H' && commandType != 'D' &&
+      cmd != "L4" && cmd != "L6" && cmd.substring(0, 8) != "L1|HOME|") {
+    homeReleaseReady = false;
+    if (homeTareActive) rejectTare("HOME_CONFIRMATION_REQUIRED");
+  }
 
   // Wait if we're sending status
   unsigned long waitStart = millis();
@@ -950,6 +1153,41 @@ void processCommand(String cmd) {
 
   // Handle different command types
   switch (commandType) {
+    case 'R': {
+      bool valid = cmd.length() == 14 && cmd[1] == '|';
+      for (unsigned int i = 2; valid && i < cmd.length(); ++i)
+        valid = (cmd[i] >= '0' && cmd[i] <= '9') || (cmd[i] >= 'a' && cmd[i] <= 'f');
+      if (!valid) { rejectCommand("R", "INVALID_TOKEN"); return; }
+      if (digitalRead(STOP_PIN) == LOW) { tripPressureFault("STOP_BUTTON"); return; }
+      if (bRunning || measurePressure || jerking || moveFITForward || releasingPressure ||
+          tareActive || !allMotorOutputsStopped()) {
+        rejectCommand("R", "MOTION_ACTIVE"); return;
+      }
+      servicePressure();
+      if (pressureFault) return;
+      if (!pressureCalibrated || !pressureSampleValid ||
+          millis() - lastPressureSample > PRESSURE_SAMPLE_TIMEOUT) {
+        rejectCommand("R", "PRESSURE_UNAVAILABLE"); return;
+      }
+      uint16_t actual = 0;
+      if (!readHomePosition(actual)) return;
+      if (actual < AZERO && !withinAxialHome(actual)) {
+        rejectCommand("R", "POSITION_OUT_OF_TOLERANCE"); return;
+      }
+      desiredPressure = 0;
+      pressureCeiling = max(pressure, protocolPressureLimit) + PRESSURE_OVERSHOOT_LIMIT;
+      pressureGuardActive = true;
+      homeReleaseToken = cmd.substring(2);
+      homeReleaseStarted = millis();
+      homeReleaseStopped = homeReleaseBelow = false;
+      homeReleaseActive = true;
+      uint8_t savedDevice = smcDeviceNumber;
+      smcDeviceNumber = 12;
+      setMotorSpeed(withinAxialHome(actual) ? 0 : -PRESSURE_SPEED);
+      smcDeviceNumber = savedDevice;
+      serviceHomeRelease();
+      return;
+    }
     case 'V': {
       // Atomic V<axial%>,<lateral%>,<pulse%>. Configuration alone must never
       // start a motor or change the speed of an in-flight centering move.
@@ -1420,16 +1658,27 @@ void processCommand(String cmd) {
           emitAck("DONE", currentCmdSeq);
           break;
         }
-        case 1:
+        case 1: {
           pressureCalibrated = false;
           if (bRunning || measurePressure || jerking || moveFITForward || releasingPressure ||
-              pressureGuardActive || tareActive) { rejectTare("MOTION_ACTIVE"); break; }
-          if (cmd != "L1|BASELINE") { rejectTare("BASELINE_REQUEST_REQUIRED"); break; }
+              pressureGuardActive || tareActive || !allMotorOutputsStopped()) {
+            rejectTare("MOTION_ACTIVE"); break;
+          }
+          bool finalZero = cmd.substring(0, 8) == "L1|HOME|";
+          if (finalZero && (!homeReleaseReady || cmd != String("L1|HOME|") + homeReleaseToken)) {
+            rejectTare("HOME_CONFIRMATION_REQUIRED"); break;
+          }
+          if (!finalZero && cmd != "L1|BASELINE") {
+            rejectTare("BASELINE_REQUEST_REQUIRED"); break;
+          }
+          if (digitalRead(STOP_PIN) == LOW) { rejectTare("STOP_BUTTON"); break; }
+          homeTareActive = finalZero;
           tareActive = true;
           tareStarted = millis();
           tareCount = 0; tareSum = 0; tareCmdSeq = currentCmdSeq;
           Serial1.println("CALIBRATION|TARE|STARTED");
           break;
+        }
         case 4:
           servicePressure();
           if (pressureSampleValid) { Serial1.print("weight|"); Serial1.println(pressure); }
@@ -1544,6 +1793,8 @@ void processCommand(String cmd) {
           jerkDirection = pressure < desiredPressure ? 1 : -1;
           setPulseSpeed(pulseSpeed * jerkDirection);
           lastJerkTime = millis(); // Initialize jerk timer
+          pulsingStarted = lastJerkTime;
+          pulseRiseReachesTarget = false;
           smcDeviceNumber = 12;
           emitAck("DONE", currentCmdSeq);
       }
@@ -1695,8 +1946,9 @@ void loop() {
 
   // Maintain the filtered pressure value without blocking
   updatePressure();
+  serviceHomeRelease();
 
-  bool activeMotion = bRunning || measurePressure || jerking || moveFITForward;
+  bool activeMotion = bRunning || measurePressure || jerking || moveFITForward || homeReleaseActive;
 
   // SAFETY: the physical stop button is honored in EVERY state --
   // including pressure application, pulsing, AND the static hold. During
@@ -1708,7 +1960,7 @@ void loop() {
   // commands are refused while the button is held (rejectIfStopEngaged).
   bool stopPressed = !STOP;
   bool loadPresent = pressure > PRESSURE_RELEASE_LBS;
-  if (stopPressed && (activeMotion || (loadPresent && !stopWasPressed))) {
+  if (!pressureFault && stopPressed && (activeMotion || (loadPresent && !stopWasPressed))) {
     emergencyStopAndRelease("Stop button pressed");
     activeMotion = false;
   }
@@ -1819,8 +2071,12 @@ void loop() {
       jerkDirection = -1;
       lastJerkTime = millis();
       setPulseSpeed(-pulseSpeed);
-    } else if (phaseElapsed >= PULSE_RECOVERY_TIMEOUT) {
+    } else if (phaseElapsed >= (lastJerkTime - pulsingStarted < PULSE_SETTLING_PERIOD ?
+                                PULSE_SETTLING_RECOVERY_TIMEOUT : PULSE_RECOVERY_TIMEOUT)) {
       tripPressureFault("PULSE_RECOVERY_TIMEOUT");
+    } else if (pulseRiseReachesTarget) {
+      // Coasting toward target; the next sample decides whether to push again.
+      setPulseSpeed(0);
     } else {
       // Keep pushing until the load recovers. Only a recovered load permits
       // the next release.

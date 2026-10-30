@@ -50,7 +50,7 @@ depend on a working position sensor. Save a measured repair, remove the referenc
 load, close, and reset explicitly; a fault never grants permission to move.
 
 Deploy the matching Pi application and Arduino firmware. The firmware identity
-is **`2026-10-28-DRX2-NB2-SERVICE`** (the service feature first shipped as
+is **`2026-10-28-DRX2-pulse-overshoot`** (the service feature first shipped as
 `2026-09-18-DRX2-NB2-SERVICE`) and its load-cell driver identity is
 `DRX-HX711-NB2`. Copying a sketch to the Pi does not flash the Arduino; follow
 the project's separate firmware deployment process.
