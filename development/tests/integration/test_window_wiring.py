@@ -741,13 +741,45 @@ def test_next_treatment_requires_recovery_and_an_explicit_patient_choice(window_
     assert "Upload failed" in run.view._cloud_status.text()
 
 
-def test_start_closes_an_already_open_nonessential_overlay(window_run):
+def test_start_closes_login_but_keeps_video_with_its_stop_strip(window_run):
     run = window_run
-    run.window.shell.show_video()
-    assert run.window.shell.video_modal.isVisible()
+    shell = run.window.shell
+    shell.login_modal.open_over(shell)
     run.window.set_protocol_state("starting")
-    assert run.window.shell.video_modal.isHidden()
+    assert shell.login_modal.isHidden()
     assert run.view._estop_btn.isEnabled()
+
+
+def test_video_during_a_treatment_shows_live_strip_and_stop_uses_screen_stop(
+    window_run, monkeypatch,
+):
+    run = window_run
+    shell = run.window.shell
+    stops = []
+    monkeypatch.setattr(run.window.protocol, "stop_from_view", lambda: stops.append(True))
+    run.window.set_protocol_state("running")
+    shell.show_video()
+    modal = shell.video_modal
+    assert modal.isVisible()
+    assert run.notices.call_count == 0
+    assert modal._treatment_bar.isVisible()
+    run.window.set_protocol_state("running")
+    assert modal.isVisible(), "a later lifecycle update must not close the video"
+    modal._treatment_stop.click()
+    assert stops == [True]
+    assert modal.isHidden()
+
+
+def test_fault_closes_an_open_video(window_run):
+    run = window_run
+    shell = run.window.shell
+    run.window.set_protocol_state("running")
+    shell.show_video()
+    assert shell.video_modal.isVisible()
+    run.window.set_protocol_state("stopping")
+    assert shell.video_modal.isVisible(), "a stop keeps the STOP strip available"
+    run.window.set_protocol_state("fault")
+    assert shell.video_modal.isHidden()
 
 
 def test_upload_failure_opens_nonblocking_window_and_sync_clears_it(window_run):

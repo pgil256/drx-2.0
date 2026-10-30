@@ -79,6 +79,13 @@ class ProtocolController:
                 window.shell.close_nonessential_overlays()
             except Exception:
                 pass
+        elif state == "fault":
+            # Video outlives a stop for its STOP strip, but a fault needs the
+            # Treatment page and its recovery prompts, not a playing clip.
+            try:
+                window.shell.close_video()
+            except Exception:
+                pass
         refresh = getattr(window, "_refresh_device_presentation", None)
         if callable(refresh):
             try:
