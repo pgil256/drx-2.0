@@ -79,7 +79,7 @@ jobs:
       # treats as hidden.
       - name: Upload coverage XML
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-xml-${{ github.sha }}
           path: .cache/coverage/coverage.xml
@@ -265,7 +265,7 @@ jobs:
 
       # .pio/ is a hidden directory, which upload-artifact skips by default.
       - name: Upload firmware image
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: firmware-mega-${{ github.sha }}
           path: |
