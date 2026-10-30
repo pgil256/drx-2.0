@@ -190,6 +190,11 @@ class AppShell(QWidget):
             if modal.isVisible():
                 modal.close_overlay()
 
+    def close_video(self) -> None:
+        """Dismiss the player so a fault is not left playing over its prompts."""
+        if self.video_modal.isVisible():
+            self.video_modal.close_overlay()
+
     def show_login(self, destination=None):
         if self._overlay_guard is not None and self._overlay_guard():
             return

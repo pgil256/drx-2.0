@@ -3,7 +3,7 @@
 The rail contains Home, Setup, Treatment, Video, Support, and Device (wrench).
 Video also opens during a treatment. A strip above the player then shows the
 phase, measured pressure, time remaining and a STOP button that takes the same
-stop path as the Treatment screen and closes the video.
+stop path as the Treatment screen and closes the video. A fault also closes it.
 Device requires login. Profile shows identity, access level, available email,
 current cloud clinic, login time, session duration and the automatic logout setting,
 plus Log Out, Restart App, and Exit App. PIN enrollment and device information

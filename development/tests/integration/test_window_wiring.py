@@ -770,6 +770,18 @@ def test_video_during_a_treatment_shows_live_strip_and_stop_uses_screen_stop(
     assert modal.isHidden()
 
 
+def test_fault_closes_an_open_video(window_run):
+    run = window_run
+    shell = run.window.shell
+    run.window.set_protocol_state("running")
+    shell.show_video()
+    assert shell.video_modal.isVisible()
+    run.window.set_protocol_state("stopping")
+    assert shell.video_modal.isVisible(), "a stop keeps the STOP strip available"
+    run.window.set_protocol_state("fault")
+    assert shell.video_modal.isHidden()
+
+
 def test_upload_failure_opens_nonblocking_window_and_sync_clears_it(window_run):
     run = window_run
     run.window._cloud_bridge.upload_failed.emit("Saved on this device; retrying automatically", False)
