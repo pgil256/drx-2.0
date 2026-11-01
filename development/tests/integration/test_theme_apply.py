@@ -26,7 +26,7 @@ def test_apply_theme_installs_resolved_stylesheet(app):
     sheet = app.styleSheet()
     assert sheet, "apply_theme installed an empty stylesheet"
     assert "var(" not in sheet, "stylesheet contains unresolved var() refs"
-    assert "#176b9a" in sheet
+    assert "#0b6bb0" in sheet  # the design system's action blue
 
 
 def test_load_fonts_is_safe_and_repeatable(app):

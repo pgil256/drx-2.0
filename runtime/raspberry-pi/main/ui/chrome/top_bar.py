@@ -1,8 +1,11 @@
-"""TopBar — persistent 84px header with device status and clinician identity.
+"""TopBar — persistent 84px white header with device status and clinician identity.
 
-Mirrors `TopBar` in `bundle.jsx` (baked to dark chrome): the knee mark and the
-"KneeSpa DRx" wordmark both navigate Home; the right side shows a login avatar
-when logged out, or the clinician identity + avatar when logged in.
+The knee mark and the "KneeSpa DRx" wordmark both navigate Home. The centre
+shows the controller-derived device status as a pill with a dot (green Ready,
+blue Preparing/Active, amber Stopping/Resetting, red Recovery/Offline). The
+right side shows a login avatar when logged out, or the clinician identity +
+avatar (action-blue ring) when logged in. Colours come from the ``--*-chrome``
+tokens, so the bar follows the shared design system's light navigation.
 
 Signals (wired to the controller in Phase 3):
     home_clicked      — logo / wordmark tapped
@@ -69,6 +72,7 @@ class TopBar(QFrame):
         logo.clicked.connect(self.home_clicked)
         lay.addWidget(logo)
 
+        ink = resolve("--text-chrome")
         self._wordmark = ClickableLabel()
         self._wordmark.setMinimumHeight(48)
         self._wordmark.setToolTip("Home")
@@ -76,9 +80,9 @@ class TopBar(QFrame):
         # Semibold at 30px sits beside the 60px mark without outweighing it.
         self._wordmark.setFont(sans_font(size="--text-xl", weight=600, tracking=-0.01))
         self._wordmark.setText(
-            "<span style='color:#ffffff'>Knee</span>"
+            f"<span style='color:{ink}'>Knee</span>"
             f"<span style='color:{resolve('--brand-cyan')}'>Spa</span>"
-            "<span style='color:#ffffff'> DRx</span>"
+            f"<span style='color:{ink}'> DRx</span>"
         )
         self._wordmark.setStyleSheet("background: transparent;")
         self._wordmark.clicked.connect(self.home_clicked)
@@ -100,7 +104,8 @@ class TopBar(QFrame):
         caption = QLabel("Device")
         caption.setTextFormat(Qt.PlainText)
         caption.setFont(sans_font(size="--text-base", weight=500))
-        caption.setStyleSheet("color: #c6ced3; background: transparent;")
+        caption.setStyleSheet(
+            f"color: {resolve('--text-chrome-muted')}; background: transparent;")
         status_lay.addWidget(caption)
         self._device_status = DSBadge("Connecting", tone="neutral", dot=True, size="md")
         self._device_status.setAccessibleName("Device status")
@@ -119,12 +124,13 @@ class TopBar(QFrame):
         self._name.setMaximumWidth(280)
         self._name.setFont(sans_font(size="--text-base", weight=700))
         self._name.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self._name.setStyleSheet("color: #ffffff; background: transparent;")
+        self._name.setStyleSheet(f"color: {ink}; background: transparent;")
         self._role = QLabel("Clinician")
         self._role.setFont(mono_font(size="--text-xs"))
         self._role.setProperty("dsCaption", True)
         self._role.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self._role.setStyleSheet("color: #c6ced3; background: transparent;")
+        self._role.setStyleSheet(
+            f"color: {resolve('--text-chrome-muted')}; background: transparent;")
         idlay.addWidget(self._name)
         idlay.addWidget(self._role)
         self._identity.setVisible(False)
@@ -146,17 +152,14 @@ class TopBar(QFrame):
         self._style_avatar(signed_in=False)
 
     def _style_avatar(self, signed_in: bool) -> None:
-        """A plain white disc when logged out; a cyan ring marks a signed-in user.
-
-        (The previous 2px black ring was invisible against the dark bar.)
-        """
-        ring = (f"3px solid {resolve('--brand-cyan')}" if signed_in
-                else f"2px solid {resolve('--white')}")
+        """Quiet outlined disc when signed out; an action-blue ring marks a session."""
+        ring = (f"3px solid {resolve('--chrome-accent')}" if signed_in
+                else f"2px solid {resolve('--border-control')}")
         self._avatar.setStyleSheet(
             f"QPushButton {{ border-radius: 27px; background: {resolve('--white')};"
             f" border: {ring}; }}"
             f" QPushButton[keyboardFocus=\"true\"]:focus"
-            f" {{ border: 3px solid {resolve('--color-primary')}; }}"
+            f" {{ border: 3px solid {resolve('--border-focus')}; }}"
             f" QPushButton:pressed {{ background: {resolve('--blue-100')}; }}"
         )
 
