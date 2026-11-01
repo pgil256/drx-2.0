@@ -1,10 +1,11 @@
-"""TopBar — persistent 84px slate header with device status and clinician identity.
+"""TopBar — persistent 84px white header with device status and clinician identity.
 
 The knee mark and the "KneeSpa DRx" wordmark both navigate Home. The centre
 shows the controller-derived device status as a pill with a dot (green Ready,
 blue Preparing/Active, amber Stopping/Resetting, red Recovery/Offline). The
 right side shows a login avatar when logged out, or the clinician identity +
-avatar (cyan ring) when logged in.
+avatar (action-blue ring) when logged in. Colours come from the ``--*-chrome``
+tokens, so the bar follows the shared design system's light navigation.
 
 Signals (wired to the controller in Phase 3):
     home_clicked      — logo / wordmark tapped
@@ -58,16 +59,16 @@ class TopBar(QFrame):
         logo.clicked.connect(self.home_clicked)
         lay.addWidget(logo)
 
-        white = resolve("--text-on-dark")
+        ink = resolve("--text-chrome")
         self._wordmark = ClickableLabel()
         self._wordmark.setMinimumHeight(48)
         self._wordmark.setToolTip("Home")
         self._wordmark.setTextFormat(Qt.RichText)
         self._wordmark.setFont(sans_font(size="--text-xl", weight=600, tracking=-0.01))
         self._wordmark.setText(
-            f"<span style='color:{white}'>Knee</span>"
+            f"<span style='color:{ink}'>Knee</span>"
             f"<span style='color:{resolve('--brand-cyan')}'>Spa</span>"
-            f"<span style='color:{white}'> DRx</span>"
+            f"<span style='color:{ink}'> DRx</span>"
         )
         self._wordmark.setStyleSheet("background: transparent;")
         self._wordmark.clicked.connect(self.home_clicked)
@@ -83,7 +84,7 @@ class TopBar(QFrame):
         caption = QLabel("Device")
         caption.setFont(sans_font(size="--text-sm", weight=600))
         caption.setStyleSheet(
-            f"color: {resolve('--text-on-dark-muted')}; background: transparent;")
+            f"color: {resolve('--text-chrome-muted')}; background: transparent;")
         status_row.addWidget(caption)
         self._device_status = DSBadge("Connecting", tone="neutral", dot=True, size="md")
         self._device_status.setAccessibleName("Device status: Connecting")
@@ -102,13 +103,13 @@ class TopBar(QFrame):
         self._name.setMaximumWidth(280)
         self._name.setFont(sans_font(size="--text-base", weight=600))
         self._name.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        self._name.setStyleSheet(f"color: {white}; background: transparent;")
+        self._name.setStyleSheet(f"color: {ink}; background: transparent;")
         self._role = QLabel("Clinician")
         self._role.setFont(sans_font(size="--text-xs"))
         mark_caption(self._role)
         self._role.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
         self._role.setStyleSheet(
-            f"color: {resolve('--text-on-dark-muted')}; background: transparent;")
+            f"color: {resolve('--text-chrome-muted')}; background: transparent;")
         idlay.addWidget(self._name)
         idlay.addWidget(self._role)
         self._identity.setVisible(False)
@@ -131,15 +132,15 @@ class TopBar(QFrame):
         self._style_avatar(False)
 
     def _style_avatar(self, logged_in: bool) -> None:
-        """Plain white disc when signed out; a cyan ring marks an active session."""
-        ring = resolve("--brand-cyan") if logged_in else resolve("--white")
+        """Quiet outlined disc when signed out; an action-blue ring marks a session."""
+        ring = resolve("--chrome-accent") if logged_in else resolve("--border-control")
         self._avatar.setStyleSheet(
             f"QPushButton {{ border-radius: {AVATAR_PX // 2}px; padding: 0;"
             f" {pinned_height(AVATAR_PX, border=3)}"
             f" background: {resolve('--white')}; border: 3px solid {ring}; }}"
             f" QPushButton:pressed {{ background: {resolve('--blue-100')}; }}"
             f" QPushButton[keyboardFocus=\"true\"]:focus {{"
-            f" border: 3px solid {resolve('--brand-cyan')}; }}"
+            f" border: 3px solid {resolve('--border-focus')}; }}"
         )
 
     def set_device_status(self, text: str) -> None:

@@ -1,10 +1,10 @@
-"""NavRail — persistent 108px slate left rail.
+"""NavRail — persistent 108px white left rail with a hairline edge.
 
 Pages (Home · Setup · Treatment · Support) sit top-aligned as fixed 88px items;
 a hairline separates the Video launcher, which opens a modal rather than a
-page; Device is pinned to the bottom. The active item paints cyan with a 4px
-cyan left edge. The rail only reports the intent; ``app_shell`` applies login
-gating and the actual page switch.
+page; Device is pinned to the bottom. The active item paints action blue on a
+soft blue fill with a 4px left edge. The rail only reports the intent;
+``app_shell`` applies login gating and the actual page switch.
 
 Signals:
     navigate(str)     — a nav item ('home'|'setup'|'protocols'|'support'|'device')
@@ -43,7 +43,8 @@ class NavRail(QFrame):
         rail = px("--rail-width")
         self.setFixedWidth(rail)
         self.setStyleSheet(
-            f"#NavRail {{ background: {resolve('--surface-chrome')}; border: none; }}"
+            f"#NavRail {{ background: {resolve('--surface-chrome')}; border: none;"
+            f" border-right: 1px solid {resolve('--surface-chrome-divider')}; }}"
         )
 
         lay = QVBoxLayout(self)

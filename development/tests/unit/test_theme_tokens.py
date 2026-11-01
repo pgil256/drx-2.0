@@ -21,22 +21,33 @@ _VAR_RE = re.compile(r"var\(\s*(--[A-Za-z0-9_-]+)\s*\)")
 
 
 def test_raw_token_returns_literal():
-    assert resolve("--brand-cyan") == "#29abe2"
+    assert resolve("--brand-cyan") == "#00a0e0"  # var(--ks-brand), the shared identity cyan
     assert resolve("--text-base") == "18px"
     assert resolve("--radius-lg") == "12px"
 
 
 def test_semantic_aliases_resolve_through_var_chain():
-    # --color-primary -> var(--blue-500) -> #176b9a
-    assert resolve("--color-primary") == "#176b9a"
-    assert resolve("--surface-page") == "#edf3f7"
-    assert resolve("--surface-dark") == "#172f42"
-    # two hops: --border-focus -> --color-primary -> --blue-500
-    assert resolve("--border-focus") == "#176b9a"
+    # --color-primary -> var(--blue-500) -> var(--ks-action) -> #0b6bb0
+    assert resolve("--color-primary") == "#0b6bb0"
+    assert resolve("--surface-page") == "#f3f6f9"
+    assert resolve("--surface-dark") == "#0e1a24"
+    # --border-focus -> var(--ks-focus), the shared focus colour, which is the action blue
+    assert resolve("--border-focus") == "#0b6bb0"
+
+
+def test_shared_table_feeds_the_semantic_names():
+    """The palette comes from design/tokens.json via the generated tokens_shared.py."""
+    from ui.theme.tokens_shared import SHARED
+
+    assert SHARED and all(name.startswith("--ks-") for name in SHARED)
+    assert all(tokens.TOKENS[name] == value for name, value in SHARED.items())
+    for semantic in ("--text-strong", "--surface-card", "--color-success", "--color-danger",
+                     "--readout-bg", "--text-xl", "--radius-md"):
+        assert "var(--ks-" in tokens.TOKENS[semantic] or tokens.TOKENS[semantic].startswith("var("), semantic
 
 
 def test_resolve_inline_var_inside_string():
-    assert resolve("2px solid var(--gray-400)") == "2px solid #bdc3c7"
+    assert resolve("2px solid var(--gray-400)") == "2px solid #7f8e9c"
     assert qss("padding: var(--space-3) var(--space-5);") == "padding: 12px 20px;"
 
 
@@ -96,7 +107,7 @@ def test_rendered_app_qss_has_no_unresolved_vars():
     rendered = load_app_qss()
     assert "var(" not in rendered, "app.qss still contains unresolved var() refs"
     # sanity: the primary interactive blue made it into the stylesheet
-    assert "#176b9a" in rendered
+    assert "#0b6bb0" in rendered
 
 
 _TYPE_SCALE = ("--text-2xs", "--text-xs", "--text-sm", "--text-base", "--text-md",

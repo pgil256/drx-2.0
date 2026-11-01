@@ -2,7 +2,8 @@
 
 Mirrors `StatReadout`: a large mono `value` with a small mono `unit` span and an
 uppercase sans caption below. Tone drives the value color; size drives the value
-font (sm=30, md=44, lg=56). Used for live pressure / angle / timer.
+font (sm=28, md=44, lg=56). Used for live pressure / angle / timer. ``on_dark``
+swaps the palette for the readout-* colours of the dark instrument panel.
 """
 
 from PyQt5.QtCore import Qt
@@ -18,15 +19,27 @@ TONES = {
     "warning": "--amber-500",
     "danger": "--red-500",
 }
+# The same tones on the dark instrument panel (``on_dark=True``): the design
+# system's readout-* colours, which keep contrast on --readout-bg.
+DARK_TONES = {
+    "default": "--readout-fg",
+    "cyan": "--readout-accent",
+    "success": "--readout-ok",
+    "warning": "--readout-warn",
+    "danger": "--readout-danger",
+}
 # size -> value font px (sm=text-xl, md=44, lg=text-3xl)
 SIZES = {"sm": "--text-xl", "md": "44px", "lg": "--text-3xl"}
 
 
 class DSStatReadout(QWidget):
-    def __init__(self, value="", unit="", label=None, tone="default", size="md", parent=None):
+    def __init__(self, value="", unit="", label=None, tone="default", size="md", parent=None,
+                 on_dark=False):
         super().__init__(parent)
         self._value = value
         self._unit = unit
+        self._on_dark = on_dark
+        self._muted = "--readout-muted" if on_dark else "--gray-600"
         self._tone = tone if tone in TONES else "default"
         self._size = size if size in SIZES else "md"
 
@@ -46,15 +59,15 @@ class DSStatReadout(QWidget):
             self._caption.setFont(sans_font(size="--text-xs", weight=600, tracking=0.06))
             mark_caption(self._caption)
             self._caption.setAlignment(Qt.AlignCenter)
-            self._caption.setStyleSheet(f"color: {resolve('--gray-600')};")
+            self._caption.setStyleSheet(f"color: {resolve(self._muted)};")
             lay.addWidget(self._caption)
 
         self._render()
 
     def _render(self):
         vpx = px(SIZES[self._size])
-        color = resolve(TONES[self._tone])
-        muted = resolve("--gray-600")
+        color = resolve((DARK_TONES if self._on_dark else TONES)[self._tone])
+        muted = resolve(self._muted)
         html = f"<span style='font-size:{vpx}px; color:{color};'>{self._value}</span>"
         if self._unit:
             # Keep a visible gap without scaling it with the numeric readout.

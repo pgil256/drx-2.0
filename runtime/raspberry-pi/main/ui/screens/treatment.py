@@ -90,7 +90,9 @@ _SUMMARY_ORDER = ("duration", "max_pressure", "max_left", "max_right", "pulse_ra
 _SUMMARY_LABELS = {"duration": "Duration", "max_pressure": "Pressure limit",
                    "max_left": "Left angle", "max_right": "Right angle",
                    "pulse_rate": "Pulse rate", "motor_speed": "Motor speed"}
-_OUTCOME_TITLES = {"completed": "Treatment completed", "stopped": "Stopped by operator",
+_OUTCOME_TITLES = {"completed": "Treatment completed",
+                   "completed_cleanup_failed": "Treatment completed; cleanup needs attention",
+                   "stopped": "Stopped by operator",
                    "fault": "Ended with a fault"}
 _TONE_COLORS = {"success": "--green-600", "warning": "--amber-500", "danger": "--red-500",
                 "neutral": "--gray-400", "info": "--blue-500"}
@@ -372,15 +374,27 @@ class TreatmentScreen(QWidget):
 
     # ----- build: live status -----
     def _status_card(self):
+        # The monitor is the design system's instrument panel: the one dark
+        # surface, so live numbers read from across the room, and the same
+        # readout-* colours as the dashboard's demo machine.
         card = DSCard(padded=True)
+        card.setStyleSheet(
+            f"#DSCard {{ background: {resolve('--readout-bg')};"
+            f" border-radius: {resolve('--radius-lg')};"
+            f" border: 1px solid {resolve('--readout-line')}; }}"
+            f"#DSCard QLabel {{ color: {resolve('--readout-fg')}; }}"
+        )
         body = card.body_layout
         body.setContentsMargins(24, 14, 24, 16)
         body.setSpacing(6)
         hdr = QHBoxLayout()
         hdr.setContentsMargins(0, 0, 0, 0)
-        hdr.addWidget(eyebrow("Treatment monitor"))
+        caption = eyebrow("Treatment monitor")
+        caption.setStyleSheet(f"color: {resolve('--readout-muted')}; background: transparent;")
+        hdr.addWidget(caption)
         hdr.addStretch(1)
-        self._angle_stat = DSStatReadout("—", label="Lateral angle (approx.)", size="sm")
+        self._angle_stat = DSStatReadout("—", label="Lateral angle (approx.)", size="sm",
+                                         on_dark=True)
         self._inline_stat(self._angle_stat)
         hdr.addWidget(self._angle_stat)
         card.add_layout(hdr)
@@ -390,7 +404,7 @@ class TreatmentScreen(QWidget):
         self._readiness = QLabel()
         self._readiness.setWordWrap(False)
         self._readiness.setFont(sans_font(size="--text-sm"))
-        self._readiness.setStyleSheet(f"color: {resolve('--text-muted')};")
+        self._readiness.setStyleSheet(f"color: {resolve('--readout-muted')};")
         self._readiness.setMinimumHeight(self._readiness.fontMetrics().height())
         _retain_when_hidden(self._readiness)
         body.addWidget(self._readiness)
@@ -402,10 +416,11 @@ class TreatmentScreen(QWidget):
         left.setSpacing(8)
         left.addStretch(1)
         self._pressure_stat = DSStatReadout("—", unit="lbs", label="Waiting for pressure",
-                                            tone="default", size="lg")
+                                            tone="cyan", size="lg", on_dark=True)
         self._compact_stat(self._pressure_stat)
         left.addWidget(self._pressure_stat)
-        self._limit_stat = DSStatReadout("40", unit="lbs", label="Limit", size="sm")
+        self._limit_stat = DSStatReadout("40", unit="lbs", label="Limit", size="sm",
+                                         on_dark=True)
         self._inline_stat(self._limit_stat)
         left.addWidget(self._sub_row(self._limit_stat))
         left.addStretch(1)
@@ -415,7 +430,8 @@ class TreatmentScreen(QWidget):
         right.setSpacing(8)
         right.addStretch(1)
         self._time_stat = DSStatReadout(_mmss(DEFAULT_PROTOCOL_MINUTES * 60),
-                                       label="Time remaining", tone="default", size="lg")
+                                       label="Time remaining", tone="default", size="lg",
+                                       on_dark=True)
         self._time_stat.setMinimumWidth(180)
         self._compact_stat(self._time_stat)
         right.addWidget(self._time_stat)
@@ -428,7 +444,7 @@ class TreatmentScreen(QWidget):
         phase_row.addWidget(self._phase_badge)
         self._outcome_label = QLabel()
         self._outcome_label.setFont(sans_font(size="--text-sm", weight=600))
-        self._outcome_label.setStyleSheet(f"color: {resolve('--text-body')};")
+        self._outcome_label.setStyleSheet(f"color: {resolve('--readout-fg')};")
         self._outcome_label.hide()
         phase_row.addWidget(self._outcome_label)
         phase_row.addStretch(1)
@@ -446,7 +462,7 @@ class TreatmentScreen(QWidget):
         self._track.setFixedHeight(10)
         self._track.setAttribute(Qt.WA_StyledBackground, True)
         self._track.setStyleSheet(
-            f"#ProgTrack {{ background: {resolve('--gray-300')}; border-radius: 5px; }}"
+            f"#ProgTrack {{ background: {resolve('--readout-line')}; border-radius: 5px; }}"
         )
         tlay = QHBoxLayout(self._track)
         tlay.setContentsMargins(0, 0, 0, 0)
@@ -454,7 +470,7 @@ class TreatmentScreen(QWidget):
         self._fill.setObjectName("ProgFill")
         self._fill.setAttribute(Qt.WA_StyledBackground, True)
         self._fill.setStyleSheet(
-            f"#ProgFill {{ border-radius: 5px; background: {resolve('--color-primary')}; }}"
+            f"#ProgFill {{ border-radius: 5px; background: {resolve('--readout-accent')}; }}"
         )
         tlay.addWidget(self._fill, 0)
         tlay.addStretch(1)
@@ -663,7 +679,8 @@ class TreatmentScreen(QWidget):
     def _render_pressure(self) -> None:
         live = self._pressure_caption == "Pressure live" and self._pressure_value is not None
         self._pressure_stat.set_value(f"{self._pressure_value:.1f}" if live else "—", "lbs")
-        self._pressure_stat.set_tone("default")
+        # A live number is the panel's accent; a stale or missing one stays plain.
+        self._pressure_stat.set_tone("cyan" if live else "default")
 
     def set_pressure_state(self, caption: str) -> None:
         self._pressure_caption = caption

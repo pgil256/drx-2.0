@@ -1,8 +1,9 @@
-"""DSNavRailButton — slate left-rail nav item (icon over label, active = cyan).
+"""DSNavRailButton — left-rail nav item (icon over label, active = action blue).
 
 Fixed 88px items, top-aligned in the rail, so five pages read as a list rather
-than a stack of stretched slabs. The active item gets a darker slate fill,
-cyan label + icon and a 4px cyan left edge. ``checkable=False`` makes a
+than a stack of stretched slabs. The active item gets the soft action fill,
+action-blue label + icon and a 4px left edge in the same blue, the rail
+counterpart of the dashboard's selected nav pill. ``checkable=False`` makes a
 launcher (Video) that shares the look without holding a selection.
 """
 
@@ -50,14 +51,14 @@ class DSNavRailButton(QToolButton):
 
     def _render(self):
         active = self.isChecked()
-        cyan = resolve("--brand-cyan")
+        accent = resolve("--chrome-accent")
         if not self.isEnabled():
-            fg = resolve("--text-on-dark-disabled")
+            fg = resolve("--text-chrome-disabled")
         else:
-            fg = cyan if active else resolve("--text-on-dark")
+            fg = accent if active else resolve("--text-chrome")
         bg = resolve("--surface-chrome-active") if active else "transparent"
         hover = resolve("--surface-chrome-active") if active else resolve("--surface-chrome-hover")
-        left = cyan if active else "transparent"
+        left = accent if active else "transparent"
         if self._icon_factory is not None:
             self.setIcon(self._icon_factory(fg, ICON_PX))
         self.setStyleSheet(
@@ -66,6 +67,6 @@ class DSNavRailButton(QToolButton):
             f" QToolButton:hover {{ background: {hover}; }}"
             f" QToolButton:pressed {{ background: {resolve('--surface-chrome-active')}; }}"
             f" QToolButton[keyboardFocus=\"true\"]:focus {{"
-            f" border: 2px solid {resolve('--white')}; border-left: 4px solid {left}; }}"
+            f" border: 2px solid {resolve('--border-focus')}; border-left: 4px solid {left}; }}"
         )
         repolish(self)
