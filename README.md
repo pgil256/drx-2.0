@@ -32,9 +32,10 @@ for desktop installation, Pi diagnostics, Buster updates, firmware flashing and 
 ## Running
 
 Install Git LFS before cloning, then run `git lfs pull` from the repository root
-to fetch the large HCT/P educational video. Fetch LFS media before running the app,
-syncing `runtime/` to a Pi, or packaging a release; Git LFS pointer files cannot play
-as videos.
+to fetch the educational videos (every `.mp4` under `runtime/raspberry-pi/main/ui/media/videos/`).
+Fetch LFS media before running the app, syncing `runtime/` to a Pi, or packaging a
+release. Git LFS pointer files cannot play as videos, and the app skips them. Tools that
+read straight from Git, such as `git archive`, emit pointers instead of the videos.
 
 ```bash
 python runtime/raspberry-pi/main/kneespa.py                  # on the Pi (requires RPi.GPIO, PyQt5)
