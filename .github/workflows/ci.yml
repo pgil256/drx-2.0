@@ -58,7 +58,10 @@ jobs:
 
       # On Linux the pty-based integration tests run for real
       # (they skip on Windows dev machines). Coverage of the shipped app is
-      # measured here only; there is no threshold yet.
+      # measured here only. The job fails below 85% line coverage (88% when
+      # the floor was set, 2026-11-05). The floor is a CLI flag rather than
+      # coverage.ini's fail_under, so the report step below still prints the
+      # total when the floor fails.
       - name: Run pytest with coverage
         env:
           QT_QPA_PLATFORM: offscreen
@@ -66,7 +69,8 @@ jobs:
           xvfb-run -a python -m pytest -q \
             --cov=runtime/raspberry-pi/main \
             --cov-config=development/coverage.ini \
-            --cov-report=xml
+            --cov-report=xml \
+            --cov-fail-under=85
 
       - name: Report coverage total
         if: ${{ !cancelled() }}
