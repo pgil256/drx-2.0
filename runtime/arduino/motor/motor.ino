@@ -8,7 +8,7 @@
   Native unit tests: development/tests/firmware/ (run_native_tests.sh).
 */
 
-#define VERSION "2026-10-28-DRX2-NB2-SERVICE"
+#define VERSION "2026-11-05-DRX2-STOP-CHECKS"
 #define HX711_DRIVER "DRX-HX711-NB2"
 #include <math.h>
 #ifndef UNIT_TEST
@@ -161,7 +161,14 @@ char positionCommandKind = 'I';
 // contact is lost (pressure reads zero).
 const float PULSE_RELEASE_FLOOR = 0.0;
 const unsigned long PULSE_RECOVERY_TIMEOUT = 5000UL;
-int pulseMotorSpeed = 0;
+int pulseMotorSpeed = 0;  // last pulse speed the axial SMC acknowledged
+// SMCs (bit = address - 12) whose last stop write was never acknowledged.
+// The stop stays pending until the SMC takes one: the move that owns the
+// SMC retries its own stop, retryPendingStops() retries the rest, and the
+// failure is reported once until then.
+uint8_t unackedStopMask = 0;
+unsigned long lastStopRetryMs = 0;
+const unsigned long STOP_RETRY_INTERVAL_MS = 200UL;
 void servicePressure();
 void reportSensorDiagnostics();
 void tripPressureFault(const char *reason);
@@ -479,19 +486,49 @@ void stopFIT() {
   digitalWrite(DIR_FIT_REVERSE, LOW);
 }
 
-// Zero one SMC on the emergency-stop path, retrying a NACKed/timed-out I2C
-// write. The stop used to be fire-and-forget: a transient bus fault
-// coincident with STOP/X left that SMC at its last speed while the firmware
-// reported everything stopped.
-static void stopDeviceOrReport(uint8_t device) {
+// Zero one SMC, retrying a NACKed/timed-out I2C write, and return whether
+// the SMC acknowledged. Every stop goes through here. Stops used to be
+// fire-and-forget: a transient bus fault left that SMC at its last speed
+// while the firmware reported it stopped (and, at arrival, sent DONE).
+// An unacknowledged stop stays pending in unackedStopMask.
+static bool stopDeviceAttempts(uint8_t device, uint8_t attempts) {
   smcDeviceNumber = device;
   uint8_t rc = 1;
-  for (uint8_t attempt = 0; attempt < 3 && rc != 0; attempt++)
+  for (uint8_t attempt = 0; attempt < attempts && rc != 0; attempt++)
     rc = setMotorSpeed(0);
-  if (rc != 0) {
+  uint8_t bit = (device >= 12 && device <= 14) ? (uint8_t)(1 << (device - 12)) : 0;
+  if (rc == 0) {
+    unackedStopMask &= (uint8_t)~bit;
+    return true;
+  }
+  if (!(unackedStopMask & bit)) {
     Serial1.print("ERROR: Motor stop not acknowledged ");
     Serial1.println((int)device);
   }
+  unackedStopMask |= bit;
+  return false;
+}
+
+static bool stopDeviceOrReport(uint8_t device) {
+  return stopDeviceAttempts(device, 3);
+}
+
+// Retry pending stops on SMCs that no active move owns (one that does
+// retries its own stop: position arrival, pressure arrival, release end,
+// pulsing). Rate-limited to one attempt per SMC per interval so a dead bus
+// cannot stall loop().
+static void retryPendingStops() {
+  if (!unackedStopMask || millis() - lastStopRetryMs < STOP_RETRY_INTERVAL_MS)
+    return;
+  lastStopRetryMs = millis();
+  uint8_t savedDevice = smcDeviceNumber;
+  for (uint8_t device = 12; device <= 14; device++) {
+    if (!(unackedStopMask & (1 << (device - 12)))) continue;
+    if (bRunning && runningDevice == device) continue;
+    if (device == 12 && (measurePressure || jerking || releasingPressure)) continue;
+    stopDeviceAttempts(device, 1);
+  }
+  smcDeviceNumber = savedDevice;
 }
 
 // Emergency stop all actuators
@@ -767,20 +804,28 @@ void acceptTareSample(long raw) {
   }
 }
 
-void stopPressureMotor() {
+bool stopPressureMotor() {
   uint8_t savedDevice = smcDeviceNumber;
-  smcDeviceNumber = 12;
-  setMotorSpeed(0);
+  bool stopped = stopDeviceOrReport(12);
   smcDeviceNumber = savedDevice;
+  return stopped;
 }
 
+// Cache a pulse speed only once the SMC acknowledges it. The cache used to
+// update even after a NACK, so a stop the SMC never took made every later
+// setPulseSpeed(0) return early without writing.
 void setPulseSpeed(int speed) {
   if (speed == pulseMotorSpeed) return;
   uint8_t savedDevice = smcDeviceNumber;
-  smcDeviceNumber = 12;
-  setMotorSpeed(speed);
+  bool acknowledged;
+  if (speed == 0) {
+    acknowledged = stopDeviceOrReport(12);
+  } else {
+    smcDeviceNumber = 12;
+    acknowledged = setMotorSpeed(speed) == 0;
+  }
   smcDeviceNumber = savedDevice;
-  pulseMotorSpeed = speed;
+  if (acknowledged) pulseMotorSpeed = speed;
 }
 
 void tripPressureFault(const char *reason) {
@@ -844,11 +889,15 @@ void servicePressure() {
     if (measurePressure &&
         ((pressureDirection > 0 && pressure >= desiredPressure) ||
          (pressureDirection < 0 && pressure <= desiredPressure + PRESSURE_TARGET_BAND))) {
-      stopPressureMotor(); // Stop before sending any status or DONE message.
-      measurePressure = false;
-      pressureDirection = 0;
-      pressureCeiling = protocolPressureLimit + PRESSURE_OVERSHOOT_LIMIT;
-      pressureDonePending = true;
+      // Stop before sending any status or DONE message. Until the SMC takes
+      // the stop the move stays active, so the next sample retries it and
+      // DONE is never reported while the motor still drives.
+      if (stopPressureMotor()) {
+        measurePressure = false;
+        pressureDirection = 0;
+        pressureCeiling = protocolPressureLimit + PRESSURE_OVERSHOOT_LIMIT;
+        pressureDonePending = true;
+      }
     }
     if (jerking && ((jerkDirection > 0 && pressure >= desiredPressure) ||
                     (jerkDirection < 0 && pressure <= PULSE_RELEASE_FLOOR)))
@@ -1211,7 +1260,7 @@ void processCommand(String cmd) {
           localPosition + positionTolerance >= localDesiredPosition) {
         position = localPosition;
         desiredPosition = localDesiredPosition;
-        setMotorSpeed(0);
+        stopDeviceOrReport(smcDeviceNumber);  // already in band; a NACK stays pending
         reportPositionDone(positionCommandKind, localDesiredPosition, localPosition, currentCmdSeq);
         sendStatus();
         break;
@@ -1279,7 +1328,7 @@ void processCommand(String cmd) {
           localPosition + positionTolerance >= localDesiredPosition) {
         desiredPosition = localDesiredPosition;
         position = localPosition;
-        setMotorSpeed(0);
+        stopDeviceOrReport(smcDeviceNumber);  // already in band; a NACK stays pending
         reportPositionDone(positionCommandKind, localDesiredPosition, localPosition, currentCmdSeq);
         sendStatus();
         break;
@@ -1384,7 +1433,7 @@ void processCommand(String cmd) {
       // Symmetric close-enough band (see 'I')
       if (desiredPosition + positionTolerance >= position &&
           position + positionTolerance >= desiredPosition) {
-        setMotorSpeed(0);
+        stopDeviceOrReport(smcDeviceNumber);  // already in band; a NACK stays pending
         reportPositionDone(positionCommandKind, localDesiredPosition, localPosition, currentCmdSeq);
         sendStatus();
         break;
@@ -1500,8 +1549,9 @@ void processCommand(String cmd) {
           // a K/I move zeroed THAT actuator mid-travel and left bRunning
           // set forever (no DONE, then BUSY for every command until X).
           if (jerking) {
-              smcDeviceNumber = 12;
-              setMotorSpeed(0);
+              // A NACK stays pending; retryPendingStops() retries it once
+              // pulsing has ended below.
+              stopDeviceOrReport(12);
           }
           pulseMotorSpeed = 0;
           jerkDirection = 0;
@@ -1633,12 +1683,10 @@ void setup() {
   // SAFETY: stop all motors before anything else. After an unexpected
   // MCU reset the SMCs may still be running the last commanded speed;
   // historically they kept moving for the >1s the load-cell init took.
-  smcDeviceNumber = 12;
-  setMotorSpeed(0);
-  smcDeviceNumber = 13;
-  setMotorSpeed(0);
-  smcDeviceNumber = 14;
-  setMotorSpeed(0);
+  // A stop an SMC does not acknowledge stays pending and loop() retries it.
+  stopDeviceOrReport(12);
+  stopDeviceOrReport(13);
+  stopDeviceOrReport(14);
   Dbg.println("All actuators stopped");
 
   Dbg.println("\n\n\nStarting");
@@ -1755,8 +1803,9 @@ void loop() {
     bool atTravelLimit =
         positionReadValid && releasePos <= (uint16_t)(AZERO + POSITION_DEADBAND);
     bool timedOut = millis() - releaseStart > RELEASE_TIMEOUT;
-    if (released || atTravelLimit || timedOut) {
-      setMotorSpeed(0);
+    // The release ends only once the SMC takes the stop; until then the
+    // next pass retries it, so RELEASED is never reported while it drives.
+    if ((released || atTravelLimit || timedOut) && stopDeviceOrReport(12)) {
       releasingPressure = false;
       if (released)
         Serial1.println("RELEASED");
@@ -1876,12 +1925,16 @@ void loop() {
           (forward > 0 ? currentPos >= desiredPosition : currentPos <= desiredPosition);
 
       if (targetReached) {
-        Dbg.println("Stopped Moving - Target Reached");
-        setMotorSpeed(0);
-        bRunning = false;
-        forward = 0;
-        loopLastPosition = -1;
-        loopStallStart = 0;
+        // Arrival completes only once the SMC takes the stop. Until then
+        // the move stays active and the next pass retries the stop, so DONE
+        // is never sent while the actuator still drives.
+        if (stopDeviceOrReport(runningDevice)) {
+          Dbg.println("Stopped Moving - Target Reached");
+          bRunning = false;
+          forward = 0;
+          loopLastPosition = -1;
+          loopStallStart = 0;
+        }
       } else {
         // Loop iterations are much faster than encoder updates, so a poll
         // count can report a false stall almost immediately. Require a full
@@ -1946,6 +1999,8 @@ void loop() {
     reportPressureDone(activeCmdSeq);
     activeCmdSeq = -1;
   }
+
+  retryPendingStops();
 
   // Command reading and processing - IMPROVED buffer handling
   while (Serial1.available() > 0) {
