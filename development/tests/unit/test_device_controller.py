@@ -337,3 +337,51 @@ def test_verified_release_hands_install_to_shutdown_not_live_controller(controll
     controller.window.close.assert_called_once()
     assert controller.window._release_install == (updates.installer, job)
     updates.installer.install.assert_not_called()
+
+
+def unlock_service(controller):
+    controller.window.hardware_service.access.provision("235689", "235689", True)
+    controller.require_service(lambda _user: None)
+    controller._auth_dialog.submit("235689")
+    assert controller.service_authorized()
+
+
+def test_purge_rejected_uploads_requires_the_service_pin(controller):
+    controller.window.hardware_service.access.provision("235689", "235689", True)
+    controller.action("purge_rejected_uploads")
+    assert controller._auth_dialog is not None
+    controller.window.cloud_client.purge_rejected.assert_not_called()
+    controller._auth_dialog.reject()
+
+
+@pytest.mark.parametrize("answer", [QMessageBox.Yes, QMessageBox.No])
+def test_purge_rejected_uploads_only_after_confirmation(controller, monkeypatch, qtbot, answer):
+    unlock_service(controller)
+    cloud = controller.window.cloud_client
+    cloud.purge_counts.return_value = {"records": 2, "files": 1}
+    cloud.purge_rejected.return_value = {"records": 2, "files": 1}
+    asked = []
+    monkeypatch.setattr(module.QMessageBox, "question",
+                        lambda *args: asked.append(args[2]) or answer)
+
+    controller.action("purge_rejected_uploads")
+    settled(controller, qtbot)
+
+    assert "2 rejected upload(s) and 1 unreadable" in asked[0]
+    if answer == QMessageBox.Yes:
+        cloud.purge_rejected.assert_called_once_with(module.DATA_PATHS["PENDING_UPLOADS"])
+        assert controller.screen.status.text().startswith("Purged 2 rejected upload(s)")
+    else:
+        cloud.purge_rejected.assert_not_called()
+
+
+def test_purge_with_nothing_rejected_asks_nothing(controller, monkeypatch):
+    unlock_service(controller)
+    controller.window.cloud_client.purge_counts.return_value = {"records": 0, "files": 0}
+    question = Mock()
+    monkeypatch.setattr(module.QMessageBox, "question", question)
+
+    controller.action("purge_rejected_uploads")
+
+    question.assert_not_called()
+    assert controller.screen.status.text() == "No rejected uploads to purge."
