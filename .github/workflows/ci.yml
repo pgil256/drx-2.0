@@ -221,6 +221,20 @@ jobs:
       - name: Build and run firmware test suites
         run: bash development/tests/firmware/run_native_tests.sh
 
+      # The same suites with a 32-bit `long`, as on the Mega 2560: millis()
+      # and long arithmetic then wrap as on the device, which the 64-bit
+      # build above cannot show. `int` stays 32 bits (x86 has no 16-bit int).
+      - name: Install 32-bit build libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-multilib
+
+      - name: Build and run firmware test suites (32-bit long, as on the Mega)
+        env:
+          ARCH_FLAGS: -m32
+          BUILD_DIR: .native-build/m32
+        run: bash development/tests/firmware/run_native_tests.sh
+
   firmware-avr-build:
     name: Firmware AVR build check (Mega 2560)
     timeout-minutes: 25
