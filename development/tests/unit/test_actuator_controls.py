@@ -12,6 +12,7 @@ Each target method is called UNBOUND against a lightweight stub ``self`` (a
 ``MagicMock``) that carries only the attributes the method actually reads, so
 no Qt window / Arduino is constructed and the tests run on Windows.
 """
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -141,6 +142,15 @@ class TestSetupMotionWatchdog:
         qtbot.wait(300)
         harness._show_timed_error.assert_not_called()
         assert harness.all_disabled()
+
+    def test_backstop_tolerates_a_window_without_motion_state(self):
+        # Fired on an object that never set the flags (e.g. before __init__
+        # finishes, or a test double): no exception, nothing re-enabled.
+        bare = SimpleNamespace(_show_timed_error=MagicMock(),
+                               enable_actuator_controls=MagicMock())
+        KneeSpa._on_motion_watchdog(bare)
+        bare.enable_actuator_controls.assert_not_called()
+        bare._show_timed_error.assert_not_called()
 
     def test_leg_stop_does_not_arm_the_backstop(self, harness):
         KneeSpa._send_motion_command(harness, "F0", "leg-length stop")

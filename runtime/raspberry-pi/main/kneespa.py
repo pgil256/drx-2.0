@@ -514,7 +514,8 @@ class KneeSpa(QMainWindow):
     def _arm_motion_watchdog(self):
         """Start the backstop for a queued Setup move awaiting its DONE."""
         KneeSpa._stop_motion_watchdog(self)
-        timer = QTimer()
+        # Parent it to the window so it cannot outlive it.
+        timer = QTimer(self) if isinstance(self, QObject) else QTimer()
         timer.setSingleShot(True)
         timer.timeout.connect(lambda: KneeSpa._on_motion_watchdog(self))
         timer.start(int(SETUP_MOTION_DONE_TIMEOUT_S * 1000))
@@ -534,7 +535,9 @@ class KneeSpa(QMainWindow):
         guards, so a reset, service session or fault still owns the controls.
         """
         self._motion_watchdog = None
-        if (not self.actuator_command_in_progress
+        # Read every flag with a default: this fires from a timer, where an
+        # exception would only reach the excepthook and leave controls locked.
+        if (getattr(self, "actuator_command_in_progress", False) is not True
                 or getattr(self, "_closing", False) is True
                 or getattr(self, "protocol_running", False) is True):
             return
