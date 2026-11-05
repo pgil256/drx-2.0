@@ -102,6 +102,71 @@ class TestActuatorControlGating:
 
 
 # ---------------------------------------------------------------------------
+# Setup motion watchdog: a queued move whose DONE never arrives must not keep
+# the controls (and with them logout and exit) blocked until a power cycle.
+# ---------------------------------------------------------------------------
+@pytest.mark.unit
+class TestSetupMotionWatchdog:
+    @pytest.fixture
+    def harness(self, qtbot, monkeypatch):
+        monkeypatch.setattr(kneespa, "SETUP_MOTION_DONE_TIMEOUT_S", 0.05)
+        h = ControlsHarness(qtbot)
+        h.arduino = MagicMock()
+        h.arduino.send.return_value = True
+        h.loading_spinner = MagicMock()
+        h._show_timed_error = MagicMock()
+        return h
+
+    def test_lost_done_hands_controls_back(self, qtbot, harness):
+        harness.disable_actuator_controls()
+        assert KneeSpa._send_motion_command(harness, "I131140", "horizontal movement")
+        qtbot.waitUntil(harness.all_enabled, timeout=2000)
+        assert harness.actuator_command_in_progress is False
+        harness._show_timed_error.assert_called_once()
+        harness.loading_spinner.hide.assert_called()
+
+    def test_done_cancels_the_backstop(self, qtbot, harness):
+        harness.disable_actuator_controls()
+        KneeSpa._send_motion_command(harness, "P40", "pressure movement")
+        harness.enable_actuator_controls()  # what set_done does on DONE
+        assert harness._motion_watchdog is None
+        qtbot.wait(300)
+        harness._show_timed_error.assert_not_called()
+
+    def test_new_operation_supersedes_pending_backstop(self, qtbot, harness):
+        harness.disable_actuator_controls()
+        KneeSpa._send_motion_command(harness, "K1688", "lateral movement")
+        harness.disable_actuator_controls()  # e.g. a reset taking the controls
+        assert harness._motion_watchdog is None
+        qtbot.wait(300)
+        harness._show_timed_error.assert_not_called()
+        assert harness.all_disabled()
+
+    def test_leg_stop_does_not_arm_the_backstop(self, harness):
+        KneeSpa._send_motion_command(harness, "F0", "leg-length stop")
+        assert getattr(harness, "_motion_watchdog", None) is None
+
+    def test_backstop_leaves_a_running_protocol_alone(self, qtbot, harness):
+        harness.disable_actuator_controls()
+        KneeSpa._send_motion_command(harness, "I131140", "horizontal movement")
+        harness.protocol_running = True
+        qtbot.wait(300)
+        assert harness.actuator_command_in_progress is True
+        harness._show_timed_error.assert_not_called()
+
+    def test_invalid_horizontal_marks_do_not_lock_jog(self, qtbot, harness):
+        harness.config = MagicMock(marks_valid=True, BMarks={})
+        harness.horizontal_flexion_position = -10  # well inside both limits
+        harness.actuator_b = ACTUATOR_B
+        harness.actuator_a = ACTUATOR_A
+        harness.actuator_c = ACTUATOR_C
+        harness.move_actuator(ACTUATOR_B, 1, 1)
+        harness.arduino.send.assert_not_called()
+        assert harness.actuator_command_in_progress is False
+        qtbot.waitUntil(harness.all_enabled, timeout=2000)
+
+
+# ---------------------------------------------------------------------------
 # move_actuator boundary/command behavior (GUI line, adapted to base guards)
 # ---------------------------------------------------------------------------
 def make_kneespa_stub(**positions):
