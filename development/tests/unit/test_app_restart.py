@@ -6,6 +6,7 @@ from unittest.mock import Mock
 import pytest
 from helpers import app_restart
 from fixtures.controllers import make_window
+import kneespa
 from kneespa import KneeSpa
 
 pytestmark = pytest.mark.unit
@@ -82,3 +83,34 @@ def test_incomplete_firmware_flash_blocks_reset():
     connection.reset_arduino()
     window.threadpool.start.assert_not_called()
     assert "recovery" in window._show_timed_error.call_args[0][0]
+
+
+def test_startup_failure_exits_non_zero_after_gpio_cleanup(monkeypatch, capsys):
+    # systemd's Restart=on-failure ignores exit code 0, so a crash must not
+    # be reported as a clean exit.
+    gpio = Mock()
+    monkeypatch.setattr(kneespa, "GPIO", gpio)
+    monkeypatch.setattr(kneespa, "main", Mock(side_effect=RuntimeError("config unreadable")))
+    with pytest.raises(SystemExit) as exited:
+        kneespa.run_as_script()
+    assert exited.value.code == 1
+    gpio.cleanup.assert_called_once()
+    assert "config unreadable" in capsys.readouterr().out
+
+
+def test_normal_exit_returns_after_gpio_cleanup(monkeypatch):
+    gpio = Mock()
+    monkeypatch.setattr(kneespa, "GPIO", gpio)
+    monkeypatch.setattr(kneespa, "main", Mock(return_value=None))
+    kneespa.run_as_script()
+    gpio.cleanup.assert_called_once()
+
+
+def test_argument_errors_keep_their_own_exit_code(monkeypatch):
+    gpio = Mock()
+    monkeypatch.setattr(kneespa, "GPIO", gpio)
+    monkeypatch.setattr(kneespa, "main", Mock(side_effect=SystemExit(2)))
+    with pytest.raises(SystemExit) as exited:
+        kneespa.run_as_script()
+    assert exited.value.code == 2
+    gpio.cleanup.assert_called_once()
