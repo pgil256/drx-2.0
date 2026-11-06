@@ -384,3 +384,64 @@ def test_restore_changes_nothing_while_the_app_holds_the_lock(tmp_path):
     assert not (runtime / "raspberry-pi").exists()
     assert restore(runtime, "--lock", str(lock)).returncode == 0
     assert (runtime / "raspberry-pi/main").is_dir()
+
+
+def prepared_folder(root, name, mtime, release_id=None, extension=".zip"):
+    folder = root / name
+    folder.mkdir(parents=True)
+    if release_id:
+        write_json(folder / "job.json",
+                   {"release": {"id": release_id, "extension": extension}})
+    os.utime(str(folder), (mtime, mtime))
+    return folder
+
+
+def test_install_prunes_old_preparations_but_never_a_backup(prepared):
+    installer, job = prepared
+    root = installer.root
+    old1 = prepared_folder(root, "prepared-old1", 1000, "firmware-id", ".hex")
+    old2 = prepared_folder(root, "prepared-old2", 2000, "recovery-id")
+    old3 = prepared_folder(root, "prepared-old3", 3000, "stale-id")
+    old4 = prepared_folder(root, "prepared-old4", 3500, "stale-id-2")
+    failed = prepared_folder(root, "prepared-failed", 4000)
+    write_json(root / "installed.json",
+               {"arduino": {"id": "firmware-id", "backup": str(old1 / "previous.hex")}})
+    write_json(root / "firmware-recovery.json",
+               {"status": "reset_required", "backup": str(old2 / "previous.hex")})
+    downloads = root / "downloads"
+    downloads.mkdir()
+    for name in (RELEASE_ID + ".zip", "firmware-id.hex", "recovery-id.zip",
+                 "stale-id.zip", "interrupted.part"):
+        (downloads / name).write_bytes(b"x")
+    leftovers = [installer.runtime / (".software-old-" + HEX),
+                 installer.runtime / (".software-next-" + HEX)]
+    for leftover in leftovers:
+        leftover.mkdir()
+    unrelated = installer.runtime / ".software-old-notes"
+    unrelated.mkdir()
+
+    installer.install(job, lambda _: None)
+
+    work = Path(job["work"])
+    kept = {path.name for path in root.glob("prepared-*")}
+    # The two newest (this install and the failed preparation), plus the two a
+    # record points to, however old.
+    assert kept == {work.name, failed.name, old1.name, old2.name}
+    assert not old3.exists() and not old4.exists()
+    assert sorted(path.name for path in downloads.iterdir()) == sorted(
+        [RELEASE_ID + ".zip", "firmware-id.hex", "recovery-id.zip"])
+    assert not any(leftover.exists() for leftover in leftovers)
+    assert unrelated.is_dir()
+    assert read_json(root / "installed.json")["arduino"]["backup"] == str(old1 / "previous.hex")
+
+
+def test_an_unreadable_record_stops_all_pruning(prepared):
+    installer, job = prepared
+    root = installer.root
+    old = [prepared_folder(root, "prepared-old%d" % index, 1000 + index, "id-%d" % index)
+           for index in range(3)]
+    (root / "firmware-recovery.json").write_text("not json")
+
+    installer.install(job, lambda _: None)
+
+    assert all(folder.is_dir() for folder in old)
