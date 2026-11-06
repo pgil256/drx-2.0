@@ -27,10 +27,10 @@ from config.constants import DATA_PATHS, EMERGENCYSTOP
 
 class ProtocolController:
     # Bound on waiting for the post-stop P0 release to unload the patient
-    # before the recovery reset runs. The reset's 'Y' reboots the MCU (which
-    # aborts an in-flight pressure move) and the homing sequence retracts the
-    # axial actuator LAST, so resetting 1 s after stop left the limb under
-    # load for the whole homing sequence.
+    # before the operator is asked to re-home. The reset's 'Y' reboots the
+    # MCU (which aborts an in-flight pressure move) and the homing sequence
+    # retracts the axial actuator LAST, so resetting 1 s after stop left the
+    # limb under load for the whole homing sequence.
     RELEASE_WAIT_S = 20.0
     RELEASE_DONE_LBS = 5.0  # mirrors firmware PRESSURE_RELEASE_LBS
     _RELEASE_POLL_MS = 250
@@ -526,17 +526,17 @@ class ProtocolController:
         window.logger.info("Pressure release command sent")
 
     def _stop_phase3(self):
-        """Phase 3 of stop protocol - recovery reset once the load has cleared."""
-        # Keep the explicit stopping state until either the worker reports a
-        # user-requested completion or reset recovery finishes.
+        """Phase 3 of stop protocol - ask to re-home once the load has cleared."""
+        # Keep the explicit stopping state until the release finishes; the
+        # device then waits for the operator's re-home.
         self._reset_after_release(time.time())
 
     def _reset_after_release(self, started):
-        """Run the recovery reset once the P0 release has unloaded the patient,
-        or after RELEASE_WAIT_S. ``last_measured_pressure`` is fed by the
-        firmware's status frames (kneespa.status_emit); None means no telemetry
-        has ever arrived (dev launcher / link never up), so there is nothing to
-        wait for."""
+        """Ask the operator to re-home once the P0 release has unloaded the
+        patient, or after RELEASE_WAIT_S. ``last_measured_pressure`` is fed by
+        the firmware's status frames (kneespa.status_emit); None means no
+        telemetry has ever arrived (dev launcher / link never up), so there is
+        nothing to wait for."""
         window = self.window
         if getattr(window, "_no_automatic_recovery", False) is True:
             return
@@ -544,6 +544,13 @@ class ProtocolController:
             return
         if getattr(window, "_physical_stop_active", False) is True:
             return  # Physical stops require an explicit operator recovery.
+        if getattr(window, "reset_in_progress", False) is True:
+            # A reset this Stop cancelled may still be winding down. Wait for
+            # it so the prompt is not lost.
+            QTimer.singleShot(
+                self._RELEASE_POLL_MS, lambda: self._reset_after_release(started)
+            )
+            return
         pressure = getattr(window, "last_measured_pressure", None)
         released = (
             pressure is None
@@ -553,14 +560,32 @@ class ProtocolController:
         if released or waited >= self.RELEASE_WAIT_S:
             if not released:
                 window.logger.warning(
-                    "Release did not clear within %.0fs (pressure=%s); resetting anyway",
-                    waited, pressure,
+                    "Release did not clear within %.0fs (pressure=%s)", waited, pressure,
                 )
-            window.reset_arduino()
+            self._require_operator_rehome(released)
             return
         QTimer.singleShot(
             self._RELEASE_POLL_MS, lambda: self._reset_after_release(started)
         )
+
+    def _require_operator_rehome(self, load_cleared):
+        """Leave the released device un-homed until the operator asks.
+
+        Homing used to start on its own once the release finished, unlike
+        the physical stop, which waits for the operator. The device now waits
+        in "Recovery required" until the operator taps Re-home in the prompt
+        or Reset in Setup. Nothing happens when time passes.
+        """
+        window = self.window
+        if window.protocol_state == "idle":
+            return  # An operator reset finished during the release wait.
+        window.logger.info("Release finished; waiting for the operator to re-home")
+        window.initial_setup_complete = False
+        self.set_state("fault")
+        window.disable_actuator_controls()
+        window.shell.setup.set_reset_enabled(True)
+        window.treatment_panel.set_idle()
+        window._show_rehome_prompt(load_cleared)
 
 
     def protocol_completed(self, success=True, session: Optional[TreatmentSession] = None):
@@ -604,9 +629,10 @@ class ProtocolController:
             # completion must neither clear it nor stack another notice.
             self.set_state("fault")
         elif user_stopped:
-            # The staged stop still owes the patient a recovery reset. Keep
-            # Start/navigation gated until _on_reset_finished confirms it,
-            # even if a successful completion was queued just before STOP.
+            # The staged stop still owes the patient a release and then an
+            # operator re-home. Keep Start/navigation gated until
+            # _on_reset_finished confirms it, even if a successful completion
+            # was queued just before STOP.
             self.set_state("stopping")
         elif success:
             self.set_state("idle")
@@ -712,9 +738,9 @@ class ProtocolController:
         # Assert the hardware EMERGENCYSTOP line FIRST - it does not depend
         # on the serial link being alive. setup_gpio() parks the pin HIGH
         # (run-permitted) at boot, so LOW is the asserted/stop state; it was
-        # configured but never driven before. Released again when the
-        # recovery reset begins (phase 3), which needs a live machine to
-        # home. Polarity is inferred from the boot default - Phase E
+        # configured but never driven before. Released again in phase 3,
+        # before the operator is asked to re-home: homing needs a live
+        # machine. Polarity is inferred from the boot default - Phase E
         # hardware measurement must confirm before this ships to a device.
         try:
             GPIO.output(EMERGENCYSTOP, GPIO.LOW)
@@ -751,8 +777,8 @@ class ProtocolController:
         QTimer.singleShot(1000, self._emergency_stop_phase3)
 
     def _emergency_stop_phase3(self):
-        """Phase 3: release the hardware stop line, then run the recovery
-        reset (the reset sequence homes actuators, which needs the machine
+        """Phase 3: release the hardware stop line, then ask the operator to
+        re-home (the reset sequence homes actuators, which needs the machine
         powered)."""
         if getattr(self.window, "_no_automatic_recovery", False) is True:
             return
@@ -762,7 +788,7 @@ class ProtocolController:
             GPIO.output(EMERGENCYSTOP, GPIO.HIGH)
         except Exception as e:
             self.window.logger.error("Could not release EMERGENCYSTOP GPIO: %s", e)
-        # Same release-then-reset ordering as the staged stop
+        # Same release-then-ask ordering as the staged stop
         self._reset_after_release(time.time())
 
 

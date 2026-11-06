@@ -72,6 +72,7 @@ from config.constants import (
 )
 
 from ui.modals.pressure_notice import PressureNotice
+from ui.modals.rehome_prompt import RehomePrompt
 from ui.modals.upload_error import UploadErrorDialog
 from config.config import Configuration
 from helpers.csv import CSVHelper
@@ -1781,6 +1782,38 @@ class KneeSpa(QMainWindow):
         self._pressure_notice = box
         box.destroyed.connect(lambda: setattr(self, "_pressure_notice", None))
 
+    def _show_rehome_prompt(self, load_cleared: bool = True) -> None:
+        """Ask before homing after an on-screen STOP; nothing moves on a timer."""
+        if self._closing:
+            return
+        existing = getattr(self, "_rehome_prompt", None)
+        if existing is not None and existing.isVisible():
+            return
+        box = RehomePrompt(load_cleared, self)
+        box.rehome_requested.connect(self._on_rehome_requested)
+        box.show()
+        self._rehome_prompt = box
+        box.destroyed.connect(lambda: setattr(self, "_rehome_prompt", None))
+
+    def _on_rehome_requested(self) -> None:
+        """Run the reset that used to start on its own after a STOP.
+
+        It replaces automatic recovery, so it needs no Setup sign-in. A fault
+        or physical stop since the prompt opened hands recovery to Setup.
+        """
+        if (getattr(self, "_no_automatic_recovery", False) is True
+                or getattr(self, "_physical_stop_active", False) is True):
+            self._show_timed_error(
+                "A safety stop is active. Check the device, then use Reset in Setup."
+            )
+            return
+        self.reset_arduino()
+
+    def _close_rehome_prompt(self) -> None:
+        box = getattr(self, "_rehome_prompt", None)
+        if box is not None:
+            box.close()
+
     def _show_timed_error(self, message):
         """Show error message that automatically closes after a timeout."""
         self.logger.warning("Status emit error: %s", message)
@@ -1845,6 +1878,8 @@ class KneeSpa(QMainWindow):
         return connected
 
     def reset_arduino(self, event=None):
+        # Reset from Setup also answers a pending re-home prompt.
+        self._close_rehome_prompt()
         self.connection.reset_arduino(event)
 
     def setup_gpio(self):
