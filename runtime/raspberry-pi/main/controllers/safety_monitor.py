@@ -13,7 +13,7 @@ from config.constants import (
     LATERAL_MIN,
     LATERAL_MAX,
 )
-from controllers.stop_controller import PHYSICAL, stops_for
+from controllers.stop_controller import COMMAND_FAULT, PHYSICAL, stops_for
 
 
 COMMAND_REJECTION_MESSAGES = {
@@ -272,26 +272,9 @@ class SafetyMonitor:
                 )
                 return
 
-            # Outside a stop, a rejected command still matters: halt the
-            # treatment state machine, but identify it as a command failure
-            # rather than a device safety trip.
-            protocol = getattr(window, "protocol", None)
-            if protocol is not None:
-                protocol.latch_session_outcome("fault")
-            window.stop_actuators()
-            window._no_automatic_recovery = True
-            window.initial_setup_complete = False
-            if window.protocol_running and window.worker:
-                try:
-                    window.worker.cancel()
-                except Exception:
-                    window.logger.exception("Error flagging worker stop")
-            fault = f"COMMAND REJECTED: {message}"
-            window.treatment_panel.set_fault(fault)
-            window.set_protocol_state("fault")
-            window._show_timed_error(
-                f"The device rejected a command: {message}. Reset before continuing."
-            )
+            # Outside a stop, a rejected command still matters: see
+            # StopController (kind "fault/command").
+            stops_for(window).stop(COMMAND_FAULT, message=message)
             return
 
         self._present_warning(message)

@@ -29,6 +29,10 @@ ESTOP = "estop"         # the on-screen EMERGENCY STOP (screen, banner, Setup)
 PHYSICAL = "physical"   # the device's own stop button
 FAULT = "fault"         # a latched controller fault: stop, no automatic movement
 SHUTDOWN = "shutdown"   # the app is closing
+# A command the firmware rejected outside a stop (SafetyMonitor.on_firmware_error).
+# A fault stop too, but it sends X once and cancels the worker only while a
+# treatment runs.
+COMMAND_FAULT = FAULT + "/command"
 
 
 @dataclass(frozen=True)
@@ -77,7 +81,7 @@ POLICIES: Dict[str, StopPolicy] = {
         flags={"no_automatic_recovery": True, "initial_setup_complete": False},
         screen="fault",
     ),
-    FAULT + "/command": StopPolicy(
+    COMMAND_FAULT: StopPolicy(
         commands=(STOP_ALL,), hardware_line=False,
         release="none: no automatic movement",
         recovery="Reset in Setup",
@@ -139,6 +143,7 @@ class StopController:
             ESTOP: self._estop_stop,
             FAULT: self._fault_stop,
             PHYSICAL: self._physical_stop,
+            COMMAND_FAULT: self._command_rejected_stop,
         }
         handlers[kind](**options)
 
@@ -385,3 +390,28 @@ class StopController:
                 "Physical emergency stop activated. Release the button and reset "
                 "the device before starting another treatment."
             )
+
+    def _command_rejected_stop(self, message: str) -> None:
+        """Halt after the firmware rejected a command outside a stop.
+
+        Halts the treatment state machine, but identifies it as a command
+        failure rather than a device safety trip.
+        """
+        window = self.window
+        protocol = self.protocol
+        if protocol is not None:
+            protocol.latch_session_outcome("fault")
+        window.stop_actuators()
+        window._no_automatic_recovery = True
+        window.initial_setup_complete = False
+        if window.protocol_running and window.worker:
+            try:
+                window.worker.cancel()
+            except Exception:
+                window.logger.exception("Error flagging worker stop")
+        fault = f"COMMAND REJECTED: {message}"
+        window.treatment_panel.set_fault(fault)
+        window.set_protocol_state("fault")
+        window._show_timed_error(
+            f"The device rejected a command: {message}. Reset before continuing."
+        )
