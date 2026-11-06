@@ -10,6 +10,7 @@ import pytest
 from unittest.mock import MagicMock
 
 import controllers.protocol_controller as pc_mod
+import controllers.stop_controller as sc_mod
 from controllers.protocol_controller import ProtocolController
 from config.constants import EMERGENCYSTOP
 
@@ -39,11 +40,12 @@ def estop_env(monkeypatch):
     # The tests call each phase directly. Real timers would run the later
     # phases after the test, against this stub, during some other test.
     monkeypatch.setattr(pc_mod, "QTimer", MagicMock())
+    monkeypatch.setattr(sc_mod, "QTimer", MagicMock())
     window = RecordingWindow(events)
     controller = ProtocolController(window)
     # Its state changes are covered in test_protocol_controller; record
     # only where the operator prompt falls in the stop sequence.
-    monkeypatch.setattr(controller, "_require_operator_rehome",
+    monkeypatch.setattr(controller.stops, "_require_operator_rehome",
                         lambda load_cleared: events.append("ask_rehome"))
     return events, gpio, controller, window
 

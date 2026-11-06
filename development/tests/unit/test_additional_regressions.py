@@ -134,8 +134,8 @@ def test_shutdown_suppresses_delayed_recovery(qtbot: QtBot) -> None:
     controller = ProtocolController(window)
     manager = ConnectionManager(window)
 
-    controller._stop_phase2()
-    controller._stop_phase3()
+    controller.stops._stop_phase2()
+    controller.stops._stop_phase3()
     controller._emergency_stop_phase2()
     controller._emergency_stop_phase3()
     manager._automatic_reset()

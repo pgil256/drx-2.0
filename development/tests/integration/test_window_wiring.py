@@ -608,7 +608,7 @@ def test_stop_waits_for_the_operator_to_rehome(window_run: SimpleNamespace,
     monkeypatch.setattr(connection_manager, "ResetWorker", lambda *args: reset)
     run.pool.start.side_effect = None
     w.last_measured_pressure = 0.0
-    w.protocol._stop_phase3()
+    w.protocol.stops._stop_phase3()
     prompt = w._rehome_prompt
     assert prompt.isVisible()
     assert w.protocol_state == "fault" and not w.initial_setup_complete
@@ -616,7 +616,7 @@ def test_stop_waits_for_the_operator_to_rehome(window_run: SimpleNamespace,
     assert w.shell.setup._reset_btn.isEnabled()
     assert not any(button.isEnabled() for row in w.shell.setup._rows.values()
                    for button in row.motion_buttons)
-    w.protocol._stop_phase3()  # a repeat does not stack a second prompt
+    w.protocol.stops._stop_phase3()  # a repeat does not stack a second prompt
     assert w._rehome_prompt is prompt
     if answer == "not now":
         prompt.later_button.click()
@@ -637,7 +637,7 @@ def test_rehome_prompt_defers_to_a_later_safety_stop(window_run: SimpleNamespace
     w = run.window
     w.protocol.stop_from_view()  # Setup-screen Stop with nothing running
     w.last_measured_pressure = 0.0
-    w.protocol._stop_phase3()
+    w.protocol.stops._stop_phase3()
     prompt = w._rehome_prompt
     w._no_automatic_recovery = True  # e.g. a firmware fault after the prompt opened
     errors = []
@@ -701,7 +701,7 @@ def test_fault_survives_completion_and_stale_callbacks_after_close(
     assert run.window.protocol_state == "fault"
     assert not run.view._start_btn.isEnabled()
     run.window.close()
-    run.window.protocol._stop_phase2()
+    run.window.protocol.stops._stop_phase2()
     run.window.protocol._emergency_stop_phase2()
     run.window.connection._on_reset_finished(True)
     worker.signals.finished.emit(True)
@@ -791,7 +791,7 @@ def test_pressure_notice_actions_keep_recovery_explicit(window_run, action, qtbo
         assert [c[0][0] for c in run.arduino.send.call_args_list] == ["X", "X", "HF1"]
         worker.cancel.assert_called_once_with(firmware_stopped=True)
         assert run.window._no_automatic_recovery
-        run.window.protocol._stop_phase2()
+        run.window.protocol.stops._stop_phase2()
         run.window.connection._automatic_reset()
         assert [c[0][0] for c in run.arduino.send.call_args_list] == ["X", "X", "HF1"]
 

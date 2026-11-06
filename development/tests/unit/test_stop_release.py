@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import controllers.protocol_controller as pc_mod
+import controllers.stop_controller as sc_mod
 from fixtures.controllers import make_window
 from fixtures.protocols import make_protocol
 
@@ -24,6 +25,13 @@ PHASES = ("_stop_phase2", "_emergency_stop_phase2")
 def no_timers(monkeypatch):
     # The phases schedule their successors; these tests drive one phase.
     monkeypatch.setattr(pc_mod, "QTimer", MagicMock())
+    monkeypatch.setattr(sc_mod, "QTimer", MagicMock())
+
+
+def phase_of(window, name):
+    """A stop phase, wherever it lives (StopController, or not yet moved)."""
+    stops = window.protocol.stops
+    return getattr(stops if hasattr(stops, name) else window.protocol, name)
 
 
 def sent(window):
@@ -35,7 +43,7 @@ def test_stop_without_a_worker_releases_pressure(phase):
     window = make_window()
     window.worker = None
 
-    getattr(window.protocol, phase)()
+    phase_of(window, phase)()
 
     assert sent(window) == ["P0"]
 
@@ -45,7 +53,7 @@ def test_a_worker_that_released_is_not_repeated(phase):
     window = make_window()
     window.worker.stop.return_value = True
 
-    getattr(window.protocol, phase)()
+    phase_of(window, phase)()
 
     window.worker.stop.assert_called_once_with()
     assert sent(window) == []
@@ -57,7 +65,7 @@ def test_a_worker_that_declined_still_gets_a_release(phase):
     window = make_window()
     window.worker.stop.return_value = False
 
-    getattr(window.protocol, phase)()
+    phase_of(window, phase)()
 
     assert sent(window) == ["P0"]
 
@@ -68,7 +76,7 @@ def test_active_physical_stop_leaves_the_firmware_release_alone(phase):
     window.worker = None
     window._physical_stop_active = True
 
-    getattr(window.protocol, phase)()
+    phase_of(window, phase)()
 
     assert sent(window) == []
 
@@ -78,7 +86,7 @@ def test_an_unsendable_release_is_logged():
     window.worker = None
     window.arduino.send.return_value = False
 
-    window.protocol._stop_phase2()
+    window.protocol.stops._stop_phase2()
 
     window.logger.error.assert_called_once()
 
@@ -88,7 +96,7 @@ def test_fault_stop_still_sends_no_release():
     window.worker = None
 
     window.protocol.stop_without_recovery("PRESSURE_LIMIT", fault=True)
-    window.protocol._stop_phase2()
+    window.protocol.stops._stop_phase2()
     window.protocol._emergency_stop_phase2()
 
     assert "P0" not in sent(window)
