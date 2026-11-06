@@ -3,6 +3,8 @@
 import os
 from pathlib import Path
 
+from .migrate_state import SECRET_FILES, restrict_secret_file
+
 
 APP_BASE_DIR = os.path.abspath(os.environ.get(
     "KNEESPA_BASE_DIR", str(Path(__file__).resolve().parents[1]),
@@ -20,12 +22,18 @@ DEVICE_STATE_DIR = os.path.join(DEVICE_DIR, "raspberry-pi")
 
 
 def load_device_environment() -> None:
-    """Read only the selected device's env files; process environment wins."""
+    """Read only the selected device's env files; process environment wins.
+
+    The files hold credentials, so a group- or world-accessible one is made
+    owner-only (0600) first, with a warning.
+    """
+    for name in SECRET_FILES:
+        restrict_secret_file(os.path.join(DEVICE_STATE_DIR, name))
     try:
         from dotenv import load_dotenv
     except ImportError:
         return
-    for name in (".env", "cloud.env"):
+    for name in SECRET_FILES:
         load_dotenv(os.path.join(DEVICE_STATE_DIR, name), override=False)
 
 
