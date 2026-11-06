@@ -114,6 +114,12 @@ class Arduino(QObject):
     # triggers an active probe
     RX_SILENCE_LIMIT_S = 15.0
     PROBE_TIMEOUT_S = 5.0
+    # Received bytes are split into lines without blocking (checklist V9).
+    # A line with no newline after this long is handed on by itself, as
+    # readline() did at the port's 1 s timeout, so the next line starts clean
+    # (the Mega can reset mid-line). A longer one is discarded.
+    PARTIAL_LINE_TIMEOUT_S = 1.0
+    MAX_PARTIAL_LINE = 512
 
     def __init__(self, transport_factory: Optional[Callable[..., object]] = None,
                  port: Optional[str] = None) -> None:
@@ -413,13 +419,34 @@ class Arduino(QObject):
         self._reader_ready.set()
         last_rx = time.time()
         probe_sent_at = None
+        # readline() blocked until a newline or the 1 s read timeout, so a
+        # partial line held up the TX queues, the stop queue included, for up
+        # to a second. Bytes are now read as they arrive and split here, and
+        # the queues are serviced every pass (checklist V9).
+        partial = b""
+        partial_since = 0.0
 
         while self._running and self.serial_com and getattr(self.serial_com, "is_open", False):
-            raw_data = ""
+            lines = []
             try:
                 self._service_tx_queue()
-                if self.serial_com.in_waiting > 0:
-                    raw_data = self.serial_com.readline().decode(errors="replace")
+                waiting = self.serial_com.in_waiting
+                if waiting > 0:
+                    if not partial:
+                        partial_since = time.monotonic()
+                    partial += self.serial_com.read(waiting)
+                    *complete, partial = partial.split(b"\n")
+                    lines = [line.decode(errors="replace") + "\n" for line in complete]
+                    if complete:
+                        partial_since = time.monotonic()
+                    if len(partial) > self.MAX_PARTIAL_LINE:
+                        self.logger.warning(
+                            "Discarding %d received bytes with no line ending", len(partial)
+                        )
+                        partial = b""
+                elif partial and time.monotonic() - partial_since >= self.PARTIAL_LINE_TIMEOUT_S:
+                    lines = [partial.decode(errors="replace")]
+                    partial = b""
                 else:
                     time.sleep(0.01)
             except (serial.SerialException, OSError):
@@ -435,7 +462,7 @@ class Arduino(QObject):
                 self.logger.exception("Unexpected error in I/O loop")
                 time.sleep(0.1)
 
-            if raw_data:
+            for raw_data in lines:
                 try:
                     self._trace_serial("RX", raw_data.rstrip("\r\n"))
                     data = raw_data.strip()
