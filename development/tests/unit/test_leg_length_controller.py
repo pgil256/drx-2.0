@@ -8,6 +8,7 @@ from controllers import leg_length_controller as module
 from controllers.connection_manager import ConnectionManager
 from helpers.arduino import Arduino, CommandHandle
 from kneespa import KneeSpa
+from fixtures.motion import make_motion
 from fixtures.controllers import make_window
 
 
@@ -223,13 +224,13 @@ def test_boot_failure_blocks_readiness_and_explicit_retry_can_home(leg):
 
 
 def test_general_done_does_not_unlock_leg_motion(leg):
-    controller, window, _, _ = leg
-    window.controls_enable_timer = None
+    controller, _, _, _ = leg
     assert controller.home()
-    window.actuator_command_in_progress = True
-    KneeSpa.enable_actuator_controls(window)
-    assert window.actuator_command_in_progress
-    assert window.controls_enable_timer is None
+    motion = make_motion(leg=controller)  # the Setup gate sees the homing leg
+    motion.state.actuator_command_in_progress = True
+    motion.enable_actuator_controls()
+    assert motion.state.actuator_command_in_progress
+    assert motion.controls_enable_timer is None
 
 
 def test_slider_target_uses_completed_quarter_inch_commands(leg):

@@ -206,6 +206,9 @@ class ConnectionManager:
         thread = getattr(window, "arduino_thread", None)
 
         if arduino is not None:
+            # First, so a connect loop still retrying ends instead of
+            # reopening the port after this teardown (checklist V8).
+            arduino.cancel_connect()
             drained = arduino.disconnect(drain_timeout=drain_timeout)
 
         if thread is not None:

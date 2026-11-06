@@ -16,6 +16,9 @@ public:
     // Captured output
     char output[MAX_OUTPUT_SIZE];
     int outputLen = 0;
+    // Shared sequence number of the first print since reset() (0 = none);
+    // compare with WireCommand::seq (mock_sequence.h).
+    unsigned long firstPrintSeq = 0;
 
     // Input queue
     std::queue<std::string> inputQueue;
@@ -45,6 +48,7 @@ public:
     }
 
     size_t print(const char* s) {
+        if (firstPrintSeq == 0) firstPrintSeq = nextMockSequence();
         int len = strlen(s);
         if (outputLen + len < MAX_OUTPUT_SIZE) {
             memcpy(output + outputLen, s, len);
@@ -135,6 +139,7 @@ public:
 
     void reset() {
         outputLen = 0;
+        firstPrintSeq = 0;
         while (!inputQueue.empty()) inputQueue.pop();
         currentInput.clear();
         inputIndex = 0;

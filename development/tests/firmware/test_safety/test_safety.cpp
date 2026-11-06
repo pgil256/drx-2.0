@@ -58,6 +58,8 @@ void setUp(void) {
     lateralSpeed = C_SPEED;
     pulseSpeed = TREATMENT_SPEED_MAX;
     pressureWarningIssued = false;
+    negativeLoadSamples = 0;
+    negativeLoadWarned = false;
     heartbeatWarningIssued = false;
     scaleWarningIssued = false;
     pressureTimeoutWarningIssued = false;
@@ -1418,6 +1420,137 @@ void test_stall_timeout_ends_the_move_with_a_distinct_error(void) {
     TEST_ASSERT_FALSE(Serial1.outputContains("MOTION_DONE"));
 }
 
+// --- V2: a sustained negative load is not load ---
+
+static int outputCount(const char *needle) {
+    std::string out(Serial1.output, Serial1.outputLen);
+    int count = 0;
+    for (size_t at = out.find(needle); at != std::string::npos;
+         at = out.find(needle, at + 1))
+        count++;
+    return count;
+}
+
+// Exactly one load-cell sample per call, about 100 ms apart as on the
+// HX711. loop() can take several (readPosition() samples too, and the mock
+// is always ready), so the count is driven through servicePressure().
+static void sample(float signedLbs, int samples) {
+    for (int i = 0; i < samples; i++) {
+        setMeasuredPressure(signedLbs);
+        _millis_value += 100;
+        keepAlive();
+        servicePressure();
+    }
+}
+
+void test_negative_load_during_a_pressure_move_latches_after_three_samples(void) {
+    setMeasuredPressure(20); processCommand("P50");
+    TEST_ASSERT_TRUE(measurePressure);
+    sample(-10, 2);
+    TEST_ASSERT_FALSE(pressureFault);
+    sample(-10, 1);
+    TEST_ASSERT_TRUE(pressureFault);
+    TEST_ASSERT_FALSE(measurePressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("FAULT|PRESSURE_NEGATIVE"));
+}
+
+void test_negative_load_while_pulsing_latches(void) {
+    jerking = true;
+    sample(-10, 3);
+    TEST_ASSERT_TRUE(pressureFault);
+    TEST_ASSERT_FALSE(jerking);
+    TEST_ASSERT_TRUE(Serial1.outputContains("FAULT|PRESSURE_NEGATIVE"));
+}
+
+void test_negative_samples_must_be_consecutive(void) {
+    setMeasuredPressure(20); processCommand("P50");
+    sample(-10, 2);
+    sample(10, 1);   // one reading back above the threshold restarts the count
+    sample(-10, 2);
+    TEST_ASSERT_FALSE(pressureFault);
+    TEST_ASSERT_TRUE(measurePressure);
+}
+
+void test_small_negative_reading_is_ignored(void) {
+    setMeasuredPressure(20); processCommand("P50");
+    sample(-4, 10);  // within NEGATIVE_LOAD_LBS, e.g. tension at a release's end
+    TEST_ASSERT_FALSE(pressureFault);
+    TEST_ASSERT_EQUAL(0, outputCount("Load cell reads negative"));
+}
+
+void test_negative_load_at_rest_warns_once_until_it_recovers(void) {
+    sample(-10, 6);
+    TEST_ASSERT_FALSE(pressureFault);
+    TEST_ASSERT_EQUAL(1, outputCount("WARNING: Load cell reads negative; re-tare"));
+    sample(0, 1);
+    sample(-10, 3);
+    TEST_ASSERT_EQUAL(2, outputCount("WARNING: Load cell reads negative; re-tare"));
+}
+
+void test_negative_load_is_not_checked_before_calibration(void) {
+    pressureCalibrated = false;
+    sample(-10, 5);
+    TEST_ASSERT_FALSE(pressureFault);
+    TEST_ASSERT_EQUAL(0, outputCount("Load cell reads negative"));
+}
+
+// --- V3: stops are written before any debug output ---
+
+// The shared sequence number of the last SMC speed write (0x85/0x86) to
+// `address`, or 0 if there was none.
+static unsigned long lastSpeedWriteSeq(uint8_t address) {
+    unsigned long seq = 0;
+    for (int i = 0; i < Wire.commandCount; i++) {
+        const WireCommand &c = Wire.commands[i];
+        if (c.address == address && c.dataLen >= 1 &&
+            (c.data[0] == 0x85 || c.data[0] == 0x86))
+            seq = c.seq;
+    }
+    return seq;
+}
+
+static unsigned long lastStopSeq(void) {
+    unsigned long last = 0;
+    for (uint8_t address = 12; address <= 14; address++) {
+        unsigned long seq = lastSpeedWriteSeq(address);
+        TEST_ASSERT_TRUE_MESSAGE(seq != 0, "a stop write is missing");
+        if (seq > last) last = seq;
+    }
+    return last;
+}
+
+void test_emergency_stop_writes_every_stop_before_any_output(void) {
+    Serial.reset(); Serial1.reset(); Wire.reset();
+    emergencyStop();
+    unsigned long last = lastStopSeq();
+    TEST_ASSERT_TRUE(Serial.firstPrintSeq > last);   // USB debug log
+    TEST_ASSERT_TRUE(Serial1.firstPrintSeq > last);  // its LOG| copy to the Pi
+    TEST_ASSERT_TRUE(Serial.outputContains("Emergency Stop"));
+    TEST_ASSERT_TRUE(Serial.outputContains("C stopped"));
+    TEST_ASSERT_FALSE(Serial.outputContains("Set motor speed on"));
+}
+
+void test_physical_stop_writes_every_stop_before_its_debug_line(void) {
+    Serial.reset(); Serial1.reset(); Wire.reset();
+    emergencyStopAndRelease("Stop button pressed");
+    unsigned long last = 0;
+    for (uint8_t address = 13; address <= 14; address++)
+        if (lastSpeedWriteSeq(address) > last) last = lastSpeedWriteSeq(address);
+    TEST_ASSERT_TRUE(last != 0);
+    TEST_ASSERT_TRUE(Serial.firstPrintSeq > last);
+    TEST_ASSERT_TRUE(Serial.outputContains("Emergency stop + release: Stop button pressed"));
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Stop button pressed"));
+}
+
+void test_speed_write_logs_after_the_i2c_write(void) {
+    Serial.reset(); Wire.reset();
+    smcDeviceNumber = 13;
+    setMotorSpeed(-500);
+    TEST_ASSERT_TRUE(lastSpeedWriteSeq(13) != 0);
+    TEST_ASSERT_TRUE(Serial.firstPrintSeq > lastSpeedWriteSeq(13));
+    TEST_ASSERT_TRUE(Serial.outputContains("Set motor speed on: 13 at -500"));
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
 
@@ -1500,6 +1633,15 @@ int main(int argc, char **argv) {
     RUN_TEST(test_v2_deferred_done_carries_seq);
     RUN_TEST(test_v2_status_carries_checksum);
     RUN_TEST(test_v1_status_checksum_preserves_legacy_command_acks);
+    RUN_TEST(test_negative_load_during_a_pressure_move_latches_after_three_samples);
+    RUN_TEST(test_negative_load_while_pulsing_latches);
+    RUN_TEST(test_negative_samples_must_be_consecutive);
+    RUN_TEST(test_small_negative_reading_is_ignored);
+    RUN_TEST(test_negative_load_at_rest_warns_once_until_it_recovers);
+    RUN_TEST(test_negative_load_is_not_checked_before_calibration);
+    RUN_TEST(test_emergency_stop_writes_every_stop_before_any_output);
+    RUN_TEST(test_physical_stop_writes_every_stop_before_its_debug_line);
+    RUN_TEST(test_speed_write_logs_after_the_i2c_write);
 
     return UNITY_END();
 }

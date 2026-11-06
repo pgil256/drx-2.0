@@ -15,11 +15,22 @@ pytestmark = pytest.mark.unit
     "CALIBRATION|TARE|CANCELLED|STOP", "COMMAND_REJECTED|P|TARE_REQUIRED",
     "DIAG|HX711|-300|-200|-100|1.000000|20|40|150|1",
     "DIAG|HX711|0|0|1|0|-1|40|150|0", "NOTICE|PRESSURE_NO_PROGRESS|2150|1.5|2.5",
+    "DIAG|HX711|-300|-200|-100|1.000000|20|40|150|1|2741",
     "DIAG|HARDWARE|1|1|1|0|0", "DIAG|HARDWARE|0|0|0|1|1",
 ])
 def test_valid_typed_replies(frame):
     signal, result = parse_diagnostic_frame(frame)
     assert signal and result
+
+def test_hx711_diagnostics_carry_the_lowest_free_ram_when_sent():
+    """V4: the 2026-11 firmware appends it; older firmware does not."""
+    _, new = parse_diagnostic_frame("DIAG|HX711|-300|-200|-100|1.000000|20|40|150|1|2741")
+    _, old = parse_diagnostic_frame("DIAG|HX711|-300|-200|-100|1.000000|20|40|150|1")
+    assert new["min_free_ram"] == 2741
+    assert old["min_free_ram"] is None
+    assert {k: v for k, v in new.items() if k != "min_free_ram"} == \
+        {k: v for k, v in old.items() if k != "min_free_ram"}
+
 
 @pytest.mark.parametrize("frame", [
     "MOTION_DONE|P|nan|40", "MOTION_DONE|P|40|inf", "MOTION_DONE|K|1500|4096",
@@ -28,6 +39,8 @@ def test_valid_typed_replies(frame):
     "CALIBRATION|TARE|OK|8388608|1", "CALIBRATION|TARE|OK|0|0",
     "DIAG|HX711|0|0|1|nan|0|0|0|1", "DIAG|HX711|0|0|1|0|0|0|0|2",
     "DIAG|HX711|0|0|1|0|-2|0|0|0", "FAULT|PRESSURE_LIMIT|40|nan",
+    "DIAG|HX711|0|0|1|0|0|0|0|1|-1", "DIAG|HX711|0|0|1|0|0|0|0|1|2741.5",
+    "DIAG|HX711|0|0|1|0|0|0|0|1|2741|1",
     "NOTICE|PRESSURE_NO_PROGRESS|2150|1|-1", "COMMAND_REJECTED|P|BAD REASON",
     "DIAG|HARDWARE|1|1|1|0", "DIAG|HARDWARE|1|1|1|0|0|DONE",
     "DIAG|HARDWARE|2|1|1|0|0", "DIAG|HARDWARE|1|1|1|false|0",

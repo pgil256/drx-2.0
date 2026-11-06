@@ -410,11 +410,26 @@ def test_protected_device_work_blocks_treatment_reset_and_manual_motion(window_r
     try:
         w.protocol.start_protocol()
         w.connection.reset_arduino()
-        assert not w._send_motion_command("K1200", "test device guard")
+        assert not w.motion.send_motion_command("K1200", "test device guard")
         assert not run.workers
         run.arduino.send.assert_not_called()
     finally:
         w._device_maintenance_active = False
+
+
+def test_motion_state_lives_on_the_motion_controller(window_run):
+    """The window's old motion names reach MotionController (checklist A3):
+    the connection manager's reset writes the positions, and the shutdown
+    stop stops the two timers by name."""
+    w = window_run.window
+    assert w.motion.state is w.device_state
+    w.axial_flexion_position = 2.5
+    assert w.motion.axial_flexion_position == 2.5
+    w.disable_actuator_controls()
+    w.motion.state.initial_setup_complete = True
+    w.enable_actuator_controls()
+    assert w.controls_enable_timer is w.motion.controls_enable_timer is not None
+    w.controls_enable_timer.stop()
 
 
 def test_calibration_restore_requires_explicit_recovery(window_run, monkeypatch, tmp_path):

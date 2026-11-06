@@ -335,6 +335,29 @@ class TestFirmwareEvents:
         assert w.treatment_panel.warnings == []
         assert w.resets == 0
 
+    def test_negative_load_fault_tells_the_operator_what_to_do(self, monitor):
+        """V2: the firmware latches PRESSURE_NEGATIVE on a sustained negative load."""
+        sm, w = monitor
+        w._closing = False
+        w.protocol = MagicMock()
+
+        sm.on_controller_fault({"reason": "PRESSURE_NEGATIVE"})
+
+        message = "Load cell reading is negative. Check wiring and re-zero."
+        w.protocol.stop_without_recovery.assert_called_once_with(message, fault=True)
+        assert w._measurement_fault == "PRESSURE_NEGATIVE"  # the code, for diagnostics
+        assert w.alerts == ["CONTROLLER FAULT: " + message]
+
+    def test_other_fault_reasons_are_shown_as_sent(self, monitor):
+        sm, w = monitor
+        w._closing = False
+        w.protocol = MagicMock()
+
+        sm.on_controller_fault({"reason": "PRESSURE_LIMIT"})
+
+        w.protocol.stop_without_recovery.assert_called_once_with("PRESSURE_LIMIT", fault=True)
+        assert w.alerts == ["CONTROLLER FAULT: PRESSURE_LIMIT"]
+
     def test_stall_timeout_during_a_reset_is_still_a_fault(self, monitor):
         """The advisory stall warning is silenced while homing; the timeout is not."""
         sm, w = monitor

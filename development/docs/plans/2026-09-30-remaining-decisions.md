@@ -52,7 +52,8 @@ firmware native tests 8 suites / 165 tests; Mega build warning-free;
 ### Batch 2026-11: stop hardening (queued, not flashed)
 
 These items come from the checklist in
-`development/docs/plans/2026-11-04-improvement-checklist.md` (F1–F4). The
+`development/docs/plans/2026-11-04-improvement-checklist.md` (F1–F4, then
+the owner-approved firmware findings V1–V6). The
 image is built from `main`, so it also contains everything in the
 2026-10-28 batch above. A device still on an older image gets both changes
 with this flash.
@@ -170,6 +171,147 @@ with this flash.
      `ERROR: Motor stall timeout <n>`, and the app shows
      `CONTROLLER FAULT: Motor stall timeout <n>` and requires Reset.
   4. A normal long move, for example homing during Reset, still completes.
+- **V1, a status ack no longer holds up a stop (2026-11-06).**
+  - **The bug:** the firmware stops reading serial bytes while a complete
+    command waits out the 200 ms rate limit (`MIN_COMMAND_INTERVAL`). Only
+    `X` was exempt. The Pi writes each status ack `Q` as soon as a status
+    frame arrives, outside its own 0.22 s pacing, so a `Q` within 200 ms of
+    a paced command waited, and an `X` right behind it waited too, for up
+    to about 200 ms.
+  - **The fix:** `Q` is exempt from the rate limit as well, and it does not
+    restart the limit's window, so it never holds up the next paced command
+    either. The Pi already assumed both `X` and `Q` bypass the limiter, so
+    no Pi change is needed.
+  - **`VERSION`** is unchanged. It is the same batch.
+- **Image after V1:** flash 34,304 bytes, RAM 2,694 bytes (local WSL build,
+  sha256 `6a391aaaf68c173f9c6903766ecbe609fd6f65f9284e5c058eab73169dc6b48f`).
+- **Bench check for V1:** none beyond the F1 checks; a normal session's
+  stops and status updates behave as before. The timing is covered by a
+  native test.
+- **V2, a sustained negative load is not load (2026-11-06).**
+  - **The bug:** `pressure` is the magnitude of the signed reading, so
+    tension past zero, or the zero drifting (drx-rd drifted by up to about
+    30 lb on 2026-10-28), counted as load. A pressure move or pulse could
+    act on load that was not there.
+  - **The fix:** while the scale is tared or a pressure guard is active, a
+    signed reading below -5 lb (`NEGATIVE_LOAD_LBS`) for 3 samples in a row
+    (`NEGATIVE_LOAD_SAMPLES`, about 0.3 s):
+    - during a pressure move or pulsing, latches
+      `FAULT|PRESSURE_NEGATIVE|<target>|<magnitude>`, through the same path
+      as the other pressure faults;
+    - otherwise sends `WARNING: Load cell reads negative; re-tare` once,
+      again only after the reading has recovered.
+  - **Limit:** a negative offset large enough to reach a move's target can
+    still satisfy that move's arrival on its first sample, before three
+    samples latch the fault; the warning then follows. Arrival is
+    unchanged.
+  - **Pi change (ships with the app, not the flash):**
+    `controllers/safety_monitor.py` shows `PRESSURE_NEGATIVE` as
+    "Load cell reading is negative. Check wiring and re-zero." Older
+    firmware never sends it.
+  - **The threshold is a starting value.** Bench data should set it above
+    the tension normally seen at the end of a release.
+- **Image after V2:** flash 34,524 bytes, RAM 2,714 bytes (local WSL build,
+  sha256 `44be785aab989c9c9bcd5225455a5be5d9774cb50ba53b92fb5725298a6ed3b1`).
+  RAM grows by the two new state bytes and the fault reason string.
+- **Bench checks for V2:**
+  - After a P0 release on a test load, the Arduino log has no
+    `Load cell reads negative` warning. If it does, record the reading and
+    raise `NEGATIVE_LOAD_LBS` above it.
+  - With the device unoccupied, offset the zero by more than 5 lb (tare with
+    about 10 lb on, then remove it): the warning appears once, and a pressure
+    Go then stops with the new operator message.
+- **V3, stops before debug output (2026-11-06).**
+  - **The bug:** every debug line also goes to USB `Serial` at 9600 baud,
+    about 1 ms per byte, and `print` blocks once its 64-byte buffer is full.
+    `setMotorSpeed()` logged before its I2C write, and `emergencyStop()`
+    printed between the axes, so the second and third stops could wait tens
+    of milliseconds behind the log. The physical stop printed first too.
+  - **The fix:**
+    - `writeMotorSpeed()` logs after the I2C write, with the same text.
+    - `emergencyStop()` writes all three stops, then stops the leg motor,
+      and only then prints its lines. The per-write "Set motor speed on"
+      lines are left out during the stop; "A stopped" to "FIT stopped"
+      still follow.
+    - The physical stop's "Emergency stop + release" debug line moves after
+      the stop. The `ERROR: Stop button pressed` line to the Pi stays first:
+      it goes over the 115200-baud link, not USB.
+    - Not done: the optional change of USB `Serial` to 115200 baud. Anyone
+      reading the Arduino's USB log would need the new rate, so it is left
+      for a separate decision.
+  - **`VERSION`** is unchanged. It is the same batch.
+- **Image after V3:** flash 34,564 bytes, RAM 2,715 bytes (local WSL build,
+  sha256 `639f8f2513cd5a33c3a2e6a05a9a50335cf99af9b40572d5ee36116eeef3a711`).
+- **Bench check for V3:** an on-screen stop and the physical stop during a
+  Setup move halt all three axes as before. The Arduino log still shows
+  "Emergency Stop" through "FIT stopped" after each stop.
+- **V4, the command buffer and a free-RAM figure (2026-11-06).**
+  - **Why:** the command path uses heap `String`s on the Mega's 8 KB of RAM.
+    The risk of fragmentation is low (short, bounded strings; no field
+    report), but nothing measured it.
+  - **The change:**
+    - `commandBuffer.reserve(MAX_COMMAND_LENGTH)` in `setup()`, so the
+      buffer no longer reallocates as it grows a byte at a time.
+    - `processCommand` takes `const String &`, which drops one copy per
+      command.
+    - The lowest free RAM seen since boot (the gap between the heap's top
+      and the stack pointer, sampled every `loop()` pass and every command)
+      is a new last field of `DIAG|HX711`, which goes out with every status.
+      Field logs then show whether heap pressure is real before anyone
+      rewrites the command path to `char[]`.
+  - **Pi change (ships with the app, not the flash):**
+    `helpers/firmware_protocol.py` accepts the eleventh field as
+    `min_free_ram`, and still accepts older firmware's ten.
+  - **`VERSION`** is unchanged. It is the same batch.
+- **Image after V4:** flash 34,656 bytes, RAM 2,716 bytes (local WSL build,
+  sha256 `c310c068bd107f9554f87eec497d34f747244c49b9b81c34259f0c312371bcf3`).
+- **Bench check for V4:** after a full treatment session, the last
+  `DIAG|HX711` line in the Arduino log ends with a free-RAM figure. Record
+  it. A figure below about 1,000 bytes is the evidence that would justify
+  the `char[]` rewrite.
+- **V5, a malformed `P` target is rejected (2026-11-06).**
+  - **The bug:** an empty, non-numeric, negative or too-large target, or a
+    `|limit` below it, latched `PRESSURE_TARGET_INVALID`. That stopped every
+    axis with no release, also ended a pressure move already running, and
+    needed a reset.
+  - **The fix (the owner chose "reject instead"):** the firmware replies
+    `COMMAND_REJECTED|P|INVALID_TARGET`, like every other refused command,
+    and changes nothing else; a running move goes on.
+    - **No `ERR` ack for framed commands, unlike the item's wording.** No
+      other `COMMAND_REJECTED` sends one. On the Pi an `ERR` reason either
+      resends the command ("Invalid P value" is a parse rejection) or shows
+      a second, raw warning. The worker and controller operations already
+      end on `COMMAND_REJECTED`, and an unanswered framed command is never
+      resent.
+  - **No Pi change:** the Pi validates targets before sending, and already
+    ends the operation on any `COMMAND_REJECTED`. The simulator now rejects
+    the same way.
+  - **`VERSION`** is unchanged. It is the same batch.
+- **Image after V5:** flash 34,654 bytes, RAM 2,708 bytes (local WSL build,
+  sha256 `4fd00b96dc82159bc3d2f76c6f4022b748179aabd1308e891d7b0f6f6432d578`).
+  The reject reason is a shorter string than the old fault reason.
+- **Bench check for V5:** none on the device; the Pi never sends such a
+  target. The native and simulator tests cover it.
+- **V6, strict frame fields (2026-11-06).**
+  - **The bug:** `parseV2Frame` read the checksum with `strtol` and never
+    checked where it stopped, so `*5`, `*5zz` and `*zz` (as 0) passed as
+    checksum fields. The sequence used `toInt()`, which accepts leading
+    digits and negatives, and a negative sequence ran the command as v1.
+  - **The fix (option (a), firmware only):** a frame must be `#`, 1-9
+    decimal digits, `:`, the command, `*` and exactly two hex digits ending
+    the line. Anything else is `Malformed frame`, as before for frames
+    with no `:` or `*`. Every frame the Pi sends already fits: its sequence
+    numbers wrap below 1,000,000 and its checksum is `%02X`.
+  - **Not done:** option (b), a CRC-8 instead of the XOR checksum. It needs a
+    coordinated Pi change and stays a separate decision.
+  - **The simulator** (`development/simulator/controller/serial_model.py`)
+    parses frames just as strictly.
+  - **`VERSION`** is unchanged. It is the same batch.
+- **Image after V6:** flash 34,308 bytes, RAM 2,708 bytes (local WSL build,
+  sha256 `905f38e91ef75baea14992de7dbef872463972413b553bcca53c014a311445a8`).
+  Flash shrinks because the parser no longer needs `strtol`.
+- **Bench check for V6:** a normal session runs as before with no
+  `Malformed frame` lines in the Arduino log.
 
 ## 2. UI changes to look at on the Pi or simulator
 

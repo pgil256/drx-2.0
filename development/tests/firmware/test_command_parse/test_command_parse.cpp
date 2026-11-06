@@ -79,25 +79,52 @@ void test_P_busy_reply_when_running(void) {
     TEST_ASSERT_TRUE(Serial1.outputContains("BUSY"));
 }
 
+// A malformed target is rejected (COMMAND_REJECTED), not latched as a
+// pressure fault that stopped every axis and needed a reset (V5).
+static void assertTargetRejected(void) {
+    TEST_ASSERT_TRUE(Serial1.outputContains("COMMAND_REJECTED|P|INVALID_TARGET"));
+    TEST_ASSERT_FALSE(Serial1.outputContains("FAULT|"));
+    TEST_ASSERT_FALSE(pressureFault);
+}
+
 void test_P_garbage_rejected(void) {
     processCommand("Pabc");
-    TEST_ASSERT_TRUE(Serial1.outputContains("FAULT|PRESSURE_TARGET_INVALID"));
+    assertTargetRejected();
     TEST_ASSERT_FALSE(measurePressure);
 }
 
 // Out-of-range targets are rejected, never clamped into range and applied.
 void test_P_above_max_rejected(void) {
     processCommand("P999");
-    TEST_ASSERT_TRUE(Serial1.outputContains("FAULT|PRESSURE_TARGET_INVALID"));
+    assertTargetRejected();
     TEST_ASSERT_FALSE(measurePressure);
     TEST_ASSERT_EQUAL_FLOAT(0.0, desiredPressure);
 }
 
 void test_P_below_min_rejected(void) {
     processCommand("P-10");
-    TEST_ASSERT_TRUE(Serial1.outputContains("FAULT|PRESSURE_TARGET_INVALID"));
+    assertTargetRejected();
     TEST_ASSERT_FALSE(measurePressure);
     TEST_ASSERT_EQUAL_FLOAT(0.0, desiredPressure);
+}
+
+void test_P_other_malformed_targets_rejected(void) {
+    const char *bad[] = {"P", "P40x", "P40|", "P40|30", "P40|81", "Pnan", "P50|abc"};
+    for (const char *cmd : bad) {
+        setUp();
+        processCommand(cmd);
+        assertTargetRejected();
+        TEST_ASSERT_FALSE(measurePressure);
+    }
+}
+
+void test_P_malformed_target_leaves_a_running_move_alone(void) {
+    processCommand("P40");
+    TEST_ASSERT_TRUE(measurePressure);
+    processCommand("P999");
+    assertTargetRejected();
+    TEST_ASSERT_TRUE(measurePressure);           // the move goes on
+    TEST_ASSERT_EQUAL_FLOAT(40.0, desiredPressure);
 }
 
 void test_P_at_max_boundary_accepted(void) {
@@ -377,6 +404,63 @@ void test_v2_rejects_corrupt_checksum(void) {
     TEST_ASSERT_TRUE(Serial1.outputContains("Checksum mismatch"));
 }
 
+// --- V6: strict frame fields ---
+
+// "#<body>*<checksum text>", where the text is written as given.
+static String frameWithChecksumText(const char *body, const char *checksumText) {
+    String frame = "#";
+    frame += body;
+    frame += "*";
+    frame += checksumText;
+    return frame;
+}
+
+// "#<body>*XX" with the body's correct checksum, whatever the body holds.
+static String frameWithValidChecksum(const char *body) {
+    String b = body;
+    char buf[64];
+    snprintf(buf, sizeof(buf), "#%s*%02X", body, xorChecksum(b, 0, b.length()));
+    return String(buf);
+}
+
+static void assertMalformed(const String &frame) {
+    Serial1.reset();
+    String inner = "UNTOUCHED";
+    TEST_ASSERT_FALSE_MESSAGE(parseV2Frame(frame, inner), frame.c_str());
+    TEST_ASSERT_TRUE(inner == "UNTOUCHED");
+    TEST_ASSERT_EQUAL(-1, (int)currentCmdSeq);
+    TEST_ASSERT_TRUE(Serial1.outputContains("Malformed frame"));
+}
+
+void test_v2_checksum_must_be_exactly_two_hex_digits(void) {
+    // "*5", "*5zz" and "*zz" used to parse through strtol, "*zz" as 0.
+    const char *bad[] = {"5", "5zz", "zz", "5Z", "G5", "5A0", "+5", " 5"};
+    for (const char *text : bad)
+        assertMalformed(frameWithChecksumText("7:P10", text));
+}
+
+void test_v2_sequence_must_be_one_to_nine_digits(void) {
+    // Valid checksums, so only the sequence field can be the reason.
+    const char *bad[] = {"-5:P10", "5a:P10", "+5:P10", " 5:P10", "1234567890:P10"};
+    for (const char *body : bad)
+        assertMalformed(frameWithValidChecksum(body));
+}
+
+void test_v2_strict_fields_still_accept_valid_frames(void) {
+    String inner = "";
+    TEST_ASSERT_TRUE(parseV2Frame(frameWithValidChecksum("123456789:K1500"), inner));
+    TEST_ASSERT_TRUE(inner == "K1500");
+    TEST_ASSERT_EQUAL(123456789L, currentCmdSeq);
+    // Lowercase hex is still two hex digits.
+    String body = "8:P10";
+    char lower[32];
+    snprintf(lower, sizeof(lower), "#%s*%02x", body.c_str(),
+             xorChecksum(body, 0, body.length()));
+    TEST_ASSERT_TRUE(parseV2Frame(String(lower), inner));
+    TEST_ASSERT_EQUAL(8, (int)currentCmdSeq);
+    currentCmdSeq = -1;
+}
+
 void test_v2_emitAck_formats(void) {
     emitAck("DONE", 13);
     TEST_ASSERT_TRUE(Serial1.outputContains("DONE|13"));
@@ -403,6 +487,65 @@ void test_v2_emergency_buffer_detection(void) {
     TEST_ASSERT_FALSE(isEmergencyBuffer(makeFrame(5, "K1500")));
 }
 
+// --- V1: a status ack never holds up an emergency stop ---
+
+void test_status_ack_buffer_detection(void) {
+    TEST_ASSERT_TRUE(isStatusAckBuffer(String("Q")));
+    TEST_ASSERT_TRUE(isStatusAckBuffer(makeFrame(5, "Q")));
+    TEST_ASSERT_FALSE(isStatusAckBuffer(String("X")));
+    TEST_ASSERT_FALSE(isStatusAckBuffer(makeFrame(5, "K1500")));
+    TEST_ASSERT_FALSE(isStatusAckBuffer(String("")));
+}
+
+// The Pi writes Q as soon as a status frame arrives, outside its 0.22 s
+// command pacing. Q within 200 ms of a paced command used to stay pending,
+// and an X right behind it waited in the UART buffer for the window to end.
+void test_stop_behind_a_status_ack_runs_on_the_next_pass(void) {
+    _millis_value += 1000;            // well past any earlier command
+    Wire.position_14 = 1200;
+    Serial1.injectCommand("K1500");   // a paced command starts a move
+    loop();
+    TEST_ASSERT_TRUE(bRunning);
+
+    _millis_value += 50;              // inside its 200 ms window
+    statusAcknowledged = false;
+    Serial1.injectCommand("Q");
+    Serial1.injectCommand("X");
+    loop();                           // Q is handled at once
+    TEST_ASSERT_TRUE(statusAcknowledged);
+    loop();                           // and X on the very next pass
+    TEST_ASSERT_FALSE(bRunning);
+}
+
+void test_status_ack_does_not_restart_the_rate_limit_window(void) {
+    _millis_value += 1000;
+    Serial1.injectCommand("T");       // a paced command
+    loop();
+    unsigned long paced = lastCommandTime;
+    _millis_value += 100;
+    statusAcknowledged = false;
+    Serial1.injectCommand("Q");
+    loop();
+    TEST_ASSERT_TRUE(statusAcknowledged);  // handled inside the window...
+    TEST_ASSERT_EQUAL_UINT32(paced, lastCommandTime);  // ...without restarting it
+}
+
+// --- V4: the lowest free RAM since boot is reported ---
+
+void test_diag_reports_the_lowest_free_ram_since_boot(void) {
+    minFreeRam = 32767;
+    testFreeRam = 3000; loop();
+    testFreeRam = 2500; processCommand("T");   // sampled on a command too
+    testFreeRam = 3500; loop();
+    TEST_ASSERT_EQUAL(2500, minFreeRam);
+    Serial1.reset();
+    reportSensorDiagnostics();
+    // The new field is the last one, after the ready flag.
+    TEST_ASSERT_TRUE(Serial1.outputContains("|2500\n"));
+    TEST_ASSERT_TRUE(Serial1.outputContains("DIAG|HX711|"));
+    testFreeRam = 4096;
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
 
@@ -413,6 +556,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_P_garbage_rejected);
     RUN_TEST(test_P_above_max_rejected);
     RUN_TEST(test_P_below_min_rejected);
+    RUN_TEST(test_P_other_malformed_targets_rejected);
+    RUN_TEST(test_P_malformed_target_leaves_a_running_move_alone);
     RUN_TEST(test_P_at_max_boundary_accepted);
     RUN_TEST(test_I_sets_position);
     RUN_TEST(test_I_ignored_when_running);
@@ -438,9 +583,16 @@ int main(int argc, char **argv) {
     RUN_TEST(test_K_within_deadband_completes_immediately);
     RUN_TEST(test_v2_parse_valid_frame);
     RUN_TEST(test_v2_rejects_corrupt_checksum);
+    RUN_TEST(test_v2_checksum_must_be_exactly_two_hex_digits);
+    RUN_TEST(test_v2_sequence_must_be_one_to_nine_digits);
+    RUN_TEST(test_v2_strict_fields_still_accept_valid_frames);
     RUN_TEST(test_v2_emitAck_formats);
     RUN_TEST(test_v2_emitCmdError_formats);
     RUN_TEST(test_v2_emergency_buffer_detection);
+    RUN_TEST(test_status_ack_buffer_detection);
+    RUN_TEST(test_stop_behind_a_status_ack_runs_on_the_next_pass);
+    RUN_TEST(test_status_ack_does_not_restart_the_rate_limit_window);
+    RUN_TEST(test_diag_reports_the_lowest_free_ram_since_boot);
     RUN_TEST(test_overlong_line_tail_is_not_executed);
     RUN_TEST(test_overlong_line_is_reported_once);
     RUN_TEST(test_command_after_overlong_line_runs);

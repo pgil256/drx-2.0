@@ -45,7 +45,7 @@ def read_line():
     if line.startswith('  '):
         arduino._running = False
     return line.encode()
-port.readline.side_effect = read_line
+port.read.side_effect = lambda size: read_line()
 arduino._running = True
 arduino.read_from_com()
 print('final partial line', end='')

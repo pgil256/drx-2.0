@@ -9,6 +9,10 @@ After the desktop logs in, a full-screen touch menu offers **Legacy KneeSpa** or
 3. verifies it with avrdude, and only then
 4. starts the app.
 
+Before the menu opens, the start script runs `runtime/restore_update.sh` (when
+present) with the shared launcher lock. It restores KneeSpa 2.0's folder if a
+software install was interrupted between its two renames.
+
 If anything fails, neither app starts; the screen shows the error with **Back**
 and **Try again**. The last-used version starts by itself after a countdown
 (15 s by default); touching the screen stops the countdown.

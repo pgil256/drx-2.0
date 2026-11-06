@@ -3,6 +3,7 @@
 Extracted from development/tests/fixtures/fake_arduino.py. Timing defaults
 remain accelerated for existing serial integration tests.
 """
+import re
 import threading
 import re
 import time
@@ -133,24 +134,25 @@ class ControllerModel:
         return False
 
 
+    # As strict as the firmware (checklist V6): 1-9 sequence digits and exactly
+    # two hex digits ending the line.
+    _FRAME = re.compile(r"#([0-9]{1,9}):([^*]+)\*([0-9A-Fa-f]{2})")
+
     def _unframe(self, raw: str):
         """Return (inner_cmd, seq); (None, None) after a checksum reject."""
         if not raw.startswith("#"):
             return raw, None
         self.host_v2 = True
-        try:
-            body, star, checksum_hex = raw[1:].rpartition("*")
-            if not star:
-                raise ValueError("no checksum")
-            seq_str, _, inner = body.partition(":")
-            seq = int(seq_str)
-            if int(checksum_hex, 16) != self._xor(body):
-                self._write(f"ERR|{seq}|Checksum mismatch\n")
-                return None, None
-            return inner, seq
-        except (ValueError, TypeError):
+        match = self._FRAME.fullmatch(raw)
+        if match is None:
             self._write("ERROR: Malformed frame\n")
             return None, None
+        seq_str, inner, checksum_hex = match.groups()
+        seq = int(seq_str)
+        if int(checksum_hex, 16) != self._xor(f"{seq_str}:{inner}"):
+            self._write(f"ERR|{seq}|Checksum mismatch\n")
+            return None, None
+        return inner, seq
 
 
     def _process_command(self, raw: str):
