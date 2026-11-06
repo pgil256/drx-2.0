@@ -31,7 +31,6 @@ select = [
 "development/simulator/session/gui.py" = ["BLE001", "S110"]
 "development/simulator/session/verify.py" = ["BLE001", "S110"]
 "development/simulator/session/verify_ux.py" = ["BLE001", "S110"]
-"development/tests/fixtures/fake_arduino.py" = ["BLE001", "S110"]
 "development/tools/e2e_touchscreen.py" = ["BLE001", "S110"]
 "development/tools/lateral_pot_probe.py" = ["BLE001", "S110"]
 "development/tools/run_local.py" = ["BLE001", "S110"]
