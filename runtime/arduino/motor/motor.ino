@@ -308,11 +308,11 @@ void exitSafeStart() {
   Wire.endTransmission();
 }
 
-// Set motor speed and direction. Returns the Wire::endTransmission() code
-// of the speed write (0 = acknowledged) so safety-critical callers can
-// notice a NACK/timeout instead of assuming the SMC took the command.
-uint8_t setMotorSpeed(int16_t speed) {
-  if (speed != 0 && pressureFault) return 0;
+// Write a speed to the addressed SMC with no fault gate. Only the E-stop
+// release back-off calls this directly; every other caller goes through
+// setMotorSpeed, which refuses motion while a pressure fault is latched.
+// Returns the Wire::endTransmission() code (0 = acknowledged).
+static uint8_t writeMotorSpeed(int16_t speed) {
   // Clamp speed to valid range
   if (speed > 3200) speed = 3200;
   if (speed < -3200) speed = -3200;
@@ -337,6 +337,15 @@ uint8_t setMotorSpeed(int16_t speed) {
   Wire.write(speed & 0x1F);
   Wire.write(speed >> 5 & 0x7F);
   return Wire.endTransmission();
+}
+
+// Set motor speed and direction. Returns the Wire::endTransmission() code
+// of the speed write (0 = acknowledged) so safety-critical callers can
+// notice a NACK/timeout instead of assuming the SMC took the command.
+// While a pressure fault is latched only zero speeds are written.
+uint8_t setMotorSpeed(int16_t speed) {
+  if (speed != 0 && pressureFault) return 0;
+  return writeMotorSpeed(speed);
 }
 
 // Read actuator position once over I2C; returns true on success
@@ -586,7 +595,11 @@ void emergencyStopAndRelease(const char *reason) {
   releasingPressure = true;
   releaseStart = millis();
   smcDeviceNumber = 12;
-  setMotorSpeed(-PRESSURE_SPEED);  // negative = back off / reduce pressure
+  // Past the pressure-fault gate on purpose: a stop pressed after a fault
+  // latched (pressure limit, sensor timeout) used to leave the patient
+  // loaded, because setMotorSpeed silently ignored the back-off. The
+  // release stays bounded by load, travel (AZERO) and RELEASE_TIMEOUT.
+  writeMotorSpeed(-PRESSURE_SPEED);  // negative = back off / reduce pressure
 }
 
 // Advisory device notice. Warnings never alter motion or protocol state;
@@ -842,7 +855,11 @@ void tripPressureFault(const char *reason) {
 }
 
 void servicePressure() {
-  if (pressureFault) return;
+  // A latched fault stops pressure service, except while a release runs:
+  // the release needs fresh samples to see the load clear. Nothing else
+  // acts on them then (tripPressureFault is a no-op once latched, and
+  // emergencyStop cleared every pressure, pulse and tare mode).
+  if (pressureFault && !releasingPressure) return;
   unsigned long now = millis();
   // A fresh read must not erase a preceding sensor-service gap.
   if (pressureGuardActive && pressurePollStarted &&
