@@ -14,6 +14,7 @@ void delay(unsigned long ms) { _millis_value += ms; }
 #include "../../../../runtime/arduino/motor/motor.ino"
 
 void setUp(void) {
+    zerosValid = czeroValid = true;  // as after a reset, which sends L5 first
     emergencyStop();
     Serial.reset(); Serial1.reset(); Wire.reset();
     pressureCalibrated = true; pressureFault = false;

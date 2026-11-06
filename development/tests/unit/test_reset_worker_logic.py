@@ -24,7 +24,7 @@ def test_full_order_requires_calibration_and_baseline(protocol_clock, v2):
     assert finished == [True] and not errors
     # The axial actuator retracts before the lateral centre and horizontal
     # home, so a stalled lateral move cannot keep the leg loaded.
-    assert link.commands == ["Y", "L5|0|1900", "I120", "K1450", "I131140",
+    assert link.commands == ["Y", "L5|0|1900|1450", "I120", "K1450", "I131140",
                              "L01.0", "L1|BASELINE"]
     assert link.baseline_valid
 
@@ -150,7 +150,7 @@ def test_reboot_in_the_middle_of_a_reset_is_unexpected(protocol_clock):
         return replies
     link.hook = hook
     run_reset(link)
-    assert reboots == [["Y", "L5|0|1900", "I120", "K1450"]]
+    assert reboots == [["Y", "L5|0|1900|1450", "I120", "K1450"]]
 
 
 def test_bare_done_cannot_skip_zero_echo(protocol_clock):

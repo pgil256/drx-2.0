@@ -13,6 +13,7 @@ void delay(unsigned long ms) { now += ms; }
 
 void setUp() {
     Wire.reset();
+    zerosValid = czeroValid = true;  // as after a reset, which sends L5 first
     pressureFault = false; emergencyStop();
     Serial.reset(); Serial1.reset(); Wire.reset(); now = 0;
     pressureCalibrated = true; pressureSampleValid = true;
