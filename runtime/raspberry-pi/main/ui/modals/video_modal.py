@@ -14,12 +14,18 @@ optional — if either is missing the modal shows a static frame with an
 unavailable message, so it can never block the app or claim to be playing on a
 machine without VLC.
 
+Video stays available during a treatment. While one is active, a treatment
+strip above the stage mirrors the Treatment monitor (phase, measured pressure,
+time remaining) with a STOP button on the same stop path as the Treatment
+screen, so the overlay never hides the operator's stop control.
+
 Signals:
     play_toggled(bool)  — play button pressed (True = now playing)
+    stop_requested      — STOP pressed on the treatment strip
     closed              — dismissed
 """
 
-from typing import Optional
+from typing import Callable, Optional
 
 from PyQt5.QtCore import QEvent, QObject, Qt, QSize, QTimer, pyqtSignal
 from PyQt5.QtGui import QPixmap
@@ -43,6 +49,7 @@ from PyQt5.QtWidgets import (
 from ui.theme import (
     chevron_icon, close_icon, compress_icon, expand_icon, pause_icon, play_icon,
 )
+from ui.widgets.ds import DSBadge, DSButton
 from ui.widgets.ds._common import image_path, mono_font, resolve, sans_font
 
 from ._overlay import Overlay
@@ -57,7 +64,10 @@ from .vlc_engine import (
 )
 
 _VIDEO_CARD_WIDTH = 800
+_STAGE_HEIGHT = int(_VIDEO_CARD_WIDTH * 9 / 16)  # 16:9
 _TOUCH_CONTROL_SIZE = 48
+# The strip takes its height from the stage so the card still fits 768 px.
+_TREATMENT_STRIP_HEIGHT = 72
 
 # Round translucent icon buttons on the dark title bar (close, full screen).
 # The size lives in the rule: the theme's QPushButton rule carries a min-height,
@@ -80,10 +90,13 @@ def _fmt(seconds):
 
 class VideoModal(Overlay):
     play_toggled = pyqtSignal(bool)
+    stop_requested = pyqtSignal()
 
     def __init__(self, parent=None):
         super().__init__(parent, scrim="rgba(15,20,28,0.60)")
         self._playing = False
+        self._treatment_source: Optional[Callable[[], dict]] = None
+        self._treatment_active = False
         self._fullscreen = False
         self._progress_fraction = 0.0
         self._audio_devices = _discover_alsa_devices()
@@ -116,6 +129,7 @@ class VideoModal(Overlay):
         lay.setSpacing(0)
 
         lay.addWidget(self._title_bar())
+        lay.addWidget(self._treatment_strip())
         self._pages = QStackedWidget()
         self._player_page = QWidget()
         player_layout = QVBoxLayout(self._player_page)
@@ -148,6 +162,88 @@ class VideoModal(Overlay):
         self._library_page = self._library()
         self._pages.addWidget(self._library_page)
         self._show_library()
+        self._treatment_poll = QTimer(self)
+        self._treatment_poll.setInterval(250)
+        self._treatment_poll.timeout.connect(self._refresh_treatment)
+
+    # ----- treatment strip -----
+    def _treatment_strip(self) -> QFrame:
+        """Live treatment summary + STOP, shown only while a treatment is active."""
+        strip = QFrame()
+        strip.setObjectName("VideoTreatmentStrip")
+        strip.setAttribute(Qt.WA_StyledBackground, True)
+        strip.setFixedHeight(_TREATMENT_STRIP_HEIGHT)
+        strip.setStyleSheet(
+            f"#VideoTreatmentStrip {{ background: {resolve('--gray-100')};"
+            f" border-bottom: 1px solid {resolve('--gray-300')}; }}"
+        )
+        row = QHBoxLayout(strip)
+        row.setContentsMargins(18, 8, 18, 8)
+        row.setSpacing(18)
+        heading = QLabel("Treatment")
+        heading.setFont(sans_font(size="--text-sm", weight=600))
+        heading.setStyleSheet(f"color: {resolve('--ink-700')}; background: transparent;")
+        row.addWidget(heading)
+        self._treatment_phase = DSBadge("", tone="neutral", dot=True)
+        row.addWidget(self._treatment_phase)
+        row.addStretch(1)
+        self._treatment_pressure = QLabel("— lbs")
+        self._treatment_remaining = QLabel("—")
+        for label, name in ((self._treatment_pressure, "Measured pressure"),
+                            (self._treatment_remaining, "Time remaining")):
+            label.setAccessibleName(name)
+            label.setToolTip(name)
+            label.setFont(mono_font(size="--text-lg", weight=600))
+            label.setStyleSheet(f"color: {resolve('--ink-900')}; background: transparent;")
+            row.addWidget(label)
+        self._treatment_stop = DSButton("STOP", variant="danger", size="md")
+        self._treatment_stop.setAccessibleName("Stop treatment")
+        self._treatment_stop.setFixedSize(132, 56)
+        self._treatment_stop.clicked.connect(self._on_treatment_stop)
+        row.addWidget(self._treatment_stop)
+        strip.hide()
+        self._treatment_bar = strip
+        return strip
+
+    def set_treatment_source(self, source: Optional[Callable[[], dict]]) -> None:
+        """Register a callable returning the Treatment monitor snapshot."""
+        self._treatment_source = source
+        if self.isVisible():
+            self._refresh_treatment()
+
+    def _refresh_treatment(self) -> None:
+        snapshot = None
+        if self._treatment_source is not None:
+            try:
+                snapshot = self._treatment_source()
+            except Exception as exc:
+                logger.error("VideoModal: treatment snapshot failed: %r", exc)
+        active = bool(snapshot and snapshot.get("active"))
+        if active:
+            self._treatment_phase.set_text(str(snapshot.get("phase", "")))
+            self._treatment_phase.set_tone(str(snapshot.get("tone", "neutral")))
+            self._treatment_pressure.setText(f"{snapshot.get('pressure', '—')} lbs")
+            self._treatment_remaining.setText(f"{snapshot.get('remaining', '—')} left")
+            # Same starvation workaround as the volume readout: repaint now so
+            # values beside VLC's native window cannot go stale on the Pi.
+            self._treatment_bar.repaint()
+        if active != self._treatment_active:
+            self._treatment_active = active
+            self._treatment_bar.setVisible(active)
+            self._apply_stage_height()
+
+    def _on_treatment_stop(self) -> None:
+        """Stop first, then return the operator to the treatment controls."""
+        logger.warning("VideoModal: treatment STOP pressed")
+        self.stop_requested.emit()
+        self.close_overlay()
+
+    def _apply_stage_height(self) -> None:
+        if self._fullscreen:
+            self._apply_fullscreen_size()
+            return
+        strip = _TREATMENT_STRIP_HEIGHT if self._treatment_active else 0
+        self._stage_frame.setFixedHeight(_STAGE_HEIGHT - strip)
 
     def _library(self) -> QWidget:
         """Build a scrollable, touch-sized list of all playable clips."""
@@ -202,6 +298,8 @@ class VideoModal(Overlay):
     def open_over(self, parent: Optional[QWidget] = None) -> None:
         """Always start at the library when the operator opens Video."""
         self._show_library()
+        self._refresh_treatment()
+        self._treatment_poll.start()
         super().open_over(parent)
         self._video_list.setFocus()
 
@@ -289,7 +387,7 @@ class VideoModal(Overlay):
         stage = QFrame()
         stage.setObjectName("VideoStage")
         stage.setAttribute(Qt.WA_StyledBackground, True)
-        stage.setFixedHeight(int(_VIDEO_CARD_WIDTH * 9 / 16))  # 16:9
+        stage.setFixedHeight(_STAGE_HEIGHT)
         stage.setStyleSheet(
             "#VideoStage { background: qradialgradient(cx:0.5, cy:0.42, radius:0.75,"
             " fx:0.5, fy:0.42, stop:0 #1b2838, stop:1 #0d141d); }"
@@ -780,6 +878,7 @@ class VideoModal(Overlay):
         self._set_progress(0)
 
     def close_overlay(self):
+        self._treatment_poll.stop()
         self._reset_playback()
         if self._fullscreen:
             self._toggle_fullscreen()
@@ -794,7 +893,7 @@ class VideoModal(Overlay):
             self._fs_btn.setToolTip("Exit full screen")
         else:
             self._card.setFixedWidth(_VIDEO_CARD_WIDTH)
-            self._stage_frame.setFixedHeight(int(_VIDEO_CARD_WIDTH * 9 / 16))
+            self._apply_stage_height()
             self._apply_frame_style(rounded=True)
             self._fs_btn.setIcon(expand_icon("#ffffff", 16))
             self._fs_btn.setToolTip("Full screen")
@@ -824,7 +923,8 @@ class VideoModal(Overlay):
         pw, ph = parent.width(), parent.height()
         header_h = self._header.sizeHint().height()
         transport_h = self._transport_bar.sizeHint().height()
-        stage_h = max(100, ph - header_h - transport_h)
+        strip_h = _TREATMENT_STRIP_HEIGHT if self._treatment_active else 0
+        stage_h = max(100, ph - header_h - transport_h - strip_h)
         self._card.setFixedWidth(pw)
         self._stage_frame.setFixedHeight(stage_h)
 
@@ -836,4 +936,5 @@ class VideoModal(Overlay):
     def cleanup(self):
         """Release VLC resources (call on app shutdown)."""
         self._poll.stop()
+        self._treatment_poll.stop()
         self._engine.release()
