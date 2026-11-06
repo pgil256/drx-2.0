@@ -7,7 +7,7 @@ from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget
 
 from ui.widgets.ds import DSButton
-from ui.widgets.ds._common import image_path
+from ui.widgets.ds._common import image_path, resolve
 
 
 class HomeScreen(QWidget):
@@ -17,7 +17,9 @@ class HomeScreen(QWidget):
         super().__init__(parent)
         self.setObjectName("HomeScreen")
         self.setAttribute(Qt.WA_StyledBackground, True)
-        self.setStyleSheet("#HomeScreen { background: #ffffff; }")
+        # The same page wash as every other screen; the logo has a transparent
+        # background, so a white panel here only read as a website splash.
+        self.setStyleSheet(f"#HomeScreen {{ background: {resolve('--surface-page')}; }}")
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(24, 20, 24, 20)

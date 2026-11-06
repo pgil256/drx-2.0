@@ -86,19 +86,15 @@ class HardwareServiceDialog(QDialog):
         self.resize(1080, 700)
         self.setMinimumSize(900, 620)
         self.setFont(sans_font(size="--text-base"))
+        # Lists, combos, spin boxes and tables take the theme's rules (app.qss).
         self.setStyleSheet(
             f"QDialog {{ background: {resolve('--surface-page')}; }}"
             "QScrollArea { border: none; background: transparent; }"
             "QScrollArea > QWidget > QWidget { background: transparent; }"
-            "QListWidget { background: white; border: 1px solid #dbe3e8;"
-            " border-radius: 10px; padding: 4px; }"
-            "QListWidget::item { min-height: 36px; padding: 4px 8px; }"
-            "QListWidget::item:selected { background: #e1f5fb; color: #075970; }"
-            "QComboBox { min-height: 48px; padding: 0 10px; background: white; }"
-            "QDoubleSpinBox { min-height: 48px; padding: 0 112px 0 12px; background: white; }"
-            "QPlainTextEdit, QTableWidget { background: white; border: 1px solid #ccd8df; }"
+            f"QPlainTextEdit {{ background: {resolve('--white')};"
+            f" border: 1px solid {resolve('--border-divider')};"
+            f" border-radius: {resolve('--radius-xs')}; padding: 8px; }}"
             "QCheckBox { spacing: 12px; padding: 6px 0; }"
-            "QCheckBox::indicator { width: 24px; height: 24px; }"
         )
 
         root = QVBoxLayout(self)
@@ -118,6 +114,10 @@ class HardwareServiceDialog(QDialog):
         self.live.setMinimumHeight(38)
         self.live.setStyleSheet("background: #eaf1f5; padding: 8px; border-radius: 6px;")
         root.addWidget(self.live)
+        self.movement_status = self._label("Movement: waiting for the device.")
+        self.movement_status.setMinimumHeight(24)
+        self.movement_status.setStyleSheet(f"color: {resolve('--amber-500')};")
+        root.addWidget(self.movement_status)
         body = QHBoxLayout()
         body.setSpacing(18)
         self.steps = QListWidget()
@@ -215,6 +215,15 @@ class HardwareServiceDialog(QDialog):
             return
         self.action_requested.emit(action, payload() if callable(payload) else payload)
 
+    def _jog_row(self, axis: str, prefix: str = "Jog") -> QHBoxLayout:
+        """Bounded jogs name their actuator, so any step can move a specific axis."""
+        row = QHBoxLayout()
+        for delta in (-200, -50, 50, 200):
+            row.addWidget(self._button(
+                f"{prefix} {delta:+d}", "jog", {"axis": axis, "step": delta}, movement=True,
+            ))
+        return row
+
     def _build_preparation(self) -> None:
         layout = self._page(
             "Prepare the device",
@@ -287,10 +296,7 @@ class HardwareServiceDialog(QDialog):
                 "Existing table values are unverified until recorded during this session. "
                 "Do not record a point that cannot be reached safely."
             ))
-        jog = QHBoxLayout()
-        for delta in (-200, -50, 50, 200):
-            jog.addWidget(self._button(f"Jog {delta:+d}", "jog", delta, movement=True))
-        layout.addLayout(jog)
+        layout.addLayout(self._jog_row(axis))
         layout.addWidget(self._label(
             "Jog sizes are position counts. Each jog requires confirmation; the controller "
             "checks the travel envelope and fresh sensor readings."
@@ -380,6 +386,12 @@ class HardwareServiceDialog(QDialog):
         layout.addWidget(self._button("1. Capture unloaded raw sample", "pressure_capture", "zero"))
         self.pressure_zero = self._label("Unloaded sample: not captured")
         layout.addWidget(self.pressure_zero)
+        layout.addWidget(self._label(
+            "Apply the reference force with the axial actuator: jog it against the reference "
+            "gauge or fixture until the gauge shows the known force, then let the reading "
+            "settle. Each jog asks for confirmation and needs fresh, stable readings."
+        ))
+        layout.addLayout(self._jog_row("axial", prefix="Axial jog"))
         layout.addWidget(self._button(
             "2. Capture known-force raw sample", "pressure_capture", "loaded"
         ))
@@ -543,6 +555,7 @@ class HardwareServiceDialog(QDialog):
         table.verticalHeader().setDefaultSectionSize(56)
         table.verticalHeader().setMinimumSectionSize(48)
         table.horizontalHeader().setSectionResizeMode(QHeaderView.Stretch)
+        table.setShowGrid(False)
         table.setWordWrap(True)
         return table
 
@@ -707,6 +720,17 @@ class HardwareServiceDialog(QDialog):
 
     def set_live(self, text: str) -> None:
         self.live.setText(text)
+
+    def set_movement_status(self, reason: Optional[str]) -> None:
+        """Keep the reason movement is unavailable visible on every step."""
+        if reason is None:
+            self.movement_status.setText(
+                "Movement available. Each jog or move asks for confirmation first."
+            )
+            self.movement_status.setStyleSheet(f"color: {resolve('--green-500')};")
+        else:
+            self.movement_status.setText(reason)
+            self.movement_status.setStyleSheet(f"color: {resolve('--amber-500')};")
 
     def set_result(self, step: str, status: str, detail: str) -> None:
         self._results[step] = (status, detail)

@@ -1,9 +1,10 @@
-"""NavRail — persistent 108px dark left rail.
+"""NavRail — persistent 108px white left rail with a hairline edge.
 
-Mirrors `NavRail` in `bundle.jsx` (dark chrome): five exclusive nav items
-(Home · Setup · Treatment · Support · Device), with Video above Support and Device.
-Active item paints cyan with a 4px cyan left border. The rail only reports the
-intent; ``app_shell`` applies login gating and the actual page switch.
+Five exclusive nav items (Home · Setup · Treatment · Support · Device), with the
+Video launcher above Support and Device. The active item paints action blue on a
+soft blue fill with a 4px left edge, the rail counterpart of the dashboard's
+selected nav pill. The rail only reports the intent; ``app_shell`` applies login
+gating and the actual page switch.
 
 Signals:
     navigate(str)     — a nav item ('home'|'setup'|'protocols'|'support'|'device')
@@ -41,7 +42,8 @@ class NavRail(QFrame):
         rail = px("--rail-width")
         self.setFixedWidth(rail)
         self.setStyleSheet(
-            f"#NavRail {{ background: {resolve('--surface-chrome')}; border: none; }}"
+            f"#NavRail {{ background: {resolve('--surface-chrome')}; border: none;"
+            f" border-right: 1px solid {resolve('--surface-chrome-divider')}; }}"
         )
 
         lay = QVBoxLayout(self)
@@ -70,15 +72,16 @@ class NavRail(QFrame):
         btn.setText("Video")
         btn.setToolTip("Demo video")
         btn.setFont(sans_font(size=19, weight=700))
-        btn.setIcon(nav_icon("play", "#ffffff", 28))
+        btn.setIcon(nav_icon("play", resolve("--text-chrome"), 28))
         btn.setIconSize(QSize(28, 28))
         btn.setFixedWidth(rail)
         btn.setMinimumHeight(80)
         btn.setSizePolicy(QSizePolicy.Fixed, QSizePolicy.Expanding)
         btn.setStyleSheet(
-            "QToolButton { color: #ffffff; background: %s; border: none;"
-            " padding: 18px 0; }"
-            " QToolButton:hover { background: #2a2a2a; }" % resolve("--surface-chrome")
+            f"QToolButton {{ color: {resolve('--text-chrome')}; background: transparent;"
+            f" border: none; padding: 18px 0; }}"
+            f" QToolButton:hover {{ background: {resolve('--surface-chrome-hover')}; }}"
+            f" QToolButton:pressed {{ background: {resolve('--surface-chrome-active')}; }}"
         )
         btn.clicked.connect(self.video_requested)
         return btn

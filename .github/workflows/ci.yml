@@ -58,7 +58,10 @@ jobs:
 
       # On Linux the pty-based integration tests run for real
       # (they skip on Windows dev machines). Coverage of the shipped app is
-      # measured here only; there is no threshold yet.
+      # measured here only. The job fails below 85% line coverage (88% when
+      # the floor was set, 2026-11-05). The floor is a CLI flag rather than
+      # coverage.ini's fail_under, so the report step below still prints the
+      # total when the floor fails.
       - name: Run pytest with coverage
         env:
           QT_QPA_PLATFORM: offscreen
@@ -66,7 +69,8 @@ jobs:
           xvfb-run -a python -m pytest -q \
             --cov=runtime/raspberry-pi/main \
             --cov-config=development/coverage.ini \
-            --cov-report=xml
+            --cov-report=xml \
+            --cov-fail-under=85
 
       - name: Report coverage total
         if: ${{ !cancelled() }}
@@ -127,6 +131,34 @@ jobs:
           python -m pip install shellcheck-py==0.11.0.1
           shellcheck --version
           git ls-files -z '*.sh' | xargs -0 shellcheck --severity=warning
+
+  # The simulator's 3D viewer: its vitest suite (session parsing and the
+  # model rig). The simulator README is tested with Node 24; this pins the
+  # 24.x release the job was verified with locally. npm ci installs exactly
+  # the lockfile.
+  simulator-viewer-tests:
+    name: Simulator viewer tests (vitest)
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: development/simulator/viewer
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24.16.0"
+          cache: npm
+          cache-dependency-path: development/simulator/viewer/package-lock.json
+
+      - name: Install viewer dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run vitest
+        run: npm test
 
   # A real Python 3.7 (the Pi's interpreter) byte-compiles the shipped code and
   # imports every runtime module. Gates the PR.
@@ -207,6 +239,55 @@ jobs:
           chown -R tester .
           runuser -u tester -- python -m pytest -q
 
+  # The Pi runs Debian Buster with apt's python3-pyqt5, not the pip PyQt5
+  # 5.15 the jobs above use. This job runs the suite on Buster's own Python
+  # 3.7 and PyQt5/Qt, so an API the device's Qt lacks fails here first.
+  # Buster is archived, so apt reads archive.debian.org.
+  buster-pyqt-tests:
+    name: Python tests (Buster apt PyQt5)
+    timeout-minutes: 25
+    runs-on: ubuntu-latest
+    container: debian:buster
+    steps:
+      - name: Point apt at the Debian archive
+        run: |
+          printf '%s\n' \
+            'deb http://archive.debian.org/debian buster main' \
+            'deb http://archive.debian.org/debian-security buster/updates main' \
+            > /etc/apt/sources.list
+          echo 'Acquire::Check-Valid-Until "false";' > /etc/apt/apt.conf.d/99archive
+
+      - name: Install Buster's Python 3.7 and PyQt5
+        run: |
+          apt-get update
+          apt-get install -y --no-install-recommends \
+            ca-certificates git rsync python3 python3-pip python3-setuptools python3-pyqt5
+          python3 --version
+          python3 -c "from PyQt5.QtCore import PYQT_VERSION_STR, QT_VERSION_STR; print('PyQt5', PYQT_VERSION_STR, 'Qt', QT_VERSION_STR)"
+
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      # Buster's pip 18 cannot install manylinux2014 wheels; pip 24.0 is the
+      # last release for Python 3.7. PyQt5 stays the apt package, so the pip
+      # PyQt5 lines of the test requirements are left out.
+      - name: Install Python test dependencies
+        run: |
+          python3 -m pip install "pip==24.0"
+          grep -v -E '^PyQt5' development/requirements-test.txt > /tmp/requirements-buster.txt
+          python3 -m pip install -r /tmp/requirements-buster.txt
+          python3 -c "import PyQt5.QtCore as q; print('Using', q.__file__)"
+
+      # Runs as an ordinary user, like the other test jobs (the firmware
+      # flash script refuses root by design).
+      - name: Run pytest
+        env:
+          QT_QPA_PLATFORM: offscreen
+        run: |
+          useradd --create-home tester
+          chown -R tester .
+          runuser -u tester -- python3 -m pytest -q
+
   # Hermetic: system g++ + the vendored Unity framework in
   # development/tests/firmware/unity/,
   # no PlatformIO registry access needed. Gates the PR (no continue-on-error).
@@ -219,6 +300,20 @@ jobs:
         uses: actions/checkout@v4
 
       - name: Build and run firmware test suites
+        run: bash development/tests/firmware/run_native_tests.sh
+
+      # The same suites with a 32-bit `long`, as on the Mega 2560: millis()
+      # and long arithmetic then wrap as on the device, which the 64-bit
+      # build above cannot show. `int` stays 32 bits (x86 has no 16-bit int).
+      - name: Install 32-bit build libraries
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-multilib
+
+      - name: Build and run firmware test suites (32-bit long, as on the Mega)
+        env:
+          ARCH_FLAGS: -m32
+          BUILD_DIR: .native-build/m32
         run: bash development/tests/firmware/run_native_tests.sh
 
   firmware-avr-build:

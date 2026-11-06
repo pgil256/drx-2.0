@@ -20,6 +20,10 @@ logger = logging.getLogger(f"{APP_NAME}.auth")
 
 PBKDF2_ITERATIONS = 200_000
 PBKDF2_PREFIX = "pbkdf2_sha256"
+# Accepted range for a stored hash's iteration count (same as service_auth).
+# A hand-edited row with a huge count would otherwise freeze the login screen.
+PBKDF2_MIN_ITERATIONS = 100_000
+PBKDF2_MAX_ITERATIONS = 1_000_000
 
 
 class SecureAuthHelper:
@@ -100,11 +104,16 @@ class SecureAuthHelper:
         if stored_hash.startswith(PBKDF2_PREFIX + "$"):
             try:
                 _, iterations, salt_hex, hash_hex = stored_hash.split("$")
+                rounds = int(iterations)
+                if not PBKDF2_MIN_ITERATIONS <= rounds <= PBKDF2_MAX_ITERATIONS:
+                    logger.warning("Ignoring a stored PIN hash with an out-of-range "
+                                   "iteration count")
+                    return False
                 derived = hashlib.pbkdf2_hmac(
                     "sha256",
                     str(pin).encode(),
                     bytes.fromhex(salt_hex),
-                    int(iterations),
+                    rounds,
                 )
                 return hmac.compare_digest(derived.hex(), hash_hex)
             except (ValueError, TypeError):
@@ -117,6 +126,12 @@ class SecureAuthHelper:
             # compare_digest raises on non-ASCII str input; one mis-columned
             # CSV row must not abort the login loop for every later user
             return False
+
+    @staticmethod
+    def is_legacy_hash(stored_hash):
+        """True for an unsalted SHA-256 digest as hash_pin produces it."""
+        return (isinstance(stored_hash, str) and len(stored_hash) == 64
+                and all(c in "0123456789abcdef" for c in stored_hash))
 
     @staticmethod
     def hash_pin(pin):

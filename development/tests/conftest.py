@@ -121,7 +121,7 @@ def fake_arduino_pair():
         if arduino.serial_com and getattr(arduino.serial_com, "is_open", False):
             try:
                 arduino.serial_com.close()
-            except Exception:
+            except OSError:  # pyserial's SerialException is an OSError
                 pass
     finally:
         fake.stop()

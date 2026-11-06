@@ -67,6 +67,23 @@ bash development/tests/firmware/run_native_tests.sh
 cd runtime/arduino/motor && pio test -e native
 ```
 
+### Integer widths
+
+The Mega 2560 has a 16-bit `int` and a 32-bit `long`. A normal 64-bit host
+build has a 32-bit `int` and a 64-bit `long`, so `millis()` arithmetic and
+`long` overflow never wrap the way they do on the device.
+
+CI therefore runs every suite twice. The second run uses `-m32`, which gives
+`long` (and `unsigned long` for `millis()`) the Mega's 32 bits. `int` stays
+32 bits, because x86 compilers have no 16-bit `int` mode. Each run prints the
+type widths it got.
+
+To repeat the 32-bit run locally (needs `sudo apt-get install g++-multilib`):
+
+```bash
+ARCH_FLAGS=-m32 BUILD_DIR=.native-build/m32 bash development/tests/firmware/run_native_tests.sh
+```
+
 The `native` environment is defined in `runtime/arduino/motor/platformio.ini`:
 
 ```ini

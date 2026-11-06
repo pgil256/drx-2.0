@@ -113,7 +113,7 @@ def test_duplicate_worker_completion_captures_original_plan(monkeypatch, qtbot, 
 
 def test_stop_latch_survives_reset_and_late_success(monkeypatch, qtbot):
     window, controller, worker = dispatch(monkeypatch)
-    monkeypatch.setattr("controllers.protocol_controller.QTimer.singleShot", lambda *a: None)
+    monkeypatch.setattr("controllers.stop_controller.QTimer.singleShot", lambda *a: None)
     controller.stop_protocol()
     window.protocol_stop_requested = False  # Reset completed before the queued finish arrived.
     window.protocol_state = "idle"
@@ -232,7 +232,7 @@ def test_timed_completion_survives_stop_races_and_uploads_cleanup_once(monkeypat
     controller._prepared = True
     worker.treatment_completed = True
     worker._failure_reason = "HOME_POSITION_CHANGED"
-    monkeypatch.setattr("controllers.protocol_controller.QTimer.singleShot", lambda *a: None)
+    monkeypatch.setattr("controllers.stop_controller.QTimer.singleShot", lambda *a: None)
     if stop == "fault":
         controller.stop_without_recovery("HOME_POSITION_CHANGED", fault=True)
     elif stop == "operator":
@@ -256,9 +256,9 @@ def test_timed_completion_survives_stop_races_and_uploads_cleanup_once(monkeypat
     assert "HOME_POSITION_CHANGED" in record["cleanup_warning"]
     assert record["underlying_error"] == "HOME_POSITION_CHANGED"
     window._show_timed_error.assert_called_once_with(record["cleanup_warning"])
-    controller._stop_phase2()
-    controller._emergency_stop_phase2()
-    controller._reset_after_release(0)
+    controller.stops._stop_phase2()
+    controller.stops._emergency_stop_phase2()
+    controller.stops._reset_after_release(0)
     window.reset_arduino.assert_not_called()
     worker.stop.assert_not_called()
     assert window._no_automatic_recovery and window.protocol_state == "fault"
@@ -282,7 +282,7 @@ def test_stop_wins_over_already_queued_success_with_complete_upload_details(monk
     controller._prepared = True
     worker.treatment_completed = True
     worker.completed.set()  # The worker finished, but its Qt signal is still queued.
-    monkeypatch.setattr("controllers.protocol_controller.QTimer.singleShot", lambda *a: None)
+    monkeypatch.setattr("controllers.stop_controller.QTimer.singleShot", lambda *a: None)
     controller.stop_protocol()
     worker.signals.finished.connect.call_args[0][0](True)
     window.cloud_client.post_treatment_async.assert_called_once()

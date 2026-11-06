@@ -105,7 +105,7 @@ class MachineSignInClient:
             if exc.code == 401:
                 self.clear()
             return result
-        except Exception:
+        except Exception:  # noqa: BLE001 - remote error text can carry tokens; never logged
             return {"error": "unavailable"}
 
     def create(self) -> Dict[str, Any]:

@@ -39,7 +39,7 @@ def test_stop_cancels_new_motion_before_delayed_cleanup(
     controller = ProtocolController(window)
     callbacks = []
     monkeypatch.setattr(
-        "controllers.protocol_controller.QTimer.singleShot",
+        "controllers.stop_controller.QTimer.singleShot",
         lambda ms, callback: callbacks.append(callback),
     )
     old_motion = arduino.send_tracked("K1600")
@@ -134,14 +134,15 @@ def test_shutdown_suppresses_delayed_recovery(qtbot: QtBot) -> None:
     controller = ProtocolController(window)
     manager = ConnectionManager(window)
 
-    controller._stop_phase2()
-    controller._stop_phase3()
-    controller._emergency_stop_phase2()
-    controller._emergency_stop_phase3()
+    controller.stops._stop_phase2()
+    controller.stops._stop_phase3()
+    controller.stops._emergency_stop_phase2()
+    controller.stops._emergency_stop_phase3()
     manager._automatic_reset()
     manager._on_reset_finished(True)
 
     window.reset_arduino.assert_not_called()
+    window._show_rehome_prompt.assert_not_called()
     window.worker.stop.assert_not_called()
 
 

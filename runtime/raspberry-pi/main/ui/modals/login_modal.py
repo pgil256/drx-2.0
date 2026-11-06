@@ -4,11 +4,11 @@ The view renders the complete approval URL locally and emits user intent only;
 the controller owns cloud requests, polling, cancellation and session validation.
 """
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QLabel, QPushButton, QVBoxLayout, QWidget
 
-from ui.theme import GLYPH
+from ui.theme import close_icon
 from ui.widgets.ds import DSKeypad
 from ui.widgets.ds._common import drop_shadow, image_path, resolve, sans_font
 
@@ -38,15 +38,18 @@ class LoginModal(Overlay):
 
         # Close — floats at the top-right corner (DS position:absolute top:14 right:14),
         # so it does not occupy a layout row and push the logo down.
-        close = QPushButton(GLYPH["close"], card)
+        close = QPushButton(card)
         close.setCursor(Qt.PointingHandCursor)
         close.setFixedSize(48, 48)
         close.setAccessibleName("Close login")
-        close.setFont(sans_font(size="--text-md", weight=600))
+        close.setToolTip("Close")
+        close.setIcon(close_icon(resolve("--ink-700"), 20))
+        close.setIconSize(QSize(20, 20))
         close.setStyleSheet(
-            "QPushButton { border-radius: 24px; border: none; padding: 0; font-size: 24px;"
-            f" background: {resolve('--gray-200')}; color: {resolve('--ink-700')}; }}"
+            "QPushButton { border-radius: 24px; border: none; padding: 0;"
+            f" background: {resolve('--gray-200')}; }}"
             f" QPushButton:hover {{ background: {resolve('--gray-300')}; }}"
+            f" QPushButton:pressed {{ background: {resolve('--gray-400')}; }}"
         )
         close.clicked.connect(self.close_overlay)
         close.move(408 - 14 - 48, 14)  # card is fixedWidth 408

@@ -12,6 +12,7 @@ Each target method is called UNBOUND against a lightweight stub ``self`` (a
 ``MagicMock``) that carries only the attributes the method actually reads, so
 no Qt window / Arduino is constructed and the tests run on Windows.
 """
+from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -19,7 +20,7 @@ from fixtures.actuators import ControlsHarness
 
 import kneespa
 from kneespa import KneeSpa
-import controllers.protocol_controller as pc_mod
+import controllers.stop_controller as sc_mod
 from controllers.protocol_controller import ProtocolController
 from config.config import Configuration
 from config.constants import (
@@ -99,6 +100,80 @@ class TestActuatorControlGating:
         h = ControlsHarness(qtbot)
         h.actuator_command_in_progress = True
         h.move_actuator("12", 1, 1)
+
+
+# ---------------------------------------------------------------------------
+# Setup motion watchdog: a queued move whose DONE never arrives must not keep
+# the controls (and with them logout and exit) blocked until a power cycle.
+# ---------------------------------------------------------------------------
+@pytest.mark.unit
+class TestSetupMotionWatchdog:
+    @pytest.fixture
+    def harness(self, qtbot, monkeypatch):
+        monkeypatch.setattr(kneespa, "SETUP_MOTION_DONE_TIMEOUT_S", 0.05)
+        h = ControlsHarness(qtbot)
+        h.arduino = MagicMock()
+        h.arduino.send.return_value = True
+        h.loading_spinner = MagicMock()
+        h._show_timed_error = MagicMock()
+        return h
+
+    def test_lost_done_hands_controls_back(self, qtbot, harness):
+        harness.disable_actuator_controls()
+        assert KneeSpa._send_motion_command(harness, "I131140", "horizontal movement")
+        qtbot.waitUntil(harness.all_enabled, timeout=2000)
+        assert harness.actuator_command_in_progress is False
+        harness._show_timed_error.assert_called_once()
+        harness.loading_spinner.hide.assert_called()
+
+    def test_done_cancels_the_backstop(self, qtbot, harness):
+        harness.disable_actuator_controls()
+        KneeSpa._send_motion_command(harness, "P40", "pressure movement")
+        harness.enable_actuator_controls()  # what set_done does on DONE
+        assert harness._motion_watchdog is None
+        qtbot.wait(300)
+        harness._show_timed_error.assert_not_called()
+
+    def test_new_operation_supersedes_pending_backstop(self, qtbot, harness):
+        harness.disable_actuator_controls()
+        KneeSpa._send_motion_command(harness, "K1688", "lateral movement")
+        harness.disable_actuator_controls()  # e.g. a reset taking the controls
+        assert harness._motion_watchdog is None
+        qtbot.wait(300)
+        harness._show_timed_error.assert_not_called()
+        assert harness.all_disabled()
+
+    def test_backstop_tolerates_a_window_without_motion_state(self):
+        # Fired on an object that never set the flags (e.g. before __init__
+        # finishes, or a test double): no exception, nothing re-enabled.
+        bare = SimpleNamespace(_show_timed_error=MagicMock(),
+                               enable_actuator_controls=MagicMock())
+        KneeSpa._on_motion_watchdog(bare)
+        bare.enable_actuator_controls.assert_not_called()
+        bare._show_timed_error.assert_not_called()
+
+    def test_leg_stop_does_not_arm_the_backstop(self, harness):
+        KneeSpa._send_motion_command(harness, "F0", "leg-length stop")
+        assert getattr(harness, "_motion_watchdog", None) is None
+
+    def test_backstop_leaves_a_running_protocol_alone(self, qtbot, harness):
+        harness.disable_actuator_controls()
+        KneeSpa._send_motion_command(harness, "I131140", "horizontal movement")
+        harness.protocol_running = True
+        qtbot.wait(300)
+        assert harness.actuator_command_in_progress is True
+        harness._show_timed_error.assert_not_called()
+
+    def test_invalid_horizontal_marks_do_not_lock_jog(self, qtbot, harness):
+        harness.config = MagicMock(marks_valid=True, BMarks={})
+        harness.horizontal_flexion_position = -10  # well inside both limits
+        harness.actuator_b = ACTUATOR_B
+        harness.actuator_a = ACTUATOR_A
+        harness.actuator_c = ACTUATOR_C
+        harness.move_actuator(ACTUATOR_B, 1, 1)
+        harness.arduino.send.assert_not_called()
+        assert harness.actuator_command_in_progress is False
+        qtbot.waitUntil(harness.all_enabled, timeout=2000)
 
 
 # ---------------------------------------------------------------------------
@@ -330,8 +405,8 @@ class TestEmergencyStop:
         stub.stop_actuators = lambda: KneeSpa.stop_actuators(stub)
         controller = ProtocolController(stub)
 
-        with patch.object(pc_mod, "QTimer") as mock_qtimer, \
-                patch.object(pc_mod, "GPIO"):
+        with patch.object(sc_mod, "QTimer") as mock_qtimer, \
+                patch.object(sc_mod, "GPIO"):
             controller.emergency_stop_clicked(None)
 
         stub.arduino.send.assert_called_once_with("X")
@@ -343,14 +418,14 @@ class TestEmergencyStop:
         stub = MagicMock()
         controller = ProtocolController(stub)
 
-        with patch.object(pc_mod, "QTimer") as mock_qtimer, \
-                patch.object(pc_mod, "GPIO"):
+        with patch.object(sc_mod, "QTimer") as mock_qtimer, \
+                patch.object(sc_mod, "GPIO"):
             controller.emergency_stop_clicked(None)
 
         stub.stop_actuators.assert_called_once()
         args, _ = mock_qtimer.singleShot.call_args
         assert args[0] == 1000
-        assert args[1] == controller._emergency_stop_phase2
+        assert args[1] == controller.stops._emergency_stop_phase2
 
     def test_marks_intentional_stop_before_sending_commands(self):
         """Firmware cleanup responses must observe the stopping state."""
@@ -358,7 +433,7 @@ class TestEmergencyStop:
         stub.protocol_state = "running"
         controller = ProtocolController(stub)
 
-        with patch.object(pc_mod, "QTimer"), patch.object(pc_mod, "GPIO"):
+        with patch.object(sc_mod, "QTimer"), patch.object(sc_mod, "GPIO"):
             controller.emergency_stop_clicked(None)
 
         assert stub.protocol_stop_requested is True

@@ -110,6 +110,7 @@ def make_window(state: str = "idle") -> SimpleNamespace:
         _release_leg_gpio=MagicMock(), _start_leg_reset_gpio=MagicMock(),
         _finish_leg_reset=MagicMock(), disable_actuator_controls=MagicMock(),
         enable_actuator_controls=MagicMock(), reset_setup_readings=MagicMock(),
+        _show_rehome_prompt=MagicMock(),
     )
     window.threadpool.activeThreadCount.return_value = 0
     window.protocol = ProtocolController(window)

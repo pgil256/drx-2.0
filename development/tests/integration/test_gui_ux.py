@@ -54,10 +54,11 @@ def test_real_telemetry_binding_never_replaces_a_target(shell):
     )
     window = SimpleNamespace(
         shell=shell, config=config, safety=SimpleNamespace(on_status=Mock()),
-        arduino=SimpleNamespace(connected=True),
+        arduino=SimpleNamespace(connected=True), logger=Mock(),
         _measurement=SimpleNamespace(caption=lambda connected: "Pressure live"),
     )
     KneeSpa.status_emit(window, 1200, 1500, 1750, 23.4)
+    window.logger.exception.assert_not_called()  # the live view updated cleanly
     assert shell.setup.row_value("pressure") == 40
     assert shell.setup.row_value("lateral") == 10
     assert shell.setup._pos["axial"]._value.text() == "1.2 in"

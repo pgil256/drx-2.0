@@ -1,5 +1,6 @@
 import csv
 import os
+import shutil
 from config.constants import DATA_PATHS
 from helpers.logging import setup_logger
 from helpers.secure_auth import SecureAuthHelper
@@ -78,6 +79,43 @@ class CSVHelper:
         self.logger.error(message)
         if QApplication is not None and QApplication.instance() is not None:
             QMessageBox.critical(None, "Error", message)
+
+    def replace_pin_hash(self, filename, old_hash, new_hash):
+        """Atomically replace one row's pin_hash, keeping every other cell.
+
+        Returns False and leaves the file untouched when exactly one matching
+        row is not found, when a row has cells beyond the header (rewriting
+        would drop them), or when the file cannot be rewritten.
+        """
+        temporary = f"{filename}.tmp"
+        try:
+            with open(filename, "r", newline="", encoding="utf-8-sig") as stream:
+                reader = csv.DictReader(stream)
+                fields = reader.fieldnames
+                rows = list(reader)
+            if not fields or "pin_hash" not in fields or any(None in row for row in rows):
+                return False
+            matches = [row for row in rows if row.get("pin_hash") == old_hash]
+            if len(matches) != 1:
+                return False
+            matches[0]["pin_hash"] = new_hash
+            with open(temporary, "w", newline="", encoding="utf-8") as stream:
+                writer = csv.DictWriter(stream, fieldnames=fields)
+                writer.writeheader()
+                writer.writerows(rows)
+                stream.flush()
+                os.fsync(stream.fileno())
+            shutil.copymode(filename, temporary)
+            os.replace(temporary, filename)
+            return True
+        except (OSError, csv.Error, UnicodeDecodeError, ValueError) as e:
+            self.logger.error("Could not rewrite a stored PIN hash in %s: %s",
+                              filename, type(e).__name__)
+            try:
+                os.unlink(temporary)
+            except OSError:
+                pass
+            return False
 
     def load_csv(self, filename):
         """

@@ -99,6 +99,172 @@ class TestLoginLockout:
 
 
 
+class FakeClock:
+    """Monotonic clock under test control."""
+
+    def __init__(self, now=1000.0):
+        self.now = now
+
+    def __call__(self):
+        return self.now
+
+
+@pytest.mark.unit
+class TestLockoutClock:
+    """D3: lockouts are timed on a monotonic clock and fail closed.
+
+    The Pi has no real-time clock, so a wall-clock deadline could be cut
+    short by an NTP correction, a manual clock change, or a reboot that
+    starts from a stale time.
+    """
+
+    PIN = "7531"
+
+    def _make(self, tmp_path, clock, boot="boot-a"):
+        stored = SecureAuthHelper.hash_pin_secure(self.PIN)
+        window = StubWindow({stored: {"pin_hash": stored, "username": "T"}})
+        auth = AuthController(window, state_path=str(tmp_path / "auth_state.json"),
+                              clock=clock, boot_id=lambda: boot)
+        return auth, window
+
+    def _trip(self, auth, window):
+        for _ in range(AuthController.LOCKOUT_THRESHOLD):
+            auth.handle_login("0000")
+
+    def _state(self, tmp_path):
+        import json
+
+        return json.loads((tmp_path / "auth_state.json").read_text(encoding="utf-8"))
+
+    @pytest.mark.parametrize("content", [
+        "{not json",
+        "[]",
+        '{"failed_logins": "three"}',
+        '{"failed_logins": -1}',
+        '{"lockout_remaining_s": NaN}',
+        '{"lockout_remaining_s": -5}',
+        '{"lockout_remaining_s": 10, "monotonic": Infinity}',
+        '{"lockout_until": Infinity}',
+    ])
+    def test_unreadable_file_starts_a_lockout(self, tmp_path, caplog, content):
+        import logging as _logging
+
+        (tmp_path / "auth_state.json").write_text(content, encoding="utf-8")
+        with caplog.at_level(_logging.WARNING):
+            auth, w = self._make(tmp_path, FakeClock())
+        assert auth.lockout_remaining() == pytest.approx(AuthController.LOCKOUT_SECONDS)
+        assert any("unreadable" in r.getMessage() for r in caplog.records)
+        auth.handle_login(self.PIN)
+        assert w.current_user is None
+        # The lockout replaces the damaged file, so it survives a restart.
+        assert self._state(tmp_path)["lockout_remaining_s"] == pytest.approx(60)
+
+    def test_unreadable_path_starts_a_lockout(self, tmp_path):
+        (tmp_path / "auth_state.json").mkdir()  # open() fails with an OSError
+        auth, w = self._make(tmp_path, FakeClock())
+        assert auth.lockout_remaining() == pytest.approx(AuthController.LOCKOUT_SECONDS)
+
+    def test_missing_file_starts_clean(self, tmp_path):
+        auth, w = self._make(tmp_path, FakeClock())
+        assert auth.lockout_remaining() == 0
+        auth.handle_login(self.PIN)
+        assert w.current_user is not None
+
+    def test_wall_clock_jump_does_not_shorten_lockout(self, tmp_path, monkeypatch):
+        import controllers.auth_controller as auth_mod
+
+        clock = FakeClock()
+        auth, w = self._make(tmp_path, clock)
+        self._trip(auth, w)
+        real_time = auth_mod.time.time
+        monkeypatch.setattr(auth_mod.time, "time", lambda: real_time() + 86400)
+        auth.handle_login(self.PIN)
+        assert w.current_user is None
+        # Nor does a restart after the jump.
+        auth2, w2 = self._make(tmp_path, clock)
+        assert auth2.lockout_remaining() == pytest.approx(60)
+        auth2.handle_login(self.PIN)
+        assert w2.current_user is None
+
+    def test_lockout_expires_on_the_monotonic_clock(self, tmp_path):
+        clock = FakeClock()
+        auth, w = self._make(tmp_path, clock)
+        self._trip(auth, w)
+        clock.now += 59
+        auth.handle_login(self.PIN)
+        assert w.current_user is None
+        clock.now += 2
+        auth.handle_login(self.PIN)
+        assert w.current_user is not None
+
+    def test_restart_in_the_same_boot_keeps_counting(self, tmp_path):
+        clock = FakeClock()
+        auth, w = self._make(tmp_path, clock)
+        self._trip(auth, w)
+        clock.now += 20  # the app restarts 20 s into a 60 s lockout
+        auth2, _ = self._make(tmp_path, clock)
+        assert auth2.lockout_remaining() == pytest.approx(40)
+
+    def test_reboot_serves_the_whole_remainder(self, tmp_path):
+        clock = FakeClock()
+        auth, w = self._make(tmp_path, clock)
+        self._trip(auth, w)
+        clock.now += 50
+        # A reboot restarts the monotonic clock near zero with a new boot ID,
+        # so the time served before it cannot be measured: serve it again.
+        auth2, w2 = self._make(tmp_path, FakeClock(now=5.0), boot="boot-b")
+        assert auth2.lockout_remaining() == pytest.approx(60)
+        auth2.handle_login(self.PIN)
+        assert w2.current_user is None
+
+    def test_no_boot_id_serves_the_whole_remainder(self, tmp_path):
+        clock = FakeClock()
+        auth, w = self._make(tmp_path, clock, boot=None)
+        self._trip(auth, w)
+        clock.now += 50
+        auth2, _ = self._make(tmp_path, clock, boot=None)
+        assert auth2.lockout_remaining() == pytest.approx(60)
+
+    def test_stored_remainder_is_capped(self, tmp_path):
+        (tmp_path / "auth_state.json").write_text(
+            '{"lockout_remaining_s": 1e9, "lockout_count": 2}', encoding="utf-8")
+        auth, _ = self._make(tmp_path, FakeClock())
+        assert auth.lockout_remaining() == AuthController.LOCKOUT_MAX_SECONDS
+        assert auth.lockout_count == 2
+
+    def test_older_wall_clock_file_is_converted(self, tmp_path):
+        import json
+        import time as _time
+
+        (tmp_path / "auth_state.json").write_text(json.dumps({
+            "failed_logins": 2, "lockout_count": 1, "lockout_until": _time.time() + 100,
+        }), encoding="utf-8")
+        auth, _ = self._make(tmp_path, FakeClock())
+        assert auth.failed_logins == 2 and auth.lockout_count == 1
+        assert auth.lockout_remaining() == pytest.approx(100, abs=2)
+
+    def test_saved_file_keeps_a_wall_clock_deadline_for_rollback(self, tmp_path):
+        import time as _time
+
+        auth, w = self._make(tmp_path, FakeClock())
+        self._trip(auth, w)
+        state = self._state(tmp_path)
+        assert state["boot_id"] == "boot-a" and state["monotonic"] == 1000.0
+        assert state["lockout_remaining_s"] == pytest.approx(60)
+        assert state["lockout_until"] == pytest.approx(_time.time() + 60, abs=5)
+
+
+def test_read_boot_id(tmp_path, monkeypatch):
+    import controllers.auth_controller as auth_mod
+
+    path = tmp_path / "boot_id"
+    path.write_text("2f6c\n", encoding="ascii")
+    monkeypatch.setattr(auth_mod, "BOOT_ID_PATH", str(path))
+    assert auth_mod.read_boot_id() == "2f6c"
+    monkeypatch.setattr(auth_mod, "BOOT_ID_PATH", str(tmp_path / "missing"))
+    assert auth_mod.read_boot_id() is None
+
+
 @pytest.mark.unit
 class TestLockoutPersistence:
     """Lockout state survives a process restart and backs off exponentially.
@@ -150,18 +316,19 @@ class TestLockoutPersistence:
         auth.lockout_count = 10
         assert auth._lockout_duration() == AuthController.LOCKOUT_MAX_SECONDS
 
-    def test_second_lockout_is_longer(self, tmp_path, monkeypatch):
-        auth, w = self._make(tmp_path)
-        self._trip_lockout(auth, w)
-        first_until = auth.lockout_until
+    def test_second_lockout_is_longer(self, tmp_path):
+        clock = FakeClock()
+        stored = SecureAuthHelper.hash_pin_secure("7531")
+        window = StubWindow({stored: {"pin_hash": stored, "username": "T"}})
+        auth = AuthController(window, state_path=str(tmp_path / "auth_state.json"),
+                              clock=clock, boot_id=lambda: "boot-a")
+        self._trip_lockout(auth, window)
+        assert auth.lockout_remaining() == pytest.approx(60)
 
         # Fast-forward past the first lockout, fail five more times.
-        monkeypatch.setattr(
-            "controllers.auth_controller.time.time",
-            lambda: first_until + 1,
-        )
-        self._trip_lockout(auth, w)
-        assert auth.lockout_until - (first_until + 1) == pytest.approx(120, abs=1)
+        clock.now += 61
+        self._trip_lockout(auth, window)
+        assert auth.lockout_remaining() == pytest.approx(120)
 
     def test_success_resets_backoff(self, tmp_path):
         auth, w = self._make(tmp_path)
@@ -172,13 +339,13 @@ class TestLockoutPersistence:
         auth2, _ = self._make(tmp_path)
         assert auth2.lockout_count == 0
 
-    def test_corrupt_state_file_starts_clean(self, tmp_path):
+    def test_corrupt_state_file_starts_a_lockout(self, tmp_path):
+        """D3: damaging the file must not hand out a fresh set of attempts."""
         (tmp_path / "auth_state.json").write_text("{not json", encoding="utf-8")
         auth, w = self._make(tmp_path)
-        assert auth.failed_logins == 0
-        assert auth.lockout_until == 0.0
+        assert auth.lockout_remaining() > 0
         auth.handle_login("7531")
-        assert w.current_user is not None
+        assert w.current_user is None
 
     def test_pin_never_logged(self, tmp_path, caplog):
         """Audit logging must not leak the attempted PIN."""

@@ -19,4 +19,8 @@ select = [
     "E9",     # syntax errors, including syntax newer than target-version
     "F",      # pyflakes: undefined names, unused imports and variables
     "FA102",  # `X | None` / `list[int]` annotations that fail on Python 3.7
+    "BLE001", # `except Exception` that neither re-raises nor logger.exception()s
+    "S110",   # `try`/`except`/`pass`
 ]
+# A catch-all that is truly needed stays, with `# noqa: BLE001` and its reason
+# (for example: remote error text can carry credentials, so it is not logged).

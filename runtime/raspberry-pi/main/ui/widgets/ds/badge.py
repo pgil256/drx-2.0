@@ -20,22 +20,30 @@ TONES = {
 }
 
 
+# size -> (label font token, dot px, horizontal pad, vertical pad). "sm" is the
+# in-card badge; "md" is read at arm's length (the top bar's device status).
+_SIZES = {"sm": ("--text-xs", 8, 12, 4), "md": ("--text-base", 10, 16, 6)}
+
+
 class DSBadge(QFrame):
-    def __init__(self, text="", tone="neutral", dot=False, parent=None):
+    def __init__(self, text="", tone="neutral", dot=False, parent=None, size="sm"):
         super().__init__(parent)
         self.setAttribute(Qt.WA_StyledBackground, True)
+        font_token, dot_px, pad_x, pad_y = _SIZES.get(size, _SIZES["sm"])
         lay = QHBoxLayout(self)
-        lay.setContentsMargins(12, 4, 12, 4)
-        lay.setSpacing(6)
+        lay.setContentsMargins(pad_x, pad_y, pad_x, pad_y)
+        lay.setSpacing(8 if size == "md" else 6)
         lay.setSizeConstraint(QLayout.SetFixedSize)  # pill hugs content
 
         self._dot = QFrame(self)
-        self._dot.setFixedSize(8, 8)
+        self._dot.setFixedSize(dot_px, dot_px)
+        self._dot_radius = dot_px // 2
         self._dot.setVisible(dot)
         self._label = QLabel(text, self)
-        # text-xs / weight 600 / tracking-wide
-        self._label.setFont(sans_font(size="--text-xs", weight=600, tracking=0.03))
-        self._label.setProperty("dsCaption", True)
+        # text-xs / weight 600 / tracking-wide (sm); text-base / 600 (md)
+        self._label.setFont(sans_font(size=font_token, weight=600, tracking=0.03))
+        if size == "sm":
+            self._label.setProperty("dsCaption", True)
         lay.addWidget(self._dot)
         lay.addWidget(self._label)
 
@@ -50,7 +58,7 @@ class DSBadge(QFrame):
             f"DSBadge {{ background: {bg}; border-radius: 999px; }}"
             f" QLabel {{ color: {fg}; background: transparent; }}"
         )
-        self._dot.setStyleSheet(f"background: {fg}; border-radius: 4px;")
+        self._dot.setStyleSheet(f"background: {fg}; border-radius: {self._dot_radius}px;")
 
     def set_text(self, text):
         self._label.setText(text)

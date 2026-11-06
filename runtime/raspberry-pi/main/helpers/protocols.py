@@ -7,6 +7,7 @@ from helpers.controller_operations import (
 )
 from helpers.conversions import lateral_degrees_to_position
 from helpers.motor_speed import motor_speed_command, motor_speed_values
+from helpers.stop_commands import RELEASE, STOP_ALL, TELEMETRY_OFF
 from typing import Mapping, Optional, Tuple
 
 from PyQt5 import QtCore
@@ -139,23 +140,25 @@ class Protocols(QtCore.QRunnable):
             ser.fault_emit.connect(self._on_controller_fault, Qt.DirectConnection)
             ser.command_rejected.connect(self._on_command_rejected, Qt.DirectConnection)
             ser.connection_lost.connect(self._on_link_lost, Qt.DirectConnection)
+        # disconnect() raises TypeError (or RuntimeError for a deleted
+        # object) when the slot was not connected; that is the normal case.
         if ser is not None and hasattr(ser, "done_emit"):
             try:
                 ser.done_emit.disconnect(self._on_firmware_done)
-            except Exception:
+            except (TypeError, RuntimeError):
                 pass
             ser.done_emit.connect(self._on_firmware_done)
         if ser is not None and hasattr(ser, "error_emit"):
             try:
                 ser.error_emit.disconnect(self._on_firmware_error)
-            except Exception:
+            except (TypeError, RuntimeError):
                 pass
             ser.error_emit.connect(self._on_firmware_error)
         if ser is not None and hasattr(ser, "status_emit"):
             # First disconnect any existing connections to avoid duplicates
             try:
                 ser.status_emit.disconnect(self.update_status)
-            except Exception:
+            except (TypeError, RuntimeError):
                 pass  # Ignore if not previously connected
                 
             # Now connect the signal
@@ -474,8 +477,8 @@ class Protocols(QtCore.QRunnable):
             return False
         try:
             ok = self._send_command("JS")
-        except Exception as e:
-            self.logger.error("Error sending JS: %s", e)
+        except Exception:
+            self.logger.exception("Error sending JS")
             ok = False
         if ok:
             self._pulse_active = False
@@ -542,9 +545,14 @@ class Protocols(QtCore.QRunnable):
             return True
         except OperationCancelled:
             return False
-        except Exception as exc:
+        except (OperationRejected, TimeoutError) as exc:
             self._failure_reason = str(exc)
             self.logger.error("Controller operation failed: %s", exc)
+            return False
+        except Exception as exc:
+            # Not a controller rejection or timeout: a bug. Keep the traceback.
+            self._failure_reason = str(exc)
+            self.logger.exception("Controller operation failed unexpectedly")
             return False
         finally:
             if temporary:
@@ -730,7 +738,10 @@ class Protocols(QtCore.QRunnable):
                 self.signals.baseline_changed.emit(True)
         except OperationCancelled:
             return False
+        except (OperationRejected, TimeoutError) as exc:
+            return self._fail(str(exc))
         except Exception as exc:
+            self.logger.exception("Unexpected error while retracting and zeroing")
             return self._fail(str(exc))
         if not centred:
             # Unloaded, the lateral actuator usually lands. A second miss is
@@ -930,7 +941,10 @@ class Protocols(QtCore.QRunnable):
             handler()
         except OperationCancelled:
             pass
+        except (OperationRejected, TimeoutError) as exc:
+            self._fail(str(exc))
         except Exception as exc:
+            self.logger.exception("Unexpected error in protocol %s", self.protocol)
             self._fail(str(exc))
         finally:
             success = self._run_success and not self._stop_requested.is_set()
@@ -969,6 +983,9 @@ class Protocols(QtCore.QRunnable):
         the old 60s keepalive thread this method used to spawn per stop
         flushed buffers and fought reconnects concurrently with whatever
         the user started next.
+
+        Returns True when this call queued the pressure release (P0), and
+        False when it did not, so the caller can release traction itself.
         """
         self.logger.info("Initiating protocol stop sequence")
         self.cancel()
@@ -980,16 +997,17 @@ class Protocols(QtCore.QRunnable):
         if self._firmware_stopped:
             # X aborts firmware's autonomous release, and P0 is rejected while
             # the physical button is held. Leave that release in control.
-            return
+            return False
 
         if not self.arduino:
             self.logger.warning("No Arduino connection available for stop sequence")
-            return
+            return False
 
+        release_sent = False
         try:
             # Emergency stop first: halts pulsing/motion immediately
             # (X jumps the transport's queue and the firmware's limiter)
-            stop_sent = self.arduino.send("X")
+            stop_sent = self.arduino.send(STOP_ALL)
             if stop_sent:
                 self.logger.info("Emergency stop command sent")
             else:
@@ -998,7 +1016,7 @@ class Protocols(QtCore.QRunnable):
 
             # Actively release traction; the firmware ramps the axial
             # actuator back until the load cell reads zero
-            release_sent = self.arduino.send("P0")
+            release_sent = self.arduino.send(RELEASE)
             if release_sent:
                 self.logger.info("Pressure release command sent")
             else:
@@ -1006,7 +1024,8 @@ class Protocols(QtCore.QRunnable):
 
             # Telemetry continues during the release via the firmware's
             # active-motion status path even after HF mode is off
-            self.arduino.send("HF0")
+            self.arduino.send(TELEMETRY_OFF)
 
-        except Exception as e:
-            self.logger.error("Error during protocol stop: %s", e)
+        except Exception:
+            self.logger.exception("Error during protocol stop")
+        return bool(release_sent)

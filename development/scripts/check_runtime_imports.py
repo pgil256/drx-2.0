@@ -56,7 +56,7 @@ def main() -> int:
         for name in names:
             try:
                 importlib.import_module(name)
-            except Exception:
+            except Exception:  # noqa: BLE001 - report every failing import, whatever it raised
                 failures.append((name, traceback.format_exc()))
         import logging
 

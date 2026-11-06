@@ -122,7 +122,7 @@ class TestResetGating:
         cm.reset_arduino()
 
         w.threadpool.start.assert_called_once()
-        assert any("EMERGENCYSTOP" in str(c) for c in cm.logger.error.call_args_list)
+        assert any("EMERGENCYSTOP" in str(c) for c in cm.logger.exception.call_args_list)
 
     def test_refused_reset_leaves_estop_line_alone(self, manager, monkeypatch):
         cm, w = manager

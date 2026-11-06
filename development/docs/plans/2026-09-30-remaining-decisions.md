@@ -49,6 +49,128 @@ firmware native tests 8 suites / 165 tests; Mega build warning-free;
   current behavior. Making the heartbeat stop pulsing again would be a
   firmware change for this batch.
 
+### Batch 2026-11: stop hardening (queued, not flashed)
+
+These items come from the checklist in
+`development/docs/plans/2026-11-04-improvement-checklist.md` (F1–F4). The
+image is built from `main`, so it also contains everything in the
+2026-10-28 batch above. A device still on an older image gets both changes
+with this flash.
+
+- **F1, checked stop writes (2026-11-05).**
+  - Every zero-speed write to an SMC is checked: up to 3 attempts. An
+    unacknowledged stop is reported once, as
+    `ERROR: Motor stop not acknowledged <n>`, until a later stop on that SMC
+    is acknowledged.
+  - A position arrival, a pressure arrival and the end of a release complete
+    (`DONE` or `RELEASED`) only once the stop is acknowledged. The next pass
+    retries it. Before this, a NACKed stop left the SMC driving while the
+    firmware reported it stopped.
+  - The pulse speed cache only updates when the SMC acknowledges the write.
+  - Stops on SMCs that no move owns are retried every 200 ms: E-stop, `JS`,
+    boot, and the stop sent when a target is already in band.
+  - No Pi change is needed; the error text is the one the E-stop already used.
+- **`VERSION`:** `2026-11-05-DRX2-STOP-CHECKS`.
+  When the home-release batch (PR #29) merges, it folds F1 and F2 into the
+  verified home release and pulse changes as `2026-11-06-DRX2-home-release`.
+  The image sizes and checksum below then describe the earlier image only, and
+  that image needs the Pi update and the flash together (`HOME_RELEASE_V1`).
+- **Image after F1:** flash 34,162 bytes, RAM 2,694 bytes, with the pinned
+  `atmelavr@5.3.0` (sha256
+  `d35640beff4a37ab134b1e3867059ed09bab104c4b194519416fa0e81bccb11b` from a
+  local WSL build; CI's firmware job uploads its own image and checksum).
+- **Bench checks for F1:**
+  - Normal Setup moves on all three axes, a pressure Go and a pulsed
+    treatment complete as before.
+  - The Arduino log for that session has no
+    `Motor stop not acknowledged` lines.
+  - Optional, with the device unoccupied: power the Mega with one SMC's I2C
+    lead disconnected. Boot reports `ERROR: Motor stop not acknowledged <n>`
+    once and keeps retrying, then stops reporting once the lead is
+    reconnected.
+- **F2, release past a latched pressure fault (2026-11-06).**
+  - **The bug:** after a pressure fault latched (for example
+    `PRESSURE_LIMIT` or `PRESSURE_SENSOR_TIMEOUT`), the physical stop
+    button's release was a no-op:
+    - `setMotorSpeed` ignored the back-off while `pressureFault` was set;
+    - `servicePressure` stopped sampling, so the release could not see the
+      load clear and idled to `ERROR: Release incomplete`.
+  - **The fix:**
+    - The release back-off writes past the fault gate (`writeMotorSpeed`).
+    - Pressure sampling continues while a release runs.
+    - The release is still bounded by load, travel (`AZERO`) and
+      `RELEASE_TIMEOUT`.
+    - Every other motion stays blocked while the fault is latched, and the
+      fault stays latched until the host's reset.
+  - **`VERSION`** is unchanged. It is the same batch.
+- **Image after F2:** flash 34,178 bytes, RAM 2,694 bytes (local WSL build,
+  sha256 `b0e3843061c2bf0583f0967e3d8b7078ef4aba61f7b166230ab68265facbeaf4`).
+- **Bench check for F2** (device unoccupied, a test load on the axial
+  actuator):
+  1. Trip a fault, for example with `P` targets that force the overshoot
+     ceiling, or by unplugging the load cell during a hold.
+  2. Press the physical stop.
+  3. The axial actuator backs off. The log shows `RELEASED` once the load is
+     under 5 lb, or `ERROR: Release incomplete` only at home or after 15 s.
+- **F3, travel limits while pulsing (2026-11-06).**
+  - **The bug:** the axial travel checks ran only during a pressure move,
+    not while pulsing. If the load dropped mid-pulse (the patient pulled
+    away, or the load cell read low), the push ran at pulse speed for up to
+    `PULSE_RECOVERY_TIMEOUT` (5 s) with no position bound.
+  - **The fix:** the pressure move's two checks now also apply to pulsing,
+    using the pulse direction:
+    - a push that reaches the axial travel limit (feedback 4095) latches
+      `FAULT|AXIAL_TRAVEL_LIMIT`;
+    - a release that reaches home (`AZERO` + 25 counts) while pressure is
+      still above target + 2 lb latches
+      `FAULT|AXIAL_HOME_BEFORE_PRESSURE_TARGET`.
+  - Both latch through `tripPressureFault`, which stops every axis. A release
+    that reaches home with the load gone keeps pulsing as before.
+  - No Pi change is needed: `helpers/firmware_protocol.py` turns every
+    `FAULT|<reason>|<target>|<pressure>` line into a controller fault,
+    whatever the reason.
+  - **`VERSION`** is unchanged. It is the same batch.
+- **Image after F3:** flash 34,202 bytes, RAM 2,694 bytes (local WSL build,
+  sha256 `416eabfa23edb9530cb1b5867a0a27a2828e2bde8aa8d5ed80f0fae3cbf1f26a`).
+- **Bench check for F3:** a pulsed treatment on a test load completes as
+  before, with no `AXIAL_` faults in the Arduino log. Do not provoke the
+  limits with a patient on the device.
+- **F4, a long stall ends the move (2026-11-06).**
+  - **The bug:** a position move (`I`, `K`, `A`) that stopped making
+    progress only sent `WARNING: Motor stalled` after 20 s
+    (`POSITION_STALL_MS`). The Pi treats that warning as advisory, so a jam,
+    or a stuck but valid encoder reading, kept the motor driving until the
+    operator pressed stop.
+  - **The fix:**
+    - The 20 s warning stays.
+    - With still no progress at 60 s (`POSITION_STALL_TIMEOUT_MS`,
+      3 × `POSITION_STALL_MS`), the firmware calls `emergencyStop()` and
+      sends `ERROR: Motor stall timeout <device>`, for example
+      `ERROR: Motor stall timeout 13`.
+    - The stopped move never reports `MOTION_DONE` or `DONE`.
+    - Progress toward the target (4 counts or more) still restarts both
+      timers.
+  - **Pi change (ships with the app, not the flash):**
+    `controllers/safety_monitor.py` handles `Motor stall timeout …` as a
+    controller fault: the treatment or reset stops, there is no automatic
+    homing, and a `CONTROLLER FAULT` alert asks for Reset.
+    - An app on this change that talks to older firmware is unchanged,
+      because older firmware never sends the new error.
+    - Older firmware has no timeout, so flashing this image is what makes
+      the motor stop.
+  - **`VERSION`** is unchanged. It is the same batch.
+- **Image after F4:** flash 34,288 bytes, RAM 2,694 bytes (local WSL build,
+  sha256 `452cc0fb03d190729c478ea4e29cba25548c395ee5d429a811f8e09be63326e7`).
+  The message string is kept in flash with `F()`, so RAM is unchanged.
+- **Bench check for F4** (device unoccupied):
+  1. Block one actuator mechanically, or hold its SMC disabled, and command
+     a Setup move on that axis.
+  2. At about 20 s the operator sees the `Motor stalled` warning.
+  3. At about 60 s the motor stops. The Arduino log shows
+     `ERROR: Motor stall timeout <n>`, and the app shows
+     `CONTROLLER FAULT: Motor stall timeout <n>` and requires Reset.
+  4. A normal long move, for example homing during Reset, still completes.
+
 ## 2. UI changes to look at on the Pi or simulator
 
 - **Pressed state:** the top-bar knee logo and wordmark now dim to 50% while
@@ -84,10 +206,11 @@ Each item is its own commit, so any one can be reverted alone.
 
 ## 4. Repository and CI changes that cannot be verified locally
 
-- **Other videos in Git LFS:** only `Next Level Integrative Medicine HCT_P Details.mp4`
-  (392 MB) is in LFS. The other 8 mp4s (about 121 MB) are plain blobs. Moving
-  them to LFS for new commits only is cheap; converting existing history needs
-  `git lfs migrate` and a force-push.
+- **Other videos in Git LFS:** done 2026-11-05, for new commits only. All nine
+  `.mp4` files under `runtime/raspberry-pi/main/ui/media/videos/` are now LFS
+  pointers: the other 8 (about 116 MB) joined `Next Level Integrative Medicine
+  HCT_P Details.mp4`. Older commits keep the plain blobs. Shrinking the pack
+  would need `git lfs migrate` and a force-push, which the owner declined.
 - **`xvfb-run` in CI:** probably unnecessary, since `QT_QPA_PLATFORM=offscreen`
   is set in CI and in `tests/conftest.py`. Removing it needs a CI run to confirm.
 - **Separate `check_limits_sync.py` CI step:** it repeats

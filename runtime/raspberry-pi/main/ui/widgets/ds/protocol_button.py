@@ -64,9 +64,11 @@ class DSProtocolButton(QPushButton):
         if selected:
             bg, fg, border = primary, "#ffffff", primary
         else:
+            # A quieter edge than the control outline: four of these sit in a
+            # row and the selected tile's fill is what should stand out.
             bg = resolve("--gray-050")
             fg = resolve("--ink-800")
-            border = resolve("--border-control")
+            border = resolve("--gray-400")
         # Keep identity readable when editing is locked; avoid nested opacity
         # effects inside shadowed cards, which can also disrupt Qt repainting.
         if not self.isEnabled():

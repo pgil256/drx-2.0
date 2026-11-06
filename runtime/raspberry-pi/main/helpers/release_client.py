@@ -127,7 +127,9 @@ class ReleaseClient(StaffClient):
             raise StaffError("download_failed", messages.get(exc.code, "Release download failed."))
         except StaffError:
             raise
-        except Exception:
+        # Remote error text can carry credentials or signed URLs, so the
+        # original is not chained or logged.
+        except Exception:  # noqa: BLE001
             raise StaffError(
                 "download_failed", "Download interrupted. Installed files are unchanged.")
         finally:

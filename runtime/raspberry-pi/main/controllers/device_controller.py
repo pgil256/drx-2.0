@@ -324,7 +324,7 @@ class DeviceController(QObject):
             try:
                 result = work()
                 self.completed.emit(result, "")
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 # System exceptions can contain secrets or record contents. Log only the type.
                 self.logger.error("Device operation %s failed (%s)", key, type(exc).__name__)
                 safe = str(exc) if isinstance(exc, (RuntimeError, ValueError)) else (
@@ -412,7 +412,7 @@ class DeviceController(QObject):
             return
         service_actions = ("view_report", "export_diagnostics", "backup_calibration",
                            "restore_calibration", "check_releases", "flash_software",
-                           "flash_firmware")
+                           "flash_firmware", "purge_rejected_uploads")
         from controllers.machine_sign_in_controller import authorize
         if not authorize(self.window, "service" if name in service_actions else "device",
                          lambda: self.action(name, value)):
@@ -457,6 +457,8 @@ class DeviceController(QObject):
             )
         elif name == "restore_calibration":
             self._review_restore(str(value), dict(self.window.current_user))
+        elif name == "purge_rejected_uploads":
+            self._confirm_purge()
         elif name == "wifi":
             self._authorize(lambda user: self._queue(
                 "wifi_scan", self.system.wifi_scan, lambda rows: self._wifi(rows, user),
@@ -498,6 +500,35 @@ class DeviceController(QObject):
 
     def _retry_sync(self) -> None:
         self.window.cloud_client.retry_pending(DATA_PATHS["PENDING_UPLOADS"], retry_blocked=True)
+
+    def _confirm_purge(self) -> None:
+        """Delete refused upload records once the technician confirms the counts."""
+        cloud = self.window.cloud_client
+        path = DATA_PATHS["PENDING_UPLOADS"]
+        try:
+            counts = cloud.purge_counts(path)
+        except (OSError, ValueError, KeyError, TypeError):
+            self.screen.set_status("The upload queue is unreadable. Contact support.")
+            return
+        if not counts["records"] and not counts["files"]:
+            self.screen.set_status("No rejected uploads to purge.")
+            return
+        answer = QMessageBox.question(
+            self.window, "Purge Rejected Uploads",
+            f"Delete {counts['records']} rejected upload(s) and {counts['files']} unreadable "
+            "upload queue file(s) from this device? The cloud refused these records, so they "
+            "will not upload. This cannot be undone.",
+            QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
+        )
+        if answer != QMessageBox.Yes or not self.service_authorized():
+            return
+        self._queue(
+            "purge_rejected_uploads", lambda: cloud.purge_rejected(path),
+            lambda result: self._system_done(
+                f"Purged {result['records']} rejected upload(s) and "
+                f"{result['files']} unreadable upload queue file(s)."),
+            condition=self.service_authorized,
+        )
 
     def _diagnostic_context(self) -> dict:
         arduino = getattr(self.window, "arduino", None)
@@ -645,7 +676,7 @@ class DeviceController(QObject):
                 try:
                     self.backend.write("brightness", value)
                 except Exception:
-                    self.logger.warning("Could not restore brightness during shutdown")
+                    self.logger.exception("Could not restore brightness during shutdown")
 
             self._worker = threading.Thread(target=restore, daemon=True)
             self._worker.start()

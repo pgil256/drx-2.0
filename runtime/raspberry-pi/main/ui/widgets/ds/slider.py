@@ -7,7 +7,7 @@ QSlider is integer-only, so both modes map a float ``min/max/step`` domain onto
 integer ticks and report real floats via ``valueChanged(float)``.
 """
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtGui import QMouseEvent
 from PyQt5.QtWidgets import (
     QHBoxLayout,
@@ -19,7 +19,7 @@ from PyQt5.QtWidgets import (
     QWidget,
 )
 
-from ui.theme import GLYPH
+from ui.theme import chevron_icon
 
 from ._common import mono_font, resolve, sans_font
 
@@ -68,14 +68,16 @@ class _TouchSlider(QSlider):
         super().mouseReleaseEvent(event)
 
 
-def _arrow_btn_css():
+def _arrow_btn_css(text=True):
+    # Text glyphs (− +) sit 4px high for optical centering; icons are centred.
+    padding = "0 0 4px 0" if text else "0"
     return (
         "QPushButton {"
         f" background: #ffffff;"
         f" color: {resolve('--ink-800')};"
         f" border: 2px solid {resolve('--border-control')};"
         f" border-radius: {resolve('--radius-md')};"
-        " padding: 0 0 4px 0; }"  # optical centering for the ‹ › glyphs
+        f" padding: {padding}; }}"
         f" QPushButton:hover {{ background: {resolve('--blue-050')};"
         f" border-color: {resolve('--color-primary')}; }}"
         f" QPushButton:pressed {{ background: {resolve('--blue-100')}; }}"
@@ -122,7 +124,7 @@ class DSSlider(QWidget):
     # -- build variants ------------------------------------------------
     def _build_slider(self, lay):
         if self._with_steps:
-            self._left_btn = self._arrow_button("−", self._decrement)
+            self._left_btn = self._arrow_button(self._decrement, "−")
             lay.addWidget(self._left_btn)
         self._slider = _TouchSlider(Qt.Horizontal, self)
         self._slider.setRange(0, self._steps)
@@ -134,7 +136,7 @@ class DSSlider(QWidget):
         self._slider.valueChanged.connect(self._on_slider)
         lay.addWidget(self._slider, 1)
         if self._with_steps:
-            self._right_btn = self._arrow_button("+", self._increment)
+            self._right_btn = self._arrow_button(self._increment, "+")
             lay.addWidget(self._right_btn)
 
         self._value_label = QLabel(self)
@@ -145,9 +147,11 @@ class DSSlider(QWidget):
         lay.addWidget(self._value_label)
 
     def _build_stepper(self, lay):
-        # Plex-safe arrow glyphs (‹ ›) — the design's ◀ ▶ tofu in IBM Plex; see
-        # ui/theme/icons.py. Same glyphs as the Setup page's jog buttons.
-        self._left_btn = self._arrow_button(GLYPH["jog_rev"], self._decrement)
+        # Drawn chevrons (the design's ◀ ▶ tofu in IBM Plex and the guillemet
+        # substitutes read as punctuation); the same icons as the Setup jog row.
+        self._left_btn = self._arrow_button(
+            self._decrement, icon=chevron_icon("left", resolve("--ink-800"), 24),
+        )
         lay.addWidget(self._left_btn)
 
         self._value_label = QLabel(self)
@@ -157,15 +161,20 @@ class DSSlider(QWidget):
         self._value_label.setStyleSheet(_LABEL_CSS)
         lay.addWidget(self._value_label, 1)
 
-        self._right_btn = self._arrow_button(GLYPH["jog_fwd"], self._increment)
+        self._right_btn = self._arrow_button(
+            self._increment, icon=chevron_icon("right", resolve("--ink-800"), 24),
+        )
         lay.addWidget(self._right_btn)
 
-    def _arrow_button(self, glyph, slot):
+    def _arrow_button(self, slot, glyph="", icon=None):
         btn = QPushButton(glyph, self)
         btn.setCursor(Qt.PointingHandCursor)
         btn.setFixedSize(_ARROW_PX, _ARROW_PX)
         btn.setFont(sans_font(size=28, weight=700))
-        btn.setStyleSheet(_arrow_btn_css())
+        if icon is not None:
+            btn.setIcon(icon)
+            btn.setIconSize(QSize(24, 24))
+        btn.setStyleSheet(_arrow_btn_css(text=icon is None))
         # Press-and-hold steps repeatedly (touch users expect this on ‹ ›).
         btn.setAutoRepeat(True)
         btn.setAutoRepeatDelay(400)

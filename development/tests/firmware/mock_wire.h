@@ -65,6 +65,13 @@ public:
     bool responseTimeout = false;
     bool shortMotorWrite = false;
 
+    // Fail only the next N SMC speed writes (0x85 forward / 0x86 reverse),
+    // optionally only to one address (-1 = any). Position reads and the
+    // exit-safe-start writes still succeed, so a test can NACK a stop
+    // without also failing the position feedback that precedes it.
+    int failSpeedWrites = 0;
+    int failSpeedAddress = -1;
+
     uint8_t endTransmission() {
         if (commandCount < MAX_WIRE_COMMANDS) {
             commands[commandCount].address = _currentAddress;
@@ -74,6 +81,12 @@ public:
         }
         if (failTransmissions > 0) {
             failTransmissions--;
+            return 4;
+        }
+        bool speedWrite = _txLen >= 1 && (_txBuffer[0] == 0x85 || _txBuffer[0] == 0x86);
+        if (speedWrite && failSpeedWrites > 0 &&
+            (failSpeedAddress < 0 || failSpeedAddress == _currentAddress)) {
+            failSpeedWrites--;
             return 4;
         }
         if (_txLen == 3 && (_txBuffer[0] == 0x85 || _txBuffer[0] == 0x86))
@@ -108,6 +121,8 @@ public:
         motorWriteResult = 0;
         responseBytes = 2;
         responseTimeout = shortMotorWrite = false;
+        failSpeedWrites = 0;
+        failSpeedAddress = -1;
         _txLen = 0;
         _rxLen = 0;
         _rxIndex = 0;

@@ -208,4 +208,4 @@ def test_failed_default_save_reports_error_without_applying_settings(
     KneeSpa._on_mark_default(window)
     window._show_timed_error.assert_called_once_with("Could not save defaults.")
     window.shell.treatment.set_settings.assert_not_called()
-    window.logger.error.assert_called_once()
+    window.logger.exception.assert_called_once_with("Failed to save defaults")

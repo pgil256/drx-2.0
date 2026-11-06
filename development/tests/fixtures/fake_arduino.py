@@ -119,7 +119,7 @@ class FakeArduino(ControllerModel):
                         if self._send_status():
                             last_idle_status_time = now
 
-            except Exception as e:
+            except Exception as e:  # noqa: BLE001 - fake device thread: report and stop
                 if self._running:
                     print(f"FakeArduino error: {e}")
                 break

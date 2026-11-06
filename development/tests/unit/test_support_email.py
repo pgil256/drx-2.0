@@ -151,7 +151,7 @@ def test_missing_credentials_log_without_connecting(
 
     run.smtp.assert_not_called()
     diagnostic = f"{FAILURE_PREFIX}: SMTP credentials are not configured"
-    run.window.logger.error.assert_called_once_with(diagnostic)
+    run.window.logger.exception.assert_called_once_with(diagnostic)
     assert run.window.support_email_result.emit.call_args[0][0] is False
 
 
@@ -171,7 +171,7 @@ def test_smtp_failures_are_logged_by_the_worker(
     queue_ticket(run)()
 
     diagnostic = f"{FAILURE_PREFIX}: {stage} failed"
-    run.window.logger.error.assert_called_once_with(diagnostic)
+    run.window.logger.exception.assert_called_once_with(diagnostic)
     run.window.logger.info.assert_not_called()
     if stage in ("connect", "enter", "login"):
         run.server.sendmail.assert_not_called()
