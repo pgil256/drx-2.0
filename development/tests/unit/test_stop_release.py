@@ -12,6 +12,7 @@ from unittest.mock import MagicMock
 import pytest
 
 import controllers.stop_controller as sc_mod
+from helpers.stop_commands import RELEASE_SEQUENCE
 from fixtures.controllers import make_window
 from fixtures.protocols import make_protocol
 
@@ -102,7 +103,9 @@ def test_fault_stop_still_sends_no_release():
 def test_worker_stop_reports_whether_it_queued_the_release():
     worker = make_protocol()
     assert worker.stop() is True
-    assert [c[0][0] for c in worker.arduino.send.call_args_list] == ["X", "P0", "HF0"]
+    sent_commands = [c[0][0] for c in worker.arduino.send.call_args_list]
+    assert sent_commands == ["X", "P0", "HF0"]
+    assert tuple(sent_commands) == RELEASE_SEQUENCE  # the names match the wire
 
     worker = make_protocol()
     worker.cancel(firmware_stopped=True)

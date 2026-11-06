@@ -22,7 +22,7 @@ import RPi.GPIO as GPIO
 from PyQt5.QtCore import QTimer
 
 from config.constants import EMERGENCYSTOP
-from helpers.stop_commands import RELEASE_SEQUENCE, STOP_ALL, TELEMETRY_ON
+from helpers.stop_commands import RELEASE, RELEASE_SEQUENCE, STOP_ALL, TELEMETRY_ON
 
 OPERATOR = "operator"   # the treatment STOP (ProtocolController.stop_protocol)
 ESTOP = "estop"         # the on-screen EMERGENCY STOP (screen, banner, Setup)
@@ -195,7 +195,7 @@ class StopController:
             # The firmware's own release owns the load; X would abort it.
             return
         arduino = getattr(window, "arduino", None)
-        if arduino is None or not arduino.send("P0"):
+        if arduino is None or not arduino.send(RELEASE):
             window.logger.error("Pressure release (P0) could not be sent after stop")
             return
         window.logger.info("Pressure release command sent")
@@ -339,14 +339,14 @@ class StopController:
         self.protocol.latch_session_outcome("fault" if fault else "stopped")
         arduino = window.arduino
         if arduino is not None:
-            arduino.send("X")
+            arduino.send(STOP_ALL)
         window.connection.cancel_reset()
         if window.worker:
             # The explicit stop here owns output cleanup; stop() must not issue P0.
             window.worker.cancel(firmware_stopped=True)
         if arduino is not None:
-            arduino.send("X")
-            arduino.send("HF1")
+            arduino.send(STOP_ALL)
+            arduino.send(TELEMETRY_ON)
             arduino.baseline_valid = False
         window._release_leg_gpio()
         window.protocol_timer.stop()

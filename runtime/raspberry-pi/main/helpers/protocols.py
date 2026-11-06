@@ -6,6 +6,7 @@ from helpers.controller_operations import (
 )
 from helpers.conversions import lateral_degrees_to_position
 from helpers.motor_speed import motor_speed_command, motor_speed_values
+from helpers.stop_commands import RELEASE, STOP_ALL, TELEMETRY_OFF
 from typing import Mapping, Optional, Tuple
 
 from PyQt5 import QtCore
@@ -930,7 +931,7 @@ class Protocols(QtCore.QRunnable):
         try:
             # Emergency stop first: halts pulsing/motion immediately
             # (X jumps the transport's queue and the firmware's limiter)
-            stop_sent = self.arduino.send("X")
+            stop_sent = self.arduino.send(STOP_ALL)
             if stop_sent:
                 self.logger.info("Emergency stop command sent")
             else:
@@ -939,7 +940,7 @@ class Protocols(QtCore.QRunnable):
 
             # Actively release traction; the firmware ramps the axial
             # actuator back until the load cell reads zero
-            release_sent = self.arduino.send("P0")
+            release_sent = self.arduino.send(RELEASE)
             if release_sent:
                 self.logger.info("Pressure release command sent")
             else:
@@ -947,7 +948,7 @@ class Protocols(QtCore.QRunnable):
 
             # Telemetry continues during the release via the firmware's
             # active-motion status path even after HF mode is off
-            self.arduino.send("HF0")
+            self.arduino.send(TELEMETRY_OFF)
 
         except Exception:
             self.logger.exception("Error during protocol stop")
