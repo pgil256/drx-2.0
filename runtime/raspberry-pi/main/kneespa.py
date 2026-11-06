@@ -1269,6 +1269,17 @@ class KneeSpa(DeviceStateAttributes, QMainWindow):
         msg_box.setStandardButtons(QMessageBox.Ok)
         msg_box.setWindowFlags(msg_box.windowFlags() | Qt.WindowStaysOnTopHint)
         msg_box.setProperty("safetyWarning", warning)
+        # Release the box when it is dismissed, as _show_timed_error does:
+        # every dismissed alert used to stay alive, owned by the window, for
+        # the kiosk's uptime. Drop the reference as the box is deleted, so
+        # the next alert never calls isVisible() on a deleted box (V10).
+        msg_box.setAttribute(Qt.WA_DeleteOnClose, True)
+
+        def forget(*_args, box=msg_box):
+            if getattr(self, "_active_safety_alert", None) is box:
+                self._active_safety_alert = None
+
+        msg_box.destroyed.connect(forget)
         msg_box.show()  # non-modal so STOP controls stay reachable
         # Keep a reference so it is not garbage-collected
         self._active_safety_alert = msg_box
