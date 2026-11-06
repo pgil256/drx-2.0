@@ -104,7 +104,9 @@ class StaffClient:
                 self.context = {}
             raise StaffError(code, ERRORS.get(code, "Cloud request failed. Please try again."),
                              uncertain=mutation and (exc.code >= 500 or 300 <= exc.code < 400))
-        except Exception:
+        # Remote error text can carry tokens or patient data, so the original
+        # is not chained or logged.
+        except Exception:  # noqa: BLE001
             raise StaffError("unavailable", "Cloud unavailable. Check the connection.",
                              uncertain=mutation)
 

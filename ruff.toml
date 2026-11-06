@@ -42,6 +42,5 @@ select = [
 "runtime/raspberry-pi/main/controllers/device_controller.py" = ["BLE001", "S110"]
 "runtime/raspberry-pi/main/controllers/machine_sign_in_controller.py" = ["BLE001", "S110"]
 "runtime/raspberry-pi/main/controllers/patient_controller.py" = ["BLE001", "S110"]
-"runtime/raspberry-pi/main/helpers/staff_client.py" = ["BLE001", "S110"]
 "runtime/raspberry-pi/main/ui/modals/release_install.py" = ["BLE001", "S110"]
 "runtime/raspberry-pi/main/ui/widgets/treatment_status_panel.py" = ["BLE001", "S110"]
