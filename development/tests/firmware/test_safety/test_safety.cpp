@@ -77,6 +77,8 @@ void setUp(void) {
     timeSinceLastStatus = 0;
     loopLastPosition = -1;
     loopStallStart = 0;
+    positionMoveStarted = 0;
+    positionMoveDeadline = 0;
     scale._ready = true;
     scale._scale = 1.0;
     scale._offset = 0.0;
@@ -509,8 +511,9 @@ void test_axial_home_within_deadband_not_stalled(void) {
     TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
 }
 
-// A frozen motor warns after the sustained no-progress interval but continues
-// until E-stop.
+// A frozen motor warns after the sustained no-progress interval but the
+// warning does not stop it. (A move started by I/K/A is also bounded by its
+// deadline; this one is set up directly, so it has none.)
 void test_genuine_stall_warns_after_sustained_interval_without_stopping(void) {
     keepAlive();
     smcDeviceNumber = 12;
@@ -573,6 +576,120 @@ void test_position_progress_restarts_stall_timer(void) {
     loop();
     TEST_ASSERT_TRUE(bRunning);
     TEST_ASSERT_TRUE(Serial1.outputContains("WARNING: Motor stalled"));
+}
+
+// --- Position-move deadline (drx-demo A3) ---
+
+static int countSpeedZeroWrites(uint8_t device);  // defined with the FAILSAFE-6 tests
+
+// One loop pass at the current mock time, with every unrelated fail-safe fresh.
+static void movePass(void) {
+    lastActiveStatus = _millis_value;
+    keepAlive();
+    loop();
+}
+
+static unsigned long expectedDeadline(unsigned long distance, unsigned long countsPerSecond) {
+    return distance * 3000UL / countsPerSecond + 5000UL;
+}
+
+void test_position_deadline_follows_distance_and_axis(void) {
+    keepAlive();
+    processCommand("K2000");                 // C from 1200
+    TEST_ASSERT_TRUE(bRunning);
+    TEST_ASSERT_EQUAL_UINT32(expectedDeadline(800, 70), positionMoveDeadline);
+    processCommand("X");
+    processCommand("I131000");               // B from 2000
+    TEST_ASSERT_EQUAL_UINT32(expectedDeadline(1000, 50), positionMoveDeadline);
+    processCommand("X");
+    processCommand("I12500");                // A from 2000
+    TEST_ASSERT_EQUAL_UINT32(expectedDeadline(1500, 40), positionMoveDeadline);
+    processCommand("X");
+    processCommand("A123");                  // 3 in x 430 = 1290 counts
+    TEST_ASSERT_EQUAL_UINT32(expectedDeadline(710, 40), positionMoveDeadline);
+    TEST_ASSERT_EQUAL_UINT32(_millis_value, positionMoveStarted);
+}
+
+void test_stuck_move_stops_at_its_deadline_without_latching(void) {
+    keepAlive();
+    processCommand("K2000");
+    unsigned long deadline = positionMoveDeadline;
+    _millis_value = deadline;                // exactly the deadline: still moving
+    movePass();
+    TEST_ASSERT_TRUE(bRunning);
+    TEST_ASSERT_FALSE(Serial1.outputContains("POSITION_MOVE_TIMEOUT"));
+    TEST_ASSERT_TRUE(Serial1.outputContains("WARNING: Motor stalled"));  // still advisory
+    int stopsBefore = countSpeedZeroWrites(14);
+    _millis_value = deadline + 1;
+    movePass();
+    TEST_ASSERT_FALSE(bRunning);
+    TEST_ASSERT_TRUE(countSpeedZeroWrites(14) > stopsBefore);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: POSITION_MOVE_TIMEOUT"));
+    TEST_ASSERT_TRUE(Serial1.outputContains("LOG|POSITION_MOVE_TIMEOUT 14 2000 1200 "));
+    TEST_ASSERT_FALSE(Serial1.outputContains("MOTION_DONE"));
+    TEST_ASSERT_FALSE(pressureFault);
+    // Nothing latched: the next move is accepted, with its own deadline.
+    Serial1.reset();
+    _millis_value += 1000;
+    processCommand("I12500");
+    TEST_ASSERT_TRUE(bRunning);
+    TEST_ASSERT_EQUAL_UINT32(_millis_value, positionMoveStarted);
+    movePass();
+    TEST_ASSERT_FALSE(Serial1.outputContains("POSITION_MOVE_TIMEOUT"));
+}
+
+void test_v2_move_timeout_names_its_sequence(void) {
+    keepAlive();
+    currentCmdSeq = 21;
+    processCommand("K2000");
+    currentCmdSeq = -1;
+    _millis_value = positionMoveDeadline + 1;
+    movePass();
+    TEST_ASSERT_FALSE(bRunning);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERR|21|POSITION_MOVE_TIMEOUT"));
+    TEST_ASSERT_FALSE(Serial1.outputContains("DONE|21"));
+    TEST_ASSERT_EQUAL(-1, activeCmdSeq);
+}
+
+void test_arrival_on_the_deadline_pass_completes(void) {
+    keepAlive();
+    processCommand("K2000");
+    _millis_value = positionMoveDeadline + 1;
+    Wire.position_14 = 1950;                 // inside the 100-count lateral band
+    movePass();
+    TEST_ASSERT_FALSE(bRunning);
+    TEST_ASSERT_TRUE(Serial1.outputContains("MOTION_DONE|K|2000|1950"));
+    TEST_ASSERT_FALSE(Serial1.outputContains("POSITION_MOVE_TIMEOUT"));
+}
+
+void test_unacknowledged_stop_keeps_the_move_until_it_lands(void) {
+    keepAlive();
+    processCommand("K2000");
+    _millis_value = positionMoveDeadline + 1;
+    Wire.failSpeedWrites = 3;                // every attempt at the stop NACKs
+    movePass();
+    TEST_ASSERT_TRUE(bRunning);
+    TEST_ASSERT_FALSE(Serial1.outputContains("POSITION_MOVE_TIMEOUT"));
+    Wire.failSpeedWrites = 0;
+    _millis_value += 10;
+    movePass();
+    TEST_ASSERT_FALSE(bRunning);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: POSITION_MOVE_TIMEOUT"));
+}
+
+void test_position_deadline_holds_across_millis_wraparound(void) {
+    keepAlive();
+    _millis_value = 0UL - 1000UL;            // 1 s before millis() rolls over
+    keepAlive();
+    processCommand("K2000");
+    unsigned long deadline = positionMoveDeadline;
+    _millis_value = (0UL - 1000UL) + deadline;  // crosses the wrap
+    movePass();
+    TEST_ASSERT_TRUE(bRunning);
+    _millis_value += 1;
+    movePass();
+    TEST_ASSERT_FALSE(bRunning);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: POSITION_MOVE_TIMEOUT"));
 }
 
 // --- P0 release semantics (2026-07-08 on-device finding) ---
@@ -1401,6 +1518,12 @@ int main(int argc, char **argv) {
     RUN_TEST(test_axial_home_within_deadband_not_stalled);
     RUN_TEST(test_genuine_stall_warns_after_sustained_interval_without_stopping);
     RUN_TEST(test_position_progress_restarts_stall_timer);
+    RUN_TEST(test_position_deadline_follows_distance_and_axis);
+    RUN_TEST(test_stuck_move_stops_at_its_deadline_without_latching);
+    RUN_TEST(test_v2_move_timeout_names_its_sequence);
+    RUN_TEST(test_arrival_on_the_deadline_pass_completes);
+    RUN_TEST(test_unacknowledged_stop_keeps_the_move_until_it_lands);
+    RUN_TEST(test_position_deadline_holds_across_millis_wraparound);
     RUN_TEST(test_p0_with_no_load_completes_done_without_error);
     RUN_TEST(test_release_reaching_zero_with_target_met_completes_done);
     RUN_TEST(test_release_at_home_with_load_cannot_report_success);
