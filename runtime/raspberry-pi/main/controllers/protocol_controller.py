@@ -19,7 +19,7 @@ from helpers import protocols
 from helpers.cloud_contract import end_settings, patient_label
 from helpers.treatment_session import TreatmentSession
 from controllers.machine_sign_in_controller import authorize
-from controllers.stop_controller import ESTOP, OPERATOR, StopController
+from controllers.stop_controller import ESTOP, FAULT, OPERATOR, StopController
 from ui.modals.treatment_review import TreatmentReviewDialog
 from ui.presentation import present
 
@@ -438,31 +438,8 @@ class ProtocolController:
         self.window.safety.on_controller_fault({"reason": reason})
 
     def stop_without_recovery(self, reason: str, fault: bool = False) -> None:
-        """Stop outputs and cancel producers without any automatic movement."""
-        window = self.window
-        window._no_automatic_recovery = True
-        window.protocol_stop_requested = True
-        self.latch_session_outcome("fault" if fault else "stopped")
-        arduino = window.arduino
-        if arduino is not None:
-            arduino.send("X")
-        window.connection.cancel_reset()
-        if window.worker:
-            # The explicit stop here owns output cleanup; stop() must not issue P0.
-            window.worker.cancel(firmware_stopped=True)
-        if arduino is not None:
-            arduino.send("X")
-            arduino.send("HF1")
-            arduino.baseline_valid = False
-        window._release_leg_gpio()
-        window.protocol_timer.stop()
-        window.initial_setup_complete = False
-        self.set_state("fault")
-        window.shell.setup.set_reset_enabled(not window.reset_in_progress)
-        window.on_baseline_changed(False)
-        if fault:
-            window.treatment_panel.set_fault(reason)
-        self.finalize_session()
+        """A stop with no automatic movement: see StopController (kind "fault")."""
+        self.stops.stop(FAULT, reason=reason, fault=fault)
 
     def stop_protocol(self):
         """The treatment STOP: see StopController (kind "operator")."""

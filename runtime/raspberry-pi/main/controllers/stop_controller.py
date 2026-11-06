@@ -66,6 +66,9 @@ POLICIES: Dict[str, StopPolicy] = {
                "initial_setup_complete": False},
         screen="fault",
     ),
+    # With fault=False (a command the worker or reset reported as rejected, or
+    # the pressure-progress Stop) the same stop latches "stopped" instead and
+    # leaves the treatment banner alone.
     FAULT: StopPolicy(
         commands=(STOP_ALL, STOP_ALL, TELEMETRY_ON), hardware_line=False,
         release="none: no automatic movement",
@@ -134,6 +137,7 @@ class StopController:
         handlers = {
             OPERATOR: self._operator_stop,
             ESTOP: self._estop_stop,
+            FAULT: self._fault_stop,
         }
         handlers[kind](**options)
 
@@ -320,3 +324,30 @@ class StopController:
             self.window.logger.exception("Could not release EMERGENCYSTOP GPIO")
         # Same release-then-ask ordering as the staged stop
         self._reset_after_release(time.time())
+
+    def _fault_stop(self, reason: str, fault: bool = False) -> None:
+        """Stop outputs and cancel producers without any automatic movement."""
+        window = self.window
+        window._no_automatic_recovery = True
+        window.protocol_stop_requested = True
+        self.protocol.latch_session_outcome("fault" if fault else "stopped")
+        arduino = window.arduino
+        if arduino is not None:
+            arduino.send("X")
+        window.connection.cancel_reset()
+        if window.worker:
+            # The explicit stop here owns output cleanup; stop() must not issue P0.
+            window.worker.cancel(firmware_stopped=True)
+        if arduino is not None:
+            arduino.send("X")
+            arduino.send("HF1")
+            arduino.baseline_valid = False
+        window._release_leg_gpio()
+        window.protocol_timer.stop()
+        window.initial_setup_complete = False
+        self.protocol.set_state("fault")
+        window.shell.setup.set_reset_enabled(not window.reset_in_progress)
+        window.on_baseline_changed(False)
+        if fault:
+            window.treatment_panel.set_fault(reason)
+        self.protocol.finalize_session()
