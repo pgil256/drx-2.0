@@ -195,6 +195,16 @@ class Arduino(QObject):
     # Connection lifecycle
     # ------------------------------------------------------------------
 
+    def cancel_connect(self) -> None:
+        """End a connect loop that is still retrying (checklist V8).
+
+        Teardown calls this first. QThread.quit() cannot interrupt the loop,
+        which runs inside the thread's started slot, so it used to outlive a
+        teardown and reopen the port up to about a minute later. Each Arduino
+        is discarded after teardown, so the flag is never cleared.
+        """
+        self._connect_cancel.set()
+
     def disconnect(self, drain_timeout=0.0):
         """Close the serial connection and stop the I/O thread.
 
@@ -285,6 +295,9 @@ class Arduino(QObject):
                 )
                 # Boot grace: USB-serial Arduinos auto-reset on open
                 if self._connect_cancel.wait(2):
+                    # Cancelled with the port just opened: close it, or it
+                    # outlives the teardown that cancelled this loop.
+                    self.disconnect()
                     return False
 
                 self._start_io_thread()
