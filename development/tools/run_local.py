@@ -106,7 +106,7 @@ def main():
             raise RuntimeError("no real Qt application instance")
         from ui.theme import apply_theme
         print(f"Theme applied: {apply_theme(app)}")
-    except Exception as err:  # never let a theme issue block launch
+    except Exception as err:  # noqa: BLE001 - never let a theme issue block launch
         print(f"Theme not applied, continuing with default style: {err}")
 
     # Same crash guard as the device launcher (PyQt5 aborts on an unhandled
