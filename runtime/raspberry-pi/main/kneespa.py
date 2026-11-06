@@ -181,9 +181,9 @@ class KneeSpa(DeviceStateAttributes, QMainWindow):
             self.loading_spinner.hide()
             return True
 
-        except Exception as e:
+        except Exception:
             self.loading_spinner.hide()
-            self.logger.error("Error in set_to_c_distance: %s", e)
+            self.logger.exception("Error in set_to_c_distance")
             self.logger.error("Degrees: %s, Type: %s", degrees, type(degrees))
             self.logger.error("CMarks: %s", self.config.CMarks)
             return False
@@ -331,7 +331,7 @@ class KneeSpa(DeviceStateAttributes, QMainWindow):
             self.logger.info("%s", SUCCESS_MESSAGES["DATA_LOADED"])
         except Exception as e:
             self.users = {}
-            self.logger.error("Error loading CSV data: %s", e)
+            self.logger.exception("Error loading CSV data")
             self._show_timed_error(f"Failed to load CSV data: {str(e)}")
         self.current_user = None
 
@@ -383,9 +383,9 @@ class KneeSpa(DeviceStateAttributes, QMainWindow):
         # Ensure a persisted per-device id exists for support tickets (§15.5).
         try:
             configured_device_id = self.config.ensure_device_id()
-        except Exception as e:
+        except Exception:
             configured_device_id = ""
-            self.logger.error("Could not ensure device id: %s", e)
+            self.logger.exception("Could not ensure device id")
         cloud_device_id = getattr(self.cloud_client, "device_id", "")
         self.shell.device.set_device_id(
             (cloud_device_id if isinstance(cloud_device_id, str) else "") or configured_device_id
@@ -490,9 +490,9 @@ class KneeSpa(DeviceStateAttributes, QMainWindow):
             return False
         try:
             queued = bool(self.arduino and self.arduino.send(command))
-        except Exception as exc:
+        except Exception:
             queued = False
-            self.logger.error("Could not queue %s command %s: %s", context, command, exc)
+            self.logger.exception("Could not queue %s command %s", context, command)
         if queued:
             # Position (A/I/K) and pressure (P) moves re-enable the controls
             # only on the firmware's DONE; F0 is a stop the leg controller owns.
@@ -628,6 +628,8 @@ class KneeSpa(DeviceStateAttributes, QMainWindow):
                 "duration", DEFAULT_PROTOCOL_MINUTES
             )
         except Exception:
+            self.logger.exception("Could not read the treatment duration; using %d min",
+                                  DEFAULT_PROTOCOL_MINUTES)
             v = DEFAULT_PROTOCOL_MINUTES
         return self._clamp_minutes(v)
 
@@ -964,7 +966,7 @@ class KneeSpa(DeviceStateAttributes, QMainWindow):
             moved = True
             return True
         except Exception as e:
-            self.logger.error("Error in Setup Go: %s", e)
+            self.logger.exception("Error in Setup Go")
             self._show_timed_error(f"Error moving actuator: {str(e)}")
         finally:
             self.loading_spinner.hide()
@@ -1035,8 +1037,8 @@ class KneeSpa(DeviceStateAttributes, QMainWindow):
                 f"left {ml:g}° / right {mr:g}° · pulse {pr:g}/sec.\n"
                 f"Motor speed: {vals['motor_speed']:g}%."
             )
-        except Exception as e:
-            self.logger.error("Failed to save defaults: %s", e)
+        except Exception:
+            self.logger.exception("Failed to save defaults")
             self._show_timed_error("Could not save defaults.")
 
     # ----- auth -----
@@ -1184,8 +1186,10 @@ class KneeSpa(DeviceStateAttributes, QMainWindow):
                 self.logger.info("%s", success_message)
                 if signal is not None:
                     signal.emit(True, success_message)
+            # A worker thread: every failure must reach the Support screen,
+            # or it would stay on "Sending" for good.
             except Exception as e:
-                self.logger.error(f"{failure_prefix}: {e}")
+                self.logger.exception(f"{failure_prefix}: {e}")
                 if signal is not None:
                     signal.emit(False, "Request not sent. Check the connection or contact your administrator.")
 
@@ -1565,7 +1569,7 @@ class KneeSpa(DeviceStateAttributes, QMainWindow):
                     "Press the physical emergency stop immediately."
                 )
         except Exception as e:
-            self.logger.error("Error in emergency stop: %s", e)
+            self.logger.exception("Error in emergency stop")
             self._show_timed_error(f"Emergency stop failed: {str(e)}")
 
     def stop_position_flexion_button(self, actuator):
@@ -1574,8 +1578,8 @@ class KneeSpa(DeviceStateAttributes, QMainWindow):
         # produce the STOP NOT DELIVERED alarm rather than an AttributeError.
         try:
             sent = bool(self.arduino and self.arduino.send("X"))
-        except Exception as exc:
-            self.logger.error("Actuator stop raised: %s", exc)
+        except Exception:
+            self.logger.exception("Actuator stop raised")
             sent = False
         if not sent:
             self.logger.error("Actuator stop could not be sent - link down")
@@ -1683,7 +1687,7 @@ class KneeSpa(DeviceStateAttributes, QMainWindow):
             self.last_measured_pressure = float(pressure)
         except (TypeError, ValueError):
             pass
-        try:
+        def update_live_view() -> None:
             self.shell.treatment.set_pressure(pressure)
             connected = bool(self.arduino and self.arduino.connected)
             calibrated = connected and self.config.marks_valid
@@ -1710,8 +1714,10 @@ class KneeSpa(DeviceStateAttributes, QMainWindow):
                     key, round(reading, 1) if reading is not None else None,
                     "From calibration" if reading is not None else "Check calibration",
                 )
-        except Exception as e:
-            self.logger.error("Error updating live status: %s", e)
+
+        # Runs for every status frame: present() logs one traceback per failure
+        # episode, and the safety checks below always run.
+        present(self.logger, "live status", update_live_view)
         return self.safety.on_status(position_a, position_b, steps, pressure)
 
     def on_sensor_diagnostics(self, diagnostics: dict) -> None:
@@ -1908,7 +1914,7 @@ def _print_recent_logs(lines: int = 200) -> None:
         try:
             content = read_recent_log_lines(path, lines)
             print("".join(content))
-        except Exception as e:
+        except (OSError, ValueError) as e:  # unreadable or undecodable log file
             print(f"Could not print {path}: {e}")
 
 
@@ -1949,7 +1955,7 @@ def _install_excepthook():
         print(f"UNHANDLED EXCEPTION (app kept running):\n{text}", file=sys.stderr)
         try:
             unhandled_log.error("Unhandled exception:\n%s", text)
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             pass  # Logging itself failed; stderr above already has the traceback.
 
     sys.excepthook = _hook
@@ -1992,10 +1998,8 @@ def main():
             from ui.theme import apply_theme
             theme_info = apply_theme(app)
             log_setup.logger.info("Theme applied: %s", theme_info)
-        except Exception as theme_err:
-            log_setup.logger.warning(
-                "Theme not applied, continuing with default style: %s", theme_err
-            )
+        except Exception:
+            log_setup.logger.exception("Theme not applied, continuing with default style")
 
         window = KneeSpa(debug_mode=args.debug, config_path=args.config)
         window._release_install_enabled = True
@@ -2043,7 +2047,7 @@ def run_as_script():
     """
     try:
         main()
-    except Exception as e:
+    except Exception as e:  # noqa: BLE001 - top level: print the traceback and exit 1
         print(f"Exception occurred: {str(e)}")
         print("Full traceback:")
         traceback.print_exc()
