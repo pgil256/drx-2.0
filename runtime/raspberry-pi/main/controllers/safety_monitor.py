@@ -13,6 +13,7 @@ from config.constants import (
     LATERAL_MIN,
     LATERAL_MAX,
 )
+from controllers.stop_controller import PHYSICAL, stops_for
 
 
 COMMAND_REJECTION_MESSAGES = {
@@ -296,37 +297,8 @@ class SafetyMonitor:
         self._present_warning(message)
 
     def on_physical_stop(self) -> None:
-        """Latch the physical stop on the host while firmware releases traction."""
-        window = self.window
-        window._no_automatic_recovery = True
-        window.connection.cancel_reset()
-        window.logger.error("Physical emergency stop activated")
-        already_stopped = getattr(window, "_physical_stop_active", False) is True
-        protocol = getattr(window, "protocol", None)
-        if protocol is not None:
-            protocol.latch_session_outcome("fault")
-        window._physical_stop_active = True
-        window.protocol_stop_requested = True
-        window.initial_setup_complete = False
-        if window.worker:
-            window.worker.cancel(firmware_stopped=True)
-        if window.arduino:
-            window.arduino.cancel_pending_commands()
-        try:
-            window._release_leg_gpio()
-        except Exception:
-            window.logger.exception("Could not release leg GPIO after physical stop")
-        window._paused_at = None
-        window.protocol_timer.stop()
-        window.set_protocol_state("fault")
-        window.disable_actuator_controls()
-        window.shell.setup.set_reset_enabled(not window.reset_in_progress)
-        window.treatment_panel.set_fault("PHYSICAL EMERGENCY STOP")
-        if not already_stopped:
-            window._show_safety_alert(
-                "Physical emergency stop activated. Release the button and reset "
-                "the device before starting another treatment."
-            )
+        """The device's stop button: see StopController (kind "physical")."""
+        stops_for(self.window).stop(PHYSICAL)
 
     def on_firmware_warning(self, message: str) -> None:
         """Handle advisory firmware notices without startup alert noise.
