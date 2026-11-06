@@ -111,7 +111,7 @@ def run_gui(manifest_path: Path, capture: Optional[Path] = None,
                     ok = result["ok"]
                     self.support_email_result.emit(ok, "Captured in simulator session" if ok
                                                    else "Simulated delivery failure")
-                except Exception:
+                except Exception:  # noqa: BLE001 - any capture failure goes to the Support screen
                     self.support_email_result.emit(False, "Local capture unavailable")
 
             threading.Thread(target=capture_request, daemon=True).start()
