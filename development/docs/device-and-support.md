@@ -166,8 +166,8 @@ Software ZIPs contain `runtime/raspberry-pi/`, `raspberry-pi/`, or its direct
 contents (`main/` and `launch.sh`). They must contain the complete application.
 Traversal, links, duplicate paths, device-state files and oversized expansions are
 rejected. Python syntax is checked against the installed interpreter. The current
-software is copied into the preparation folder before a same-filesystem rename
-activates the new tree. Handled activation failures restore the old tree. Device
+software is copied into the preparation folder before same-filesystem renames
+activate the new tree. Handled activation failures restore the old tree. Device
 state, credentials, calibration, logs and uploads remain outside the replacement.
 Dependencies must already be provisioned; installation does not install Python
 packages or change OS permissions. Version metadata alone does not establish
@@ -192,11 +192,24 @@ treatment is enabled. Validate the device physically before returning it to use.
 
 `updates/installed.json` records the release UUID, version, checksum, installation
 time and backup path after success. Preparation folders retain backups and build/
-flash logs for service recovery. A power loss during the two software renames can
-require manual restoration of `previous-software/` into `runtime/raspberry-pi/`
-with the app stopped. The app does not claim power-loss atomicity or automatically
-roll back a release that installs successfully but fails during its later startup.
-Review and prune old update folders during maintenance after validating recovery.
+flash logs for service recovery.
+
+**Power loss during a software install.** The install moves `runtime/raspberry-pi`
+aside, then moves the new software into its place. Before the first rename it
+flushes the new software and a journal (`runtime/.software-swap`) to disk; after
+the second it flushes the folder change. If power is lost between the two renames,
+the next start restores the previous software automatically: the desktop launcher,
+the version chooser and the systemd example run `runtime/restore_update.sh` first.
+See [Interrupted software update](deployment.md#interrupted-software-update). The
+app does not roll back a release that installs successfully but fails during its
+later startup.
+
+**Update folders are pruned after each successful install.** The newest two
+`updates/prepared-*` folders are kept, plus any folder holding the backup that
+`installed.json` or `firmware-recovery.json` names, however old. Downloaded archives
+are kept only for the kept folders' releases. An unreadable record stops pruning
+entirely. Leftover `.software-old-*` and `.software-next-*` folders from an
+interrupted install are removed.
 
 The handoff document describes the current cloud implementation, which must be
 deployed to the configured host. Live staff authentication, release compatibility,

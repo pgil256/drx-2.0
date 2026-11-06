@@ -10,6 +10,7 @@ the reported `/home/pi/drx` installation; the sync defaults below remain `/home/
 
 ```text
 runtime/
+  restore_update.sh       # restores raspberry-pi/ after an interrupted install
   raspberry-pi/
     launch.sh
     main/                 # app, Python constants, UI, assets, requirements.txt
@@ -67,6 +68,29 @@ Override with `PI_USER`, `DEST_ROOT`, `SERVICE`, and optionally `SSH_OPTS`.
 `SOURCE_DIR` may select another release's **runtime directory**, not its root.
 The retired `DEST_DIR` variable is rejected to prevent old deployment commands
 from targeting the wrong tree. Root paths use shell-safe characters without spaces.
+
+### Interrupted software update
+
+An in-app software install (Service > Flash Software) renames
+`runtime/raspberry-pi` to `runtime/.software-old-*`, then renames the new software
+into its place. A power cut between the two renames leaves no app folder.
+`runtime/restore_update.sh` moves the retired folder back, using the journal the
+install flushed to disk first (`runtime/.software-swap`), or the most recently
+changed `.software-old-*` folder without one. It does nothing when the app folder
+is present.
+
+- The desktop launcher runs it under its lock before starting the app, and logs
+  the result in `desktop-launch.log`.
+- The version chooser and the systemd example pass the same lock with `--lock`.
+  While the app holds it (it may be installing), the script changes nothing.
+- `runtime/raspberry-pi/launch.sh` cannot do this: it is inside the swapped folder.
+
+The script lives in `runtime/`, outside the folder a release replaces, so it
+arrives by routine sync, not through an in-app release. The launchers in
+`devices/` are copied separately (see the Pi setup script reference). Until both
+are in place, or if the script reports that nothing could be restored, stop the
+app and copy `previous-software/` from the newest `updates/prepared-*` folder back
+to `runtime/raspberry-pi/`.
 
 ## Transfer selected state for one device
 
