@@ -320,6 +320,10 @@ void exitSafeStart() {
   Wire.endTransmission();
 }
 
+// While set, writeMotorSpeed() does not log. emergencyStop() sets it so
+// that no debug output comes between its three stop writes (checklist V3).
+static bool quietSpeedLog = false;
+
 // Write a speed to the addressed SMC with no fault gate. Only the E-stop
 // release back-off calls this directly; every other caller goes through
 // setMotorSpeed, which refuses motion while a pressure fault is latched.
@@ -328,12 +332,7 @@ static uint8_t writeMotorSpeed(int16_t speed) {
   // Clamp speed to valid range
   if (speed > 3200) speed = 3200;
   if (speed < -3200) speed = -3200;
-
-  // Log speed setting
-  Dbg.print("Set motor speed on: ");
-  Dbg.print(smcDeviceNumber);
-  Dbg.print(" at ");
-  Dbg.println(speed);
+  const int16_t requested = speed;
 
   // Determine direction
   uint8_t cmd = 0x85;  // Motor forward
@@ -348,7 +347,18 @@ static uint8_t writeMotorSpeed(int16_t speed) {
   Wire.write(cmd);
   Wire.write(speed & 0x1F);
   Wire.write(speed >> 5 & 0x7F);
-  return Wire.endTransmission();
+  uint8_t rc = Wire.endTransmission();
+
+  // Log after the write: USB Serial runs at 9600 baud (about 1 ms per byte)
+  // and print blocks once its 64-byte buffer is full, so logging first
+  // delayed every write, stops included (checklist V3).
+  if (!quietSpeedLog) {
+    Dbg.print("Set motor speed on: ");
+    Dbg.print(smcDeviceNumber);
+    Dbg.print(" at ");
+    Dbg.println(requested);
+  }
+  return rc;
 }
 
 // Set motor speed and direction. Returns the Wire::endTransmission() code
@@ -554,22 +564,24 @@ static void retryPendingStops() {
 
 // Emergency stop all actuators
 void emergencyStop() {
-  Dbg.println("Emergency Stop");
-
   // Aborted motion/pressure commands never get a DONE (v1 behavior);
   // drop the in-flight sequence so a later completion cannot echo it
   activeCmdSeq = -1;
 
+  // Every stop is written before any debug output. Printing between the
+  // axes used to hold the second and third stops behind the 9600-baud USB
+  // log, by tens of milliseconds once its buffer filled (checklist V3).
+  quietSpeedLog = true;
   stopDeviceOrReport(12);
-  Dbg.println("A stopped");
-
   stopDeviceOrReport(13);
-  Dbg.println("B stopped");
-
   stopDeviceOrReport(14);
-  Dbg.println("C stopped");
-
+  quietSpeedLog = false;
   stopFIT();
+
+  Dbg.println("Emergency Stop");
+  Dbg.println("A stopped");
+  Dbg.println("B stopped");
+  Dbg.println("C stopped");
   Dbg.println("FIT stopped");
 
   measurePressure = false;
@@ -597,12 +609,13 @@ void emergencyStopAndRelease(const char *reason) {
   if (releasingPressure)
     return;  // a release is already the active fault response
 
-  Dbg.print("Emergency stop + release: ");
-  Dbg.println(reason);
   Serial1.print("ERROR: ");
   Serial1.println(reason);
 
   emergencyStop();
+  // Logged after the stops, like emergencyStop()'s own lines (V3).
+  Dbg.print("Emergency stop + release: ");
+  Dbg.println(reason);
 
   releasingPressure = true;
   releaseStart = millis();
