@@ -1946,12 +1946,23 @@ def main():
                                  f"Could not restart the app. Please reopen it.\n{exc}")
 
 
-if __name__ == "__main__":
+def run_as_script():
+    """Device entry point: a failed run must exit non-zero.
+
+    kneespa.service restarts the app with Restart=on-failure, which ignores a
+    clean exit. Swallowing the exception here used to leave a blank kiosk
+    after a startup crash instead of letting systemd bring the app back.
+    """
     try:
         main()
     except Exception as e:
         print(f"Exception occurred: {str(e)}")
         print("Full traceback:")
         traceback.print_exc()
+        sys.exit(1)
     finally:
         GPIO.cleanup()
+
+
+if __name__ == "__main__":
+    run_as_script()
