@@ -10,6 +10,7 @@ from PyQt5.QtCore import QObject, Qt, pyqtSignal
 from PyQt5.QtWidgets import QInputDialog, QMessageBox, QProgressDialog
 
 from config.paths import DEVICE_STATE_DIR, PROJECT_DIR
+from helpers import release_signature
 from helpers.release_client import ReleaseClient
 from helpers.release_installer import ReleaseInstaller
 from helpers.staff_client import StaffError
@@ -171,7 +172,8 @@ class ReleaseController(QObject):
             self.device.screen.release_status.setText(
                 "Latest means most recently uploaded. Review the version before flashing.")
         elif action == "prepare":
-            self._install_review(result)
+            job, signature_note = result
+            self._install_review(job, signature_note)
 
     def _progress(self, generation: int, message: str) -> None:
         if generation == self.generation and self.dialog:
@@ -223,8 +225,10 @@ class ReleaseController(QObject):
                     generation, f"Downloading… {done * 100 // total}%"), self.cancel.is_set)
             if self.cancel.is_set():
                 raise ValueError("Update cancelled before preparation.")
-            self.progress.emit(generation, "Download verified. Checking package and preparing…")
-            return self.installer.prepare(downloaded, release, port, technician)
+            self.progress.emit(generation, "Download verified. Checking its signature…")
+            signature_note = self._check_signature(client, release, downloaded)
+            self.progress.emit(generation, "Checking package and preparing…")
+            return self.installer.prepare(downloaded, release, port, technician), signature_note
 
         self.dialog = QProgressDialog("Preparing release…", "Cancel", 0, 0, self.window)
         self.dialog.setWindowTitle("Device update")
@@ -233,11 +237,36 @@ class ReleaseController(QObject):
         self.dialog.show()
         self._run("prepare", prepare)
 
-    def _install_review(self, job: dict) -> None:
+    def _check_signature(self, client: ReleaseClient, release: dict, downloaded: Path) -> str:
+        """Check the release's detached signature (checklist U2).
+
+        Returns "" when it is valid, or the warning to show when the mode is
+        warn; raises ValueError, which refuses the install, when it is
+        enforce. Runs on the worker thread, before anything is prepared.
+        """
+        signature, reason = client.download_signature(release, downloaded.parent)
+        if signature is None:
+            check = release_signature.SignatureCheck(release_signature.MISSING, reason)
+        else:
+            check = release_signature.verify(downloaded, signature)
+        allowed, message = release_signature.decide(check, release_signature.signature_mode())
+        if check.status == release_signature.VALID:
+            self.window.logger.info("Release %s signature verified", release["version"])
+        else:
+            self.window.logger.warning("Release %s signature: %s", release["version"], message)
+        if not allowed:
+            raise ValueError(message)
+        return message
+
+    def _install_review(self, job: dict, signature_note: str = "") -> None:
         generation = self.generation
-        self.device.screen.release_status.setText("Downloaded and verified; not installed yet.")
+        status = "Downloaded and verified; not installed yet."
+        if signature_note:
+            status += "\n" + signature_note
+        self.device.screen.release_status.setText(status)
         answer = QMessageBox.question(
             self.window, "Ready to flash",
+            (signature_note + "\n\n" if signature_note else "") +
             f"Flash {job['release']['version']} now?\n\nRemove the patient and all loads. "
             "Keep power connected. The app will close its device connection, back up the current "
             "installation, then install the verified release. "

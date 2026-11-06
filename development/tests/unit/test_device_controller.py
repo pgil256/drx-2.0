@@ -339,6 +339,24 @@ def test_verified_release_hands_install_to_shutdown_not_live_controller(controll
     updates.installer.install.assert_not_called()
 
 
+def test_prepared_release_review_shows_the_signature_warning(controller, monkeypatch):
+    """U2: in warn mode a missing or bad signature is shown, then the install continues."""
+    from controllers import release_controller
+    updates = release_flow(controller)
+    controller.window.close = Mock()
+    asked = []
+    monkeypatch.setattr(release_controller.QMessageBox, "question",
+                        lambda parent, title, text, *rest: asked.append(text) or QMessageBox.Yes)
+    job = {"release": {"version": "v2"}}
+    note = "Warning: the release has no signature (none published)."
+
+    updates._completed(updates.generation, "prepare", (job, note))
+
+    assert note in controller.screen.release_status.text()
+    assert asked and asked[0].startswith(note)
+    assert controller.window._release_install == (updates.installer, job)
+
+
 def unlock_service(controller):
     controller.window.hardware_service.access.provision("235689", "235689", True)
     controller.require_service(lambda _user: None)

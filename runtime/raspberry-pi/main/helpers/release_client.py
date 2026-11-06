@@ -6,7 +6,7 @@ from pathlib import Path
 import re
 import tempfile
 import time
-from typing import Callable, Dict, Optional
+from typing import Callable, Dict, Optional, Tuple
 from urllib.error import HTTPError
 from urllib.parse import urlsplit
 from urllib.request import Request
@@ -17,6 +17,8 @@ from helpers.cloud_client import CloudClient
 
 MAX_RELEASE_BYTES = 256 * 1024 * 1024
 DOWNLOAD_DEADLINE_S = 300
+MAX_SIGNATURE_BYTES = 64 * 1024
+SIGNATURE_TYPES = ("application/pgp-signature", "application/octet-stream")
 
 
 class ReleaseClient(StaffClient):
@@ -63,6 +65,46 @@ class ReleaseClient(StaffClient):
         return {platform: (self.metadata(latest[platform], platform)
                            if latest.get(platform) else None)
                 for platform in ("raspberry-pi", "arduino")}
+
+    def download_signature(self, release: Dict, directory: Path) -> Tuple[Optional[Path], str]:
+        """Fetch the release's detached signature (checklist U2).
+
+        Returns (path, "") or (None, why). The signature is served next to
+        the release, at .../releases/<id>/signature (see
+        development/docs/release-signing.md). A failure here is reported as
+        a missing signature; the signature mode decides what that means.
+        """
+        release = self.metadata(release, release.get("platform"))
+        self.check_context("devices.view")
+        url = self.cloud_url + release["download_url"].rsplit("/", 1)[0] + "/signature"
+        request = Request(url, headers={"Accept": SIGNATURE_TYPES[0]})
+        try:
+            with self._opener.open(request, timeout=10) as response:
+                content_type = response.headers.get("Content-Type", "").split(";")[0]
+                if response.status != 200 or content_type not in SIGNATURE_TYPES:
+                    return None, "The cloud did not return a signature file."
+                data = response.read(MAX_SIGNATURE_BYTES + 1)
+        except HTTPError as exc:
+            if exc.code == 404:
+                return None, "No signature was published for this release."
+            return None, f"The signature download failed (HTTP {exc.code})."
+        # Remote error text can carry credentials or signed URLs, so only the
+        # type is kept.
+        except Exception as exc:  # noqa: BLE001
+            return None, f"The signature download failed ({type(exc).__name__})."
+        if not data or len(data) > MAX_SIGNATURE_BYTES:
+            return None, "The signature file was empty or too large."
+        directory.mkdir(parents=True, exist_ok=True)
+        destination = directory / (release["id"] + release["extension"] + ".sig")
+        descriptor, temporary = tempfile.mkstemp(prefix=".signature-", dir=str(directory))
+        try:
+            with os.fdopen(descriptor, "wb") as output:
+                output.write(data)
+            os.replace(temporary, destination)
+        finally:
+            if os.path.exists(temporary):
+                os.unlink(temporary)
+        return destination, ""
 
     def download(self, release: Dict, directory: Path,
                  progress: Optional[Callable[[int, int], None]] = None,
