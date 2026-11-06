@@ -100,7 +100,7 @@ from helpers.watchdog import extend_watchdog_for_shutdown, start_watchdog
 # Modern view layer — the composition root for chrome + screens + modals.
 from ui.app_shell import AppShell
 from ui.measurements import calibrated_reading
-from ui.presentation import device_presentation
+from ui.presentation import device_presentation, present
 from ui.widgets.loading_spinner import LoadingSpinner
 from ui.widgets.treatment_status_panel import TreatmentStatusPanel
 
@@ -458,11 +458,9 @@ class KneeSpa(QMainWindow):
 
     def _set_badge(self, connected):
         """Reflect Arduino connectivity on the Setup header badge."""
-        try:
-            self.shell.setup.set_arduino_connected(connected)
-            self._refresh_device_presentation()
-        except Exception:
-            pass
+        present(self.logger, "Setup connection badge",
+                lambda: self.shell.setup.set_arduino_connected(connected))
+        present(self.logger, "device status", self._refresh_device_presentation)
 
     def _refresh_device_presentation(self) -> None:
         """Present controller readiness without modifying device operation."""
@@ -478,10 +476,8 @@ class KneeSpa(QMainWindow):
 
     def _reflect_setup(self, key, value):
         """Reflect a commanded target without claiming that a sensor measured it."""
-        try:
-            self.shell.setup.set_position(key, value)
-        except Exception:
-            pass
+        present(self.logger, "Setup position",
+                lambda: self.shell.setup.set_position(key, value))
 
     def _send_motion_command(self, command, context):
         """Queue a Setup motion without fabricating success in the UI."""
@@ -824,12 +820,15 @@ class KneeSpa(QMainWindow):
         try:
             vals = self.shell.treatment.settings_values()
         except Exception:
+            # The run keeps the previous settings snapshot.
+            self.logger.exception("Could not read the Treatment settings")
             return
         self._prev_settings = dict(vals)
         try:
             self.protocol_value = str(self.shell.treatment.selected_protocol())
         except Exception:
-            pass
+            self.logger.exception("Could not read the selected protocol; keeping %s",
+                                  self.protocol_value)
         rate = vals.get("pulse_rate", 0) or 0
         self.current_pulse_rate = rate if rate > 0 else None
         self.current_use_pulse_setting = rate > 0
@@ -1057,10 +1056,8 @@ class KneeSpa(QMainWindow):
         if self.current_user is None:
             # Specifics (lockout countdown, etc.) arrive via the timed error
             # box; the modal shows the inline generic failure.
-            try:
-                self.shell.login_failed("Invalid PIN. Please try again.")
-            except Exception:
-                pass
+            present(self.logger, "login failure message",
+                    lambda: self.shell.login_failed("Invalid PIN. Please try again."))
 
     def _on_logout(self):
         if self._block_active_treatment_exit():
@@ -1072,7 +1069,8 @@ class KneeSpa(QMainWindow):
         try:
             unlink_patient(self)
         except Exception:
-            pass
+            # Logout continues, but a patient left linked must be visible.
+            self.logger.exception("Could not unlink the patient at logout")
         self.shell.logout()
 
     def _on_exit_app(self):
@@ -1660,10 +1658,8 @@ class KneeSpa(QMainWindow):
         Treatment screen's inline progress ring."""
         if self.protocol_start_time:
             elapsed = int(time.time() - self.protocol_start_time)
-            try:
-                self.shell.treatment.set_progress(elapsed, self.protocol_duration)
-            except Exception:
-                pass
+            present(self.logger, "treatment progress",
+                    lambda: self.shell.treatment.set_progress(elapsed, self.protocol_duration))
         self.protocol.update_protocol_time()
 
     def _confirm_mid_protocol_change(self) -> bool:
@@ -1963,7 +1959,7 @@ def _install_excepthook():
         try:
             unhandled_log.error("Unhandled exception:\n%s", text)
         except Exception:
-            pass
+            pass  # Logging itself failed; stderr above already has the traceback.
 
     sys.excepthook = _hook
 
