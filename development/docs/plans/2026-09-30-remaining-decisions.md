@@ -42,7 +42,8 @@ firmware native tests 8 suites / 165 tests; Mega build warning-free;
 ### Batch 2026-11: stop hardening (queued, not flashed)
 
 These items come from the checklist in
-`development/docs/plans/2026-11-04-improvement-checklist.md` (F1–F4). The
+`development/docs/plans/2026-11-04-improvement-checklist.md` (F1–F4, then
+the owner-approved firmware findings V1–V6). The
 image is built from `main`, so it also contains everything in the
 2026-10-28 batch above. A device still on an older image gets both changes
 with this flash.
@@ -156,6 +157,23 @@ with this flash.
      `ERROR: Motor stall timeout <n>`, and the app shows
      `CONTROLLER FAULT: Motor stall timeout <n>` and requires Reset.
   4. A normal long move, for example homing during Reset, still completes.
+- **V1, a status ack no longer holds up a stop (2026-11-06).**
+  - **The bug:** the firmware stops reading serial bytes while a complete
+    command waits out the 200 ms rate limit (`MIN_COMMAND_INTERVAL`). Only
+    `X` was exempt. The Pi writes each status ack `Q` as soon as a status
+    frame arrives, outside its own 0.22 s pacing, so a `Q` within 200 ms of
+    a paced command waited, and an `X` right behind it waited too, for up
+    to about 200 ms.
+  - **The fix:** `Q` is exempt from the rate limit as well, and it does not
+    restart the limit's window, so it never holds up the next paced command
+    either. The Pi already assumed both `X` and `Q` bypass the limiter, so
+    no Pi change is needed.
+  - **`VERSION`** is unchanged. It is the same batch.
+- **Image after V1:** flash 34,304 bytes, RAM 2,694 bytes (local WSL build,
+  sha256 `6a391aaaf68c173f9c6903766ecbe609fd6f65f9284e5c058eab73169dc6b48f`).
+- **Bench check for V1:** none beyond the F1 checks; a normal session's
+  stops and status updates behave as before. The timing is covered by a
+  native test.
 
 ## 2. UI changes to look at on the Pi or simulator
 

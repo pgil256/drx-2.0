@@ -403,6 +403,49 @@ void test_v2_emergency_buffer_detection(void) {
     TEST_ASSERT_FALSE(isEmergencyBuffer(makeFrame(5, "K1500")));
 }
 
+// --- V1: a status ack never holds up an emergency stop ---
+
+void test_status_ack_buffer_detection(void) {
+    TEST_ASSERT_TRUE(isStatusAckBuffer(String("Q")));
+    TEST_ASSERT_TRUE(isStatusAckBuffer(makeFrame(5, "Q")));
+    TEST_ASSERT_FALSE(isStatusAckBuffer(String("X")));
+    TEST_ASSERT_FALSE(isStatusAckBuffer(makeFrame(5, "K1500")));
+    TEST_ASSERT_FALSE(isStatusAckBuffer(String("")));
+}
+
+// The Pi writes Q as soon as a status frame arrives, outside its 0.22 s
+// command pacing. Q within 200 ms of a paced command used to stay pending,
+// and an X right behind it waited in the UART buffer for the window to end.
+void test_stop_behind_a_status_ack_runs_on_the_next_pass(void) {
+    _millis_value += 1000;            // well past any earlier command
+    Wire.position_14 = 1200;
+    Serial1.injectCommand("K1500");   // a paced command starts a move
+    loop();
+    TEST_ASSERT_TRUE(bRunning);
+
+    _millis_value += 50;              // inside its 200 ms window
+    statusAcknowledged = false;
+    Serial1.injectCommand("Q");
+    Serial1.injectCommand("X");
+    loop();                           // Q is handled at once
+    TEST_ASSERT_TRUE(statusAcknowledged);
+    loop();                           // and X on the very next pass
+    TEST_ASSERT_FALSE(bRunning);
+}
+
+void test_status_ack_does_not_restart_the_rate_limit_window(void) {
+    _millis_value += 1000;
+    Serial1.injectCommand("T");       // a paced command
+    loop();
+    unsigned long paced = lastCommandTime;
+    _millis_value += 100;
+    statusAcknowledged = false;
+    Serial1.injectCommand("Q");
+    loop();
+    TEST_ASSERT_TRUE(statusAcknowledged);  // handled inside the window...
+    TEST_ASSERT_EQUAL_UINT32(paced, lastCommandTime);  // ...without restarting it
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
 
@@ -441,6 +484,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_v2_emitAck_formats);
     RUN_TEST(test_v2_emitCmdError_formats);
     RUN_TEST(test_v2_emergency_buffer_detection);
+    RUN_TEST(test_status_ack_buffer_detection);
+    RUN_TEST(test_stop_behind_a_status_ack_runs_on_the_next_pass);
+    RUN_TEST(test_status_ack_does_not_restart_the_rate_limit_window);
     RUN_TEST(test_overlong_line_tail_is_not_executed);
     RUN_TEST(test_overlong_line_is_reported_once);
     RUN_TEST(test_command_after_overlong_line_runs);

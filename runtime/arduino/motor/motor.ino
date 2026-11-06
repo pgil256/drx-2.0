@@ -257,6 +257,7 @@ void emitCmdError(const char *reason);
 void emitSafetyWarning(const char *reason);
 bool parseV2Frame(const String &raw, String &inner);
 bool isEmergencyBuffer(const String &b);
+bool isStatusAckBuffer(const String &b);
 
 // Debug tee. Every diagnostic the sketch used to print only on the USB
 // Serial (9600, nothing listening on the Pi in normal operation) now also
@@ -686,18 +687,30 @@ bool parseV2Frame(const String &raw, String &inner) {
   return true;
 }
 
+// The command letter of a pending line, plain ("X") or framed ("#12:X*5A");
+// '\0' when there is none.
+char bufferCommandLetter(const String &b) {
+  if (b.length() == 0)
+    return '\0';
+  if (b.charAt(0) != '#')
+    return b.charAt(0);
+  int colon = b.indexOf(':');
+  if (colon > 0 && colon + 1 < (int)b.length())
+    return b.charAt(colon + 1);
+  return '\0';
+}
+
 // Emergency stop must bypass the rate limiter whether framed or not
 bool isEmergencyBuffer(const String &b) {
-  if (b.length() == 0)
-    return false;
-  if (b.charAt(0) == 'X')
-    return true;
-  if (b.charAt(0) == '#') {
-    int colon = b.indexOf(':');
-    if (colon > 0 && colon + 1 < (int)b.length() && b.charAt(colon + 1) == 'X')
-      return true;
-  }
-  return false;
+  return bufferCommandLetter(b) == 'X';
+}
+
+// A status ack ('Q') bypasses it too. It only sets statusAcknowledged, and
+// the Pi writes it as soon as a status frame arrives, outside its own 0.22 s
+// pacing. Held as pending, it stopped bytes being read, so an 'X' right
+// behind it waited up to MIN_COMMAND_INTERVAL (checklist V1).
+bool isStatusAckBuffer(const String &b) {
+  return bufferCommandLetter(b) == 'Q';
 }
 
 // True if s is a plain decimal number (optional leading -, one optional .)
@@ -2078,12 +2091,16 @@ void loop() {
 
   // Process complete commands with rate limiting. 'X' (emergency stop)
   // is exempt from both the rate limiter and the status-in-progress
-  // gate: a stop must never wait in line behind an ack
+  // gate: a stop must never wait in line behind an ack. A status ack ('Q')
+  // is exempt too, and does not restart the limiter's window, so it can
+  // never hold up the next paced command either.
   if (isCommandComplete) {
     bool isEmergency = isEmergencyBuffer(commandBuffer);
-    if (isEmergency ||
+    bool isStatusAck = isStatusAckBuffer(commandBuffer);
+    if (isEmergency || isStatusAck ||
         (millis() - lastCommandTime > MIN_COMMAND_INTERVAL && !isProcessingStatus)) {
-      lastCommandTime = millis();
+      if (!isStatusAck)
+        lastCommandTime = millis();
       String execBuffer = commandBuffer;
       currentCmdSeq = -1;
       bool frameOk = true;
