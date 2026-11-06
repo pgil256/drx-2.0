@@ -62,7 +62,9 @@ class ResetWorker(QRunnable):
         pos_b = horizontal_degrees_to_position(self.config.BMarks, DEFAULT_HORIZONTAL_POSITION)
         if any(not 0 <= value <= 4095 for value in (a_zero, b_zero, pos_c, pos_b)):
             raise OperationRejected("Configured reset position exceeds controller feedback range")
-        operations.perform(f"L5|{a_zero}|{b_zero}", ("zeros", a_zero, b_zero), 10.0)
+        # The lateral centre rides along as the C zero; firmware before
+        # 2026-11 reads only the first two fields and ignores it.
+        operations.perform(f"L5|{a_zero}|{b_zero}|{pos_c}", ("zeros", a_zero, b_zero), 10.0)
         for command, kind, target, tolerance, timeout in (
             (f"K{pos_c}", "K", pos_c, 100, 30.0),
             (f"I13{pos_b}", "I", pos_b, 25, 30.0),

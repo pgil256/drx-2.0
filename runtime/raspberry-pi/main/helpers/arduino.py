@@ -743,7 +743,7 @@ class Arduino(QObject):
                     if not self._resolve_v2_ack(self.last_done_seq, "DONE"):
                         return
                 self.done_emit.emit()
-            elif (tokens[0] == "ZEROS" and len(tokens) == 3
+            elif (tokens[0] == "ZEROS" and len(tokens) in (3, 4)  # 4: with the C zero
                   and all(re.fullmatch(r"[0-9]+", t) and 0 <= int(t) <= 4095
                           for t in tokens[1:])):
                 self.zeros_emit.emit(int(tokens[1]), int(tokens[2]))

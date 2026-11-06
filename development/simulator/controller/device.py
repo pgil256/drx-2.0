@@ -313,12 +313,14 @@ class SimulatedController(ControllerModel):
             if command[2:3] != "|":
                 self._reject("L5", "INVALID_FORMAT")
                 return
-            _, a_zero, b_zero = command.split("|")
+            # L5|<a>|<b>[|<c>]: the C zero is optional, as in the firmware.
+            _, a_zero, b_zero, *c_zero = command.split("|")
             a_zero, b_zero = int(a_zero), int(b_zero)
-            if not 0 <= a_zero <= 4095 or not 0 <= b_zero <= 4095:
+            if (not 0 <= a_zero <= 4095 or not 0 <= b_zero <= 4095 or len(c_zero) > 1
+                    or (c_zero and not 0 <= int(c_zero[0]) <= 4095)):
                 raise ValueError("Invalid L5 zero marks")
             self._a_zero, self._b_zero = a_zero, b_zero
-            self._write(f"ZEROS|{a_zero}|{b_zero}\n")
+            self._write("|".join(["ZEROS", str(a_zero), str(b_zero)] + c_zero) + "\n")
             self._ack("DONE", seq)
         elif stage == "4":
             self._write(f"weight|{self.pressure:.2f}\n")
