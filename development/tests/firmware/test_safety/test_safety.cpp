@@ -106,6 +106,9 @@ void tearDown(void) {}
 static void keepAlive(void) {
     lastHostTraffic = _millis_value;
     lastScaleReady = _millis_value;
+    // A test that jumps the clock is not a starved loop; tared axial moves
+    // now check the sensor-service gap too.
+    lastPressurePoll = _millis_value;
 }
 
 void test_emergency_stop_clears_all_state(void) {
@@ -322,6 +325,81 @@ void test_heartbeat_not_tripped_when_idle(void) {
     loop();
 
     TEST_ASSERT_FALSE(releasingPressure);
+}
+
+// --- A tared load cell is required during axial position moves ---
+
+// An axial position move in flight with the cell silent (unplugged: DOUT
+// never reports ready) since t = 0.
+static void silentCellDuringMove(uint8_t device) {
+    bRunning = true;
+    runningDevice = device;
+    desiredPosition = 60000;  // unreachable: the move stays active
+    scale._ready = false;
+    lastPressureSample = 0;
+    pressureSampleValid = true;
+}
+
+static void runAt(unsigned long now) {
+    _millis_value = now;
+    lastPressurePoll = now;   // the loop itself is not starved
+    pressurePollStarted = true;
+    lastHostTraffic = now;
+    lastScaleReady = now;     // isolate the latched guard from the advisory warning
+    loop();
+}
+
+void test_silent_load_cell_during_tared_axial_move_faults(void) {
+    silentCellDuringMove(12);
+    runAt(PRESSURE_SAMPLE_TIMEOUT);
+    TEST_ASSERT_FALSE(pressureFault);  // exactly the timeout: not yet
+    TEST_ASSERT_TRUE(bRunning);
+    runAt(PRESSURE_SAMPLE_TIMEOUT + 1);
+    TEST_ASSERT_TRUE(pressureFault);
+    TEST_ASSERT_FALSE(bRunning);
+    TEST_ASSERT_TRUE(Serial1.outputContains("FAULT|PRESSURE_SENSOR_TIMEOUT|"));
+}
+
+void test_axial_move_started_by_command_is_guarded(void) {
+    keepAlive();
+    _millis_value = 300;  // past the rate-limit window
+    keepAlive();
+    Wire.position_12 = 100;
+    Serial1.injectCommand("I121000");
+    loop();
+    TEST_ASSERT_TRUE(bRunning);
+    TEST_ASSERT_EQUAL(12, runningDevice);
+    scale._ready = false;
+    runAt(lastPressureSample + PRESSURE_SAMPLE_TIMEOUT + 1);
+    TEST_ASSERT_TRUE(pressureFault);
+    TEST_ASSERT_TRUE(Serial1.outputContains("PRESSURE_SENSOR_TIMEOUT"));
+}
+
+void test_untared_axial_move_is_not_guarded(void) {
+    pressureCalibrated = false;  // e.g. the reset's homing before the tare
+    silentCellDuringMove(12);
+    runAt(3000);
+    TEST_ASSERT_FALSE(pressureFault);
+    TEST_ASSERT_TRUE(bRunning);
+}
+
+void test_lateral_move_with_silent_cell_is_not_guarded(void) {
+    silentCellDuringMove(14);
+    runAt(3000);
+    TEST_ASSERT_FALSE(pressureFault);
+    TEST_ASSERT_TRUE(bRunning);
+}
+
+void test_silent_cell_never_stops_the_autonomous_release(void) {
+    releasingPressure = true;
+    releaseStart = 0;
+    scale._ready = false;
+    lastPressureSample = 0;
+    pressure = 30;  // load still present: the release keeps going
+    Wire.position_12 = 2000;
+    runAt(PRESSURE_SAMPLE_TIMEOUT + 1);
+    TEST_ASSERT_FALSE(pressureFault);
+    TEST_ASSERT_TRUE(releasingPressure);
 }
 
 void test_load_cell_warning_does_not_stop_pressure_move(void) {
@@ -1440,6 +1518,11 @@ int main(int argc, char **argv) {
     RUN_TEST(test_heartbeat_loss_does_not_stop_fit_motion);
     RUN_TEST(test_heartbeat_not_tripped_when_idle);
     RUN_TEST(test_load_cell_warning_does_not_stop_pressure_move);
+    RUN_TEST(test_silent_load_cell_during_tared_axial_move_faults);
+    RUN_TEST(test_axial_move_started_by_command_is_guarded);
+    RUN_TEST(test_untared_axial_move_is_not_guarded);
+    RUN_TEST(test_lateral_move_with_silent_cell_is_not_guarded);
+    RUN_TEST(test_silent_cell_never_stops_the_autonomous_release);
     RUN_TEST(test_release_drives_axial_backward);
     RUN_TEST(test_release_completes_when_load_clears);
     RUN_TEST(test_release_bounded_by_timeout);
