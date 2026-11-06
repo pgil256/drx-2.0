@@ -144,6 +144,7 @@ class StopController:
             FAULT: self._fault_stop,
             PHYSICAL: self._physical_stop,
             COMMAND_FAULT: self._command_rejected_stop,
+            SHUTDOWN: self._shutdown_stop,
         }
         handlers[kind](**options)
 
@@ -415,3 +416,34 @@ class StopController:
         window._show_timed_error(
             f"The device rejected a command: {message}. Reset before continuing."
         )
+
+    def _shutdown_stop(self) -> None:
+        """Stop the device as the app closes, before resources are released.
+
+        No automatic recovery, the session latched as "fault", producers and
+        timers stopped, then X, P0 and HF0 -- or, after a physical stop, the
+        queued commands dropped so X cannot abort the firmware's release.
+        """
+        window = self.window
+        window._no_automatic_recovery = True
+        self.protocol.latch_session_outcome("fault")
+        window.connection.cancel_reset()
+        if window.worker:
+            window.worker.cancel(firmware_stopped=window._physical_stop_active)
+        if getattr(window, "_calibration_active", False) is True:
+            window.hardware_service.shutdown()
+        for name in ("protocol_timer", "controls_enable_timer", "_cloud_retry_timer",
+                     "_pressure_state_timer", "_motion_watchdog"):
+            timer = getattr(window, name, None)
+            if timer is not None:
+                timer.stop()
+        arduino = window.arduino
+        if arduino is not None:
+            arduino._connect_cancel.set()
+            if window._physical_stop_active:
+                arduino.cancel_pending_commands()
+            else:
+                for command in RELEASE_SEQUENCE:
+                    arduino.send(command)
+        window._release_leg_gpio()
+        self.protocol.finalize_session()

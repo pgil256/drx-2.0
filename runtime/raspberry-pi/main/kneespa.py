@@ -106,6 +106,7 @@ from ui.widgets.loading_spinner import LoadingSpinner
 from ui.widgets.treatment_status_panel import TreatmentStatusPanel
 
 from controllers.safety_monitor import SafetyMonitor
+from controllers.stop_controller import SHUTDOWN, stops_for
 from controllers.auth_controller import AuthController
 from controllers.protocol_controller import ProtocolController
 from controllers.connection_manager import ConnectionManager
@@ -1286,29 +1287,9 @@ class KneeSpa(DeviceStateAttributes, QMainWindow):
             self.machine_sign_in.clear()
             self.machine_sign_in.timer.stop()
             self.patients.clear_session()
-            self._no_automatic_recovery = True
             self._shutdown_began = time.monotonic()
-            self.protocol.latch_session_outcome("fault")
-            self.connection.cancel_reset()
-            if self.worker:
-                self.worker.cancel(firmware_stopped=self._physical_stop_active)
-            if getattr(self, "_calibration_active", False) is True:
-                self.hardware_service.shutdown()
-            for name in ("protocol_timer", "controls_enable_timer", "_cloud_retry_timer",
-                         "_pressure_state_timer", "_motion_watchdog"):
-                timer = getattr(self, name, None)
-                if timer is not None:
-                    timer.stop()
-            arduino = self.arduino
-            if arduino is not None:
-                arduino._connect_cancel.set()
-                if self._physical_stop_active:
-                    arduino.cancel_pending_commands()
-                else:
-                    for command in ("X", "P0", "HF0"):
-                        arduino.send(command)
-            self._release_leg_gpio()
-            self.protocol.finalize_session()
+            # The shutdown stop: see StopController (kind "shutdown").
+            stops_for(self).stop(SHUTDOWN)
             # Outbox flushing may wait on bounded network I/O; keep Qt responsive.
             self._cloud_close_thread = threading.Thread(
                 target=lambda: self.cloud_client.close(wait=True), name="cloud-shutdown",
