@@ -78,7 +78,7 @@ class GuiVerification:
         except StopIteration:
             self.passed = True
             self._finish()
-        except Exception:
+        except Exception:  # noqa: BLE001 - the harness records any failure with its traceback
             self.results.append({"error": traceback.format_exc(), "state": self.state})
             traceback.print_exc()
             self._finish()
