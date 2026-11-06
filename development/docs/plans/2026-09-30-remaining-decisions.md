@@ -74,6 +74,30 @@ with this flash.
     lead disconnected. Boot reports `ERROR: Motor stop not acknowledged <n>`
     once and keeps retrying, then stops reporting once the lead is
     reconnected.
+- **F2, release past a latched pressure fault (2026-11-06).**
+  - **The bug:** after a pressure fault latched (for example
+    `PRESSURE_LIMIT` or `PRESSURE_SENSOR_TIMEOUT`), the physical stop
+    button's release was a no-op:
+    - `setMotorSpeed` ignored the back-off while `pressureFault` was set;
+    - `servicePressure` stopped sampling, so the release could not see the
+      load clear and idled to `ERROR: Release incomplete`.
+  - **The fix:**
+    - The release back-off writes past the fault gate (`writeMotorSpeed`).
+    - Pressure sampling continues while a release runs.
+    - The release is still bounded by load, travel (`AZERO`) and
+      `RELEASE_TIMEOUT`.
+    - Every other motion stays blocked while the fault is latched, and the
+      fault stays latched until the host's reset.
+  - **`VERSION`** is unchanged. It is the same batch.
+- **Image after F2:** flash 34,178 bytes, RAM 2,694 bytes (local WSL build,
+  sha256 `b0e3843061c2bf0583f0967e3d8b7078ef4aba61f7b166230ab68265facbeaf4`).
+- **Bench check for F2** (device unoccupied, a test load on the axial
+  actuator):
+  1. Trip a fault, for example with `P` targets that force the overshoot
+     ceiling, or by unplugging the load cell during a hold.
+  2. Press the physical stop.
+  3. The axial actuator backs off. The log shows `RELEASED` once the load is
+     under 5 lb, or `ERROR: Release incomplete` only at home or after 15 s.
 
 ## 2. UI changes to look at on the Pi or simulator
 

@@ -1268,6 +1268,93 @@ void test_nacked_pressure_arrival_stop_withholds_done(void) {
     TEST_ASSERT_EQUAL(0, unackedStopMask);
 }
 
+// --- A physical stop releases the load even after a pressure fault latched ---
+// setMotorSpeed used to ignore the back-off while pressureFault was set, and
+// servicePressure stopped sampling, so a stop pressed after a fault left the
+// patient loaded and the release idled to "Release incomplete".
+
+static int countReverseSpeedWrites(uint8_t device) {
+    int n = 0;
+    for (int i = 0; i < Wire.commandCount; i++) {
+        if (Wire.commands[i].address == device && Wire.commands[i].dataLen == 3 &&
+            Wire.commands[i].data[0] == 0x86 &&
+            (Wire.commands[i].data[1] != 0 || Wire.commands[i].data[2] != 0))
+            n++;
+    }
+    return n;
+}
+
+static void latchFaultUnderLoad(void) {
+    scale._raw = 40;          // 40 lb on the leg (scale factor 1.0)
+    Wire.position_12 = 2000;  // well above the travel floor
+    keepAlive();
+    loop();                   // sample the load
+    tripPressureFault("PRESSURE_LIMIT");
+    TEST_ASSERT_TRUE(pressureFault);
+    Wire.reset();
+}
+
+void test_physical_stop_releases_after_a_latched_pressure_fault(void) {
+    latchFaultUnderLoad();
+    _pin_levels[STOP_PIN] = LOW;
+    keepAlive();
+    loop();
+
+    TEST_ASSERT_TRUE(releasingPressure);
+    TEST_ASSERT_EQUAL(1, countReverseSpeedWrites(12));
+
+    scale._raw = 0;  // the load clears
+    keepAlive();
+    loop();
+
+    TEST_ASSERT_FALSE(releasingPressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("RELEASED"));
+    TEST_ASSERT_FALSE(Serial1.outputContains("Release incomplete"));
+    TEST_ASSERT_TRUE(pressureFault);  // still latched until the host resets
+}
+
+void test_post_fault_release_stops_at_the_travel_floor(void) {
+    latchFaultUnderLoad();
+    _pin_levels[STOP_PIN] = LOW;
+    keepAlive();
+    loop();
+    TEST_ASSERT_TRUE(releasingPressure);
+
+    AZERO = 0;
+    Wire.position_12 = 10;  // home reached with load still present
+    keepAlive();
+    loop();
+
+    TEST_ASSERT_FALSE(releasingPressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Release incomplete"));
+}
+
+void test_post_fault_release_with_a_silent_load_cell_is_bounded_by_time(void) {
+    latchFaultUnderLoad();
+    scale._ready = false;  // the load cell stops answering
+    _pin_levels[STOP_PIN] = LOW;
+    keepAlive();
+    loop();
+    TEST_ASSERT_TRUE(releasingPressure);
+
+    _millis_value += RELEASE_TIMEOUT + 1;
+    lastHostTraffic = _millis_value;
+    loop();
+
+    TEST_ASSERT_FALSE(releasingPressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Release incomplete"));
+}
+
+void test_other_motion_stays_blocked_while_a_fault_is_latched(void) {
+    latchFaultUnderLoad();
+    smcDeviceNumber = 13;
+    setMotorSpeed(800);
+    smcDeviceNumber = 12;
+    setMotorSpeed(-800);
+    TEST_ASSERT_EQUAL(0, countNonzeroSpeedWrites(13));
+    TEST_ASSERT_EQUAL(0, countNonzeroSpeedWrites(12));
+}
+
 void test_v2_ack_seq_survives_beyond_int16(void) {
     emitAck("DONE", 40000L);
     TEST_ASSERT_TRUE(Serial1.outputContains("DONE|40000"));
@@ -1348,6 +1435,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_pending_stop_retry_is_rate_limited_and_skips_owned_smcs);
     RUN_TEST(test_nacked_release_stop_keeps_releasing_until_acknowledged);
     RUN_TEST(test_nacked_pressure_arrival_stop_withholds_done);
+    RUN_TEST(test_physical_stop_releases_after_a_latched_pressure_fault);
+    RUN_TEST(test_post_fault_release_stops_at_the_travel_floor);
+    RUN_TEST(test_post_fault_release_with_a_silent_load_cell_is_bounded_by_time);
+    RUN_TEST(test_other_motion_stays_blocked_while_a_fault_is_latched);
     RUN_TEST(test_v2_ack_seq_survives_beyond_int16);
     RUN_TEST(test_position_read_does_not_burn_dead_wait);
 
