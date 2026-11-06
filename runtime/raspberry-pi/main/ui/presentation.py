@@ -1,6 +1,30 @@
 """Read-only presentation of controller state; no motion or lifecycle transitions."""
 
 from dataclasses import dataclass
+from typing import Callable, Set
+
+# Targets whose last update failed. A target that keeps failing (the
+# treatment progress updates every second) logs one traceback, not one
+# per call, until it succeeds again.
+_failing: Set[str] = set()
+
+
+def present(logger, target: str, update: Callable[[], object]) -> bool:
+    """Run a UI update; log a failure and carry on.
+
+    Display problems must never delay or break safety work, so nothing is
+    re-raised. ``update`` is a zero-argument callable, so a missing widget
+    attribute is caught here too. Returns whether the update ran.
+    """
+    try:
+        update()
+    except Exception:
+        if target not in _failing:
+            _failing.add(target)
+            logger.exception("Could not update %s", target)
+        return False
+    _failing.discard(target)
+    return True
 
 
 @dataclass(frozen=True)

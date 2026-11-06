@@ -21,6 +21,7 @@ from helpers.cloud_contract import end_settings, patient_label
 from helpers.treatment_session import TreatmentSession
 from controllers.machine_sign_in_controller import authorize
 from ui.modals.treatment_review import TreatmentReviewDialog
+from ui.presentation import present
 
 from config.constants import DATA_PATHS, EMERGENCYSTOP
 
@@ -75,10 +76,8 @@ class ProtocolController:
             # back to idle.
             self.set_busy(True)
         if state in ("starting", "running", "stopping"):
-            try:
-                window.shell.close_nonessential_overlays()
-            except Exception:
-                pass
+            present(window.logger, "nonessential overlays",
+                    lambda: window.shell.close_nonessential_overlays())
         refresh = getattr(window, "_refresh_device_presentation", None)
         if callable(refresh):
             try:
@@ -89,17 +88,15 @@ class ProtocolController:
 
     def _set_run_state(self, running: bool) -> None:
         """Present an unpaused lifecycle transition without delaying safety work."""
-        try:
-            self.window.shell.treatment.set_run_state(running=running, paused=False)
-        except Exception:
-            pass
+        window = self.window
+        present(window.logger, "treatment run state",
+                lambda: window.shell.treatment.set_run_state(running=running, paused=False))
 
     def set_busy(self, busy: bool) -> None:
         """Gate treatment controls during transitions and connection/reset work."""
-        try:
-            self.window.shell.treatment.set_busy(busy)
-        except Exception:
-            pass
+        window = self.window
+        present(window.logger, "treatment busy state",
+                lambda: window.shell.treatment.set_busy(busy))
 
     def confirm_leave_treatment(self, source_page: str, destination_page: str) -> bool:
         """Warn before leaving the Treatment screen during an active protocol.
@@ -180,11 +177,10 @@ class ProtocolController:
     def start_or_stop(self) -> None:
         """Toggle the lifecycle and finish the existing start-phase presentation."""
         self._toggle_start_stop()
-        if self.window.protocol_state == "running":
-            try:
-                self.window.shell.treatment.set_phase("ramping")
-            except Exception:
-                pass
+        window = self.window
+        if window.protocol_state == "running":
+            present(window.logger, "treatment phase",
+                    lambda: window.shell.treatment.set_phase("ramping"))
 
     def _toggle_start_stop(self) -> None:
         """Start or stop the protocol with debouncing to prevent multiple rapid clicks."""
@@ -822,10 +818,9 @@ class ProtocolController:
             phase = "ramping"
         else:
             return
-        try:
-            self.window.shell.treatment.set_phase(phase)
-        except Exception:
-            pass
+        window = self.window
+        present(window.logger, "treatment phase",
+                lambda: window.shell.treatment.set_phase(phase))
 
     def pause(self) -> None:
         """Pause the worker and countdown, then present the paused controls."""
@@ -837,11 +832,10 @@ class ProtocolController:
             window._paused_at = time.time()
             if window.protocol_timer.isActive():
                 window.protocol_timer.stop()
-            try:
-                window.shell.treatment.set_run_state(running=True, paused=True)
-                window.shell.treatment.set_phase("paused")
-            except Exception:
-                pass
+            present(window.logger, "treatment run state",
+                    lambda: window.shell.treatment.set_run_state(running=True, paused=True))
+            present(window.logger, "treatment phase",
+                    lambda: window.shell.treatment.set_phase("paused"))
 
     def resume(self) -> None:
         """Resume the worker, excluding paused time from the UI countdown."""
@@ -854,13 +848,11 @@ class ProtocolController:
                 window.protocol_start_time += time.time() - window._paused_at
             window._paused_at = None
             window.protocol_timer.start(1000)
-            try:
-                window.shell.treatment.set_run_state(running=True, paused=False)
-                window.shell.treatment.set_phase(
-                    "pulsing" if window.current_use_pulse_setting else "holding"
-                )
-            except Exception:
-                pass
+            phase = "pulsing" if window.current_use_pulse_setting else "holding"
+            present(window.logger, "treatment run state",
+                    lambda: window.shell.treatment.set_run_state(running=True, paused=False))
+            present(window.logger, "treatment phase",
+                    lambda: window.shell.treatment.set_phase(phase))
 
     def stop_from_view(self) -> None:
         """Run the screen STOP chain, then present its stopped controls."""
@@ -869,8 +861,7 @@ class ProtocolController:
         window._paused_at = None
         if window.protocol_timer.isActive():
             window.protocol_timer.stop()
-        try:
-            window.shell.treatment.set_run_state(running=False, paused=False)
-            window.shell.treatment.set_phase("stopped")
-        except Exception:
-            pass
+        present(window.logger, "treatment run state",
+                lambda: window.shell.treatment.set_run_state(running=False, paused=False))
+        present(window.logger, "treatment phase",
+                lambda: window.shell.treatment.set_phase("stopped"))
