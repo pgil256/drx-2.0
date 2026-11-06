@@ -68,6 +68,7 @@ from config.constants import (
     PROTOCOL_MINUTES_MIN,
     PROTOCOL_MINUTES_MAX,
     DATA_PATHS,
+    SETUP_MOTION_DONE_TIMEOUT_S,
 )
 
 from ui.modals.pressure_notice import PressureNotice
@@ -253,6 +254,7 @@ class KneeSpa(QMainWindow):
         self.reset_in_progress = False  # Flag to prevent overlapping resets
         self.actuator_command_in_progress = False  # Prevents simultaneous actuator commands
         self.controls_enable_timer = None  # Single pending-enable timer for all controls
+        self._motion_watchdog = None  # Backstop for a Setup move whose DONE never arrives
         self.mid_protocol_warning_shown = False
         self.protocol_stop_requested = False
         self._physical_stop_active = False
@@ -494,6 +496,10 @@ class KneeSpa(QMainWindow):
             queued = False
             self.logger.error("Could not queue %s command %s: %s", context, command, exc)
         if queued:
+            # Position (A/I/K) and pressure (P) moves re-enable the controls
+            # only on the firmware's DONE; F0 is a stop the leg controller owns.
+            if command[:1] in ("A", "I", "K", "P"):
+                KneeSpa._arm_motion_watchdog(self)
             return True
 
         self.logger.error("Could not queue %s command %s", context, command)
@@ -505,9 +511,52 @@ class KneeSpa(QMainWindow):
         self.loading_spinner.hide()
         return False
 
+    def _arm_motion_watchdog(self):
+        """Start the backstop for a queued Setup move awaiting its DONE."""
+        KneeSpa._stop_motion_watchdog(self)
+        # Parent it to the window so it cannot outlive it.
+        timer = QTimer(self) if isinstance(self, QObject) else QTimer()
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda: KneeSpa._on_motion_watchdog(self))
+        timer.start(int(SETUP_MOTION_DONE_TIMEOUT_S * 1000))
+        self._motion_watchdog = timer
+
+    def _stop_motion_watchdog(self):
+        timer = getattr(self, "_motion_watchdog", None)
+        if timer is not None:
+            timer.stop()
+            self._motion_watchdog = None
+
+    def _on_motion_watchdog(self):
+        """No DONE for a Setup move: hand the controls back to the operator.
+
+        Without this a lost DONE kept actuator_command_in_progress set, which
+        also blocks logout and exit. enable_actuator_controls keeps its own
+        guards, so a reset, service session or fault still owns the controls.
+        """
+        self._motion_watchdog = None
+        # Read every flag with a default: this fires from a timer, where an
+        # exception would only reach the excepthook and leave controls locked.
+        if (getattr(self, "actuator_command_in_progress", False) is not True
+                or getattr(self, "_closing", False) is True
+                or getattr(self, "protocol_running", False) is True):
+            return
+        self.logger.error(
+            "No DONE from the device within %s s of a Setup move; re-enabling controls",
+            SETUP_MOTION_DONE_TIMEOUT_S,
+        )
+        self.loading_spinner.hide()
+        self._show_timed_error(
+            "The device did not report that the movement finished. "
+            "Check the device before moving again."
+        )
+        self.enable_actuator_controls()
+
     ### UI Methods ###
 
     def disable_actuator_controls(self):
+        # A new command or operation supersedes any pending move's backstop.
+        KneeSpa._stop_motion_watchdog(self)
         # Cancel any pending enable so it cannot fire mid-command and
         # re-enable controls while the MCU is still busy
         if self.controls_enable_timer is not None:
@@ -518,6 +567,8 @@ class KneeSpa(QMainWindow):
             w.setEnabled(False)
 
     def enable_actuator_controls(self):
+        # Completion (or an owner taking over) ends the pending move's backstop.
+        KneeSpa._stop_motion_watchdog(self)
         if getattr(getattr(self, "leg", None), "active", False) is True:
             return
         if (getattr(self, "_calibration_active", False) is True
@@ -887,6 +938,7 @@ class KneeSpa(QMainWindow):
 
         self.loading_spinner.show()
         self.disable_actuator_controls()
+        moved = False
         try:
             if key == "axial":
                 inches = self.shell.setup.row_value("axial")
@@ -913,13 +965,19 @@ class KneeSpa(QMainWindow):
                 self.lateral_flexion_position = degrees
                 self._reflect_setup("lateral", degrees)
             elif key == "pressure":
-                return self._apply_setup_pressure()
+                moved = self._apply_setup_pressure()
+                return moved
+            moved = True
             return True
         except Exception as e:
             self.logger.error("Error in Setup Go: %s", e)
             self._show_timed_error(f"Error moving actuator: {str(e)}")
         finally:
             self.loading_spinner.hide()
+            if not moved:
+                # Nothing is moving, so no DONE will re-enable the controls.
+                # Leaving them disabled also blocked logout and exit.
+                self.enable_actuator_controls()
 
     def _apply_setup_pressure(self):
         """Setup pressure Go: clamp to [MIN_PRESSURE, PRESSURE_MAX] and send P."""
@@ -1243,7 +1301,7 @@ class KneeSpa(QMainWindow):
             if getattr(self, "_calibration_active", False) is True:
                 self.hardware_service.shutdown()
             for name in ("protocol_timer", "controls_enable_timer", "_cloud_retry_timer",
-                         "_pressure_state_timer"):
+                         "_pressure_state_timer", "_motion_watchdog"):
                 timer = getattr(self, name, None)
                 if timer is not None:
                     timer.stop()
@@ -1326,9 +1384,17 @@ class KneeSpa(QMainWindow):
             self.loading_spinner.show()
             self.disable_actuator_controls()
 
-            position = horizontal_degrees_to_position(
-                self.config.BMarks, new_position
-            )
+            # Same handling as the lateral branch: invalid BMarks used to raise
+            # out of this slot with the controls already disabled.
+            try:
+                position = horizontal_degrees_to_position(
+                    self.config.BMarks, new_position
+                )
+            except ValueError as e:
+                self.logger.error("Invalid horizontal position: %s", e)
+                self.enable_actuator_controls()
+                self.loading_spinner.hide()
+                return
             command = f"I13{position}"
             if not KneeSpa._send_motion_command(
                 self, command, "horizontal movement"
