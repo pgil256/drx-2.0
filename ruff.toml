@@ -19,4 +19,40 @@ select = [
     "E9",     # syntax errors, including syntax newer than target-version
     "F",      # pyflakes: undefined names, unused imports and variables
     "FA102",  # `X | None` / `list[int]` annotations that fail on Python 3.7
+    "BLE001", # `except Exception` that neither re-raises nor logger.exception()s
+    "S110",   # `try`/`except`/`pass`
 ]
+
+# Files not yet converted to the blind-except rules (checklist L2). Remove a
+# file's entry in the commit that converts it. A catch-all that is truly
+# needed stays, with `# noqa: BLE001 - <reason>`.
+[lint.per-file-ignores]
+"development/scripts/check_runtime_imports.py" = ["BLE001", "S110"]
+"development/simulator/session/gui.py" = ["BLE001", "S110"]
+"development/simulator/session/verify.py" = ["BLE001", "S110"]
+"development/simulator/session/verify_ux.py" = ["BLE001", "S110"]
+"development/tests/conftest.py" = ["BLE001", "S110"]
+"development/tests/fixtures/fake_arduino.py" = ["BLE001", "S110"]
+"development/tools/e2e_touchscreen.py" = ["BLE001", "S110"]
+"development/tools/lateral_pot_probe.py" = ["BLE001", "S110"]
+"development/tools/run_local.py" = ["BLE001", "S110"]
+"development/tools/run_simulator.py" = ["BLE001", "S110"]
+"devices/maintenance/raspberry-pi/version-chooser/version_chooser.py" = ["BLE001", "S110"]
+"runtime/raspberry-pi/main/config/config.py" = ["BLE001", "S110"]
+"runtime/raspberry-pi/main/controllers/connection_manager.py" = ["BLE001", "S110"]
+"runtime/raspberry-pi/main/controllers/device_controller.py" = ["BLE001", "S110"]
+"runtime/raspberry-pi/main/controllers/machine_sign_in_controller.py" = ["BLE001", "S110"]
+"runtime/raspberry-pi/main/controllers/patient_controller.py" = ["BLE001", "S110"]
+"runtime/raspberry-pi/main/controllers/protocol_controller.py" = ["BLE001", "S110"]
+"runtime/raspberry-pi/main/controllers/safety_monitor.py" = ["BLE001", "S110"]
+"runtime/raspberry-pi/main/helpers/cloud_client.py" = ["BLE001", "S110"]
+"runtime/raspberry-pi/main/helpers/device_system.py" = ["BLE001", "S110"]
+"runtime/raspberry-pi/main/helpers/logging.py" = ["BLE001", "S110"]
+"runtime/raspberry-pi/main/helpers/machine_sign_in.py" = ["BLE001", "S110"]
+"runtime/raspberry-pi/main/helpers/protocols.py" = ["BLE001", "S110"]
+"runtime/raspberry-pi/main/helpers/release_client.py" = ["BLE001", "S110"]
+"runtime/raspberry-pi/main/helpers/staff_client.py" = ["BLE001", "S110"]
+"runtime/raspberry-pi/main/kneespa.py" = ["BLE001", "S110"]
+"runtime/raspberry-pi/main/ui/modals/release_install.py" = ["BLE001", "S110"]
+"runtime/raspberry-pi/main/ui/modals/vlc_engine.py" = ["BLE001", "S110"]
+"runtime/raspberry-pi/main/ui/widgets/treatment_status_panel.py" = ["BLE001", "S110"]
