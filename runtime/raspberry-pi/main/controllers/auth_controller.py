@@ -10,6 +10,7 @@ lockout duration doubles on each consecutive lockout. Failed attempts
 are logged for audit; the PIN itself is never logged.
 """
 import json
+import os
 import time
 from pathlib import Path
 
@@ -73,6 +74,40 @@ class AuthController:
             self.LOCKOUT_MAX_SECONDS,
         )
 
+    def _upgrade_legacy_hash(self, stored_hash, pin, user):
+        """Replace a proven unsalted SHA-256 hash with PBKDF2 where it is stored.
+
+        Legacy hashes keep working. Only user_pins.csv rows can be rewritten;
+        an *_PIN_HASH value from the environment is only reported.
+        """
+        if not SecureAuthHelper.is_legacy_hash(stored_hash):
+            return
+        username = user.get("username")
+        try:
+            if stored_hash in (os.getenv("ADMIN_PIN_HASH"), os.getenv("USER_PIN_HASH")):
+                self.logger.warning(
+                    "User %r signed in with a legacy unsalted PIN hash from the "
+                    "environment; replace it with SecureAuthHelper.hash_pin_secure",
+                    username)
+                return
+            csv_helper = getattr(self.window, "csv", None)
+            new_hash = SecureAuthHelper.hash_pin_secure(pin)
+            if csv_helper is None or not csv_helper.replace_pin_hash(
+                    DATA_PATHS["USER_PINS"], stored_hash, new_hash):
+                self.logger.warning(
+                    "User %r signed in with a legacy unsalted PIN hash that could "
+                    "not be upgraded", username)
+                return
+            users = self.window.users
+            users.pop(stored_hash, None)
+            user["pin_hash"] = new_hash
+            users[new_hash] = user
+            self.logger.warning("Upgraded a legacy unsalted PIN hash to PBKDF2 for user %r",
+                                username)
+        except Exception:
+            # Bookkeeping must never undo a successful login.
+            self.logger.exception("Legacy PIN hash upgrade failed")
+
     # -- login --------------------------------------------------------
 
     def handle_login(self, pin: str):
@@ -94,9 +129,11 @@ class AuthController:
             return
 
         matched_user = None
+        matched_hash = None
         for stored_hash, user in window.users.items():
             if SecureAuthHelper.verify_pin(pin, stored_hash):
                 matched_user = user
+                matched_hash = stored_hash
                 break
 
         if matched_user:
@@ -108,6 +145,7 @@ class AuthController:
             self._save_state()
             window.current_user = matched_user
             window.update_ui_after_login()
+            self._upgrade_legacy_hash(matched_hash, pin, matched_user)
         else:
             self.failed_logins += 1
             self.logger.warning(
