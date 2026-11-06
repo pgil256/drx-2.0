@@ -206,6 +206,9 @@ class ConnectionManager:
         thread = getattr(window, "arduino_thread", None)
 
         if arduino is not None:
+            # First, so a connect loop still retrying ends instead of
+            # reopening the port after this teardown (checklist V8).
+            arduino.cancel_connect()
             drained = arduino.disconnect(drain_timeout=drain_timeout)
 
         if thread is not None:
@@ -298,8 +301,8 @@ class ConnectionManager:
         """Drive the hardware EMERGENCYSTOP output to its idle (HIGH) level."""
         try:
             GPIO.output(EMERGENCYSTOP, GPIO.HIGH)
-        except Exception as exc:
-            self.logger.error("Could not release EMERGENCYSTOP GPIO before reset: %s", exc)
+        except Exception:
+            self.logger.exception("Could not release EMERGENCYSTOP GPIO before reset")
 
     def _on_reset_finished(self, success, worker=None):
         """Slot called when ResetWorker finishes."""

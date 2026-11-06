@@ -42,7 +42,9 @@ class ReleaseInstallDialog(QDialog):
             try:
                 message = self.installer.install(self.job, self.progress.emit)
                 self.completed.emit(True, message)
-            except Exception:
+            # Any failure must reach this dialog. The installer writes the
+            # traceback to install-error.log in the job folder named below.
+            except Exception:  # noqa: BLE001
                 self.completed.emit(
                     False, "Installation failed. Do not use the device until service "
                     "recovery is complete. Backup and logs: " + self.job["work"])

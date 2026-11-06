@@ -76,7 +76,9 @@ def parse_diagnostic_frame(frame):
                 raise ValueError("Malformed hardware diagnostics")
             fields = ("a_ok", "b_ok", "c_ok", "stop_pressed", "fit_active")
             return "hardware_diagnostics", dict(zip(fields, (value == "1" for value in parts[2:])))
-        if len(parts) != 10 or parts[1] != "HX711":
+        # Firmware from the 2026-11 batch appends the lowest free RAM seen
+        # since boot, in bytes (checklist V4); older firmware sends ten fields.
+        if len(parts) not in (10, 11) or parts[1] != "HX711":
             raise ValueError("Malformed HX711 diagnostics")
         values = {"raw": _integer(parts[2], -8388608, 8388607),
                   "offset": _integer(parts[3], -8388608, 8388607),
@@ -85,7 +87,9 @@ def parse_diagnostic_frame(frame):
                   "age_ms": _integer(parts[6], -1, 4294967295),
                   "max_gap_ms": _integer(parts[7], 0, 4294967295),
                   "read_us": _integer(parts[8], 0, 4294967295),
-                  "ready": bool(_integer(parts[9], 0, 1))}
+                  "ready": bool(_integer(parts[9], 0, 1)),
+                  "min_free_ram": (_integer(parts[10], 0, 32767)
+                                   if len(parts) == 11 else None)}
         values["valid"] = values["age_ms"] >= 0
         return "sensor_diagnostics", values
     if parts[0] == "FIRMWARE":

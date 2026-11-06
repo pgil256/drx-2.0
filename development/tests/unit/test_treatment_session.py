@@ -113,7 +113,7 @@ def test_duplicate_worker_completion_captures_original_plan(monkeypatch, qtbot, 
 
 def test_stop_latch_survives_reset_and_late_success(monkeypatch, qtbot):
     window, controller, worker = dispatch(monkeypatch)
-    monkeypatch.setattr("controllers.protocol_controller.QTimer.singleShot", lambda *a: None)
+    monkeypatch.setattr("controllers.stop_controller.QTimer.singleShot", lambda *a: None)
     controller.stop_protocol()
     window.protocol_stop_requested = False  # Reset completed before the queued finish arrived.
     window.protocol_state = "idle"

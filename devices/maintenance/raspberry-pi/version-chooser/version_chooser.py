@@ -547,7 +547,7 @@ def make_window(settings: Settings, session: Optional[Session] = None) -> object
                 self.done.emit(self.work(self.progress.emit), "")
             except ChooserError as error:
                 self.done.emit(None, str(error))
-            except Exception as error:  # Shown on screen instead of a silent exit.
+            except Exception as error:  # noqa: BLE001 - shown on screen, not a silent exit
                 self.done.emit(None, "Unexpected error: {!r}".format(error))
 
     class Window(QWidget):

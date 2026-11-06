@@ -6,6 +6,7 @@ from unittest.mock import MagicMock
 
 from PyQt5.QtCore import QThreadPool, QTimer
 
+from controllers.motion_controller import MotionController
 from controllers.protocol_controller import ProtocolController
 from helpers.treatment_session import TreatmentSession
 from ui.modals import PatientModal
@@ -103,6 +104,7 @@ def make_window(state: str = "idle") -> SimpleNamespace:
         _release_leg_gpio=MagicMock(), _start_leg_reset_gpio=MagicMock(),
         _finish_leg_reset=MagicMock(), disable_actuator_controls=MagicMock(),
         enable_actuator_controls=MagicMock(), reset_setup_readings=MagicMock(),
+        _show_rehome_prompt=MagicMock(),
     )
     window.threadpool.activeThreadCount.return_value = 0
     window.protocol = ProtocolController(window)
@@ -125,11 +127,12 @@ def make_stub() -> SimpleNamespace:
     window._block_active_treatment_exit = MagicMock(return_value=False)
     window._confirm_mid_protocol_change = MagicMock(return_value=True)
     window.set_to_distance = MagicMock(return_value=True)
+    # The Setup handlers live on MotionController (checklist A3); the window
+    # authorizes and delegates.
+    window.motion = MagicMock(spec=MotionController)
     for name in (
-        "close", "_seed_modern_run_inputs", "_reflect_setup", "_setup_reset", "_leg_jog",
-        "move_actuator", "_apply_setup_pressure", "reset_flexion_button_clicked",
-        "stop_leg_movement", "stop_position_flexion_button",
-        "_show_patient_modal", "_on_patient_edit", "_on_mark_default",
+        "close", "_seed_modern_run_inputs", "_reflect_setup", "_leg_jog",
+        "move_actuator", "_show_patient_modal", "_on_patient_edit", "_on_mark_default",
     ):
         setattr(window, name, MagicMock())
     return window

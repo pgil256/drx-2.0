@@ -48,6 +48,17 @@ class GuiVerification:
     def save(self, name: str) -> None:
         self.window.grab().save(str(self.directory / (name + ".png")))
 
+    def rehome_prompt(self) -> object:
+        """The visible post-Stop re-home prompt, or None."""
+        box = getattr(self.window, "_rehome_prompt", None)
+        return box if box is not None and box.isVisible() else None
+
+    def released_awaiting_rehome(self) -> bool:
+        """A Stop finished its release and nothing homes until the operator asks."""
+        w = self.window
+        return (self.rehome_prompt() is not None and w.protocol_state == "fault"
+                and not w.reset_in_progress and not w.initial_setup_complete)
+
     def _advance(self) -> None:
         if self._busy:
             return
@@ -67,7 +78,7 @@ class GuiVerification:
         except StopIteration:
             self.passed = True
             self._finish()
-        except Exception:
+        except Exception:  # noqa: BLE001 - the harness records any failure with its traceback
             self.results.append({"error": traceback.format_exc(), "state": self.state})
             traceback.print_exc()
             self._finish()
@@ -263,7 +274,10 @@ class GuiVerification:
         self.click(treatment._estop_btn)
         yield self.wait("GUI Stop enters recovery", lambda: w.protocol_state == "stopping"
                         or w.reset_in_progress)
-        yield self.wait("GUI Stop releases homes and rezeros", lambda:
+        yield self.wait("GUI Stop releases and asks to re-home", self.released_awaiting_rehome, 60)
+        self.save("rehome-prompt")
+        self.click(self.rehome_prompt().rehome_button)
+        yield self.wait("operator re-home homes and rezeros", lambda:
                         w.protocol_state == "idle" and w.initial_setup_complete
                         and w.arduino.baseline_valid and not w.reset_in_progress
                         and self.state["pose"]["axial_inches"] < 0.01, 60)

@@ -12,33 +12,27 @@ from datetime import datetime, timezone
 from functools import partial
 from typing import Dict, Optional
 
-import RPi.GPIO as GPIO
-from PyQt5.QtCore import QTimer
+
 from PyQt5.QtWidgets import QMessageBox
 
 from helpers import protocols
 from helpers.cloud_contract import end_settings, patient_label
 from helpers.treatment_session import TreatmentSession
 from controllers.machine_sign_in_controller import authorize
+from controllers.stop_controller import ESTOP, FAULT, OPERATOR, StopController
 from ui.modals.treatment_review import TreatmentReviewDialog
+from ui.presentation import present
 
-from config.constants import DATA_PATHS, EMERGENCYSTOP
+from config.constants import DATA_PATHS
 
 
 class ProtocolController:
-    # Bound on waiting for the post-stop P0 release to unload the patient
-    # before the recovery reset runs. The reset's 'Y' reboots the MCU (which
-    # aborts an in-flight pressure move) and the homing sequence retracts the
-    # axial actuator LAST, so resetting 1 s after stop left the limb under
-    # load for the whole homing sequence.
-    RELEASE_WAIT_S = 20.0
-    RELEASE_DONE_LBS = 5.0  # mirrors firmware PRESSURE_RELEASE_LBS
-    _RELEASE_POLL_MS = 250
-
     def __init__(self, window):
         self.window = window
         self._session: Optional[TreatmentSession] = None
         self._prepared = False
+        # Every kind of stop runs in the StopController (checklist A2).
+        self.stops = StopController(window, self)
 
     def set_state(self, state):
         """Single source of truth for the protocol lifecycle.
@@ -75,10 +69,8 @@ class ProtocolController:
             # back to idle.
             self.set_busy(True)
         if state in ("starting", "running", "stopping"):
-            try:
-                window.shell.close_nonessential_overlays()
-            except Exception:
-                pass
+            present(window.logger, "nonessential overlays",
+                    lambda: window.shell.close_nonessential_overlays())
         refresh = getattr(window, "_refresh_device_presentation", None)
         if callable(refresh):
             try:
@@ -89,17 +81,15 @@ class ProtocolController:
 
     def _set_run_state(self, running: bool) -> None:
         """Present an unpaused lifecycle transition without delaying safety work."""
-        try:
-            self.window.shell.treatment.set_run_state(running=running, paused=False)
-        except Exception:
-            pass
+        window = self.window
+        present(window.logger, "treatment run state",
+                lambda: window.shell.treatment.set_run_state(running=running, paused=False))
 
     def set_busy(self, busy: bool) -> None:
         """Gate treatment controls during transitions and connection/reset work."""
-        try:
-            self.window.shell.treatment.set_busy(busy)
-        except Exception:
-            pass
+        window = self.window
+        present(window.logger, "treatment busy state",
+                lambda: window.shell.treatment.set_busy(busy))
 
     def confirm_leave_treatment(self, source_page: str, destination_page: str) -> bool:
         """Warn before leaving the Treatment screen during an active protocol.
@@ -165,8 +155,8 @@ class ProtocolController:
                 return False
             settings = dict(window.shell.treatment.settings_values())
             settings["duration"] = int(window._duration_minutes())
-        except Exception as e:
-            window.logger.error("Error reading protocol parameters for confirmation: %s", e)
+        except Exception:
+            window.logger.exception("Error reading protocol parameters for confirmation")
             return False
 
         patient = getattr(window, "cloud_patient", None)
@@ -180,11 +170,10 @@ class ProtocolController:
     def start_or_stop(self) -> None:
         """Toggle the lifecycle and finish the existing start-phase presentation."""
         self._toggle_start_stop()
-        if self.window.protocol_state == "running":
-            try:
-                self.window.shell.treatment.set_phase("ramping")
-            except Exception:
-                pass
+        window = self.window
+        if window.protocol_state == "running":
+            present(window.logger, "treatment phase",
+                    lambda: window.shell.treatment.set_phase("ramping"))
 
     def _toggle_start_stop(self) -> None:
         """Start or stop the protocol with debouncing to prevent multiple rapid clicks."""
@@ -319,9 +308,10 @@ class ProtocolController:
             duration = 12  # Default to 12 minutes
             try:
                 duration = int(window._duration_minutes())
-            except Exception as e:
-                window.logger.warning(
-                    "Error getting time value: %s, using default 5 minutes", e
+            except Exception:
+                window.logger.exception(
+                    "Could not read the treatment duration; using the default %d minutes",
+                    duration,
                 )
 
             if duration == 0:
@@ -448,120 +438,16 @@ class ProtocolController:
         self.window.safety.on_controller_fault({"reason": reason})
 
     def stop_without_recovery(self, reason: str, fault: bool = False) -> None:
-        """Stop outputs and cancel producers without any automatic movement."""
-        window = self.window
-        window._no_automatic_recovery = True
-        window.protocol_stop_requested = True
-        self.latch_session_outcome("fault" if fault else "stopped")
-        arduino = window.arduino
-        if arduino is not None:
-            arduino.send("X")
-        window.connection.cancel_reset()
-        if window.worker:
-            # The explicit stop here owns output cleanup; stop() must not issue P0.
-            window.worker.cancel(firmware_stopped=True)
-        if arduino is not None:
-            arduino.send("X")
-            arduino.send("HF1")
-            arduino.baseline_valid = False
-        window._release_leg_gpio()
-        window.protocol_timer.stop()
-        window.initial_setup_complete = False
-        self.set_state("fault")
-        window.shell.setup.set_reset_enabled(not window.reset_in_progress)
-        window.on_baseline_changed(False)
-        if fault:
-            window.treatment_panel.set_fault(reason)
-        self.finalize_session()
+        """A stop with no automatic movement: see StopController (kind "fault")."""
+        self.stops.stop(FAULT, reason=reason, fault=fault)
 
     def stop_protocol(self):
-        """Stop protocol sequence."""
-        window = self.window
-        window.logger.info("Stopping protocol")
-        window.protocol_stop_requested = True
-        self.latch_session_outcome("stopped")
-        # Cancel the producer before X clears queued work. Waiting until phase
-        # 2 allowed the worker to enqueue fresh motion after the stop command.
-        if window.worker:
-            window.worker.cancel()
-        window.stop_actuators()
-        self.finalize_session()
-        self.set_state("stopping")
-        window.mid_protocol_warning_shown = False
-        # Use QTimer to avoid blocking UI
-        QTimer.singleShot(500, self._stop_phase2)
+        """The treatment STOP: see StopController (kind "operator")."""
+        self.stops.stop(OPERATOR)
 
-    def _stop_phase2(self):
-        """Phase 2 of stop protocol after 0.5 second delay."""
-        window = self.window
-        if getattr(window, "_no_automatic_recovery", False) is True:
-            return
-        if getattr(window, "_closing", False) is True:
-            return
-        self._release_after_stop()
-        # Continue to phase 3 after another 0.5 seconds
-        QTimer.singleShot(500, self._stop_phase3)
-
-    def _release_after_stop(self):
-        """Release traction for an operator STOP or on-screen emergency stop.
-
-        The treatment worker's stop() normally sends X, P0 and HF0. When there
-        is no worker (pressure applied from the Setup screen), or a finished
-        worker declines because an earlier physical stop marked it, P0 used
-        to be skipped: the load stayed on until the recovery reset re-homed
-        the axial actuator, up to RELEASE_WAIT_S later. Fault stops never
-        reach here (stop_without_recovery sets _no_automatic_recovery).
-        """
-        window = self.window
-        worker = window.worker
-        if worker is not None and worker.stop() is not False:
-            return
-        if getattr(window, "_physical_stop_active", False) is True:
-            # The firmware's own release owns the load; X would abort it.
-            return
-        arduino = getattr(window, "arduino", None)
-        if arduino is None or not arduino.send("P0"):
-            window.logger.error("Pressure release (P0) could not be sent after stop")
-            return
-        window.logger.info("Pressure release command sent")
-
-    def _stop_phase3(self):
-        """Phase 3 of stop protocol - recovery reset once the load has cleared."""
-        # Keep the explicit stopping state until either the worker reports a
-        # user-requested completion or reset recovery finishes.
-        self._reset_after_release(time.time())
-
-    def _reset_after_release(self, started):
-        """Run the recovery reset once the P0 release has unloaded the patient,
-        or after RELEASE_WAIT_S. ``last_measured_pressure`` is fed by the
-        firmware's status frames (kneespa.status_emit); None means no telemetry
-        has ever arrived (dev launcher / link never up), so there is nothing to
-        wait for."""
-        window = self.window
-        if getattr(window, "_no_automatic_recovery", False) is True:
-            return
-        if getattr(window, "_closing", False) is True:
-            return
-        if getattr(window, "_physical_stop_active", False) is True:
-            return  # Physical stops require an explicit operator recovery.
-        pressure = getattr(window, "last_measured_pressure", None)
-        released = (
-            pressure is None
-            or (isinstance(pressure, (int, float)) and pressure < self.RELEASE_DONE_LBS)
-        )
-        waited = time.time() - started
-        if released or waited >= self.RELEASE_WAIT_S:
-            if not released:
-                window.logger.warning(
-                    "Release did not clear within %.0fs (pressure=%s); resetting anyway",
-                    waited, pressure,
-                )
-            window.reset_arduino()
-            return
-        QTimer.singleShot(
-            self._RELEASE_POLL_MS, lambda: self._reset_after_release(started)
-        )
-
+    def emergency_stop_clicked(self, event, outcome: str = "fault"):
+        """The on-screen emergency stop: see StopController (kind "estop")."""
+        self.stops.stop(ESTOP, outcome=outcome)
 
     def protocol_completed(self, success=True, session: Optional[TreatmentSession] = None):
         """Handle protocol completion."""
@@ -596,17 +482,18 @@ class ProtocolController:
             self._set_phase_from_text(
                 "Protocol complete" if success else "Protocol stopped"
             )
-        except Exception as e:
-            window.logger.error("Error updating status label: %s", e)
+        except Exception:
+            window.logger.exception("Error updating status label")
         window.mid_protocol_warning_shown = False
         if safety_fault_active:
             # Preserve an existing command/device fault. A later worker
             # completion must neither clear it nor stack another notice.
             self.set_state("fault")
         elif user_stopped:
-            # The staged stop still owes the patient a recovery reset. Keep
-            # Start/navigation gated until _on_reset_finished confirms it,
-            # even if a successful completion was queued just before STOP.
+            # The staged stop still owes the patient a release and then an
+            # operator re-home. Keep Start/navigation gated until
+            # _on_reset_finished confirms it, even if a successful completion
+            # was queued just before STOP.
             self.set_state("stopping")
         elif success:
             self.set_state("idle")
@@ -664,7 +551,7 @@ class ProtocolController:
                     "The treatment record could not be saved for upload. Contact support.", False
                 )
             except Exception:
-                window.logger.error("Could not display the treatment recording failure")
+                window.logger.exception("Could not display the treatment recording failure")
         try:
             window.shell.treatment.set_outcome(session.outcome, session.elapsed())
         except Exception:
@@ -674,7 +561,7 @@ class ProtocolController:
             try:
                 sign_in.treatment_finished()
             except Exception:
-                window.logger.error("Could not finish sign-out presentation after treatment")
+                window.logger.exception("Could not finish sign-out presentation after treatment")
 
     def _session_progress(self, text: str, session: TreatmentSession) -> None:
         if session is self._session and not session.finalized:
@@ -696,76 +583,6 @@ class ProtocolController:
             window.protocol_timer.stop()
             window.protocol_start_time = None
 
-    def emergency_stop_clicked(self, event, outcome: str = "fault"):
-        """Handle emergency stop button press."""
-        window = self.window
-        # Mark this as an intentional stop before any firmware responses can
-        # arrive. Command rejections from the follow-up pressure-release
-        # cleanup must not be mislabeled as a new physical device fault.
-        window.protocol_stop_requested = True
-        self.latch_session_outcome(outcome)
-        # The banner's EMERGENCY STOP reaches here directly (not via the
-        # Treatment screen's _on_estop), so clear the UI pause anchor here
-        # too -- it used to survive an e-stop taken while paused, after
-        # which PAUSE did nothing for every later treatment.
-        window._paused_at = None
-        # Assert the hardware EMERGENCYSTOP line FIRST - it does not depend
-        # on the serial link being alive. setup_gpio() parks the pin HIGH
-        # (run-permitted) at boot, so LOW is the asserted/stop state; it was
-        # configured but never driven before. Released again when the
-        # recovery reset begins (phase 3), which needs a live machine to
-        # home. Polarity is inferred from the boot default - Phase E
-        # hardware measurement must confirm before this ships to a device.
-        try:
-            GPIO.output(EMERGENCYSTOP, GPIO.LOW)
-        except Exception as e:
-            window.logger.error("Could not assert EMERGENCYSTOP GPIO: %s", e)
-        # Logged only after the hardware line is asserted.
-        window.logger.warning("Emergency stop triggered")
-        if window.worker:
-            window.worker.cancel()
-        # arduino.send never blocks or reconnects; 'X' jumps the tx queue
-        # and stop_actuators alarms the operator if the link is down.
-        window.stop_actuators()
-        self.finalize_session()
-        # UI state changes come after both independent stop mechanisms so a
-        # broken widget can never delay either safety action. The raw stop
-        # flag above is already sufficient to classify an immediate reply.
-        if hasattr(window, "protocol_state"):
-            try:
-                self.set_state("stopping")
-            except Exception as e:
-                window.logger.error("Could not update emergency-stop UI state: %s", e)
-        # Use QTimer instead of sleep to avoid blocking UI
-        QTimer.singleShot(1000, self._emergency_stop_phase2)
-
-    def _emergency_stop_phase2(self):
-        """Phase 2 of emergency stop after 1 second delay."""
-        window = self.window
-        if getattr(window, "_no_automatic_recovery", False) is True:
-            return
-        if getattr(window, "_closing", False) is True:
-            return
-        self._release_after_stop()
-        # Continue to phase 3 after another second
-        QTimer.singleShot(1000, self._emergency_stop_phase3)
-
-    def _emergency_stop_phase3(self):
-        """Phase 3: release the hardware stop line, then run the recovery
-        reset (the reset sequence homes actuators, which needs the machine
-        powered)."""
-        if getattr(self.window, "_no_automatic_recovery", False) is True:
-            return
-        if getattr(self.window, "_closing", False) is True:
-            return
-        try:
-            GPIO.output(EMERGENCYSTOP, GPIO.HIGH)
-        except Exception as e:
-            self.window.logger.error("Could not release EMERGENCYSTOP GPIO: %s", e)
-        # Same release-then-reset ordering as the staged stop
-        self._reset_after_release(time.time())
-
-
     def update_status_label(self, text):
         """Mirror worker phase messages on the persistent status label
         and the treatment banner."""
@@ -773,8 +590,8 @@ class ProtocolController:
         clean = str(text).lstrip(">")
         try:
             self._set_phase_from_text(clean)
-        except Exception as e:
-            window.logger.error("Error updating status label: %s", e)
+        except Exception:
+            window.logger.exception("Error updating status label")
         window.treatment_panel.set_phase(clean.upper())
 
     def _set_phase_from_text(self, text: str) -> None:
@@ -796,10 +613,9 @@ class ProtocolController:
             phase = "ramping"
         else:
             return
-        try:
-            self.window.shell.treatment.set_phase(phase)
-        except Exception:
-            pass
+        window = self.window
+        present(window.logger, "treatment phase",
+                lambda: window.shell.treatment.set_phase(phase))
 
     def pause(self) -> None:
         """Pause the worker and countdown, then present the paused controls."""
@@ -811,11 +627,10 @@ class ProtocolController:
             window._paused_at = time.time()
             if window.protocol_timer.isActive():
                 window.protocol_timer.stop()
-            try:
-                window.shell.treatment.set_run_state(running=True, paused=True)
-                window.shell.treatment.set_phase("paused")
-            except Exception:
-                pass
+            present(window.logger, "treatment run state",
+                    lambda: window.shell.treatment.set_run_state(running=True, paused=True))
+            present(window.logger, "treatment phase",
+                    lambda: window.shell.treatment.set_phase("paused"))
 
     def resume(self) -> None:
         """Resume the worker, excluding paused time from the UI countdown."""
@@ -828,13 +643,11 @@ class ProtocolController:
                 window.protocol_start_time += time.time() - window._paused_at
             window._paused_at = None
             window.protocol_timer.start(1000)
-            try:
-                window.shell.treatment.set_run_state(running=True, paused=False)
-                window.shell.treatment.set_phase(
-                    "pulsing" if window.current_use_pulse_setting else "holding"
-                )
-            except Exception:
-                pass
+            phase = "pulsing" if window.current_use_pulse_setting else "holding"
+            present(window.logger, "treatment run state",
+                    lambda: window.shell.treatment.set_run_state(running=True, paused=False))
+            present(window.logger, "treatment phase",
+                    lambda: window.shell.treatment.set_phase(phase))
 
     def stop_from_view(self) -> None:
         """Run the screen STOP chain, then present its stopped controls."""
@@ -843,8 +656,7 @@ class ProtocolController:
         window._paused_at = None
         if window.protocol_timer.isActive():
             window.protocol_timer.stop()
-        try:
-            window.shell.treatment.set_run_state(running=False, paused=False)
-            window.shell.treatment.set_phase("stopped")
-        except Exception:
-            pass
+        present(window.logger, "treatment run state",
+                lambda: window.shell.treatment.set_run_state(running=False, paused=False))
+        present(window.logger, "treatment phase",
+                lambda: window.shell.treatment.set_phase("stopped"))

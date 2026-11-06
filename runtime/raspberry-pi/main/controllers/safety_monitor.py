@@ -13,6 +13,7 @@ from config.constants import (
     LATERAL_MIN,
     LATERAL_MAX,
 )
+from controllers.stop_controller import COMMAND_FAULT, PHYSICAL, stops_for
 
 
 COMMAND_REJECTION_MESSAGES = {
@@ -36,6 +37,18 @@ LEGACY_ADVISORY_MESSAGES = {
     "Heartbeat lost",
     "Host heartbeat lost",
     "Motor stalled",
+}
+
+# "ERROR: Motor stall timeout <device>": the firmware has already stopped
+# every axis because a move made no progress for 3 x POSITION_STALL_MS. Unlike
+# the advisory "Motor stalled" above, this is a fault.
+STALL_TIMEOUT_PREFIX = "Motor stall timeout"
+
+# Operator wording for latched firmware fault reasons whose code alone does
+# not say what to do. Other reasons are shown as sent.
+FAULT_MESSAGES = {
+    # A sustained negative load: tension past zero or zero drift (V2).
+    "PRESSURE_NEGATIVE": "Load cell reading is negative. Check wiring and re-zero.",
 }
 
 # Status telemetry can briefly land a few counts (or a fraction of a pound)
@@ -240,6 +253,11 @@ class SafetyMonitor:
             window.logger.warning("Firmware busy: %s", message)
             return
 
+        if message.startswith(STALL_TIMEOUT_PREFIX):
+            # Latch a fault with no automatic homing; Reset is the way back.
+            self.on_controller_fault({"reason": message})
+            return
+
         if message in LEGACY_ADVISORY_MESSAGES:
             self.on_firmware_warning(message)
             return
@@ -261,62 +279,16 @@ class SafetyMonitor:
                 )
                 return
 
-            # Outside a stop, a rejected command still matters: halt the
-            # treatment state machine, but identify it as a command failure
-            # rather than a device safety trip.
-            protocol = getattr(window, "protocol", None)
-            if protocol is not None:
-                protocol.latch_session_outcome("fault")
-            window.stop_actuators()
-            window._no_automatic_recovery = True
-            window.initial_setup_complete = False
-            if window.protocol_running and window.worker:
-                try:
-                    window.worker.cancel()
-                except Exception as e:
-                    window.logger.error("Error flagging worker stop: %s", e)
-            fault = f"COMMAND REJECTED: {message}"
-            window.treatment_panel.set_fault(fault)
-            window.set_protocol_state("fault")
-            window._show_timed_error(
-                f"The device rejected a command: {message}. Reset before continuing."
-            )
+            # Outside a stop, a rejected command still matters: see
+            # StopController (kind "fault/command").
+            stops_for(window).stop(COMMAND_FAULT, message=message)
             return
 
         self._present_warning(message)
 
     def on_physical_stop(self) -> None:
-        """Latch the physical stop on the host while firmware releases traction."""
-        window = self.window
-        window._no_automatic_recovery = True
-        window.connection.cancel_reset()
-        window.logger.error("Physical emergency stop activated")
-        already_stopped = getattr(window, "_physical_stop_active", False) is True
-        protocol = getattr(window, "protocol", None)
-        if protocol is not None:
-            protocol.latch_session_outcome("fault")
-        window._physical_stop_active = True
-        window.protocol_stop_requested = True
-        window.initial_setup_complete = False
-        if window.worker:
-            window.worker.cancel(firmware_stopped=True)
-        if window.arduino:
-            window.arduino.cancel_pending_commands()
-        try:
-            window._release_leg_gpio()
-        except Exception:
-            window.logger.exception("Could not release leg GPIO after physical stop")
-        window._paused_at = None
-        window.protocol_timer.stop()
-        window.set_protocol_state("fault")
-        window.disable_actuator_controls()
-        window.shell.setup.set_reset_enabled(not window.reset_in_progress)
-        window.treatment_panel.set_fault("PHYSICAL EMERGENCY STOP")
-        if not already_stopped:
-            window._show_safety_alert(
-                "Physical emergency stop activated. Release the button and reset "
-                "the device before starting another treatment."
-            )
+        """The device's stop button: see StopController (kind "physical")."""
+        stops_for(self.window).stop(PHYSICAL)
 
     def on_firmware_warning(self, message: str) -> None:
         """Handle advisory firmware notices without startup alert noise.
@@ -349,8 +321,9 @@ class SafetyMonitor:
         reason = result["reason"]
         self.window.logger.error("Controller fault: %s", reason)
         self.window._measurement_fault = reason
-        self.window.protocol.stop_without_recovery(reason, fault=True)
-        self.window._show_safety_alert("CONTROLLER FAULT: " + reason)
+        message = FAULT_MESSAGES.get(reason, reason)
+        self.window.protocol.stop_without_recovery(message, fault=True)
+        self.window._show_safety_alert("CONTROLLER FAULT: " + message)
 
     def on_command_rejected(self, result: dict) -> None:
         """Reject the active operation promptly without an automatic homing retry."""
@@ -385,8 +358,8 @@ class SafetyMonitor:
                 window._show_timed_error(msg)
             else:
                 window.logger.info("Zero marks verified: A=%s B=%s", a_zero, b_zero)
-        except Exception as e:
-            window.logger.error("Error verifying zero marks: %s", e)
+        except Exception:
+            window.logger.exception("Error verifying zero marks")
 
     def on_connection_lost(self):
         """Present connection loss as an advisory warning."""

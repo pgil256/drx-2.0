@@ -121,10 +121,7 @@ class Configuration:
             self._validate_calibration()
 
         except Exception as e:
-            logger.error("%s", e)
-            logger.error(
-                'Fatal error, could not load config file from "%s"', self.configFile
-            )
+            logger.exception('Fatal error, could not load config file from "%s"', self.configFile)
             self._set_default_c_marks()
             self._set_default_a_marks()
             self._set_default_b_marks()
@@ -536,9 +533,8 @@ class Configuration:
         try:
             self._ensure_config_sections()
             self._atomic_write()
-        except Exception as e:
-            logger.error("%s", e)
-            logger.error('Fatal error, could not write config file to "%s"', self.configFile)
+        except Exception:
+            logger.exception('Fatal error, could not write config file to "%s"', self.configFile)
 
     def _set_default_c_marks(self):
         """Set default CMarks values for lateral actuator."""

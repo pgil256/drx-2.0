@@ -1,11 +1,12 @@
 """Measured service data validates safely and persists as one transaction."""
 
 from pathlib import Path
-from unittest.mock import MagicMock, Mock
+from unittest.mock import Mock
 
 import pytest
 
 from config.config import Configuration
+from fixtures.motion import make_motion
 from helpers.hardware_service import HardwareServiceDraft, axial_position, load_cell_factor
 
 pytestmark = pytest.mark.unit
@@ -329,52 +330,35 @@ def test_axial_interpolation_rejects_invalid_tables(marks):
 
 @pytest.mark.parametrize("marked,command", [(False, "A122.0"), (True, "I121100")])
 def test_axial_go_uses_measured_table_only_after_service_opt_in(config, marked, command):
-    from kneespa import KneeSpa
-
     config.AMarks = {"0": 100, "1": 700, "3": 1500, "4": 1800}
     config.axial_service_calibrated = marked
-    window = MagicMock()
-    window.config = config
-    window.arduino.send.return_value = True
-    assert KneeSpa.set_to_distance(window, 2, "12")
-    window.arduino.send.assert_called_once_with(command)
+    motion = make_motion(config=config, mock_controls=True)
+    assert motion.set_to_distance(2, "12")
+    motion.arduino.send.assert_called_once_with(command)
 
 
 @pytest.mark.parametrize("marked,command", [(False, "A120.5"), (True, "I12400")])
 def test_axial_jog_uses_measured_table_only_after_service_opt_in(config, marked, command):
-    from kneespa import KneeSpa
-
     config.AMarks = {"0": 100, "1": 700, "3": 1500, "4": 1800}
     config.axial_service_calibrated = marked
-    window = MagicMock()
-    window.config = config
-    window.actuator_a, window.actuator_b, window.actuator_c = "12", "13", "14"
-    window.actuator_command_in_progress = False
-    window.axial_flexion_position = 0
-    window.arduino.send.return_value = True
-    KneeSpa.move_actuator(window, "12", "1", 1)
-    window.arduino.send.assert_called_once_with(command)
-    assert window.axial_flexion_position == 0.5
+    motion = make_motion(config=config, mock_controls=True, axial=0)
+    motion.move_actuator("12", "1", 1)
+    motion.arduino.send.assert_called_once_with(command)
+    assert motion.axial_flexion_position == 0.5
 
 
 @pytest.mark.parametrize("operation", ["go", "jog"])
 def test_invalid_service_axial_table_never_sends_motion(config, operation):
-    from kneespa import KneeSpa
-
     config.AMarks = {"0": 100, "4": 5000}
     config.axial_service_calibrated = True
-    window = MagicMock()
-    window.config = config
-    window.actuator_a, window.actuator_b, window.actuator_c = "12", "13", "14"
-    window.actuator_command_in_progress = False
-    window.axial_flexion_position = 0
+    motion = make_motion(config=config, mock_controls=True, axial=0)
     if operation == "go":
-        assert KneeSpa.set_to_distance(window, 2, "12") is False
+        assert motion.set_to_distance(2, "12") is False
     else:
-        assert KneeSpa.move_actuator(window, "12", "1", 1) is False
-        assert window.axial_flexion_position == 0
-    window.arduino.send.assert_not_called()
-    window._show_timed_error.assert_called_once()
+        assert motion.move_actuator("12", "1", 1) is False
+        assert motion.axial_flexion_position == 0
+    motion.arduino.send.assert_not_called()
+    motion.view.show_error.assert_called_once()
 
 
 def test_load_cell_reference_calculation_preserves_polarity_and_tare_offset():

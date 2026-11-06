@@ -215,6 +215,12 @@ class TestFirmwareSafetyMessages:
         assert blocker.args == ["Motor stalled"]
         assert errors == []
 
+    def test_stall_timeout_error_reaches_the_error_signal(self, arduino, qtbot):
+        """F4: not a parse rejection, so it is reported rather than retried."""
+        with qtbot.waitSignal(arduino.error_emit, timeout=1000) as blocker:
+            arduino.handle_com("ERROR: Motor stall timeout 13")
+        assert blocker.args == ["Motor stall timeout 13"]
+
     def test_busy_emits_error_signal(self, arduino, qtbot):
         with qtbot.waitSignal(arduino.error_emit, timeout=1000) as blocker:
             arduino.handle_com("BUSY")

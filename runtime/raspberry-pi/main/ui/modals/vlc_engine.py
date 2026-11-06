@@ -26,7 +26,9 @@ logger = logging.getLogger(f"{APP_NAME}.ui.video")
 
 try:  # VLC is optional — absent on dev boxes / headless CI (mocked in tests).
     import vlc
-except Exception as exc:  # pragma: no cover - exercised only where vlc is missing
+# Any failure loading the binding or libVLC must degrade to the poster, never
+# stop the app. A warning, not a traceback: dev boxes and CI never have VLC.
+except Exception as exc:  # noqa: BLE001  # pragma: no cover - only where vlc is missing
     logger.warning("VideoModal: VLC unavailable: %r", exc)
     vlc = None
 
@@ -183,8 +185,8 @@ class _VlcEngine:
                         "VideoModal: skipping Git LFS pointer (run git lfs pull): %s", path
                     )
                 return [path for path in clips if path not in pointers]
-        except Exception:
-            pass
+        except OSError as exc:
+            logger.warning("VideoModal: could not list the videos folder: %r", exc)
         return []
 
     def count(self):
@@ -228,11 +230,11 @@ class _VlcEngine:
                 # (including the close button) unresponsive during playback.
                 self._player.video_set_mouse_input(False)
                 self._player.video_set_key_input(False)
-            except Exception:
-                pass
+            except Exception as exc:  # noqa: BLE001 - optional; some libVLC builds lack it
+                logger.info("VideoModal: VLC input passthrough unavailable: %r", exc)
             self._load(self._index)
-        except Exception as exc:
-            logger.error("VideoModal: VLC init failed, degrading to poster: %r", exc)
+        except Exception:
+            logger.exception("VideoModal: VLC init failed, degrading to poster")
             self._player = None
             self.available = False
         return self._player
@@ -264,6 +266,7 @@ class _VlcEngine:
                 self._player.stop()
                 self._load(index)
             except Exception:
+                logger.exception("VideoModal: could not select clip %d", index + 1)
                 return False
         return True
 
@@ -288,7 +291,7 @@ class _VlcEngine:
             ):
                 if state == getattr(vlc.State, name, object()):
                     return name.lower()
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 - polled every tick; unreadable reads as unknown
             pass
         return "unknown"
 
@@ -319,8 +322,8 @@ class _VlcEngine:
             # called. Apply now and retry from the poll once state=Playing.
             self.ensure_audio()
             return True
-        except Exception as exc:
-            logger.error("VideoModal: play() failed: %r", exc)
+        except Exception:
+            logger.exception("VideoModal: play() failed")
             return False
 
     def pause(self):
@@ -329,11 +332,11 @@ class _VlcEngine:
                 # Explicit pause avoids libvlc_media_player_pause()'s toggle
                 # semantics getting out of sync with the Qt button state.
                 self._player.set_pause(1)
-            except Exception:
+            except Exception:  # noqa: BLE001 - older libVLC lacks set_pause; use the toggle
                 try:
                     self._player.pause()
                 except Exception:
-                    pass
+                    logger.exception("VideoModal: pause failed")
 
     def set_audio_device(self, device: str) -> None:
         """Rebuild VLC so a new direct ALSA output is used on the next play."""
@@ -351,7 +354,7 @@ class _VlcEngine:
             try:
                 self._player.audio_set_volume(self._volume)
             except Exception:
-                pass
+                logger.exception("VideoModal: could not set the volume")
 
     def set_muted(self, muted: bool) -> None:
         self._muted = bool(muted)
@@ -360,7 +363,7 @@ class _VlcEngine:
             try:
                 self._player.audio_set_mute(self._muted)
             except Exception:
-                pass
+                logger.exception("VideoModal: could not set mute")
 
     def ensure_audio(self) -> None:
         """Unmute and restore nominal VLC volume once audio output exists."""
@@ -385,7 +388,8 @@ class _VlcEngine:
                     "VideoModal: VLC audio output did not become ready "
                     "(mute=%r, volume=%r)", muted, volume,
                 )
-        except Exception as exc:
+        # The audio output may not exist yet; retried up to 20 times, logged on the last.
+        except Exception as exc:  # noqa: BLE001
             if self._audio_attempts == 20:
                 logger.warning("VideoModal: unable to enable VLC audio: %r", exc)
 
@@ -395,7 +399,7 @@ class _VlcEngine:
             try:
                 self._player.stop()
             except Exception:
-                pass
+                logger.exception("VideoModal: stop() failed")
 
     def position(self):
         """Return ``(elapsed_s, total_s)`` floats, or ``None`` when unknown."""
@@ -420,7 +424,7 @@ class _VlcEngine:
 
             if length is not None and length > 0 and current is not None and current >= 0:
                 return current / 1000.0, length / 1000.0
-        except Exception:
+        except Exception:  # noqa: BLE001, S110 - polled every tick; unknown reads as None
             pass
         return None
 
@@ -435,7 +439,7 @@ class _VlcEngine:
             if self._instance is not None:
                 self._instance.release()
         except Exception:
-            pass
+            logger.exception("VideoModal: could not release VLC")
         finally:
             self._player = None
             self._instance = None

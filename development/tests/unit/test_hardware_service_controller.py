@@ -10,10 +10,12 @@ from PyQt5.QtCore import QObject, pyqtSignal
 from PyQt5.QtWidgets import QMainWindow, QMessageBox
 
 from config.config import Configuration
+from controllers.device_state import DeviceStateAttributes
 from controllers import hardware_service_controller as module
 from helpers.arduino import CommandHandle
 from helpers.firmware_protocol import HX711_PROTOCOL_DRIVER
 from helpers.service_auth import ServiceAccess
+from fixtures.motion import make_motion
 
 pytestmark = pytest.mark.unit
 
@@ -55,6 +57,10 @@ class ServiceArduino(QObject):
         return handle
 
 
+class ServiceWindow(DeviceStateAttributes, QMainWindow):
+    """A bare window whose device flags live in a DeviceState, as on KneeSpa."""
+
+
 @pytest.fixture
 def service(qtbot, monkeypatch, tmp_path, request):
     clock = [100.0]
@@ -69,7 +75,7 @@ def service(qtbot, monkeypatch, tmp_path, request):
     config.calibration = -28369
     config._write_default_config()
     config.get_config()
-    w = QMainWindow()
+    w = ServiceWindow()
     qtbot.addWidget(w)
     w.current_user = {"username": "Service tech", "status": "admin"}
     w.config = config
@@ -402,7 +408,9 @@ def test_normal_motion_cannot_overlap_service_and_leg_requires_rehome(service):
 
     c, w, _, feed = service
     prepare(c, feed)
-    assert not KneeSpa._send_motion_command(w, "I12550", "test")
+    # Setup motion shares the window's DeviceState, as on KneeSpa.
+    motion = make_motion(state=w.device_state, arduino=w.arduino)
+    assert not motion.send_motion_command("I12550", "test")
     c.move_leg("+")
     assert w._service_leg_position_unknown
     assert not KneeSpa._move_leg(w, "F+")

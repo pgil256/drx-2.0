@@ -410,11 +410,26 @@ def test_protected_device_work_blocks_treatment_reset_and_manual_motion(window_r
     try:
         w.protocol.start_protocol()
         w.connection.reset_arduino()
-        assert not w._send_motion_command("K1200", "test device guard")
+        assert not w.motion.send_motion_command("K1200", "test device guard")
         assert not run.workers
         run.arduino.send.assert_not_called()
     finally:
         w._device_maintenance_active = False
+
+
+def test_motion_state_lives_on_the_motion_controller(window_run):
+    """The window's old motion names reach MotionController (checklist A3):
+    the connection manager's reset writes the positions, and the shutdown
+    stop stops the two timers by name."""
+    w = window_run.window
+    assert w.motion.state is w.device_state
+    w.axial_flexion_position = 2.5
+    assert w.motion.axial_flexion_position == 2.5
+    w.disable_actuator_controls()
+    w.motion.state.initial_setup_complete = True
+    w.enable_actuator_controls()
+    assert w.controls_enable_timer is w.motion.controls_enable_timer is not None
+    w.controls_enable_timer.stop()
 
 
 def test_calibration_restore_requires_explicit_recovery(window_run, monkeypatch, tmp_path):
@@ -594,6 +609,78 @@ def test_stop_completion_race_and_recovery(window_run: SimpleNamespace,
     assert run.view._settings["duration"].isEnabled()
 
 
+@pytest.mark.parametrize("answer", ["not now", "re-home", "setup reset"])
+def test_stop_waits_for_the_operator_to_rehome(window_run: SimpleNamespace,
+                                               monkeypatch: pytest.MonkeyPatch,
+                                               answer: str) -> None:
+    """S2: after the release, nothing homes until the operator asks."""
+    run = window_run
+    w = run.window
+    worker = start(run)
+    run.view.estop_requested.emit()
+    worker.signals.finished.emit(False)
+    reset = MagicMock(signals=ResetWorkerSignals())
+    monkeypatch.setattr(connection_manager, "ResetWorker", lambda *args: reset)
+    run.pool.start.side_effect = None
+    w.last_measured_pressure = 0.0
+    w.protocol.stops._stop_phase3()
+    prompt = w._rehome_prompt
+    assert prompt.isVisible()
+    assert w.protocol_state == "fault" and not w.initial_setup_complete
+    assert not w.reset_in_progress and not run.view._start_btn.isEnabled()
+    assert w.shell.setup._reset_btn.isEnabled()
+    assert not any(button.isEnabled() for row in w.shell.setup._rows.values()
+                   for button in row.motion_buttons)
+    w.protocol.stops._stop_phase3()  # a repeat does not stack a second prompt
+    assert w._rehome_prompt is prompt
+    if answer == "not now":
+        prompt.later_button.click()
+        assert not prompt.isVisible() and not w.reset_in_progress
+        assert w.protocol_state == "fault" and w.shell.setup._reset_btn.isEnabled()
+        return
+    if answer == "re-home":
+        prompt.rehome_button.click()
+    else:
+        w.shell.setup._reset_btn.click()
+    assert w.reset_in_progress and not prompt.isVisible()
+    reset.signals.finished.emit(True)
+    assert w.protocol_state == "idle" and run.view._start_btn.isEnabled()
+
+
+def test_rehome_prompt_defers_to_a_later_safety_stop(window_run: SimpleNamespace) -> None:
+    run = window_run
+    w = run.window
+    w.protocol.stop_from_view()  # Setup-screen Stop with nothing running
+    w.last_measured_pressure = 0.0
+    w.protocol.stops._stop_phase3()
+    prompt = w._rehome_prompt
+    w._no_automatic_recovery = True  # e.g. a firmware fault after the prompt opened
+    errors = []
+    w._show_timed_error = errors.append
+    prompt.rehome_button.click()
+    assert not w.reset_in_progress
+    assert errors and "Reset in Setup" in errors[0]
+
+
+def test_window_flags_live_in_device_state(window_run: SimpleNamespace,
+                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    """A1: the window's flags are its DeviceState, and the guards read it."""
+    run = window_run
+    w = run.window
+    reset = MagicMock(signals=ResetWorkerSignals())
+    monkeypatch.setattr(connection_manager, "ResetWorker", lambda *args: reset)
+    run.pool.start.side_effect = None
+    w.reset_arduino()
+    assert w.device_state.reset_in_progress is True
+    assert not w.device_state.can_exit() and not w.device_state.can_move()
+    assert w._block_active_treatment_exit() is True
+    reset.signals.finished.emit(True)
+    assert w.device_state.reset_in_progress is False
+    assert w.device_state.initial_setup_complete is True
+    assert w.device_state.protocol_state == "idle"
+    assert w.device_state.can_exit() and w.device_state.can_move()
+
+
 @pytest.mark.parametrize("result", ["success", "failure", "error"])
 def test_reset_signals_drive_real_controls(window_run: SimpleNamespace,
                                            monkeypatch: pytest.MonkeyPatch,
@@ -629,8 +716,8 @@ def test_fault_survives_completion_and_stale_callbacks_after_close(
     assert run.window.protocol_state == "fault"
     assert not run.view._start_btn.isEnabled()
     run.window.close()
-    run.window.protocol._stop_phase2()
-    run.window.protocol._emergency_stop_phase2()
+    run.window.protocol.stops._stop_phase2()
+    run.window.protocol.stops._emergency_stop_phase2()
     run.window.connection._on_reset_finished(True)
     worker.signals.finished.emit(True)
     assert run.window.protocol_state == "fault"
@@ -677,9 +764,30 @@ def test_worker_progress_phase_precedence_and_full_banner(window_run: SimpleName
 def test_progress_view_error_still_updates_banner(window_run: SimpleNamespace,
                                                   monkeypatch: pytest.MonkeyPatch) -> None:
     run = window_run
+    # The 250 ms measurement refresh also calls set_phase. If it fires while
+    # set_phase is broken (pytest-qt processes events after the test; a slow
+    # runner leaves the timer due), the failure lands in the Qt event loop.
+    # This test is about the progress path only.
+    run.window._pressure_state_timer.stop()
     monkeypatch.setattr(run.view, "set_phase", MagicMock(side_effect=RuntimeError("view")))
     run.window.protocol.update_status_label(">>Pressure ramp")
     assert run.window.treatment_panel.phase_label.text() == "PRESSURE RAMP"
+
+
+def test_firmware_stall_timeout_faults_the_running_treatment(window_run):
+    """F4: the firmware stopped a jammed move; the Pi must not treat it as advisory."""
+    run = window_run
+    w = run.window
+    worker = start(run)
+    run.arduino.send.reset_mock()
+    w.handle_firmware_error("Motor stall timeout 14")
+    assert w.protocol_state == "fault" and w._no_automatic_recovery
+    assert not w.initial_setup_complete
+    worker.cancel.assert_called_once_with(firmware_stopped=True)
+    assert "X" in [c[0][0] for c in run.arduino.send.call_args_list]
+    assert not run.view._start_btn.isEnabled()
+    assert w.treatment_panel.phase_label.text() == "SAFETY STOP: Motor stall timeout 14"
+    w._show_safety_alert.assert_called_once_with("CONTROLLER FAULT: Motor stall timeout 14")
 
 
 @pytest.mark.parametrize("action", ["Dismiss", "Stop"])
@@ -698,7 +806,7 @@ def test_pressure_notice_actions_keep_recovery_explicit(window_run, action, qtbo
         assert [c[0][0] for c in run.arduino.send.call_args_list] == ["X", "X", "HF1"]
         worker.cancel.assert_called_once_with(firmware_stopped=True)
         assert run.window._no_automatic_recovery
-        run.window.protocol._stop_phase2()
+        run.window.protocol.stops._stop_phase2()
         run.window.connection._automatic_reset()
         assert [c[0][0] for c in run.arduino.send.call_args_list] == ["X", "X", "HF1"]
 

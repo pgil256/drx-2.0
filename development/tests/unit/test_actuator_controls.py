@@ -8,21 +8,23 @@ Union of the two development lines:
   guards (in-progress command debounce + marks_valid calibration gate), plus
   the emergency-stop scheduling and mid-protocol confirmation contracts.
 
-Each target method is called UNBOUND against a lightweight stub ``self`` (a
-``MagicMock``) that carries only the attributes the method actually reads, so
-no Qt window / Arduino is constructed and the tests run on Windows.
+The Setup motion tests drive a real MotionController (checklist A3) built
+by ``fixtures.motion.make_motion`` with a fake for every collaborator, or the
+window-shaped ``ControlsHarness`` around one; the stop and mid-protocol tests
+call window methods UNBOUND against a lightweight stub ``self``. No Qt window or
+Arduino is constructed, so the tests run on Windows.
 """
-from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
 import pytest
 from fixtures.actuators import ControlsHarness
+from fixtures.motion import make_motion
 
 import kneespa
 from kneespa import KneeSpa
-import controllers.protocol_controller as pc_mod
+import controllers.motion_controller as mc_mod
+import controllers.stop_controller as sc_mod
 from controllers.protocol_controller import ProtocolController
-from config.config import Configuration
 from config.constants import (
     ACTUATORS,
     AXIAL_MAX_INCHES,
@@ -110,7 +112,7 @@ class TestActuatorControlGating:
 class TestSetupMotionWatchdog:
     @pytest.fixture
     def harness(self, qtbot, monkeypatch):
-        monkeypatch.setattr(kneespa, "SETUP_MOTION_DONE_TIMEOUT_S", 0.05)
+        monkeypatch.setattr(mc_mod, "SETUP_MOTION_DONE_TIMEOUT_S", 0.05)
         h = ControlsHarness(qtbot)
         h.arduino = MagicMock()
         h.arduino.send.return_value = True
@@ -120,7 +122,7 @@ class TestSetupMotionWatchdog:
 
     def test_lost_done_hands_controls_back(self, qtbot, harness):
         harness.disable_actuator_controls()
-        assert KneeSpa._send_motion_command(harness, "I131140", "horizontal movement")
+        assert harness.motion.send_motion_command("I131140", "horizontal movement")
         qtbot.waitUntil(harness.all_enabled, timeout=2000)
         assert harness.actuator_command_in_progress is False
         harness._show_timed_error.assert_called_once()
@@ -128,7 +130,7 @@ class TestSetupMotionWatchdog:
 
     def test_done_cancels_the_backstop(self, qtbot, harness):
         harness.disable_actuator_controls()
-        KneeSpa._send_motion_command(harness, "P40", "pressure movement")
+        harness.motion.send_motion_command("P40", "pressure movement")
         harness.enable_actuator_controls()  # what set_done does on DONE
         assert harness._motion_watchdog is None
         qtbot.wait(300)
@@ -136,29 +138,28 @@ class TestSetupMotionWatchdog:
 
     def test_new_operation_supersedes_pending_backstop(self, qtbot, harness):
         harness.disable_actuator_controls()
-        KneeSpa._send_motion_command(harness, "K1688", "lateral movement")
+        harness.motion.send_motion_command("K1688", "lateral movement")
         harness.disable_actuator_controls()  # e.g. a reset taking the controls
         assert harness._motion_watchdog is None
         qtbot.wait(300)
         harness._show_timed_error.assert_not_called()
         assert harness.all_disabled()
 
-    def test_backstop_tolerates_a_window_without_motion_state(self):
-        # Fired on an object that never set the flags (e.g. before __init__
-        # finishes, or a test double): no exception, nothing re-enabled.
-        bare = SimpleNamespace(_show_timed_error=MagicMock(),
-                               enable_actuator_controls=MagicMock())
-        KneeSpa._on_motion_watchdog(bare)
-        bare.enable_actuator_controls.assert_not_called()
-        bare._show_timed_error.assert_not_called()
+    def test_backstop_does_nothing_once_no_move_is_pending(self):
+        # Fired after the move finished (or before any): nothing re-enabled
+        # and no error shown.
+        motion = make_motion(mock_controls=True)
+        motion._on_motion_watchdog()
+        motion.enable_actuator_controls.assert_not_called()
+        motion.view.show_error.assert_not_called()
 
     def test_leg_stop_does_not_arm_the_backstop(self, harness):
-        KneeSpa._send_motion_command(harness, "F0", "leg-length stop")
+        harness.motion.send_motion_command("F0", "leg-length stop")
         assert getattr(harness, "_motion_watchdog", None) is None
 
     def test_backstop_leaves_a_running_protocol_alone(self, qtbot, harness):
         harness.disable_actuator_controls()
-        KneeSpa._send_motion_command(harness, "I131140", "horizontal movement")
+        harness.motion.send_motion_command("I131140", "horizontal movement")
         harness.protocol_running = True
         qtbot.wait(300)
         assert harness.actuator_command_in_progress is True
@@ -167,9 +168,6 @@ class TestSetupMotionWatchdog:
     def test_invalid_horizontal_marks_do_not_lock_jog(self, qtbot, harness):
         harness.config = MagicMock(marks_valid=True, BMarks={})
         harness.horizontal_flexion_position = -10  # well inside both limits
-        harness.actuator_b = ACTUATOR_B
-        harness.actuator_a = ACTUATOR_A
-        harness.actuator_c = ACTUATOR_C
         harness.move_actuator(ACTUATOR_B, 1, 1)
         harness.arduino.send.assert_not_called()
         assert harness.actuator_command_in_progress is False
@@ -180,31 +178,11 @@ class TestSetupMotionWatchdog:
 # move_actuator boundary/command behavior (GUI line, adapted to base guards)
 # ---------------------------------------------------------------------------
 def make_kneespa_stub(**positions):
-    """Build a minimal stub ``self`` for ``move_actuator``.
+    """A MotionController for ``move_actuator``, with the default marks.
 
-    Only the attributes read by ``move_actuator`` are populated: actuator id
-    strings, a mocked ``arduino``, the current-position attributes, and a
-    default-populated ``config`` with the base guards satisfied
-    (actuator_command_in_progress False, marks_valid True)."""
-    config = Configuration()
-    config._set_default_c_marks()
-    config._set_default_a_marks()
-    config._set_default_b_marks()
-    config.marks_valid = True  # the calibration gate is tested separately
-
-    stub = MagicMock()
-    stub.actuator_a = ACTUATOR_A
-    stub.actuator_b = ACTUATOR_B
-    stub.actuator_c = ACTUATOR_C
-    stub.actuator_command_in_progress = False
-
-    stub.arduino = MagicMock()
-    stub.config = config
-
-    stub.horizontal_flexion_position = positions.get("horizontal", 0)
-    stub.axial_flexion_position = positions.get("axial", 0)
-    stub.lateral_flexion_position = positions.get("lateral", 0)
-    return stub
+    The base guards are satisfied (no command in progress, marks_valid True)
+    and the control lock is mocked, so only the jog itself runs."""
+    return make_motion(mock_controls=True, **positions)
 
 
 @pytest.mark.unit
@@ -216,9 +194,9 @@ class TestMoveActuatorGuards:
         must warn and send nothing."""
         stub = make_kneespa_stub(horizontal=0)
         stub.config.marks_valid = False
-        KneeSpa.move_actuator(stub, ACTUATOR_B, "1", 1)
+        stub.move_actuator(ACTUATOR_B, "1", 1)
         stub.arduino.send.assert_not_called()
-        stub._warn_uncalibrated.assert_called_once()
+        stub.view.warn_uncalibrated.assert_called_once()
 
 
 @pytest.mark.unit
@@ -228,7 +206,7 @@ class TestMoveActuatorHorizontal:
     def test_above_max_does_not_send(self):
         """Moving past HORIZONTAL_MAX_DEGREES is rejected with no command."""
         stub = make_kneespa_stub(horizontal=HORIZONTAL_MAX_DEGREES)
-        KneeSpa.move_actuator(stub, ACTUATOR_B, "1", 1)
+        stub.move_actuator(ACTUATOR_B, "1", 1)
         stub.arduino.send.assert_not_called()
         # Position must be unchanged after a rejected move.
         assert stub.horizontal_flexion_position == HORIZONTAL_MAX_DEGREES
@@ -236,7 +214,7 @@ class TestMoveActuatorHorizontal:
     def test_below_min_does_not_send(self):
         """Moving below HORIZONTAL_MIN_DEGREES is rejected with no command."""
         stub = make_kneespa_stub(horizontal=HORIZONTAL_MIN_DEGREES)
-        KneeSpa.move_actuator(stub, ACTUATOR_B, "1", -1)
+        stub.move_actuator(ACTUATOR_B, "1", -1)
         stub.arduino.send.assert_not_called()
         assert stub.horizontal_flexion_position == HORIZONTAL_MIN_DEGREES
 
@@ -244,14 +222,14 @@ class TestMoveActuatorHorizontal:
         """In-range move sends the calibrated absolute BMarks position."""
         # Start at -5; slow step (speed_factor <= 4) is 5, direction +1 -> 0 deg.
         stub = make_kneespa_stub(horizontal=-5)
-        KneeSpa.move_actuator(stub, ACTUATOR_B, "1", 1)
+        stub.move_actuator(ACTUATOR_B, "1", 1)
         stub.arduino.send.assert_called_once_with("I131900")
         assert stub.horizontal_flexion_position == 0
 
     def test_fast_speed_uses_larger_step(self):
         """speed_factor > 4 uses a step of 10 degrees."""
         stub = make_kneespa_stub(horizontal=-25)
-        KneeSpa.move_actuator(stub, ACTUATOR_B, "5", 1)
+        stub.move_actuator(ACTUATOR_B, "5", 1)
         # -25 + 10 = -15 -> calibrated BMarks position 760.
         stub.arduino.send.assert_called_once_with("I13760")
         assert stub.horizontal_flexion_position == -15
@@ -261,7 +239,7 @@ class TestMoveActuatorHorizontal:
         # Start at -5, slow step 5 -> new_position 0 == HORIZONTAL_MAX_DEGREES.
         assert HORIZONTAL_MAX_DEGREES == 0
         stub = make_kneespa_stub(horizontal=-5)
-        KneeSpa.move_actuator(stub, ACTUATOR_B, "1", 1)
+        stub.move_actuator(ACTUATOR_B, "1", 1)
         stub.arduino.send.assert_called_once()
         assert stub.horizontal_flexion_position == HORIZONTAL_MAX_DEGREES
 
@@ -270,17 +248,17 @@ class TestMoveActuatorHorizontal:
         """Horizontal jogs that would pass 0 deg are refused with no command,
         even though calibration still spans -25..+5 deg."""
         stub = make_kneespa_stub(horizontal=start)
-        KneeSpa.move_actuator(stub, ACTUATOR_B, speed, 1)
+        stub.move_actuator(ACTUATOR_B, speed, 1)
         stub.arduino.send.assert_not_called()
         assert stub.horizontal_flexion_position == start
 
     def test_failed_send_does_not_change_displayed_position(self):
         stub = make_kneespa_stub(horizontal=-10)
         stub.arduino.send.return_value = False
-        result = KneeSpa.move_actuator(stub, ACTUATOR_B, "1", 1)
+        result = stub.move_actuator(ACTUATOR_B, "1", 1)
         assert result is False
         assert stub.horizontal_flexion_position == -10
-        stub._reflect_setup.assert_not_called()
+        stub.view.show_position.assert_not_called()
         stub.enable_actuator_controls.assert_called_once()
 
 
@@ -291,15 +269,15 @@ class TestMoveActuatorAxial:
     def test_above_max_does_not_send(self):
         """Moving past AXIAL_MAX_INCHES errors and sends no command."""
         stub = make_kneespa_stub(axial=AXIAL_MAX_INCHES)
-        KneeSpa.move_actuator(stub, ACTUATOR_A, "1", 1)
+        stub.move_actuator(ACTUATOR_A, "1", 1)
         stub.arduino.send.assert_not_called()
-        stub._show_timed_error.assert_called_once()
+        stub.view.show_error.assert_called_once()
         assert stub.axial_flexion_position == AXIAL_MAX_INCHES
 
     def test_below_min_does_not_send(self):
         """Moving below AXIAL_MIN_INCHES is rejected with no command."""
         stub = make_kneespa_stub(axial=AXIAL_MIN_INCHES)
-        KneeSpa.move_actuator(stub, ACTUATOR_A, "1", -1)
+        stub.move_actuator(ACTUATOR_A, "1", -1)
         stub.arduino.send.assert_not_called()
         assert stub.axial_flexion_position == AXIAL_MIN_INCHES
 
@@ -307,14 +285,14 @@ class TestMoveActuatorAxial:
         """In-range move sends ``A12<pos:.1f>`` and advances the position."""
         # Start at 0; slow step is 0.5, direction +1 -> 0.5 inches.
         stub = make_kneespa_stub(axial=0)
-        KneeSpa.move_actuator(stub, ACTUATOR_A, "1", 1)
+        stub.move_actuator(ACTUATOR_A, "1", 1)
         stub.arduino.send.assert_called_once_with("A120.5")
         assert stub.axial_flexion_position == 0.5
 
     def test_fast_speed_uses_larger_step(self):
         """speed_factor > 4 uses a step of 1.0 inch."""
         stub = make_kneespa_stub(axial=0)
-        KneeSpa.move_actuator(stub, ACTUATOR_A, "5", 1)
+        stub.move_actuator(ACTUATOR_A, "5", 1)
         stub.arduino.send.assert_called_once_with("A121.0")
         assert stub.axial_flexion_position == 1.0
 
@@ -326,17 +304,17 @@ class TestMoveActuatorLateral:
     def test_above_max_does_not_send(self):
         """Moving past LATERAL_MAX_DEGREES errors and sends no command."""
         stub = make_kneespa_stub(lateral=LATERAL_MAX_DEGREES)
-        KneeSpa.move_actuator(stub, ACTUATOR_C, "1", 1)
+        stub.move_actuator(ACTUATOR_C, "1", 1)
         stub.arduino.send.assert_not_called()
-        stub._show_timed_error.assert_called_once()
+        stub.view.show_error.assert_called_once()
         assert stub.lateral_flexion_position == LATERAL_MAX_DEGREES
 
     def test_below_min_does_not_send(self):
         """Moving below LATERAL_MIN_DEGREES errors and sends no command."""
         stub = make_kneespa_stub(lateral=LATERAL_MIN_DEGREES)
-        KneeSpa.move_actuator(stub, ACTUATOR_C, "1", -1)
+        stub.move_actuator(ACTUATOR_C, "1", -1)
         stub.arduino.send.assert_not_called()
-        stub._show_timed_error.assert_called_once()
+        stub.view.show_error.assert_called_once()
         assert stub.lateral_flexion_position == LATERAL_MIN_DEGREES
 
     def test_in_range_sends_mapped_position_command(self):
@@ -344,7 +322,7 @@ class TestMoveActuatorLateral:
         # Start at 0; slow step is 2.5, direction +1 -> 2.5 deg.
         stub = make_kneespa_stub(lateral=0)
         expected_pos = int(stub.config.CMarks["2.5"])
-        KneeSpa.move_actuator(stub, ACTUATOR_C, "1", 1)
+        stub.move_actuator(ACTUATOR_C, "1", 1)
         stub.arduino.send.assert_called_once_with(f"K{expected_pos}")
         assert stub.lateral_flexion_position == 2.5
 
@@ -395,7 +373,7 @@ class TestLegLengthBounds:
         # Start at 1.0; slow step 2.5 -> 3.5 -> rounds to 2.5 (nearest 2.5).
         stub = make_kneespa_stub(lateral=1.0)
         expected_pos = int(stub.config.CMarks["2.5"])
-        KneeSpa.move_actuator(stub, ACTUATOR_C, "1", 1)
+        stub.move_actuator(ACTUATOR_C, "1", 1)
         stub.arduino.send.assert_called_once_with(f"K{expected_pos}")
         assert stub.lateral_flexion_position == 2.5
 
@@ -414,8 +392,8 @@ class TestEmergencyStop:
         stub.stop_actuators = lambda: KneeSpa.stop_actuators(stub)
         controller = ProtocolController(stub)
 
-        with patch.object(pc_mod, "QTimer") as mock_qtimer, \
-                patch.object(pc_mod, "GPIO"):
+        with patch.object(sc_mod, "QTimer") as mock_qtimer, \
+                patch.object(sc_mod, "GPIO"):
             controller.emergency_stop_clicked(None)
 
         stub.arduino.send.assert_called_once_with("X")
@@ -427,14 +405,14 @@ class TestEmergencyStop:
         stub = MagicMock()
         controller = ProtocolController(stub)
 
-        with patch.object(pc_mod, "QTimer") as mock_qtimer, \
-                patch.object(pc_mod, "GPIO"):
+        with patch.object(sc_mod, "QTimer") as mock_qtimer, \
+                patch.object(sc_mod, "GPIO"):
             controller.emergency_stop_clicked(None)
 
         stub.stop_actuators.assert_called_once()
         args, _ = mock_qtimer.singleShot.call_args
         assert args[0] == 1000
-        assert args[1] == controller._emergency_stop_phase2
+        assert args[1] == controller.stops._emergency_stop_phase2
 
     def test_marks_intentional_stop_before_sending_commands(self):
         """Firmware cleanup responses must observe the stopping state."""
@@ -442,7 +420,7 @@ class TestEmergencyStop:
         stub.protocol_state = "running"
         controller = ProtocolController(stub)
 
-        with patch.object(pc_mod, "QTimer"), patch.object(pc_mod, "GPIO"):
+        with patch.object(sc_mod, "QTimer"), patch.object(sc_mod, "GPIO"):
             controller.emergency_stop_clicked(None)
 
         assert stub.protocol_stop_requested is True

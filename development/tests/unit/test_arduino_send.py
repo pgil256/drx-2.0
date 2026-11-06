@@ -256,6 +256,106 @@ class TestTrackedQueueSafety:
         assert handle.written.is_set()
 
 
+class ScriptedPort:
+    """A port that serves scripted chunks without blocking.
+
+    Each poll of ``in_waiting`` takes the next script item when nothing is
+    pending: bytes arrive, a number idles that many seconds, a callable runs.
+    The loop stops once the script is used up. ``events`` records polls and
+    writes in order.
+    """
+
+    def __init__(self, arduino, script):
+        self.arduino = arduino
+        self.script = list(script)
+        self.pending = b""
+        self.events = []
+        self.is_open = True
+
+    @property
+    def in_waiting(self):
+        self.events.append("poll")
+        if not self.pending:
+            if not self.script:
+                self.arduino._running = False
+                return 0
+            item = self.script.pop(0)
+            if callable(item):
+                item()
+                return 0
+            if isinstance(item, (int, float)):
+                time.sleep(item)
+                return 0
+            self.pending = item
+        return len(self.pending)
+
+    def read(self, size):
+        data, self.pending = self.pending[:size], self.pending[size:]
+        return data
+
+    def readline(self):
+        raise AssertionError("readline() blocks up to the read timeout")
+
+    def write(self, payload):
+        self.events.append(payload)
+        return len(payload)
+
+    def flush(self):
+        pass
+
+    def close(self):
+        self.is_open = False
+
+
+@pytest.mark.unit
+class TestIoLoopReads:
+    """V9: reads never block, so a partial line cannot hold up a stop."""
+
+    @pytest.fixture
+    def handled(self, arduino, monkeypatch):
+        lines = []
+        monkeypatch.setattr(arduino, "handle_com", lines.append)
+        return lines
+
+    def run(self, arduino, script):
+        port = ScriptedPort(arduino, script)
+        arduino.serial_com = port
+        arduino.read_from_com()
+        return port
+
+    @pytest.mark.timeout(10)
+    def test_a_stop_queued_behind_half_a_line_is_written_on_the_next_pass(
+        self, arduino, handled
+    ):
+        port = self.run(arduino, [b"S|1|2", lambda: arduino.send("X"), 0.0])
+        polls = [index for index, event in enumerate(port.events) if event == "poll"]
+        queued = polls[1]  # the second poll ran the script item that queued the X
+        assert port.events[queued + 1] == b"X\n"  # written before the next poll
+        assert handled == []  # the half line is still waiting for its end
+
+    @pytest.mark.timeout(10)
+    def test_a_line_split_across_reads_is_handled_once_whole(self, arduino, handled):
+        self.run(arduino, [b"S|1|2", b"|3|4\nOK\r\n", b"OK"])
+        assert handled == ["S|1|2|3|4", "OK"]
+
+    @pytest.mark.timeout(10)
+    def test_a_line_that_never_ends_is_handed_on_by_itself(
+        self, arduino, handled, monkeypatch
+    ):
+        """As readline() did at its timeout: the next line starts clean."""
+        monkeypatch.setattr(arduino, "PARTIAL_LINE_TIMEOUT_S", 0.05)
+        self.run(arduino, [b"Rea", 0.1, 0.0, b"Ready to Go\n"])
+        assert handled == ["Rea", "Ready to Go"]
+
+    @pytest.mark.timeout(10)
+    def test_an_overlong_line_with_no_ending_is_discarded(
+        self, arduino, handled, monkeypatch
+    ):
+        monkeypatch.setattr(arduino, "MAX_PARTIAL_LINE", 16)
+        self.run(arduino, [b"x" * 40, b"OK\n"])
+        assert handled == ["OK"]
+
+
 @pytest.mark.unit
 class TestIoLoopLinkLoss:
     """read_from_com() must report a dead port instead of spinning on it.
@@ -311,9 +411,46 @@ class TestIoLoopLinkLoss:
         assert lost == ["lost"]
 
     @pytest.mark.timeout(10)
+    def test_unanswered_probe_sends_a_final_stop_before_giving_up(
+        self, arduino, lost, monkeypatch
+    ):
+        """V7: the receive path may be the only part that failed."""
+        monkeypatch.setattr(arduino, "RX_SILENCE_LIMIT_S", 0.0)
+        monkeypatch.setattr(arduino, "PROBE_TIMEOUT_S", 0.05)
+        arduino.serial_com.in_waiting = 0
+        order = []
+        arduino.serial_com.write.side_effect = lambda payload: order.append(payload)
+        arduino.connection_lost.connect(lambda: order.append("lost"))
+
+        arduino.read_from_com()
+
+        assert order == [b"T\n", b"X\n", "lost"]
+        assert lost == ["lost"]
+
+    @pytest.mark.timeout(10)
+    def test_failed_probe_write_still_tries_the_final_stop(self, arduino, lost, monkeypatch):
+        monkeypatch.setattr(arduino, "RX_SILENCE_LIMIT_S", 0.0)
+        arduino.serial_com.in_waiting = 0
+        arduino.serial_com.write.side_effect = OSError(5, "Input/output error")
+
+        arduino.read_from_com()
+
+        # Both the probe and the stop were attempted; the failure is logged.
+        assert [c[0][0] for c in arduino.serial_com.write.call_args_list] == [b"T\n", b"X\n"]
+        assert lost == ["lost"]
+        assert arduino.connected is False
+
+    @pytest.mark.timeout(10)
+    def test_closed_port_skips_the_final_stop(self, arduino, lost):
+        arduino.serial_com.is_open = False
+        arduino._handle_link_lost()
+        arduino.serial_com.write.assert_not_called()
+        assert lost == ["lost"]
+
+    @pytest.mark.timeout(10)
     def test_line_handling_error_is_not_a_link_loss(self, arduino, lost, monkeypatch):
-        arduino.serial_com.in_waiting = 1
-        arduino.serial_com.readline.return_value = b"S|1|2|3|4\n"
+        arduino.serial_com.in_waiting = 10
+        arduino.serial_com.read.return_value = b"S|1|2|3|4\n"
 
         def boom(data):
             arduino._running = False

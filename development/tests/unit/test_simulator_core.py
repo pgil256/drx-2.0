@@ -186,6 +186,41 @@ def test_server_roundtrip_fragmentation_and_control_authorization(tmp_path):
     asyncio.run(exercise())
 
 
+def framed(body, checksum=None):
+    """'#<body>*XX', with the body's XOR checksum unless one is given."""
+    value = 0
+    for char in body:
+        value ^= ord(char)
+    return "#{}*{}".format(body, checksum if checksum is not None else "%02X" % value)
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("frame", [
+    framed("7:T", "5"), framed("7:T", "5zz"), framed("7:T", "zz"),
+    framed("-5:T"), framed("+5:T"), framed(" 5:T"), framed("1234567890:T"),
+])
+def test_a_lenient_frame_field_is_malformed(frame):
+    """Matches firmware V6: strict sequence and checksum fields."""
+    device = SimulatedController()
+    replies = send(device, frame)
+    assert "Malformed frame" in replies
+    assert "OK" not in replies
+    assert "OK|123456789" in send(device, framed("123456789:T"))
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("command", ["P999", "P-10", "Pabc", "P40|30", "P40|20|50"])
+def test_a_malformed_pressure_target_is_rejected_not_latched(command):
+    """Matches firmware V5: a reject, with no fault and no motion."""
+    device = SimulatedController()
+    prepare(device)
+    replies = send(device, command)
+    assert "COMMAND_REJECTED|P|INVALID_TARGET" in replies
+    assert "FAULT|" not in replies
+    assert not device.measure_pressure
+    assert "MOTION_DONE|P|20.00" in send(device, "P20|20", 5)  # still usable
+
+
 @pytest.mark.unit
 def test_pressure_increase_only_completes_at_or_above_requested_target():
     device = SimulatedController()

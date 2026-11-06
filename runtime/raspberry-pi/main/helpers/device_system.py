@@ -104,7 +104,7 @@ class DeviceSystem:
         try:
             with urlopen(request, timeout=5) as response:
                 return "Reachable over HTTPS" if response.status == 200 else "Unexpected response"
-        except Exception:
+        except Exception:  # noqa: BLE001 - any failure means unreachable; shown as a status
             return "HTTPS check failed (offline, captive portal, or blocked test endpoint)"
 
     def wifi_scan(self) -> List[Dict[str, str]]:

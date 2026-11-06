@@ -18,6 +18,13 @@ import zipfile
 from helpers.device_records import read_json, write_json
 
 MAX_EXPANDED_BYTES = 1024 * 1024 * 1024
+# Written next to runtime/raspberry-pi before a software swap and removed after
+# it. runtime/restore_update.sh reads it if the swap was interrupted (U1).
+SWAP_JOURNAL = ".software-swap"
+# Prepared update folders kept after a successful install, besides any folder a
+# backup or firmware recovery record points to (V11).
+KEEP_PREPARED = 2
+SWAP_LEFTOVER = re.compile(r"\.software-(?:old|next)-[0-9a-f]{32}")
 MEGA_APPLICATION_BYTES = 253952
 MEGA_BUILD = """[platformio]
 src_dir = .
@@ -54,6 +61,35 @@ def remove_tree(path: Path, root: Path) -> None:
     checked = contained(path, root)
     if checked.exists():
         shutil.rmtree(str(checked))
+
+
+def fsync_directory(path: Path) -> None:
+    """Make the renames and removals inside ``path`` durable (POSIX only)."""
+    if os.name != "posix":
+        return
+    descriptor = os.open(str(path), os.O_RDONLY)
+    try:
+        os.fsync(descriptor)
+    finally:
+        os.close(descriptor)
+
+
+def fsync_tree(root: Path) -> None:
+    """Flush every file and folder under ``root`` to disk before it goes live.
+
+    A power cut soon after the swap could otherwise leave the new software's
+    files empty on the SD card (POSIX only).
+    """
+    if os.name != "posix":
+        return
+    for directory, _, names in os.walk(str(root)):
+        for name in names:
+            descriptor = os.open(os.path.join(directory, name), os.O_RDONLY)
+            try:
+                os.fsync(descriptor)
+            finally:
+                os.close(descriptor)
+        fsync_directory(Path(directory))
 
 
 def extract_package(archive: Path, destination: Path, platform: str) -> Path:
@@ -319,7 +355,91 @@ class ReleaseInstaller:
             self._history(job, False)
             raise
         self._history(job, True)
+        try:
+            self._prune(work)
+        except (OSError, ValueError):
+            # Cleanup must not change an already verified installation outcome.
+            pass
         return message
+
+    def _protected_folders(self) -> set:
+        """Prepared folders holding the backup or recovery image a record names.
+
+        Raises when a record exists but cannot be read, so nothing is pruned.
+        """
+        folders = set()
+        backups = []
+        installed = self.root / "installed.json"
+        if installed.exists():
+            records = read_json(installed)
+            backups.extend(record.get("backup") for record in records.values()
+                           if isinstance(record, dict))
+        recovery = self.root / "firmware-recovery.json"
+        if recovery.exists():
+            backups.append(read_json(recovery).get("backup"))
+        for backup in backups:
+            if not backup:
+                continue
+            try:
+                relative = Path(backup).resolve().relative_to(self.root)
+            except ValueError:
+                continue
+            if relative.parts:
+                folders.add(self.root / relative.parts[0])
+        return folders
+
+    def _prune(self, work: Path) -> None:
+        """Keep the newest prepared folders and every protected one (V11).
+
+        Downloads are kept only for the releases the kept folders were prepared
+        from, and leftovers of an interrupted software swap are removed.
+        """
+        try:
+            protected = self._protected_folders() | {work.resolve()}
+        except (OSError, ValueError, AttributeError):
+            return  # An unreadable record could name a backup: prune nothing.
+        folders = sorted(
+            (path for path in self.root.glob("prepared-*")
+             if path.is_dir() and not path.is_symlink()),
+            key=lambda path: path.stat().st_mtime, reverse=True)
+        kept = set(folders[:KEEP_PREPARED]) | protected
+        for folder in folders:
+            if folder not in kept:
+                remove_tree(folder, self.root)
+        archives = set()
+        for folder in kept:
+            try:
+                release = read_json(folder / "job.json")["release"]
+                archives.add(release["id"] + release["extension"])
+            except (OSError, ValueError, KeyError, TypeError):
+                continue  # A failed preparation has no job record.
+        downloads = self.root / "downloads"
+        if downloads.is_dir():
+            for path in downloads.iterdir():
+                if path.name not in archives and path.is_file() and not path.is_symlink():
+                    contained(path, self.root).unlink()
+        for path in self.runtime.iterdir():
+            if SWAP_LEFTOVER.fullmatch(path.name) and path.is_dir():
+                remove_tree(path, self.runtime)
+        if (self.runtime / "raspberry-pi").is_dir():
+            self._clear_journal()
+
+    def _write_journal(self, **paths: Path) -> None:
+        """Record the swap and flush it to disk before the first rename."""
+        journal = self.runtime / SWAP_JOURNAL
+        descriptor = os.open(str(journal), os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o644)
+        with os.fdopen(descriptor, "w", encoding="utf-8") as output:
+            output.write("".join(f"{key}={value}\n" for key, value in paths.items()))
+            output.flush()
+            os.fsync(output.fileno())
+        fsync_directory(self.runtime)
+
+    def _clear_journal(self) -> None:
+        try:
+            (self.runtime / SWAP_JOURNAL).unlink()
+        except FileNotFoundError:
+            return
+        fsync_directory(self.runtime)
 
     def _history(self, job: Dict, success: bool) -> None:
         now = datetime.now(timezone.utc)
@@ -345,22 +465,33 @@ class ReleaseInstaller:
         progress("Backing up the current software…")
         shutil.copytree(str(target), str(backup))
         shutil.copytree(str(source), str(candidate))
+        fsync_tree(candidate)
         moved = False
         try:
+            # Between the two renames runtime/raspberry-pi does not exist. If the
+            # device loses power there, runtime/restore_update.sh moves the
+            # retired folder back before the app next starts.
+            self._write_journal(target=target, retired=retired, candidate=candidate)
             progress("Activating the verified software…")
             os.replace(target, retired)
             moved = True
             os.replace(candidate, target)
+            fsync_directory(self.runtime)
             self._record(job, backup)
         except Exception:
             if moved:
                 if target.exists():
                     remove_tree(target, self.runtime)
                 os.replace(retired, target)
+                fsync_directory(self.runtime)
+            # Rolled back (or never moved): the journal has nothing to restore.
+            # A failed rollback raises before this, leaving it for the launcher.
+            self._clear_journal()
             raise
         finally:
             if candidate.exists():
                 remove_tree(candidate, self.runtime)
+        self._clear_journal()
         if retired.exists():
             try:
                 remove_tree(retired, self.runtime)

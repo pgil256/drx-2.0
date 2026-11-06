@@ -165,7 +165,8 @@ class PatientController(QObject):
                 result = operation()
             except StaffError as exc:
                 result = exc
-            except Exception:
+            # Exception text can carry patient data or tokens: log only the action.
+            except Exception:  # noqa: BLE001
                 self.window.logger.error("Patient cloud operation failed: %s", action)
                 result = StaffError("unavailable", "Cloud request failed. Your form has been kept.")
             try:

@@ -114,6 +114,12 @@ class Arduino(QObject):
     # triggers an active probe
     RX_SILENCE_LIMIT_S = 15.0
     PROBE_TIMEOUT_S = 5.0
+    # Received bytes are split into lines without blocking (checklist V9).
+    # A line with no newline after this long is handed on by itself, as
+    # readline() did at the port's 1 s timeout, so the next line starts clean
+    # (the Mega can reset mid-line). A longer one is discarded.
+    PARTIAL_LINE_TIMEOUT_S = 1.0
+    MAX_PARTIAL_LINE = 512
 
     def __init__(self, transport_factory: Optional[Callable[..., object]] = None,
                  port: Optional[str] = None) -> None:
@@ -194,6 +200,16 @@ class Arduino(QObject):
     # ------------------------------------------------------------------
     # Connection lifecycle
     # ------------------------------------------------------------------
+
+    def cancel_connect(self) -> None:
+        """End a connect loop that is still retrying (checklist V8).
+
+        Teardown calls this first. QThread.quit() cannot interrupt the loop,
+        which runs inside the thread's started slot, so it used to outlive a
+        teardown and reopen the port up to about a minute later. Each Arduino
+        is discarded after teardown, so the flag is never cleared.
+        """
+        self._connect_cancel.set()
 
     def disconnect(self, drain_timeout=0.0):
         """Close the serial connection and stop the I/O thread.
@@ -285,6 +301,9 @@ class Arduino(QObject):
                 )
                 # Boot grace: USB-serial Arduinos auto-reset on open
                 if self._connect_cancel.wait(2):
+                    # Cancelled with the port just opened: close it, or it
+                    # outlives the teardown that cancelled this loop.
+                    self.disconnect()
                     return False
 
                 self._start_io_thread()
@@ -413,13 +432,34 @@ class Arduino(QObject):
         self._reader_ready.set()
         last_rx = time.time()
         probe_sent_at = None
+        # readline() blocked until a newline or the 1 s read timeout, so a
+        # partial line held up the TX queues, the stop queue included, for up
+        # to a second. Bytes are now read as they arrive and split here, and
+        # the queues are serviced every pass (checklist V9).
+        partial = b""
+        partial_since = 0.0
 
         while self._running and self.serial_com and getattr(self.serial_com, "is_open", False):
-            raw_data = ""
+            lines = []
             try:
                 self._service_tx_queue()
-                if self.serial_com.in_waiting > 0:
-                    raw_data = self.serial_com.readline().decode(errors="replace")
+                waiting = self.serial_com.in_waiting
+                if waiting > 0:
+                    if not partial:
+                        partial_since = time.monotonic()
+                    partial += self.serial_com.read(waiting)
+                    *complete, partial = partial.split(b"\n")
+                    lines = [line.decode(errors="replace") + "\n" for line in complete]
+                    if complete:
+                        partial_since = time.monotonic()
+                    if len(partial) > self.MAX_PARTIAL_LINE:
+                        self.logger.warning(
+                            "Discarding %d received bytes with no line ending", len(partial)
+                        )
+                        partial = b""
+                elif partial and time.monotonic() - partial_since >= self.PARTIAL_LINE_TIMEOUT_S:
+                    lines = [partial.decode(errors="replace")]
+                    partial = b""
                 else:
                     time.sleep(0.01)
             except (serial.SerialException, OSError):
@@ -435,7 +475,7 @@ class Arduino(QObject):
                 self.logger.exception("Unexpected error in I/O loop")
                 time.sleep(0.1)
 
-            if raw_data:
+            for raw_data in lines:
                 try:
                     self._trace_serial("RX", raw_data.rstrip("\r\n"))
                     data = raw_data.strip()
@@ -475,6 +515,7 @@ class Arduino(QObject):
         self.logger.info("I/O loop exited")
 
     def _handle_link_lost(self):
+        self._send_final_stop()
         self._invalidate_identity()
         self.connected = False
         self.connection_ready_event.clear()
@@ -483,6 +524,26 @@ class Arduino(QObject):
             self._fail_pending("DISCONNECTED", "Serial link lost")
             self._queue_condition.notify_all()
         self.connection_lost.emit()
+
+    def _send_final_stop(self) -> None:
+        """One best-effort X before the link is declared lost (checklist V7).
+
+        If only the receive path failed, the firmware is still running whatever
+        it was doing, and its heartbeat only warns. Once the link is lost every
+        send() is refused, so this is the last chance to stop it. Runs on the
+        I/O thread, which owns the port. If the port is really gone the write
+        fails, and that is logged.
+        """
+        port = self.serial_com
+        if port is None or not getattr(port, "is_open", False):
+            self.logger.warning("Serial link lost; the port is closed, so no stop was sent")
+            return
+        try:
+            self._write_now("X")
+        except Exception:
+            self.logger.exception("Serial link lost; the final stop (X) could not be written")
+        else:
+            self.logger.warning("Serial link lost; sent a final stop (X)")
 
     def _discard_queued(self, result: str, reason: str) -> None:
         """Cancel unsent commands under the queue lock without claiming a write."""

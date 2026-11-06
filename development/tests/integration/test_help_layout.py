@@ -47,6 +47,24 @@ def test_help_reference_fits_without_clipping(
         assert scroll.viewport().rect().contains(bounds), label.text()
 
 
+def _reveal(scroll, widget) -> None:
+    """Scroll just far enough to show all of ``widget``, as a touch scroll can.
+
+    Not QScrollArea.ensureWidgetVisible: on Qt 5.11 (the Pi's Buster Qt) it
+    scrolls to QRect.bottom() - viewport height, and bottom() is the last
+    pixel inside the rect, so it stops 1 px short. Clamping to the scroll
+    range is kept, so content that really is out of reach still fails.
+    """
+    bar = scroll.verticalScrollBar()
+    top = widget.mapTo(scroll.widget(), QPoint()).y()
+    bottom = top + widget.height()
+    viewport = scroll.viewport().height()
+    if bottom - bar.value() > viewport:
+        bar.setValue(bottom - viewport)
+    if top < bar.value():
+        bar.setValue(top)
+
+
 @pytest.mark.parametrize("section", [0, 1])
 def test_help_overflow_can_reveal_every_reference(
     themed_app: QApplication, qtbot: QtBot, section: int,
@@ -62,7 +80,7 @@ def test_help_overflow_can_reveal_every_reference(
     qtbot.wait(10)
     assert scroll.verticalScrollBar().maximum() > 0
     for label in scroll.widget().findChildren(QLabel):
-        scroll.ensureWidgetVisible(label, 0, 0)
+        _reveal(scroll, label)
         bounds = label.rect().translated(label.mapTo(scroll.viewport(), QPoint()))
         assert scroll.viewport().rect().contains(bounds), label.text()
     assert all(button.isVisible() for button in shell.support._section_buttons)

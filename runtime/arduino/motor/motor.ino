@@ -84,6 +84,12 @@ int pulseSpeed = TREATMENT_SPEED_MAX;
 #define HEARTBEAT_TIMEOUT     10000  // sustained host silence before warning
 #define SCALE_READ_TIMEOUT    500    // ms without HX711 ready -> warning
 #define PRESSURE_RELEASE_LBS  5.0    // autonomous release target after E-stop
+// A signed load below -NEGATIVE_LOAD_LBS for NEGATIVE_LOAD_SAMPLES samples in
+// a row is tension past zero or zero drift, not load (checklist V2). 5 lb is a
+// starting value: bench data should set it above the tension normally seen at
+// the end of a release.
+#define NEGATIVE_LOAD_LBS     5.0
+#define NEGATIVE_LOAD_SAMPLES 3
 #define RELEASE_TIMEOUT       15000  // ms bound on E-stop pressure release
 // Advisory only: the move keeps going until the host acts. Must stay
 // BELOW the host's PRESSURE_BUILD_TIMEOUT_S (constants.py, 90 s) so this
@@ -92,6 +98,9 @@ int pulseSpeed = TREATMENT_SPEED_MAX;
 #define PRESSURE_MOVE_TIMEOUT 80000  // ms before advisory pressure warning
 #define POSITION_DEADBAND     25     // counts: symmetric close-enough band
 #define POSITION_STALL_MS     20000  // sustained no-progress time before warning
+// No progress for this long ends the move (E-stop + ERROR). Unsigned long:
+// 3 * 20000 overflows the Mega's 16-bit int.
+#define POSITION_STALL_TIMEOUT_MS (3UL * POSITION_STALL_MS)
 #define POSITION_PROGRESS_COUNTS 4   // encoder progress that resets stall timer
 #define ACTIVE_STATUS_INTERVAL 1000  // ms: status cadence during motion (non-HF)
 
@@ -108,8 +117,10 @@ const unsigned long STATUS_TIMEOUT = 2000; // Force-reset acknowledgment after 2
 // Load cell setup
 Hx711Sampler scale;
 float calibration_factor = -4360.14;
-float pressure = 0;          // filtered magnitude used by control/safety logic
-float signedPressure = 0;    // filtered signed value (negative = wiring/drift fault)
+float pressure = 0;          // magnitude (0.5 lb deadband) used by control/safety logic
+float signedPressure = 0;    // signed value; sustained negative is checked (V2)
+uint8_t negativeLoadSamples = 0;  // consecutive samples below -NEGATIVE_LOAD_LBS
+bool negativeLoadWarned = false;  // warning sent; cleared once the reading recovers
 
 // Non-blocking load-cell sampling state
 unsigned long lastScaleReady = 0;    // last time the HX711 had data for us
@@ -222,7 +233,29 @@ elapsedMillis timeSinceLastStatus = 0; // Timer for high-frequency updates
 const unsigned long HIGH_FREQ_INTERVAL = 1000; // ms for frequent updates (adjust as needed)
 
 // Command handling
-String commandBuffer = "";
+String commandBuffer = "";  // reserve()d to MAX_COMMAND_LENGTH in setup() (V4)
+
+// The lowest free RAM seen since boot: the gap between the heap's top
+// (__brkval) and the stack pointer, sampled on every loop() pass and every
+// command (checklist V4). DIAG|HX711 reports it, so field logs show whether
+// heap pressure from the String command path is real before anyone rewrites
+// that path.
+#ifndef UNIT_TEST
+extern char __heap_start;
+extern char *__brkval;
+static int freeRamNow() {
+  char top;
+  return (int)(&top - (__brkval ? __brkval : &__heap_start));
+}
+#else
+int testFreeRam = 4096;  // native tests set the "measured" gap
+static int freeRamNow() { return testFreeRam; }
+#endif
+int minFreeRam = 32767;
+static void noteFreeRam() {
+  int freeBytes = freeRamNow();
+  if (freeBytes < minFreeRam) minFreeRam = freeBytes;
+}
 bool isCommandComplete = false;
 // Set when a line overflows commandBuffer: the rest of that line is
 // dropped up to its newline instead of being run as a new command.
@@ -254,6 +287,7 @@ void emitCmdError(const char *reason);
 void emitSafetyWarning(const char *reason);
 bool parseV2Frame(const String &raw, String &inner);
 bool isEmergencyBuffer(const String &b);
+bool isStatusAckBuffer(const String &b);
 
 // Debug tee. Every diagnostic the sketch used to print only on the USB
 // Serial (9600, nothing listening on the Pi in normal operation) now also
@@ -308,20 +342,19 @@ void exitSafeStart() {
   Wire.endTransmission();
 }
 
-// Set motor speed and direction. Returns the Wire::endTransmission() code
-// of the speed write (0 = acknowledged) so safety-critical callers can
-// notice a NACK/timeout instead of assuming the SMC took the command.
-uint8_t setMotorSpeed(int16_t speed) {
-  if (speed != 0 && pressureFault) return 0;
+// While set, writeMotorSpeed() does not log. emergencyStop() sets it so
+// that no debug output comes between its three stop writes (checklist V3).
+static bool quietSpeedLog = false;
+
+// Write a speed to the addressed SMC with no fault gate. Only the E-stop
+// release back-off calls this directly; every other caller goes through
+// setMotorSpeed, which refuses motion while a pressure fault is latched.
+// Returns the Wire::endTransmission() code (0 = acknowledged).
+static uint8_t writeMotorSpeed(int16_t speed) {
   // Clamp speed to valid range
   if (speed > 3200) speed = 3200;
   if (speed < -3200) speed = -3200;
-
-  // Log speed setting
-  Dbg.print("Set motor speed on: ");
-  Dbg.print(smcDeviceNumber);
-  Dbg.print(" at ");
-  Dbg.println(speed);
+  const int16_t requested = speed;
 
   // Determine direction
   uint8_t cmd = 0x85;  // Motor forward
@@ -336,7 +369,27 @@ uint8_t setMotorSpeed(int16_t speed) {
   Wire.write(cmd);
   Wire.write(speed & 0x1F);
   Wire.write(speed >> 5 & 0x7F);
-  return Wire.endTransmission();
+  uint8_t rc = Wire.endTransmission();
+
+  // Log after the write: USB Serial runs at 9600 baud (about 1 ms per byte)
+  // and print blocks once its 64-byte buffer is full, so logging first
+  // delayed every write, stops included (checklist V3).
+  if (!quietSpeedLog) {
+    Dbg.print("Set motor speed on: ");
+    Dbg.print(smcDeviceNumber);
+    Dbg.print(" at ");
+    Dbg.println(requested);
+  }
+  return rc;
+}
+
+// Set motor speed and direction. Returns the Wire::endTransmission() code
+// of the speed write (0 = acknowledged) so safety-critical callers can
+// notice a NACK/timeout instead of assuming the SMC took the command.
+// While a pressure fault is latched only zero speeds are written.
+uint8_t setMotorSpeed(int16_t speed) {
+  if (speed != 0 && pressureFault) return 0;
+  return writeMotorSpeed(speed);
 }
 
 // Read actuator position once over I2C; returns true on success
@@ -533,22 +586,24 @@ static void retryPendingStops() {
 
 // Emergency stop all actuators
 void emergencyStop() {
-  Dbg.println("Emergency Stop");
-
   // Aborted motion/pressure commands never get a DONE (v1 behavior);
   // drop the in-flight sequence so a later completion cannot echo it
   activeCmdSeq = -1;
 
+  // Every stop is written before any debug output. Printing between the
+  // axes used to hold the second and third stops behind the 9600-baud USB
+  // log, by tens of milliseconds once its buffer filled (checklist V3).
+  quietSpeedLog = true;
   stopDeviceOrReport(12);
-  Dbg.println("A stopped");
-
   stopDeviceOrReport(13);
-  Dbg.println("B stopped");
-
   stopDeviceOrReport(14);
-  Dbg.println("C stopped");
-
+  quietSpeedLog = false;
   stopFIT();
+
+  Dbg.println("Emergency Stop");
+  Dbg.println("A stopped");
+  Dbg.println("B stopped");
+  Dbg.println("C stopped");
   Dbg.println("FIT stopped");
 
   measurePressure = false;
@@ -576,17 +631,22 @@ void emergencyStopAndRelease(const char *reason) {
   if (releasingPressure)
     return;  // a release is already the active fault response
 
-  Dbg.print("Emergency stop + release: ");
-  Dbg.println(reason);
   Serial1.print("ERROR: ");
   Serial1.println(reason);
 
   emergencyStop();
+  // Logged after the stops, like emergencyStop()'s own lines (V3).
+  Dbg.print("Emergency stop + release: ");
+  Dbg.println(reason);
 
   releasingPressure = true;
   releaseStart = millis();
   smcDeviceNumber = 12;
-  setMotorSpeed(-PRESSURE_SPEED);  // negative = back off / reduce pressure
+  // Past the pressure-fault gate on purpose: a stop pressed after a fault
+  // latched (pressure limit, sensor timeout) used to leave the patient
+  // loaded, because setMotorSpeed silently ignored the back-off. The
+  // release stays bounded by load, travel (AZERO) and RELEASE_TIMEOUT.
+  writeMotorSpeed(-PRESSURE_SPEED);  // negative = back off / reduce pressure
 }
 
 // Advisory device notice. Warnings never alter motion or protocol state;
@@ -645,19 +705,36 @@ bool rejectIfStopEngaged() {
   return false;
 }
 
+// One hex digit's value, or -1.
+static int hexDigitValue(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  return -1;
+}
+
 // Parse "#<seq>:<CMD>*<XX>" into inner CMD; verifies the checksum.
 // Returns false (after emitting an error) on a malformed/corrupt frame.
+// Strict (checklist V6): <seq> is 1-9 decimal digits and <XX> exactly two
+// hex digits ending the line. strtol and toInt() used to accept "*5",
+// "*5zz" and "*zz" (read as 0), and a negative or partly numeric sequence;
+// a negative one then ran the command as v1.
 bool parseV2Frame(const String &raw, String &inner) {
   int colon = raw.indexOf(':');
   int star = raw.indexOf('*');
-  if (colon < 2 || star < colon + 2 || star + 1 >= (int)raw.length()) {
+  bool wellFormed = colon >= 2 && colon <= 10 && star >= colon + 2 &&
+                    star + 3 == (int)raw.length();
+  for (int i = 1; wellFormed && i < colon; i++)
+    wellFormed = raw.charAt(i) >= '0' && raw.charAt(i) <= '9';
+  int high = wellFormed ? hexDigitValue(raw.charAt(star + 1)) : -1;
+  int low = wellFormed ? hexDigitValue(raw.charAt(star + 2)) : -1;
+  if (high < 0 || low < 0) {
     currentCmdSeq = -1;
     emitCmdError("Malformed frame");
     return false;
   }
-  long seq = raw.substring(1, colon).toInt();
-  uint8_t expected =
-      (uint8_t)strtol(raw.substring(star + 1).c_str(), NULL, 16);
+  long seq = raw.substring(1, colon).toInt();  // only digits now
+  uint8_t expected = (uint8_t)(high << 4 | low);
   uint8_t actual = xorChecksum(raw, 1, (unsigned int)star);
   if (actual != expected) {
     currentCmdSeq = seq;
@@ -670,18 +747,30 @@ bool parseV2Frame(const String &raw, String &inner) {
   return true;
 }
 
+// The command letter of a pending line, plain ("X") or framed ("#12:X*5A");
+// '\0' when there is none.
+char bufferCommandLetter(const String &b) {
+  if (b.length() == 0)
+    return '\0';
+  if (b.charAt(0) != '#')
+    return b.charAt(0);
+  int colon = b.indexOf(':');
+  if (colon > 0 && colon + 1 < (int)b.length())
+    return b.charAt(colon + 1);
+  return '\0';
+}
+
 // Emergency stop must bypass the rate limiter whether framed or not
 bool isEmergencyBuffer(const String &b) {
-  if (b.length() == 0)
-    return false;
-  if (b.charAt(0) == 'X')
-    return true;
-  if (b.charAt(0) == '#') {
-    int colon = b.indexOf(':');
-    if (colon > 0 && colon + 1 < (int)b.length() && b.charAt(colon + 1) == 'X')
-      return true;
-  }
-  return false;
+  return bufferCommandLetter(b) == 'X';
+}
+
+// A status ack ('Q') bypasses it too. It only sets statusAcknowledged, and
+// the Pi writes it as soon as a status frame arrives, outside its own 0.22 s
+// pacing. Held as pending, it stopped bytes being read, so an 'X' right
+// behind it waited up to MIN_COMMAND_INTERVAL (checklist V1).
+bool isStatusAckBuffer(const String &b) {
+  return bufferCommandLetter(b) == 'Q';
 }
 
 // True if s is a plain decimal number (optional leading -, one optional .)
@@ -705,10 +794,11 @@ bool isNumeric(const String &s) {
   return seenDigit;
 }
 
-// Non-blocking load-cell sampling: one HX711 read when data is ready
-// (~10 Hz), saturation-rejected, median-of-3 filtered. Maintains the
-// global `pressure` (magnitude) and `signedPressure` without ever
-// stalling loop() the way blocking get_units() calls did.
+// Non-blocking load-cell sampling (servicePressure, below): one HX711 read
+// when data is ready (~10 Hz), saturation-rejected and not otherwise
+// filtered. Maintains the global `pressure` (magnitude) and
+// `signedPressure` without ever stalling loop() the way blocking
+// get_units() calls did.
 void reportFirmwareIdentity() {
   Serial1.print("FIRMWARE|");
   Serial1.print(VERSION);
@@ -733,7 +823,9 @@ void reportSensorDiagnostics() {
   Serial1.print("|");
   Serial1.print(lastPressureReadUs);
   Serial1.print("|");
-  Serial1.println(scale.is_ready() ? 1 : 0);
+  Serial1.print(scale.is_ready() ? 1 : 0);
+  Serial1.print("|");
+  Serial1.println(minFreeRam);  // bytes, lowest since boot (V4)
 }
 
 // Explicit, read-only service probe. A cached position cannot establish that
@@ -841,8 +933,39 @@ void tripPressureFault(const char *reason) {
   Serial1.println(pressure);
 }
 
+// `pressure` is a magnitude, so a negative reading (tension past zero, or
+// the zero drifting) used to count as load. Once it has stayed below
+// -NEGATIVE_LOAD_LBS for NEGATIVE_LOAD_SAMPLES samples, it latches
+// PRESSURE_NEGATIVE during a pressure move or pulsing, and otherwise warns
+// once until the reading recovers (checklist V2). True when it latched.
+bool checkNegativeLoad() {
+  if (!(pressureCalibrated || pressureGuardActive) ||
+      signedPressure >= -NEGATIVE_LOAD_LBS) {
+    negativeLoadSamples = 0;
+    negativeLoadWarned = false;
+    return false;
+  }
+  if (negativeLoadSamples < NEGATIVE_LOAD_SAMPLES)
+    ++negativeLoadSamples;
+  if (negativeLoadSamples < NEGATIVE_LOAD_SAMPLES)
+    return false;
+  if (measurePressure || jerking) {
+    tripPressureFault("PRESSURE_NEGATIVE");
+    return true;
+  }
+  if (!negativeLoadWarned) {
+    Serial1.println(F("WARNING: Load cell reads negative; re-tare"));
+    negativeLoadWarned = true;
+  }
+  return false;
+}
+
 void servicePressure() {
-  if (pressureFault) return;
+  // A latched fault stops pressure service, except while a release runs:
+  // the release needs fresh samples to see the load clear. Nothing else
+  // acts on them then (tripPressureFault is a no-op once latched, and
+  // emergencyStop cleared every pressure, pulse and tare mode).
+  if (pressureFault && !releasingPressure) return;
   unsigned long now = millis();
   // A fresh read must not erase a preceding sensor-service gap.
   if (pressureGuardActive && pressurePollStarted &&
@@ -886,6 +1009,8 @@ void servicePressure() {
       tripPressureFault("PRESSURE_LIMIT");
       return;
     }
+    if (checkNegativeLoad())
+      return;
     if (measurePressure &&
         ((pressureDirection > 0 && pressure >= desiredPressure) ||
          (pressureDirection < 0 && pressure <= desiredPressure + PRESSURE_TARGET_BAND))) {
@@ -958,7 +1083,9 @@ int positionMoveSpeed(uint8_t device) {
   return BC_SPEED;
 }
 
-void processCommand(String cmd) {
+// By reference: the caller's buffer used to be copied again on every call.
+void processCommand(const String &cmd) {
+  noteFreeRam();  // the command's Strings are live here
   if (cmd.length() == 0) return;
 
   // Validate command length
@@ -1113,7 +1240,11 @@ void processCommand(String cmd) {
             localPressure > MAX_PRESSURE_LBS ||
             !isfinite(localPressureLimit) || localPressureLimit < localPressure ||
             localPressureLimit > MAX_PRESSURE_LBS) {
-          tripPressureFault("PRESSURE_TARGET_INVALID");
+          // Rejected, like every other refused command, and nothing else
+          // changes: a running move goes on. This used to latch a pressure
+          // fault, stopping every axis with no release, so getting back
+          // needed a reset (checklist V5).
+          rejectCommand("P", "INVALID_TARGET");
           return;
         }
       }
@@ -1668,6 +1799,10 @@ void setup() {
   wdt_disable();  // a pending watchdog must not fire again mid-setup
 #endif
 
+  // One allocation up front: the buffer grows a byte at a time and used to
+  // reallocate as it did (checklist V4).
+  commandBuffer.reserve(MAX_COMMAND_LENGTH);
+
   // Join I2C bus as slave
   Wire.begin(0x8);
   // Wire busy-waits with no timeout by default; a wedged bus or dead
@@ -1737,6 +1872,8 @@ void loop() {
 #if ENABLE_WDT
   wdt_reset();
 #endif
+
+  noteFreeRam();
 
   // Read stop pin
   STOP = digitalRead(STOP_PIN);
@@ -1899,6 +2036,7 @@ void loop() {
     // (and its stop sent to the wrong SMC)
     smcDeviceNumber = runningDevice;
     uint16_t currentPos = readPosition();
+    bool stallTimedOut = false;
 
     if (positionReadValid) {
       // Debug output, rate-limited: this used to print every loop pass
@@ -1946,6 +2084,15 @@ void loop() {
           loopLastPosition = currentPos;
           loopStallStart = millis();
           positionStallWarningIssued = false;
+        } else if (millis() - loopStallStart >= POSITION_STALL_TIMEOUT_MS) {
+          // The warning alone never stopped a jammed move: the Pi treats
+          // "Motor stalled" as advisory. A stall that outlasts this ends
+          // the move with its own error, which the Pi handles as a fault.
+          uint8_t stalledDevice = runningDevice;
+          emergencyStop();
+          stallTimedOut = true;
+          Serial1.print(F("ERROR: Motor stall timeout "));
+          Serial1.println(stalledDevice);
         } else if (millis() - loopStallStart >= POSITION_STALL_MS &&
                    !positionStallWarningIssued) {
           emitSafetyWarning("Motor stalled");
@@ -1958,8 +2105,9 @@ void loop() {
     // iteration rather than acting on garbage (0 was both the error
     // value and a legal position)
 
-    // Cleanup after run complete
-    if (!bRunning && !pressureFault) {
+    // Cleanup after run complete. A stall timeout is not a completion:
+    // it must never report MOTION_DONE for the move it stopped.
+    if (!bRunning && !pressureFault && !stallTimedOut) {
       position = currentPos;
       reportPositionDone(positionCommandKind, desiredPosition, currentPos, activeCmdSeq);
       sendStatus();
@@ -1973,12 +2121,18 @@ void loop() {
     uint16_t currentPos = readPosition();
     smcDeviceNumber = savedDevice;
     if (!positionReadValid) tripPressureFault("POSITION_FEEDBACK_INVALID");
-    if (!pressureFault && measurePressure) {
-      if (pressureDirection > 0 && currentPos >= min(AXIAL_MAX_POS, 4095))
+    // Travel bounds hold in both pressure modes. A pulse push that lost its
+    // load used to run for up to PULSE_RECOVERY_TIMEOUT with no position
+    // bound; it now stops at the same limit as a pressure move.
+    if (!pressureFault) {
+      int axialDirection = measurePressure ? pressureDirection : jerkDirection;
+      if (axialDirection > 0 && currentPos >= min(AXIAL_MAX_POS, 4095))
         tripPressureFault("AXIAL_TRAVEL_LIMIT");
-      if (pressureDirection < 0 && currentPos <= (uint16_t)(AZERO + POSITION_DEADBAND) &&
+      if (axialDirection < 0 && currentPos <= (uint16_t)(AZERO + POSITION_DEADBAND) &&
           pressure > desiredPressure + PRESSURE_TARGET_BAND)
         tripPressureFault("AXIAL_HOME_BEFORE_PRESSURE_TARGET");
+    }
+    if (!pressureFault && measurePressure) {
       if (millis() - pressureMoveStarted >= PRESSURE_MOVE_TIMEOUT &&
           !pressureTimeoutWarningIssued) {
         emitSafetyWarning("Pressure move timeout approaching");
@@ -2041,12 +2195,16 @@ void loop() {
 
   // Process complete commands with rate limiting. 'X' (emergency stop)
   // is exempt from both the rate limiter and the status-in-progress
-  // gate: a stop must never wait in line behind an ack
+  // gate: a stop must never wait in line behind an ack. A status ack ('Q')
+  // is exempt too, and does not restart the limiter's window, so it can
+  // never hold up the next paced command either.
   if (isCommandComplete) {
     bool isEmergency = isEmergencyBuffer(commandBuffer);
-    if (isEmergency ||
+    bool isStatusAck = isStatusAckBuffer(commandBuffer);
+    if (isEmergency || isStatusAck ||
         (millis() - lastCommandTime > MIN_COMMAND_INTERVAL && !isProcessingStatus)) {
-      lastCommandTime = millis();
+      if (!isStatusAck)
+        lastCommandTime = millis();
       String execBuffer = commandBuffer;
       currentCmdSeq = -1;
       bool frameOk = true;

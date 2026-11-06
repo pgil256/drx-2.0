@@ -15,6 +15,7 @@ from helpers.treatment_session import TreatmentSession
 from kneespa import KneeSpa, _CloudBridge
 from fixtures.actuators import ControlsHarness
 from fixtures.controllers import make_stub
+from fixtures.motion import make_motion
 from fixtures.protocols import make_protocol
 
 pytestmark = pytest.mark.unit
@@ -79,56 +80,58 @@ def test_cancel_pending_after_physical_stop_does_not_send_x(protocol_v2: bool) -
 
 @pytest.mark.parametrize("key", ["axial", "horizontal", "lateral"])
 def test_setup_go_requires_valid_position_calibration(key: str) -> None:
-    window = make_stub()
-    window.config.marks_valid = False
-    window.shell.setup.row_value.return_value = 0
+    motion = make_motion(mock_controls=True)
+    motion.set_to_distance = MagicMock()
+    motion.set_to_c_distance = MagicMock()
+    motion.config.marks_valid = False
 
-    assert KneeSpa._on_setup_go(window, key) is False
+    assert motion.setup_go(key) is False
 
-    window._warn_uncalibrated.assert_called_once()
-    window.arduino.send.assert_not_called()
-    window.set_to_distance.assert_not_called()
-    window.set_to_c_distance.assert_not_called()
-    window.disable_actuator_controls.assert_not_called()
+    motion.view.warn_uncalibrated.assert_called_once()
+    motion.arduino.send.assert_not_called()
+    motion.set_to_distance.assert_not_called()
+    motion.set_to_c_distance.assert_not_called()
+    motion.disable_actuator_controls.assert_not_called()
 
 
 def test_setup_pressure_requires_scale_calibration() -> None:
-    window = make_stub()
-    window.config.scale_calibrated = False
-    window.shell.setup.row_value.return_value = 50
+    motion = make_motion(mock_controls=True)
+    motion.config.scale_calibrated = False
+    motion.view.row_value.return_value = 50
 
-    assert KneeSpa._apply_setup_pressure(window) is False
+    assert motion.apply_setup_pressure() is False
 
-    window._warn_uncalibrated.assert_called_once()
-    window.arduino.send.assert_not_called()
+    motion.view.warn_uncalibrated.assert_called_once()
+    motion.arduino.send.assert_not_called()
 
 
 def test_pressure_go_refuses_uncalibrated_scale_before_locking_controls() -> None:
-    window = make_stub()
-    window.config.scale_calibrated = False
+    motion = make_motion(mock_controls=True)
+    motion.apply_setup_pressure = MagicMock()
+    motion.config.scale_calibrated = False
 
-    assert KneeSpa._on_setup_go(window, "pressure") is False
+    assert motion.setup_go("pressure") is False
 
-    window._apply_setup_pressure.assert_not_called()
-    window.disable_actuator_controls.assert_not_called()
+    motion.apply_setup_pressure.assert_not_called()
+    motion.disable_actuator_controls.assert_not_called()
 
 
 def test_pressure_release_remains_available_without_calibration() -> None:
-    window = make_stub()
-    window.config.scale_calibrated = False
+    motion = make_motion(mock_controls=True)
+    motion.config.scale_calibrated = False
 
-    KneeSpa._setup_reset(window, "pressure")
+    motion.setup_reset("pressure")
 
-    window.arduino.send.assert_called_once_with("P0")
+    motion.arduino.send.assert_called_once_with("P0")
 
 
 def test_manual_axial_home_does_not_fabricate_zero_pressure() -> None:
-    window = make_stub()
+    motion = make_motion(mock_controls=True)
 
-    KneeSpa.reset_flexion_button_clicked(window, window.actuator_a)
+    motion.reset_flexion_button_clicked(motion.actuator_a)
 
-    window.arduino.send.assert_called_once_with("I120")
-    assert all(call[0][0] != "pressure" for call in window._reflect_setup.call_args_list)
+    motion.arduino.send.assert_called_once_with("I120")
+    assert all(call[0][0] != "pressure" for call in motion.view.show_position.call_args_list)
 
 
 def test_lateral_wait_exits_after_stop_during_pause(protocol_clock):
@@ -299,9 +302,10 @@ def test_pressure_release_cannot_automatically_reset_physical_stop() -> None:
     window._physical_stop_active = True
     controller = ProtocolController(window)
 
-    controller._reset_after_release(0)
+    controller.stops._reset_after_release(0)
 
     window.reset_arduino.assert_not_called()
+    window._show_rehome_prompt.assert_not_called()
 
 
 def test_reset_completion_after_physical_stop_does_not_restore_readiness(qtbot: QtBot) -> None:

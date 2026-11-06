@@ -264,10 +264,14 @@ class SimulatedController(ControllerModel):
             self._ack("BUSY", seq)
             return
         parts = command[1:].split("|")
-        target = float(parts[0])
-        limit = float(parts[1]) if len(parts) == 2 else target
+        try:
+            target = float(parts[0])
+            limit = float(parts[1]) if len(parts) == 2 else target
+        except ValueError:
+            target = limit = float("nan")  # fails the range check below
         if len(parts) > 2 or not 0 <= target <= limit <= 80:
-            self._trip("PRESSURE_TARGET_INVALID")
+            # Rejected, not latched as a fault (firmware V5).
+            self._reject("P", "INVALID_TARGET")
             return
         if self.plant.sensor_age > 0.5:
             self._trip("PRESSURE_SENSOR_TIMEOUT")

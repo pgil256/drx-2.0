@@ -1,6 +1,7 @@
 # development/tests/unit/test_connection_manager.py
 """Tests for the extracted Arduino connection lifecycle."""
 import threading
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +10,8 @@ from unittest.mock import MagicMock
 import controllers.connection_manager as cm_mod
 from config.constants import EMERGENCYSTOP
 from controllers.connection_manager import ConnectionManager
+from helpers.arduino import Arduino
+from PyQt5.QtCore import QThread
 from fixtures.controllers import ConnectionWindow as StubWindow
 
 
@@ -122,7 +125,7 @@ class TestResetGating:
         cm.reset_arduino()
 
         w.threadpool.start.assert_called_once()
-        assert any("EMERGENCYSTOP" in str(c) for c in cm.logger.error.call_args_list)
+        assert any("EMERGENCYSTOP" in str(c) for c in cm.logger.exception.call_args_list)
 
     def test_refused_reset_leaves_estop_line_alone(self, manager, monkeypatch):
         cm, w = manager
@@ -196,14 +199,78 @@ class TestThreadTeardown:
         w.arduino_thread.wait.return_value = True
         thread = w.arduino_thread
 
+        order = []
+        arduino.cancel_connect.side_effect = lambda: order.append("cancel")
+        arduino.disconnect.side_effect = lambda **kw: order.append("disconnect") or True
+
         assert cm.teardown_arduino(drain_timeout=1.5) is True
 
+        assert order == ["cancel", "disconnect"]  # V8: the connect loop first
         arduino.disconnect.assert_called_once_with(drain_timeout=1.5)
         thread.quit.assert_called_once()
         thread.wait.assert_called_once_with(3000)
         thread.deleteLater.assert_called_once()
         assert w.arduino is None
         assert w.arduino_thread is None
+
+    @pytest.mark.timeout(30)
+    @pytest.mark.parametrize("stage", ["boot_grace", "probing"])
+    def test_teardown_ends_a_connect_loop_that_gets_no_answer(self, qtbot, stage):
+        """V8: a real transport on its QThread, wired as setup_arduino wires
+        it, with a port whose probes are never answered. Teardown used to
+        time out after 3 s, keep the old references and leave the loop
+        retrying, reopening the port."""
+        opened = []
+
+        class SilentPort:
+            in_waiting = 0
+
+            def __init__(self, *args, **kwargs):
+                self.is_open = True
+                self.written = []
+                opened.append(self)
+
+            def write(self, data):
+                self.written.append(data)
+                return len(data)
+
+            def flush(self):
+                pass
+
+            def readline(self):
+                return b""
+
+            def close(self):
+                self.is_open = False
+
+        arduino = Arduino(transport_factory=SilentPort)
+        thread = QThread()
+        arduino.moveToThread(thread)
+        arduino.finished.connect(thread.quit)
+        thread.started.connect(arduino.run)
+        window = SimpleNamespace(arduino=arduino, arduino_thread=thread, logger=MagicMock())
+        thread.start()
+        try:
+            if stage == "boot_grace":
+                qtbot.waitUntil(lambda: len(opened) == 1, timeout=5000)
+            else:
+                qtbot.waitUntil(
+                    lambda: bool(opened) and b"T\n" in opened[-1].written, timeout=8000)
+
+            started = time.monotonic()
+            assert ConnectionManager(window).teardown_arduino() is True
+            assert time.monotonic() - started < 3.0
+            assert window.arduino is None and window.arduino_thread is None
+            # The loop has returned, so nothing can reopen the port, and the
+            # port it had open is closed.
+            assert len(opened) == 1
+            assert not opened[0].is_open
+        finally:
+            # A failed assertion must not leave the QThread running: Qt aborts
+            # the process when a running QThread is destroyed.
+            arduino.cancel_connect()
+            thread.quit()
+            thread.wait(15000)
 
     def test_teardown_ignores_inherited_qobject_thread_method(self, manager):
         """A fresh QMainWindow has thread(), but no owned Arduino QThread."""
