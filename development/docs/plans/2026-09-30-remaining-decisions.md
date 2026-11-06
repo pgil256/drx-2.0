@@ -98,6 +98,29 @@ with this flash.
   2. Press the physical stop.
   3. The axial actuator backs off. The log shows `RELEASED` once the load is
      under 5 lb, or `ERROR: Release incomplete` only at home or after 15 s.
+- **F3, travel limits while pulsing (2026-11-06).**
+  - **The bug:** the axial travel checks ran only during a pressure move,
+    not while pulsing. If the load dropped mid-pulse (the patient pulled
+    away, or the load cell read low), the push ran at pulse speed for up to
+    `PULSE_RECOVERY_TIMEOUT` (5 s) with no position bound.
+  - **The fix:** the pressure move's two checks now also apply to pulsing,
+    using the pulse direction:
+    - a push that reaches the axial travel limit (feedback 4095) latches
+      `FAULT|AXIAL_TRAVEL_LIMIT`;
+    - a release that reaches home (`AZERO` + 25 counts) while pressure is
+      still above target + 2 lb latches
+      `FAULT|AXIAL_HOME_BEFORE_PRESSURE_TARGET`.
+  - Both latch through `tripPressureFault`, which stops every axis. A release
+    that reaches home with the load gone keeps pulsing as before.
+  - No Pi change is needed: `helpers/firmware_protocol.py` turns every
+    `FAULT|<reason>|<target>|<pressure>` line into a controller fault,
+    whatever the reason.
+  - **`VERSION`** is unchanged. It is the same batch.
+- **Image after F3:** flash 34,202 bytes, RAM 2,694 bytes (local WSL build,
+  sha256 `416eabfa23edb9530cb1b5867a0a27a2828e2bde8aa8d5ed80f0fae3cbf1f26a`).
+- **Bench check for F3:** a pulsed treatment on a test load completes as
+  before, with no `AXIAL_` faults in the Arduino log. Do not provoke the
+  limits with a patient on the device.
 
 ## 2. UI changes to look at on the Pi or simulator
 

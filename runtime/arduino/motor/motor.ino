@@ -1990,12 +1990,18 @@ void loop() {
     uint16_t currentPos = readPosition();
     smcDeviceNumber = savedDevice;
     if (!positionReadValid) tripPressureFault("POSITION_FEEDBACK_INVALID");
-    if (!pressureFault && measurePressure) {
-      if (pressureDirection > 0 && currentPos >= min(AXIAL_MAX_POS, 4095))
+    // Travel bounds hold in both pressure modes. A pulse push that lost its
+    // load used to run for up to PULSE_RECOVERY_TIMEOUT with no position
+    // bound; it now stops at the same limit as a pressure move.
+    if (!pressureFault) {
+      int axialDirection = measurePressure ? pressureDirection : jerkDirection;
+      if (axialDirection > 0 && currentPos >= min(AXIAL_MAX_POS, 4095))
         tripPressureFault("AXIAL_TRAVEL_LIMIT");
-      if (pressureDirection < 0 && currentPos <= (uint16_t)(AZERO + POSITION_DEADBAND) &&
+      if (axialDirection < 0 && currentPos <= (uint16_t)(AZERO + POSITION_DEADBAND) &&
           pressure > desiredPressure + PRESSURE_TARGET_BAND)
         tripPressureFault("AXIAL_HOME_BEFORE_PRESSURE_TARGET");
+    }
+    if (!pressureFault && measurePressure) {
       if (millis() - pressureMoveStarted >= PRESSURE_MOVE_TIMEOUT &&
           !pressureTimeoutWarningIssued) {
         emitSafetyWarning("Pressure move timeout approaching");
