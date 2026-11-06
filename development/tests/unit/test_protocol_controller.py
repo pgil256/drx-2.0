@@ -583,7 +583,7 @@ class TestReleaseBeforeRehome:
     def test_prompt_waits_while_load_present(self, controller):
         pc, w = controller
         w.last_measured_pressure = 30.0
-        pc._stop_phase3()
+        pc.stops._stop_phase3()
         w._show_rehome_prompt.assert_not_called()
         w.reset_arduino.assert_not_called()
 
@@ -591,7 +591,7 @@ class TestReleaseBeforeRehome:
         pc, w = controller
         w.protocol_state = "stopping"
         w.last_measured_pressure = 1.0
-        pc._stop_phase3()
+        pc.stops._stop_phase3()
         w._show_rehome_prompt.assert_called_once_with(True)
         # Nothing homes without the operator: no automatic reset.
         w.reset_arduino.assert_not_called()
@@ -604,7 +604,7 @@ class TestReleaseBeforeRehome:
     def test_asks_immediately_without_telemetry(self, controller):
         pc, w = controller
         w.last_measured_pressure = None  # no status frame ever arrived
-        pc._stop_phase3()
+        pc.stops._stop_phase3()
         w._show_rehome_prompt.assert_called_once_with(True)
         w.reset_arduino.assert_not_called()
 
@@ -613,36 +613,36 @@ class TestReleaseBeforeRehome:
 
         pc, w = controller
         w.last_measured_pressure = 30.0
-        pc._reset_after_release(started=_time.time() - pc.RELEASE_WAIT_S - 1)
+        pc.stops._reset_after_release(started=_time.time() - pc.stops.RELEASE_WAIT_S - 1)
         w._show_rehome_prompt.assert_called_once_with(False)
         w.reset_arduino.assert_not_called()
 
     def test_emergency_stop_phase3_also_waits(self, controller):
         pc, w = controller
         w.last_measured_pressure = 30.0
-        pc._emergency_stop_phase3()
+        pc.stops._emergency_stop_phase3()
         w._show_rehome_prompt.assert_not_called()
         w.reset_arduino.assert_not_called()
 
     def test_emergency_stop_phase3_asks_once_released(self, controller):
         pc, w = controller
         w.last_measured_pressure = 0.5
-        pc._emergency_stop_phase3()
+        pc.stops._emergency_stop_phase3()
         w._show_rehome_prompt.assert_called_once_with(True)
         w.reset_arduino.assert_not_called()
 
     def test_waits_for_a_cancelled_reset_then_asks(self, controller, monkeypatch):
         """Stop during a reset cancels it; the prompt follows its failure."""
-        from controllers import protocol_controller as pc_mod
+        from controllers import stop_controller as sc_mod
 
         pc, w = controller
         polls = []
-        monkeypatch.setattr(pc_mod.QTimer, "singleShot",
+        monkeypatch.setattr(sc_mod.QTimer, "singleShot",
                             lambda ms, callback: polls.append(callback))
         w.protocol_state = "stopping"
         w.reset_in_progress = True
         w.last_measured_pressure = 0.0
-        pc._stop_phase3()
+        pc.stops._stop_phase3()
         w._show_rehome_prompt.assert_not_called()
         assert len(polls) == 1
         w.reset_in_progress = False
@@ -655,7 +655,7 @@ class TestReleaseBeforeRehome:
         pc, w = controller
         w.protocol_state = "idle"  # an operator reset completed meanwhile
         w.last_measured_pressure = 0.0
-        pc._stop_phase3()
+        pc.stops._stop_phase3()
         w._show_rehome_prompt.assert_not_called()
         assert w.initial_setup_complete is True
 
@@ -665,7 +665,7 @@ class TestReleaseBeforeRehome:
         w.protocol_state = "stopping"
         w.protocol_stop_requested = True
         w.last_measured_pressure = 0.0
-        pc._stop_phase3()
+        pc.stops._stop_phase3()
         pc.protocol_completed(True)
         assert w.protocol_state == "fault"
         assert w.initial_setup_complete is False

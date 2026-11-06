@@ -299,7 +299,7 @@ def test_pressure_release_cannot_automatically_reset_physical_stop() -> None:
     window._physical_stop_active = True
     controller = ProtocolController(window)
 
-    controller._reset_after_release(0)
+    controller.stops._reset_after_release(0)
 
     window.reset_arduino.assert_not_called()
     window._show_rehome_prompt.assert_not_called()
