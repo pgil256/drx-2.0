@@ -30,7 +30,9 @@ def _diagnostic_warning(message: str) -> None:
         if sys.__stderr__ is not None:
             sys.__stderr__.write(message + "\n")
             sys.__stderr__.flush()
-    except Exception:
+    # The last-resort report: there is nowhere left to send its own failure,
+    # and a logging failure must never reach the code that logged.
+    except Exception:  # noqa: BLE001, S110
         pass
 
 
@@ -122,7 +124,8 @@ class LogRetention:
                     self._warn(exc)
                     continue
                 total -= size
-        except Exception as exc:
+        # Runs inside a log handler: report once via _warn, never to the caller.
+        except Exception as exc:  # noqa: BLE001
             self._warn(exc)
         finally:
             self._lock.release()
@@ -187,7 +190,7 @@ class DiagnosticFileHandler(logging.FileHandler):
             self.flush()
             if self.retention is not None:
                 self.retention.cleanup(force=rotated)
-        except Exception:
+        except Exception:  # noqa: BLE001 - logging.Handler.emit contract: any failure goes to handleError
             self.handleError(record)
 
     def handleError(self, record: logging.LogRecord) -> None:
@@ -369,7 +372,7 @@ class LoggerSetup:
         safe_data = str(data).replace("\r", "\\r").replace("\n", "\\n")
         try:
             self.serial_logger.info("%s %s", direction, safe_data)
-        except Exception:
+        except Exception:  # noqa: BLE001, S110
             # Diagnostics must not prevent a command from being sent or parsed.
             pass
 

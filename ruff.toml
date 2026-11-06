@@ -47,7 +47,6 @@ select = [
 "runtime/raspberry-pi/main/controllers/safety_monitor.py" = ["BLE001", "S110"]
 "runtime/raspberry-pi/main/helpers/cloud_client.py" = ["BLE001", "S110"]
 "runtime/raspberry-pi/main/helpers/device_system.py" = ["BLE001", "S110"]
-"runtime/raspberry-pi/main/helpers/logging.py" = ["BLE001", "S110"]
 "runtime/raspberry-pi/main/helpers/machine_sign_in.py" = ["BLE001", "S110"]
 "runtime/raspberry-pi/main/helpers/release_client.py" = ["BLE001", "S110"]
 "runtime/raspberry-pi/main/helpers/staff_client.py" = ["BLE001", "S110"]
