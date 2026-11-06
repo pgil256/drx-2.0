@@ -253,6 +253,14 @@ emergency stop. Enabling protocol v2 (`KNEESPA_PROTOCOL_V2=1`) adds a
 checksum to every command so a corrupted digit that still parses is also
 caught and resent rather than executed.
 
+Position moves (`I`, `K`, `A`) also have a deadline: |target − start| × 3 ÷
+the expected speed at the slowest motor setting (A 40, B 50, C 70 counts/s),
+plus 5 s. A move that has not arrived by then is stopped on its own axis and
+ended with `ERR|<seq>|POSITION_MOVE_TIMEOUT` (`ERROR: POSITION_MOVE_TIMEOUT`
+unframed). This is not a parse rejection, so it is never resent, and nothing
+latches. The 20 s `Motor stalled` notice stays advisory. The C speed is
+measured; A and B are provisional until measured at speed 800.
+
 Protocol v2 (per-command sequence numbers + XOR checksums on commands
 and status frames) is built into the firmware and the Pi transport but
 disabled by default; enable with `KNEESPA_PROTOCOL_V2=1` after the
