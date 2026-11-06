@@ -5,13 +5,15 @@ from unittest.mock import MagicMock
 from PyQt5.QtWidgets import QPushButton
 from pytestqt.qtbot import QtBot
 
+from controllers.device_state import DeviceStateAttributes
 from kneespa import KneeSpa
 
 
-class ControlsHarness:
+class ControlsHarness(DeviceStateAttributes):
     """Bare object exposing only the state the control-gating methods use.
 
-    Binds the real KneeSpa methods without constructing the full UI.
+    Binds the real KneeSpa methods without constructing the full UI. The
+    window's device flags live in a DeviceState, as on the real window.
     """
 
     disable_actuator_controls = KneeSpa.disable_actuator_controls

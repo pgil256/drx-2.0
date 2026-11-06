@@ -87,6 +87,7 @@ from helpers.cloud_client import CloudClient
 from helpers.cloud_contract import cloud_error_message, validate_patient
 from controllers.hardware_service_controller import HardwareServiceController
 from controllers.device_controller import DeviceController
+from controllers.device_state import DeviceStateAttributes
 from controllers.linked_patient import link_patient, unlink_patient
 from controllers.patient_controller import PatientController
 from controllers.machine_sign_in_controller import MachineSignInController, authorize
@@ -134,7 +135,7 @@ class _CloudBridge(QObject):
 
 
 # Main Python class
-class KneeSpa(QMainWindow):
+class KneeSpa(DeviceStateAttributes, QMainWindow):
     """Main application class for KneeSpa."""
 
     support_email_result = pyqtSignal(bool, str)
@@ -568,14 +569,7 @@ class KneeSpa(QMainWindow):
         KneeSpa._stop_motion_watchdog(self)
         if getattr(getattr(self, "leg", None), "active", False) is True:
             return
-        if (getattr(self, "_calibration_active", False) is True
-                or getattr(self, "_device_maintenance_active", False) is True):
-            return
-        if (
-            self.reset_in_progress
-            or not self.initial_setup_complete
-            or self.protocol_state == "fault"
-        ):
+        if not self.device_state.can_move():
             return
         self.actuator_command_in_progress = False
         if self.protocol_running == False:
@@ -1223,10 +1217,7 @@ class KneeSpa(QMainWindow):
         return self.protocol.confirm_leave_treatment(source_page, destination_page)
 
     def _block_active_treatment_exit(self) -> bool:
-        if any(getattr(self, name, False) is True for name in (
-            "_device_maintenance_active", "_calibration_active", "reset_in_progress",
-            "actuator_command_in_progress",
-        )):
+        if not self.device_state.can_exit():
             self._show_timed_error("Finish movement, reset or device service before leaving.")
             return True
         return self.protocol.block_active_treatment_exit()
