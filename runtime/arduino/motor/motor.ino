@@ -224,6 +224,9 @@ const unsigned long HIGH_FREQ_INTERVAL = 1000; // ms for frequent updates (adjus
 // Command handling
 String commandBuffer = "";
 bool isCommandComplete = false;
+// One complete command waiting out MIN_COMMAND_INTERVAL while reading continues
+// (isCommandComplete says the slot is full).
+String pendingCommand = "";
 // Set when a line overflows commandBuffer: the rest of that line is
 // dropped up to its newline instead of being run as a new command.
 bool discardingOverlongCommand = false;
@@ -254,6 +257,9 @@ void emitCmdError(const char *reason);
 void emitSafetyWarning(const char *reason);
 bool parseV2Frame(const String &raw, String &inner);
 bool isEmergencyBuffer(const String &b);
+void handleCompleteLine(const String &line);
+void processCommand(String cmd);
+void executeLine(const String &line, bool countsForRateLimit);
 
 // Debug tee. Every diagnostic the sketch used to print only on the USB
 // Serial (9600, nothing listening on the Pi in normal operation) now also
@@ -668,6 +674,76 @@ bool parseV2Frame(const String &raw, String &inner) {
   currentCmdSeq = seq;
   inner = raw.substring(colon + 1, star);
   return true;
+}
+
+// The command inside a plain or v2-framed line ("#<seq>:<CMD>*<XX>"),
+// trimmed and unverified: only used to decide whether a line may skip the
+// queue. The frame is checked when the line runs.
+String lineCommand(const String &line) {
+  String cmd = line;
+  if (line.charAt(0) == '#') {
+    int colon = line.indexOf(':');
+    int star = line.indexOf('*');
+    cmd = (colon > 0 && star > colon) ? line.substring(colon + 1, star) : String("");
+  }
+  cmd.trim();
+  return cmd;
+}
+
+long lineSeq(const String &line) {
+  if (line.charAt(0) != '#') return -1;
+  int colon = line.indexOf(':');
+  return colon > 1 ? line.substring(1, colon).toInt() : -1;
+}
+
+// Run one complete line: verify a v2 frame, then process it.
+void executeLine(const String &line, bool countsForRateLimit) {
+  if (countsForRateLimit)
+    lastCommandTime = millis();
+  String execBuffer = line;
+  currentCmdSeq = -1;
+  bool frameOk = true;
+  if (line.charAt(0) == '#')
+    frameOk = parseV2Frame(line, execBuffer);
+  if (frameOk)
+    processCommand(execBuffer);
+  currentCmdSeq = -1;
+}
+
+// One complete line from the host. X and JS run at once, ahead of the rate
+// limiter and the status-in-progress gate. Q only sets a flag, and queued it
+// would take the slot from a real command behind it. Anything else runs now
+// if the limiter allows, else waits in the one slot; a second waiting
+// command is dropped with BUSY.
+void handleCompleteLine(const String &line) {
+  String cmd = lineCommand(line);
+  if (isEmergencyBuffer(line) || cmd == "JS") {
+    if (isCommandComplete) {
+      // The waiting command was sent before this stop: it must never run
+      // after it and restart motion.
+      currentCmdSeq = lineSeq(pendingCommand);
+      emitCmdError("Superseded by stop");
+      currentCmdSeq = -1;
+      pendingCommand = "";
+      isCommandComplete = false;
+    }
+    executeLine(line, true);
+    return;
+  }
+  if (cmd == "Q") {
+    executeLine(line, false);
+    return;
+  }
+  if (isCommandComplete) {
+    emitAck("BUSY", lineSeq(line));
+    return;
+  }
+  if (millis() - lastCommandTime > MIN_COMMAND_INTERVAL && !isProcessingStatus) {
+    executeLine(line, true);
+    return;
+  }
+  pendingCommand = line;
+  isCommandComplete = true;
 }
 
 // Emergency stop must bypass the rate limiter whether framed or not
@@ -2002,14 +2078,11 @@ void loop() {
 
   retryPendingStops();
 
-  // Command reading and processing - IMPROVED buffer handling
+  // Command reading. Reading never pauses while a command waits out the
+  // rate limit, so a stop behind it is never held up. Each line is handled
+  // on its own: bytes are never appended to a line that already ended (that
+  // used to merge "Q"+"X" into "QX", discarding an emergency stop).
   while (Serial1.available() > 0) {
-    // Never append bytes to an already-complete command: under the rate
-    // limiter this used to merge two commands into one corrupt string
-    // (e.g. "Q"+"X" -> "QX", silently discarding an emergency stop)
-    if (isCommandComplete)
-      break;
-
     char incomingByte = Serial1.read();
     lastHostTraffic = millis();  // any host byte feeds the heartbeat
 
@@ -2018,8 +2091,9 @@ void loop() {
       // nothing from that line runs.
       discardingOverlongCommand = false;
       if (commandBuffer.length() > 0) { // Only process non-empty commands
-        isCommandComplete = true;
-        break;
+        String line = commandBuffer;
+        commandBuffer = "";
+        handleCompleteLine(line);
       }
     } else if (discardingOverlongCommand) {
       // Drop the rest of an overlong line. Its tail used to collect in
@@ -2039,24 +2113,12 @@ void loop() {
     }
   }
 
-  // Process complete commands with rate limiting. 'X' (emergency stop)
-  // is exempt from both the rate limiter and the status-in-progress
-  // gate: a stop must never wait in line behind an ack
-  if (isCommandComplete) {
-    bool isEmergency = isEmergencyBuffer(commandBuffer);
-    if (isEmergency ||
-        (millis() - lastCommandTime > MIN_COMMAND_INTERVAL && !isProcessingStatus)) {
-      lastCommandTime = millis();
-      String execBuffer = commandBuffer;
-      currentCmdSeq = -1;
-      bool frameOk = true;
-      if (commandBuffer.charAt(0) == '#')
-        frameOk = parseV2Frame(commandBuffer, execBuffer);
-      if (frameOk)
-        processCommand(execBuffer);
-      currentCmdSeq = -1;
-      commandBuffer = "";
-      isCommandComplete = false;
-    }
+  // Run the waiting command once the rate limit allows.
+  if (isCommandComplete && millis() - lastCommandTime > MIN_COMMAND_INTERVAL &&
+      !isProcessingStatus) {
+    String line = pendingCommand;
+    pendingCommand = "";
+    isCommandComplete = false;
+    executeLine(line, true);
   }
 }

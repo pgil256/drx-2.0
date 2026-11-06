@@ -45,7 +45,7 @@ void setUp(void) {
     axialSpeed = PRESSURE_SPEED; lateralSpeed = C_SPEED; pulseSpeed = TREATMENT_SPEED_MAX;
     scale._ready = true; scale._scale = 1; scale._offset = 0; scale._raw = 0;
     STOP = true; _pin_levels[STOP_PIN] = HIGH;
-    commandBuffer = ""; isCommandComplete = false;
+    commandBuffer = ""; isCommandComplete = false; pendingCommand = "";
     discardingOverlongCommand = false; lastCommandTime = 0;
     _millis_value = 0;
     jerkInterval = 200;  // mutable since Phase 3.5 (J<ms>); reset between tests
