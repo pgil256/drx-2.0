@@ -6,11 +6,31 @@ support accordion), the modal overlays, and the drawn icon / glyph helpers.
 conftest forces QT_QPA_PLATFORM=offscreen; no backend is involved.
 """
 
+import os
 from unittest.mock import MagicMock
 
 import pytest
 
 pytestmark = pytest.mark.integration
+
+
+@pytest.fixture(autouse=True)
+def stand_in_clips(monkeypatch, tmp_path_factory):
+    """Point every test at playable stand-ins named like the shipped clips.
+
+    The shipped clips are Git LFS objects. A checkout without `git lfs pull`
+    (CI, fresh worktrees) holds ~130-byte pointer stubs, which the player
+    correctly skips, so no test may depend on the real folder's contents.
+    Tests that need a specific folder still set UI_PATHS["VIDEOS"] themselves.
+    """
+    from config.constants import UI_PATHS
+
+    shipped = UI_PATHS["VIDEOS"]
+    clips = tmp_path_factory.mktemp("stand-in-clips")
+    for name in os.listdir(shipped):
+        if name.lower().endswith(".mp4"):
+            (clips / name).write_bytes(b"\x00" * 2048)
+    monkeypatch.setitem(UI_PATHS, "VIDEOS", str(clips))
 
 
 @pytest.fixture
@@ -19,22 +39,8 @@ def app(themed_app):
 
 
 @pytest.fixture
-def shell(app, monkeypatch, tmp_path):
-    import os
-
-    from config.constants import UI_PATHS
+def shell(app):
     from ui.app_shell import AppShell
-
-    # Stand-ins named like the shipped clips: a checkout without `git lfs pull`
-    # (CI, fresh worktrees) holds a pointer stub for the large video, which the
-    # library correctly skips, so the real folder's contents vary by checkout.
-    shipped = UI_PATHS["VIDEOS"]
-    clips = tmp_path / "videos"
-    clips.mkdir()
-    for name in os.listdir(shipped):
-        if name.lower().endswith(".mp4"):
-            (clips / name).write_bytes(b"\x00" * 2048)
-    monkeypatch.setitem(UI_PATHS, "VIDEOS", str(clips))
 
     s = AppShell()
     s.resize(1366, 768)

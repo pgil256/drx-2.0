@@ -68,9 +68,11 @@ from config.constants import (
     PROTOCOL_MINUTES_MIN,
     PROTOCOL_MINUTES_MAX,
     DATA_PATHS,
+    SETUP_MOTION_DONE_TIMEOUT_S,
 )
 
 from ui.modals.pressure_notice import PressureNotice
+from ui.modals.rehome_prompt import RehomePrompt
 from ui.modals.upload_error import UploadErrorDialog
 from config.config import Configuration
 from helpers.csv import CSVHelper
@@ -98,7 +100,7 @@ from helpers.watchdog import extend_watchdog_for_shutdown, start_watchdog
 # Modern view layer — the composition root for chrome + screens + modals.
 from ui.app_shell import AppShell
 from ui.measurements import calibrated_reading
-from ui.presentation import device_presentation
+from ui.presentation import device_presentation, present
 from ui.widgets.loading_spinner import LoadingSpinner
 from ui.widgets.treatment_status_panel import TreatmentStatusPanel
 
@@ -253,6 +255,7 @@ class KneeSpa(QMainWindow):
         self.reset_in_progress = False  # Flag to prevent overlapping resets
         self.actuator_command_in_progress = False  # Prevents simultaneous actuator commands
         self.controls_enable_timer = None  # Single pending-enable timer for all controls
+        self._motion_watchdog = None  # Backstop for a Setup move whose DONE never arrives
         self.mid_protocol_warning_shown = False
         self.protocol_stop_requested = False
         self._physical_stop_active = False
@@ -455,11 +458,9 @@ class KneeSpa(QMainWindow):
 
     def _set_badge(self, connected):
         """Reflect Arduino connectivity on the Setup header badge."""
-        try:
-            self.shell.setup.set_arduino_connected(connected)
-            self._refresh_device_presentation()
-        except Exception:
-            pass
+        present(self.logger, "Setup connection badge",
+                lambda: self.shell.setup.set_arduino_connected(connected))
+        present(self.logger, "device status", self._refresh_device_presentation)
 
     def _refresh_device_presentation(self) -> None:
         """Present controller readiness without modifying device operation."""
@@ -475,10 +476,8 @@ class KneeSpa(QMainWindow):
 
     def _reflect_setup(self, key, value):
         """Reflect a commanded target without claiming that a sensor measured it."""
-        try:
-            self.shell.setup.set_position(key, value)
-        except Exception:
-            pass
+        present(self.logger, "Setup position",
+                lambda: self.shell.setup.set_position(key, value))
 
     def _send_motion_command(self, command, context):
         """Queue a Setup motion without fabricating success in the UI."""
@@ -494,6 +493,10 @@ class KneeSpa(QMainWindow):
             queued = False
             self.logger.error("Could not queue %s command %s: %s", context, command, exc)
         if queued:
+            # Position (A/I/K) and pressure (P) moves re-enable the controls
+            # only on the firmware's DONE; F0 is a stop the leg controller owns.
+            if command[:1] in ("A", "I", "K", "P"):
+                KneeSpa._arm_motion_watchdog(self)
             return True
 
         self.logger.error("Could not queue %s command %s", context, command)
@@ -505,9 +508,52 @@ class KneeSpa(QMainWindow):
         self.loading_spinner.hide()
         return False
 
+    def _arm_motion_watchdog(self):
+        """Start the backstop for a queued Setup move awaiting its DONE."""
+        KneeSpa._stop_motion_watchdog(self)
+        # Parent it to the window so it cannot outlive it.
+        timer = QTimer(self) if isinstance(self, QObject) else QTimer()
+        timer.setSingleShot(True)
+        timer.timeout.connect(lambda: KneeSpa._on_motion_watchdog(self))
+        timer.start(int(SETUP_MOTION_DONE_TIMEOUT_S * 1000))
+        self._motion_watchdog = timer
+
+    def _stop_motion_watchdog(self):
+        timer = getattr(self, "_motion_watchdog", None)
+        if timer is not None:
+            timer.stop()
+            self._motion_watchdog = None
+
+    def _on_motion_watchdog(self):
+        """No DONE for a Setup move: hand the controls back to the operator.
+
+        Without this a lost DONE kept actuator_command_in_progress set, which
+        also blocks logout and exit. enable_actuator_controls keeps its own
+        guards, so a reset, service session or fault still owns the controls.
+        """
+        self._motion_watchdog = None
+        # Read every flag with a default: this fires from a timer, where an
+        # exception would only reach the excepthook and leave controls locked.
+        if (getattr(self, "actuator_command_in_progress", False) is not True
+                or getattr(self, "_closing", False) is True
+                or getattr(self, "protocol_running", False) is True):
+            return
+        self.logger.error(
+            "No DONE from the device within %s s of a Setup move; re-enabling controls",
+            SETUP_MOTION_DONE_TIMEOUT_S,
+        )
+        self.loading_spinner.hide()
+        self._show_timed_error(
+            "The device did not report that the movement finished. "
+            "Check the device before moving again."
+        )
+        self.enable_actuator_controls()
+
     ### UI Methods ###
 
     def disable_actuator_controls(self):
+        # A new command or operation supersedes any pending move's backstop.
+        KneeSpa._stop_motion_watchdog(self)
         # Cancel any pending enable so it cannot fire mid-command and
         # re-enable controls while the MCU is still busy
         if self.controls_enable_timer is not None:
@@ -518,6 +564,8 @@ class KneeSpa(QMainWindow):
             w.setEnabled(False)
 
     def enable_actuator_controls(self):
+        # Completion (or an owner taking over) ends the pending move's backstop.
+        KneeSpa._stop_motion_watchdog(self)
         if getattr(getattr(self, "leg", None), "active", False) is True:
             return
         if (getattr(self, "_calibration_active", False) is True
@@ -772,12 +820,15 @@ class KneeSpa(QMainWindow):
         try:
             vals = self.shell.treatment.settings_values()
         except Exception:
+            # The run keeps the previous settings snapshot.
+            self.logger.exception("Could not read the Treatment settings")
             return
         self._prev_settings = dict(vals)
         try:
             self.protocol_value = str(self.shell.treatment.selected_protocol())
         except Exception:
-            pass
+            self.logger.exception("Could not read the selected protocol; keeping %s",
+                                  self.protocol_value)
         rate = vals.get("pulse_rate", 0) or 0
         self.current_pulse_rate = rate if rate > 0 else None
         self.current_use_pulse_setting = rate > 0
@@ -887,6 +938,7 @@ class KneeSpa(QMainWindow):
 
         self.loading_spinner.show()
         self.disable_actuator_controls()
+        moved = False
         try:
             if key == "axial":
                 inches = self.shell.setup.row_value("axial")
@@ -913,13 +965,19 @@ class KneeSpa(QMainWindow):
                 self.lateral_flexion_position = degrees
                 self._reflect_setup("lateral", degrees)
             elif key == "pressure":
-                return self._apply_setup_pressure()
+                moved = self._apply_setup_pressure()
+                return moved
+            moved = True
             return True
         except Exception as e:
             self.logger.error("Error in Setup Go: %s", e)
             self._show_timed_error(f"Error moving actuator: {str(e)}")
         finally:
             self.loading_spinner.hide()
+            if not moved:
+                # Nothing is moving, so no DONE will re-enable the controls.
+                # Leaving them disabled also blocked logout and exit.
+                self.enable_actuator_controls()
 
     def _apply_setup_pressure(self):
         """Setup pressure Go: clamp to [MIN_PRESSURE, PRESSURE_MAX] and send P."""
@@ -998,10 +1056,8 @@ class KneeSpa(QMainWindow):
         if self.current_user is None:
             # Specifics (lockout countdown, etc.) arrive via the timed error
             # box; the modal shows the inline generic failure.
-            try:
-                self.shell.login_failed("Invalid PIN. Please try again.")
-            except Exception:
-                pass
+            present(self.logger, "login failure message",
+                    lambda: self.shell.login_failed("Invalid PIN. Please try again."))
 
     def _on_logout(self):
         if self._block_active_treatment_exit():
@@ -1013,7 +1069,8 @@ class KneeSpa(QMainWindow):
         try:
             unlink_patient(self)
         except Exception:
-            pass
+            # Logout continues, but a patient left linked must be visible.
+            self.logger.exception("Could not unlink the patient at logout")
         self.shell.logout()
 
     def _on_exit_app(self):
@@ -1243,7 +1300,7 @@ class KneeSpa(QMainWindow):
             if getattr(self, "_calibration_active", False) is True:
                 self.hardware_service.shutdown()
             for name in ("protocol_timer", "controls_enable_timer", "_cloud_retry_timer",
-                         "_pressure_state_timer"):
+                         "_pressure_state_timer", "_motion_watchdog"):
                 timer = getattr(self, name, None)
                 if timer is not None:
                     timer.stop()
@@ -1326,9 +1383,17 @@ class KneeSpa(QMainWindow):
             self.loading_spinner.show()
             self.disable_actuator_controls()
 
-            position = horizontal_degrees_to_position(
-                self.config.BMarks, new_position
-            )
+            # Same handling as the lateral branch: invalid BMarks used to raise
+            # out of this slot with the controls already disabled.
+            try:
+                position = horizontal_degrees_to_position(
+                    self.config.BMarks, new_position
+                )
+            except ValueError as e:
+                self.logger.error("Invalid horizontal position: %s", e)
+                self.enable_actuator_controls()
+                self.loading_spinner.hide()
+                return
             command = f"I13{position}"
             if not KneeSpa._send_motion_command(
                 self, command, "horizontal movement"
@@ -1593,10 +1658,8 @@ class KneeSpa(QMainWindow):
         Treatment screen's inline progress ring."""
         if self.protocol_start_time:
             elapsed = int(time.time() - self.protocol_start_time)
-            try:
-                self.shell.treatment.set_progress(elapsed, self.protocol_duration)
-            except Exception:
-                pass
+            present(self.logger, "treatment progress",
+                    lambda: self.shell.treatment.set_progress(elapsed, self.protocol_duration))
         self.protocol.update_protocol_time()
 
     def _confirm_mid_protocol_change(self) -> bool:
@@ -1715,6 +1778,38 @@ class KneeSpa(QMainWindow):
         self._pressure_notice = box
         box.destroyed.connect(lambda: setattr(self, "_pressure_notice", None))
 
+    def _show_rehome_prompt(self, load_cleared: bool = True) -> None:
+        """Ask before homing after an on-screen STOP; nothing moves on a timer."""
+        if self._closing:
+            return
+        existing = getattr(self, "_rehome_prompt", None)
+        if existing is not None and existing.isVisible():
+            return
+        box = RehomePrompt(load_cleared, self)
+        box.rehome_requested.connect(self._on_rehome_requested)
+        box.show()
+        self._rehome_prompt = box
+        box.destroyed.connect(lambda: setattr(self, "_rehome_prompt", None))
+
+    def _on_rehome_requested(self) -> None:
+        """Run the reset that used to start on its own after a STOP.
+
+        It replaces automatic recovery, so it needs no Setup sign-in. A fault
+        or physical stop since the prompt opened hands recovery to Setup.
+        """
+        if (getattr(self, "_no_automatic_recovery", False) is True
+                or getattr(self, "_physical_stop_active", False) is True):
+            self._show_timed_error(
+                "A safety stop is active. Check the device, then use Reset in Setup."
+            )
+            return
+        self.reset_arduino()
+
+    def _close_rehome_prompt(self) -> None:
+        box = getattr(self, "_rehome_prompt", None)
+        if box is not None:
+            box.close()
+
     def _show_timed_error(self, message):
         """Show error message that automatically closes after a timeout."""
         self.logger.warning("Status emit error: %s", message)
@@ -1779,6 +1874,8 @@ class KneeSpa(QMainWindow):
         return connected
 
     def reset_arduino(self, event=None):
+        # Reset from Setup also answers a pending re-home prompt.
+        self._close_rehome_prompt()
         self.connection.reset_arduino(event)
 
     def setup_gpio(self):
@@ -1862,7 +1959,7 @@ def _install_excepthook():
         try:
             unhandled_log.error("Unhandled exception:\n%s", text)
         except Exception:
-            pass
+            pass  # Logging itself failed; stderr above already has the traceback.
 
     sys.excepthook = _hook
 
@@ -1946,12 +2043,23 @@ def main():
                                  f"Could not restart the app. Please reopen it.\n{exc}")
 
 
-if __name__ == "__main__":
+def run_as_script():
+    """Device entry point: a failed run must exit non-zero.
+
+    kneespa.service restarts the app with Restart=on-failure, which ignores a
+    clean exit. Swallowing the exception here used to leave a blank kiosk
+    after a startup crash instead of letting systemd bring the app back.
+    """
     try:
         main()
     except Exception as e:
         print(f"Exception occurred: {str(e)}")
         print("Full traceback:")
         traceback.print_exc()
+        sys.exit(1)
     finally:
         GPIO.cleanup()
+
+
+if __name__ == "__main__":
+    run_as_script()

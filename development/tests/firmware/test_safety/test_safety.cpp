@@ -95,6 +95,8 @@ void setUp(void) {
     timeInFIT = 0;
     _pin_levels[DIR_FIT_FORWARD] = LOW;
     _pin_levels[DIR_FIT_REVERSE] = LOW;
+    unackedStopMask = 0;
+    lastStopRetryMs = 0;
 }
 
 void tearDown(void) {}
@@ -1101,6 +1103,258 @@ void test_emergency_stop_reports_persistent_i2c_failure(void) {
     TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Motor stop not acknowledged 12"));
 }
 
+// --- Every stop write is checked, retried and reported ---
+
+static int countInOutput(const std::string &needle) {
+    std::string out = Serial1.getOutput();
+    int n = 0;
+    for (size_t at = out.find(needle); at != std::string::npos; at = out.find(needle, at + 1))
+        n++;
+    return n;
+}
+
+// The arrival stop used to be fire-and-forget: a NACK left the SMC driving
+// while the firmware cleared bRunning and reported DONE.
+void test_nacked_arrival_stop_withholds_done_and_retries(void) {
+    bRunning = true;
+    runningDevice = 13;
+    smcDeviceNumber = 13;
+    positionCommandKind = 'I';
+    desiredPosition = 2000;
+    Wire.position_13 = 2000;  // at target
+    activeCmdSeq = 7;
+    Wire.failSpeedWrites = 3;  // every attempt of the first pass
+    Wire.failSpeedAddress = 13;
+    keepAlive();
+
+    loop();
+
+    TEST_ASSERT_TRUE(bRunning);
+    TEST_ASSERT_EQUAL(3, countSpeedZeroWrites(13));
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Motor stop not acknowledged 13"));
+    TEST_ASSERT_FALSE(Serial1.outputContains("MOTION_DONE"));
+
+    keepAlive();
+    loop();
+
+    TEST_ASSERT_FALSE(bRunning);
+    TEST_ASSERT_EQUAL(4, countSpeedZeroWrites(13));
+    TEST_ASSERT_TRUE(Serial1.outputContains("MOTION_DONE|I|2000|2000"));
+    TEST_ASSERT_EQUAL(1, countInOutput("Motor stop not acknowledged"));
+    TEST_ASSERT_EQUAL(0, unackedStopMask);
+}
+
+// The pulse cache used to record a speed the SMC never took, so the next
+// setPulseSpeed(0) returned early and the stop was never retried.
+void test_nacked_pulse_stop_is_not_cached_and_retries(void) {
+    pulseMotorSpeed = 1600;
+    Wire.failSpeedWrites = 3;
+    Wire.failSpeedAddress = 12;
+
+    setPulseSpeed(0);
+
+    TEST_ASSERT_EQUAL(1600, pulseMotorSpeed);
+    TEST_ASSERT_EQUAL(3, countSpeedZeroWrites(12));
+
+    setPulseSpeed(0);
+
+    TEST_ASSERT_EQUAL(0, pulseMotorSpeed);
+    TEST_ASSERT_EQUAL(4, countSpeedZeroWrites(12));
+    TEST_ASSERT_EQUAL(0, unackedStopMask);
+}
+
+void test_nacked_pulse_push_is_retried_on_the_next_call(void) {
+    pulseMotorSpeed = 0;
+    Wire.failSpeedWrites = 1;
+    Wire.failSpeedAddress = 12;
+
+    setPulseSpeed(1600);
+    TEST_ASSERT_EQUAL(0, pulseMotorSpeed);
+
+    setPulseSpeed(1600);
+    TEST_ASSERT_EQUAL(1600, pulseMotorSpeed);
+}
+
+void test_nacked_js_stop_is_retried_after_pulsing_ends(void) {
+    jerking = true;
+    pulseMotorSpeed = 1600;
+    Wire.failSpeedWrites = 3;
+    Wire.failSpeedAddress = 12;
+
+    processCommand("JS");
+
+    TEST_ASSERT_FALSE(jerking);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Motor stop not acknowledged 12"));
+    TEST_ASSERT_EQUAL(1, unackedStopMask);  // bit for SMC 12
+
+    _millis_value = STOP_RETRY_INTERVAL_MS;
+    keepAlive();
+    loop();
+
+    TEST_ASSERT_EQUAL(4, countSpeedZeroWrites(12));
+    TEST_ASSERT_EQUAL(0, unackedStopMask);
+}
+
+void test_pending_stop_retry_is_rate_limited_and_skips_owned_smcs(void) {
+    unackedStopMask = (1 << 1) | (1 << 2);  // SMCs 13 and 14
+    bRunning = true;
+    runningDevice = 14;                     // a move owns SMC 14
+    desiredPosition = 3000;
+    Wire.position_14 = 1200;                // far from target: no arrival stop
+    lastStopRetryMs = 0;
+    _millis_value = STOP_RETRY_INTERVAL_MS - 1;
+    keepAlive();
+
+    loop();
+    TEST_ASSERT_EQUAL(0, countSpeedZeroWrites(13));  // interval not yet elapsed
+
+    _millis_value = STOP_RETRY_INTERVAL_MS;
+    keepAlive();
+    loop();
+    TEST_ASSERT_EQUAL(1, countSpeedZeroWrites(13));
+    TEST_ASSERT_EQUAL(0, countSpeedZeroWrites(14));
+    TEST_ASSERT_EQUAL(1 << 2, unackedStopMask);
+}
+
+void test_nacked_release_stop_keeps_releasing_until_acknowledged(void) {
+    keepAlive();
+    emergencyStopAndRelease("test fault");
+    TEST_ASSERT_TRUE(releasingPressure);
+    scale._raw = 0;            // load cleared
+    Wire.position_12 = 2000;   // above the travel floor
+    Wire.failSpeedWrites = 3;
+    Wire.failSpeedAddress = 12;
+    keepAlive();
+
+    loop();
+
+    TEST_ASSERT_TRUE(releasingPressure);
+    TEST_ASSERT_FALSE(Serial1.outputContains("RELEASED"));
+
+    keepAlive();
+    loop();
+
+    TEST_ASSERT_FALSE(releasingPressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("RELEASED"));
+}
+
+void test_nacked_pressure_arrival_stop_withholds_done(void) {
+    keepAlive();
+    measurePressure = true;
+    pressureDirection = 1;
+    desiredPressure = 20;
+    scale._raw = 25;           // at or past the target (scale 1.0)
+    Wire.position_12 = 2000;
+    pressureMoveStarted = _millis_value;
+    activeCmdSeq = 9;
+    // Persistent NACK: servicePressure() samples more than once per pass,
+    // and every sample retries the stop.
+    Wire.failSpeedWrites = 1000;
+    Wire.failSpeedAddress = 12;
+
+    loop();
+
+    TEST_ASSERT_TRUE(measurePressure);
+    TEST_ASSERT_FALSE(Serial1.outputContains("MOTION_DONE|P"));
+    TEST_ASSERT_EQUAL(1, countInOutput("Motor stop not acknowledged 12"));
+    TEST_ASSERT_TRUE(countSpeedZeroWrites(12) >= 3);
+
+    Wire.failSpeedWrites = 0;  // the SMC takes the next stop
+    keepAlive();
+    loop();
+
+    TEST_ASSERT_FALSE(measurePressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("MOTION_DONE|P|20.0|25.0"));
+    TEST_ASSERT_EQUAL(0, unackedStopMask);
+}
+
+// --- A physical stop releases the load even after a pressure fault latched ---
+// setMotorSpeed used to ignore the back-off while pressureFault was set, and
+// servicePressure stopped sampling, so a stop pressed after a fault left the
+// patient loaded and the release idled to "Release incomplete".
+
+static int countReverseSpeedWrites(uint8_t device) {
+    int n = 0;
+    for (int i = 0; i < Wire.commandCount; i++) {
+        if (Wire.commands[i].address == device && Wire.commands[i].dataLen == 3 &&
+            Wire.commands[i].data[0] == 0x86 &&
+            (Wire.commands[i].data[1] != 0 || Wire.commands[i].data[2] != 0))
+            n++;
+    }
+    return n;
+}
+
+static void latchFaultUnderLoad(void) {
+    scale._raw = 40;          // 40 lb on the leg (scale factor 1.0)
+    Wire.position_12 = 2000;  // well above the travel floor
+    keepAlive();
+    loop();                   // sample the load
+    tripPressureFault("PRESSURE_LIMIT");
+    TEST_ASSERT_TRUE(pressureFault);
+    Wire.reset();
+}
+
+void test_physical_stop_releases_after_a_latched_pressure_fault(void) {
+    latchFaultUnderLoad();
+    _pin_levels[STOP_PIN] = LOW;
+    keepAlive();
+    loop();
+
+    TEST_ASSERT_TRUE(releasingPressure);
+    TEST_ASSERT_EQUAL(1, countReverseSpeedWrites(12));
+
+    scale._raw = 0;  // the load clears
+    keepAlive();
+    loop();
+
+    TEST_ASSERT_FALSE(releasingPressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("RELEASED"));
+    TEST_ASSERT_FALSE(Serial1.outputContains("Release incomplete"));
+    TEST_ASSERT_TRUE(pressureFault);  // still latched until the host resets
+}
+
+void test_post_fault_release_stops_at_the_travel_floor(void) {
+    latchFaultUnderLoad();
+    _pin_levels[STOP_PIN] = LOW;
+    keepAlive();
+    loop();
+    TEST_ASSERT_TRUE(releasingPressure);
+
+    AZERO = 0;
+    Wire.position_12 = 10;  // home reached with load still present
+    keepAlive();
+    loop();
+
+    TEST_ASSERT_FALSE(releasingPressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Release incomplete"));
+}
+
+void test_post_fault_release_with_a_silent_load_cell_is_bounded_by_time(void) {
+    latchFaultUnderLoad();
+    scale._ready = false;  // the load cell stops answering
+    _pin_levels[STOP_PIN] = LOW;
+    keepAlive();
+    loop();
+    TEST_ASSERT_TRUE(releasingPressure);
+
+    _millis_value += RELEASE_TIMEOUT + 1;
+    lastHostTraffic = _millis_value;
+    loop();
+
+    TEST_ASSERT_FALSE(releasingPressure);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Release incomplete"));
+}
+
+void test_other_motion_stays_blocked_while_a_fault_is_latched(void) {
+    latchFaultUnderLoad();
+    smcDeviceNumber = 13;
+    setMotorSpeed(800);
+    smcDeviceNumber = 12;
+    setMotorSpeed(-800);
+    TEST_ASSERT_EQUAL(0, countNonzeroSpeedWrites(13));
+    TEST_ASSERT_EQUAL(0, countNonzeroSpeedWrites(12));
+}
+
 void test_v2_ack_seq_survives_beyond_int16(void) {
     emitAck("DONE", 40000L);
     TEST_ASSERT_TRUE(Serial1.outputContains("DONE|40000"));
@@ -1174,6 +1428,17 @@ int main(int argc, char **argv) {
     RUN_TEST(test_l0_rejects_zero_or_garbage_factor);
     RUN_TEST(test_emergency_stop_retries_unacknowledged_write);
     RUN_TEST(test_emergency_stop_reports_persistent_i2c_failure);
+    RUN_TEST(test_nacked_arrival_stop_withholds_done_and_retries);
+    RUN_TEST(test_nacked_pulse_stop_is_not_cached_and_retries);
+    RUN_TEST(test_nacked_pulse_push_is_retried_on_the_next_call);
+    RUN_TEST(test_nacked_js_stop_is_retried_after_pulsing_ends);
+    RUN_TEST(test_pending_stop_retry_is_rate_limited_and_skips_owned_smcs);
+    RUN_TEST(test_nacked_release_stop_keeps_releasing_until_acknowledged);
+    RUN_TEST(test_nacked_pressure_arrival_stop_withholds_done);
+    RUN_TEST(test_physical_stop_releases_after_a_latched_pressure_fault);
+    RUN_TEST(test_post_fault_release_stops_at_the_travel_floor);
+    RUN_TEST(test_post_fault_release_with_a_silent_load_cell_is_bounded_by_time);
+    RUN_TEST(test_other_motion_stays_blocked_while_a_fault_is_latched);
     RUN_TEST(test_v2_ack_seq_survives_beyond_int16);
     RUN_TEST(test_position_read_does_not_burn_dead_wait);
 

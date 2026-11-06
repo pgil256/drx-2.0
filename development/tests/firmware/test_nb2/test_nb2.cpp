@@ -153,6 +153,30 @@ void test_recovered_load_releases_without_waiting_at_target() {
     TEST_ASSERT_EQUAL(-1, jerkDirection); TEST_ASSERT_TRUE(speed(12) < 0);
     TEST_ASSERT_EQUAL(now, lastJerkTime);
 }
+// F3: a pulse is bounded by the same axial limits as a pressure move.
+void test_pulse_push_at_the_travel_limit_latches_and_stops() {
+    sample(40); processCommand("P40"); processCommand("J500");
+    sample(30); tick(500); // the release ends with the load low: push
+    TEST_ASSERT_EQUAL(1, jerkDirection); TEST_ASSERT_TRUE(speed(12) > 0);
+    Wire.position_12 = 4094; tick(); // one count short of the limit
+    TEST_ASSERT_FALSE(pressureFault); TEST_ASSERT_TRUE(jerking);
+    Wire.position_12 = 4095; tick();
+    TEST_ASSERT_TRUE(pressureFault); stopped();
+    TEST_ASSERT_TRUE(Serial1.outputContains("FAULT|AXIAL_TRAVEL_LIMIT"));
+}
+void test_pulse_release_at_home_under_load_latches_and_stops() {
+    sample(40); processCommand("P40"); processCommand("J500");
+    TEST_ASSERT_EQUAL(-1, jerkDirection); TEST_ASSERT_TRUE(speed(12) < 0);
+    Wire.position_12 = 100 + POSITION_DEADBAND; // home: AZERO = 100
+    sample(43); tick(); // still above target + band
+    TEST_ASSERT_TRUE(pressureFault); stopped();
+    TEST_ASSERT_TRUE(Serial1.outputContains("FAULT|AXIAL_HOME_BEFORE_PRESSURE_TARGET"));
+}
+void test_pulse_release_at_home_without_load_keeps_pulsing() {
+    sample(40); processCommand("P40"); processCommand("J500");
+    Wire.position_12 = 100; sample(0); tick();
+    TEST_ASSERT_FALSE(pressureFault); TEST_ASSERT_TRUE(jerking);
+}
 void test_notice_is_once_and_advisory() {
     Wire.position_12 = 100; sample(0); processCommand("P40");
     Wire.position_12 = 2250; sample(1); loop();
@@ -188,6 +212,9 @@ int main() {
     RUN_TEST(test_release_travels_for_the_interval_until_contact_is_lost);
     RUN_TEST(test_pulse_recovery_must_finish_before_release_and_duplicates_do_not_reset);
     RUN_TEST(test_recovered_load_releases_without_waiting_at_target);
+    RUN_TEST(test_pulse_push_at_the_travel_limit_latches_and_stops);
+    RUN_TEST(test_pulse_release_at_home_under_load_latches_and_stops);
+    RUN_TEST(test_pulse_release_at_home_without_load_keeps_pulsing);
     RUN_TEST(test_notice_is_once_and_advisory);
     RUN_TEST(test_position_bands_and_feedback_range);
     return UNITY_END();

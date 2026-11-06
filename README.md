@@ -32,9 +32,10 @@ for desktop installation, Pi diagnostics, Buster updates, firmware flashing and 
 ## Running
 
 Install Git LFS before cloning, then run `git lfs pull` from the repository root
-to fetch the large HCT/P educational video. Fetch LFS media before running the app,
-syncing `runtime/` to a Pi, or packaging a release; Git LFS pointer files cannot play
-as videos.
+to fetch the educational videos (every `.mp4` under `runtime/raspberry-pi/main/ui/media/videos/`).
+Fetch LFS media before running the app, syncing `runtime/` to a Pi, or packaging a
+release. Git LFS pointer files cannot play as videos, and the app skips them. Tools that
+read straight from Git, such as `git archive`, emit pointers instead of the videos.
 
 ```bash
 python runtime/raspberry-pi/main/kneespa.py                  # on the Pi (requires RPi.GPIO, PyQt5)
@@ -263,7 +264,7 @@ rollback when operating a device with older bare-`J` firmware.
 
 **Before flashing firmware to a device**, complete the deployment bench checks in
 [Hardware Tests & Calibration](development/docs/hardware-service.md#verification-before-deployment)
-for the current image (`VERSION` in `motor.ino`, now `2026-10-28-DRX2-NB2-SERVICE`).
+for the current image (`VERSION` in `motor.ino`, now `2026-11-05-DRX2-STOP-CHECKS`).
 The older [Flash Batch 1 checklist](development/docs/plans/2026-06-11-batch1-hardware-checklist.md)
 was written for `2026-06-11-FAILSAFE-2`. Its watchdog/bootloader recovery check (A2)
 and the position-convention measurements (E1–E3) that later math corrections are

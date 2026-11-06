@@ -341,13 +341,23 @@ class TreatmentScreen(QWidget):
 
     # ----- build: live status -----
     def _status_card(self):
+        # The monitor is the one dark surface: the design system's instrument
+        # panel (readout-*), shared with the dashboard's demo machine.
         card = DSCard(padded=True)
+        card.setStyleSheet(
+            f"#DSCard {{ background: {resolve('--readout-bg')};"
+            f" border-radius: {resolve('--radius-lg')};"
+            f" border: 1px solid {resolve('--readout-line')}; }}"
+            f" #DSCard QLabel {{ color: {resolve('--readout-fg')}; }}"
+        )
         body = card.body_layout
         body.setContentsMargins(20, 12, 20, 12)
         body.setSpacing(8)
         hdr = QHBoxLayout()
         hdr.setContentsMargins(0, 0, 0, 0)
-        hdr.addWidget(eyebrow("Treatment monitor"))
+        title = eyebrow("Treatment monitor")
+        title.setStyleSheet(f"color: {resolve('--readout-muted')}; background: transparent;")
+        hdr.addWidget(title)
         hdr.addStretch(1)
         self._phase_badge = DSBadge(PHASES["idle"][0], tone=PHASES["idle"][1], dot=True)
         hdr.addWidget(self._phase_badge)
@@ -358,22 +368,26 @@ class TreatmentScreen(QWidget):
         self._readiness = QLabel()
         self._readiness.setWordWrap(True)
         self._readiness.setFont(sans_font(size=16))
+        self._readiness.setStyleSheet(f"color: {resolve('--readout-muted')};")
         body.addWidget(self._readiness)
         self._outcome_label = QLabel()
         self._outcome_label.setWordWrap(True)
         self._outcome_label.setFont(sans_font(size=18, weight=600))
+        self._outcome_label.setStyleSheet(f"color: {resolve('--readout-fg')};")
         self._outcome_label.hide()
         body.addWidget(self._outcome_label)
         readouts = QHBoxLayout()
         readouts.setSpacing(24)
         self._time_stat = DSStatReadout(_mmss(DEFAULT_PROTOCOL_MINUTES * 60),
-                                       label="Time remaining", tone="default", size="lg")
+                                       label="Time remaining", tone="default", size="lg",
+                                       on_dark=True)
         self._time_stat.setMinimumWidth(180)
         self._pressure_stat = DSStatReadout("—", unit="lbs", label="Waiting for pressure",
-                                            tone="default", size="lg")
-        self._angle_stat = DSStatReadout("—", label="Lateral angle (approx.)", size="sm")
+                                            tone="default", size="lg", on_dark=True)
+        self._angle_stat = DSStatReadout("—", label="Lateral angle (approx.)", size="sm",
+                                         on_dark=True)
         self._limit_stat = DSStatReadout("40", unit="lbs", label="Selected pressure limit",
-                                         size="sm")
+                                         size="sm", on_dark=True)
         for stat in (self._pressure_stat, self._time_stat):
             stat.layout().setAlignment(Qt.AlignVCenter)
             stat.layout().setSpacing(4)
@@ -400,7 +414,7 @@ class TreatmentScreen(QWidget):
         self._track.setFixedHeight(10)
         self._track.setAttribute(Qt.WA_StyledBackground, True)
         self._track.setStyleSheet(
-            f"#ProgTrack {{ background: {resolve('--gray-300')}; border-radius: 5px; }}"
+            f"#ProgTrack {{ background: {resolve('--readout-line')}; border-radius: 5px; }}"
         )
         tlay = QHBoxLayout(self._track)
         tlay.setContentsMargins(0, 0, 0, 0)
@@ -408,8 +422,7 @@ class TreatmentScreen(QWidget):
         self._fill.setObjectName("ProgFill")
         self._fill.setAttribute(Qt.WA_StyledBackground, True)
         self._fill.setStyleSheet(
-            "#ProgFill { border-radius: 5px; background: qlineargradient(x1:0,y1:0,x2:1,y2:0,"
-            f" stop:0 {resolve('--blue-500')}, stop:1 {resolve('--blue-600')}); }}"
+            f"#ProgFill {{ border-radius: 5px; background: {resolve('--readout-accent')}; }}"
         )
         tlay.addWidget(self._fill, 0)
         tlay.addStretch(1)
@@ -605,7 +618,8 @@ class TreatmentScreen(QWidget):
     def _render_pressure(self) -> None:
         live = self._pressure_caption == "Pressure live" and self._pressure_value is not None
         self._pressure_stat.set_value(f"{self._pressure_value:.1f}" if live else "—", "lbs")
-        self._pressure_stat.set_tone("default")
+        # Only a live reading takes the accent; stale or missing stays plain.
+        self._pressure_stat.set_tone("cyan" if live else "default")
 
     def set_pressure_state(self, caption: str) -> None:
         self._pressure_caption = caption

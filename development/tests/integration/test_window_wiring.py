@@ -594,6 +594,59 @@ def test_stop_completion_race_and_recovery(window_run: SimpleNamespace,
     assert run.view._settings["duration"].isEnabled()
 
 
+@pytest.mark.parametrize("answer", ["not now", "re-home", "setup reset"])
+def test_stop_waits_for_the_operator_to_rehome(window_run: SimpleNamespace,
+                                               monkeypatch: pytest.MonkeyPatch,
+                                               answer: str) -> None:
+    """S2: after the release, nothing homes until the operator asks."""
+    run = window_run
+    w = run.window
+    worker = start(run)
+    run.view.estop_requested.emit()
+    worker.signals.finished.emit(False)
+    reset = MagicMock(signals=ResetWorkerSignals())
+    monkeypatch.setattr(connection_manager, "ResetWorker", lambda *args: reset)
+    run.pool.start.side_effect = None
+    w.last_measured_pressure = 0.0
+    w.protocol._stop_phase3()
+    prompt = w._rehome_prompt
+    assert prompt.isVisible()
+    assert w.protocol_state == "fault" and not w.initial_setup_complete
+    assert not w.reset_in_progress and not run.view._start_btn.isEnabled()
+    assert w.shell.setup._reset_btn.isEnabled()
+    assert not any(button.isEnabled() for row in w.shell.setup._rows.values()
+                   for button in row.motion_buttons)
+    w.protocol._stop_phase3()  # a repeat does not stack a second prompt
+    assert w._rehome_prompt is prompt
+    if answer == "not now":
+        prompt.later_button.click()
+        assert not prompt.isVisible() and not w.reset_in_progress
+        assert w.protocol_state == "fault" and w.shell.setup._reset_btn.isEnabled()
+        return
+    if answer == "re-home":
+        prompt.rehome_button.click()
+    else:
+        w.shell.setup._reset_btn.click()
+    assert w.reset_in_progress and not prompt.isVisible()
+    reset.signals.finished.emit(True)
+    assert w.protocol_state == "idle" and run.view._start_btn.isEnabled()
+
+
+def test_rehome_prompt_defers_to_a_later_safety_stop(window_run: SimpleNamespace) -> None:
+    run = window_run
+    w = run.window
+    w.protocol.stop_from_view()  # Setup-screen Stop with nothing running
+    w.last_measured_pressure = 0.0
+    w.protocol._stop_phase3()
+    prompt = w._rehome_prompt
+    w._no_automatic_recovery = True  # e.g. a firmware fault after the prompt opened
+    errors = []
+    w._show_timed_error = errors.append
+    prompt.rehome_button.click()
+    assert not w.reset_in_progress
+    assert errors and "Reset in Setup" in errors[0]
+
+
 @pytest.mark.parametrize("result", ["success", "failure", "error"])
 def test_reset_signals_drive_real_controls(window_run: SimpleNamespace,
                                            monkeypatch: pytest.MonkeyPatch,
