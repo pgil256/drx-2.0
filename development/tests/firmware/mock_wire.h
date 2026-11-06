@@ -6,6 +6,7 @@
 
 #include <stdint.h>
 #include <string.h>
+#include "mock_sequence.h"
 
 #define MAX_WIRE_COMMANDS 20000
 #define MAX_WIRE_DATA 64
@@ -14,6 +15,7 @@ struct WireCommand {
     uint8_t address;
     uint8_t data[MAX_WIRE_DATA];
     int dataLen;
+    unsigned long seq;  // shared with the Serial mocks (mock_sequence.h)
 };
 
 class MockWire {
@@ -71,6 +73,7 @@ public:
             commands[commandCount].address = _currentAddress;
             memcpy(commands[commandCount].data, _txBuffer, _txLen);
             commands[commandCount].dataLen = _txLen;
+            commands[commandCount].seq = nextMockSequence();
             commandCount++;
         }
         if (failTransmissions > 0) {

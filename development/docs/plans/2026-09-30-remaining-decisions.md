@@ -207,6 +207,30 @@ with this flash.
   - With the device unoccupied, offset the zero by more than 5 lb (tare with
     about 10 lb on, then remove it): the warning appears once, and a pressure
     Go then stops with the new operator message.
+- **V3, stops before debug output (2026-11-06).**
+  - **The bug:** every debug line also goes to USB `Serial` at 9600 baud,
+    about 1 ms per byte, and `print` blocks once its 64-byte buffer is full.
+    `setMotorSpeed()` logged before its I2C write, and `emergencyStop()`
+    printed between the axes, so the second and third stops could wait tens
+    of milliseconds behind the log. The physical stop printed first too.
+  - **The fix:**
+    - `writeMotorSpeed()` logs after the I2C write, with the same text.
+    - `emergencyStop()` writes all three stops, then stops the leg motor,
+      and only then prints its lines. The per-write "Set motor speed on"
+      lines are left out during the stop; "A stopped" to "FIT stopped"
+      still follow.
+    - The physical stop's "Emergency stop + release" debug line moves after
+      the stop. The `ERROR: Stop button pressed` line to the Pi stays first:
+      it goes over the 115200-baud link, not USB.
+    - Not done: the optional change of USB `Serial` to 115200 baud. Anyone
+      reading the Arduino's USB log would need the new rate, so it is left
+      for a separate decision.
+  - **`VERSION`** is unchanged. It is the same batch.
+- **Image after V3:** flash 34,564 bytes, RAM 2,715 bytes (local WSL build,
+  sha256 `639f8f2513cd5a33c3a2e6a05a9a50335cf99af9b40572d5ee36116eeef3a711`).
+- **Bench check for V3:** an on-screen stop and the physical stop during a
+  Setup move halt all three axes as before. The Arduino log still shows
+  "Emergency Stop" through "FIT stopped" after each stop.
 
 ## 2. UI changes to look at on the Pi or simulator
 

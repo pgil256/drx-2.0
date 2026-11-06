@@ -1494,6 +1494,63 @@ void test_negative_load_is_not_checked_before_calibration(void) {
     TEST_ASSERT_EQUAL(0, outputCount("Load cell reads negative"));
 }
 
+// --- V3: stops are written before any debug output ---
+
+// The shared sequence number of the last SMC speed write (0x85/0x86) to
+// `address`, or 0 if there was none.
+static unsigned long lastSpeedWriteSeq(uint8_t address) {
+    unsigned long seq = 0;
+    for (int i = 0; i < Wire.commandCount; i++) {
+        const WireCommand &c = Wire.commands[i];
+        if (c.address == address && c.dataLen >= 1 &&
+            (c.data[0] == 0x85 || c.data[0] == 0x86))
+            seq = c.seq;
+    }
+    return seq;
+}
+
+static unsigned long lastStopSeq(void) {
+    unsigned long last = 0;
+    for (uint8_t address = 12; address <= 14; address++) {
+        unsigned long seq = lastSpeedWriteSeq(address);
+        TEST_ASSERT_TRUE_MESSAGE(seq != 0, "a stop write is missing");
+        if (seq > last) last = seq;
+    }
+    return last;
+}
+
+void test_emergency_stop_writes_every_stop_before_any_output(void) {
+    Serial.reset(); Serial1.reset(); Wire.reset();
+    emergencyStop();
+    unsigned long last = lastStopSeq();
+    TEST_ASSERT_TRUE(Serial.firstPrintSeq > last);   // USB debug log
+    TEST_ASSERT_TRUE(Serial1.firstPrintSeq > last);  // its LOG| copy to the Pi
+    TEST_ASSERT_TRUE(Serial.outputContains("Emergency Stop"));
+    TEST_ASSERT_TRUE(Serial.outputContains("C stopped"));
+    TEST_ASSERT_FALSE(Serial.outputContains("Set motor speed on"));
+}
+
+void test_physical_stop_writes_every_stop_before_its_debug_line(void) {
+    Serial.reset(); Serial1.reset(); Wire.reset();
+    emergencyStopAndRelease("Stop button pressed");
+    unsigned long last = 0;
+    for (uint8_t address = 13; address <= 14; address++)
+        if (lastSpeedWriteSeq(address) > last) last = lastSpeedWriteSeq(address);
+    TEST_ASSERT_TRUE(last != 0);
+    TEST_ASSERT_TRUE(Serial.firstPrintSeq > last);
+    TEST_ASSERT_TRUE(Serial.outputContains("Emergency stop + release: Stop button pressed"));
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Stop button pressed"));
+}
+
+void test_speed_write_logs_after_the_i2c_write(void) {
+    Serial.reset(); Wire.reset();
+    smcDeviceNumber = 13;
+    setMotorSpeed(-500);
+    TEST_ASSERT_TRUE(lastSpeedWriteSeq(13) != 0);
+    TEST_ASSERT_TRUE(Serial.firstPrintSeq > lastSpeedWriteSeq(13));
+    TEST_ASSERT_TRUE(Serial.outputContains("Set motor speed on: 13 at -500"));
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
 
@@ -1582,6 +1639,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_small_negative_reading_is_ignored);
     RUN_TEST(test_negative_load_at_rest_warns_once_until_it_recovers);
     RUN_TEST(test_negative_load_is_not_checked_before_calibration);
+    RUN_TEST(test_emergency_stop_writes_every_stop_before_any_output);
+    RUN_TEST(test_physical_stop_writes_every_stop_before_its_debug_line);
+    RUN_TEST(test_speed_write_logs_after_the_i2c_write);
 
     return UNITY_END();
 }
