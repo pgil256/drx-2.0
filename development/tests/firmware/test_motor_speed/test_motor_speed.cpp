@@ -34,7 +34,7 @@ void setUp(void) {
     Wire.position_12 = 1000; Wire.position_13 = 1000; Wire.position_14 = 1000;
     scale._ready = true; scale._scale = 1; scale._offset = 0; scale._raw = 0;
     lastHostTraffic = 0; lastScaleReady = 0;
-    commandBuffer = ""; isCommandComplete = false;
+    commandBuffer = ""; isCommandComplete = false; pendingCommand = "";
     jerkInterval = 500;
 }
 void tearDown(void) {}

@@ -23,7 +23,7 @@ void setUp() {
     AZERO = 100; BZERO = 1900;
     STOP = true; stopWasPressed = false; _pin_levels[STOP_PIN] = HIGH;
     Wire.position_12 = 1000; Wire.position_13 = 1900; Wire.position_14 = 1500;
-    commandBuffer = ""; isCommandComplete = false;
+    commandBuffer = ""; isCommandComplete = false; pendingCommand = "";
     highFrequencyStatus = false; isProcessingStatus = false; statusAcknowledged = true;
     lastStatusTime = lastActiveStatus = loopPosition = 0; timeSinceLastStatus = 0;
     lastHostTraffic = lastScaleReady = 0; currentCmdSeq = activeCmdSeq = -1;
