@@ -446,6 +446,22 @@ void test_status_ack_does_not_restart_the_rate_limit_window(void) {
     TEST_ASSERT_EQUAL_UINT32(paced, lastCommandTime);  // ...without restarting it
 }
 
+// --- V4: the lowest free RAM since boot is reported ---
+
+void test_diag_reports_the_lowest_free_ram_since_boot(void) {
+    minFreeRam = 32767;
+    testFreeRam = 3000; loop();
+    testFreeRam = 2500; processCommand("T");   // sampled on a command too
+    testFreeRam = 3500; loop();
+    TEST_ASSERT_EQUAL(2500, minFreeRam);
+    Serial1.reset();
+    reportSensorDiagnostics();
+    // The new field is the last one, after the ready flag.
+    TEST_ASSERT_TRUE(Serial1.outputContains("|2500\n"));
+    TEST_ASSERT_TRUE(Serial1.outputContains("DIAG|HX711|"));
+    testFreeRam = 4096;
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
 
@@ -487,6 +503,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_status_ack_buffer_detection);
     RUN_TEST(test_stop_behind_a_status_ack_runs_on_the_next_pass);
     RUN_TEST(test_status_ack_does_not_restart_the_rate_limit_window);
+    RUN_TEST(test_diag_reports_the_lowest_free_ram_since_boot);
     RUN_TEST(test_overlong_line_tail_is_not_executed);
     RUN_TEST(test_overlong_line_is_reported_once);
     RUN_TEST(test_command_after_overlong_line_runs);

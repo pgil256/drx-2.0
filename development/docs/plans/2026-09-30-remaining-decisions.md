@@ -231,6 +231,30 @@ with this flash.
 - **Bench check for V3:** an on-screen stop and the physical stop during a
   Setup move halt all three axes as before. The Arduino log still shows
   "Emergency Stop" through "FIT stopped" after each stop.
+- **V4, the command buffer and a free-RAM figure (2026-11-06).**
+  - **Why:** the command path uses heap `String`s on the Mega's 8 KB of RAM.
+    The risk of fragmentation is low (short, bounded strings; no field
+    report), but nothing measured it.
+  - **The change:**
+    - `commandBuffer.reserve(MAX_COMMAND_LENGTH)` in `setup()`, so the
+      buffer no longer reallocates as it grows a byte at a time.
+    - `processCommand` takes `const String &`, which drops one copy per
+      command.
+    - The lowest free RAM seen since boot (the gap between the heap's top
+      and the stack pointer, sampled every `loop()` pass and every command)
+      is a new last field of `DIAG|HX711`, which goes out with every status.
+      Field logs then show whether heap pressure is real before anyone
+      rewrites the command path to `char[]`.
+  - **Pi change (ships with the app, not the flash):**
+    `helpers/firmware_protocol.py` accepts the eleventh field as
+    `min_free_ram`, and still accepts older firmware's ten.
+  - **`VERSION`** is unchanged. It is the same batch.
+- **Image after V4:** flash 34,656 bytes, RAM 2,716 bytes (local WSL build,
+  sha256 `c310c068bd107f9554f87eec497d34f747244c49b9b81c34259f0c312371bcf3`).
+- **Bench check for V4:** after a full treatment session, the last
+  `DIAG|HX711` line in the Arduino log ends with a free-RAM figure. Record
+  it. A figure below about 1,000 bytes is the evidence that would justify
+  the `char[]` rewrite.
 
 ## 2. UI changes to look at on the Pi or simulator
 
