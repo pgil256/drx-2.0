@@ -1,9 +1,17 @@
 # requirements-test.txt
-pytest>=7.0
-pytest-mock
-pytest-qt
-pytest-cov
-pytest-timeout
+# Test tooling is pinned to the versions CI installed on 2026-11-05, so a new
+# upstream release cannot change test results without a commit. pytest 9.2
+# and pytest-mock 3.17 need Python 3.10+; older interpreters (the Pi's 3.7 CI
+# job) get the last versions that support them.
+pytest==9.2.0; python_version >= "3.10"
+pytest==7.4.4; python_version < "3.10"
+pytest-mock==3.17.0; python_version >= "3.10"
+pytest-mock==3.11.1; python_version < "3.10"
+pytest-qt==4.5.0; python_version >= "3.10"
+pytest-qt==4.2.0; python_version < "3.10"
+pytest-cov==7.1.0; python_version >= "3.10"
+pytest-cov==4.1.0; python_version < "3.10"
+pytest-timeout==2.4.0
 pyserial>=3.5
 aiohttp==3.13.3; python_version >= "3.9"  # Shared simulator HTTP/transport tests run in the full suite.
 aiohttp==3.8.6; python_version < "3.9"  # Last release for the Pi's Python 3.7.
