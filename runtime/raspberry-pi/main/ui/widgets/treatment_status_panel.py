@@ -276,7 +276,7 @@ class TreatmentStatusPanel(QFrame):
             return False
         try:
             return bool(self._suppress_when())
-        except Exception:
+        except Exception:  # noqa: BLE001 - a failing check shows the banner, never hides it
             return False
 
     def show(self) -> None:  # noqa: A003 - QWidget API
