@@ -404,6 +404,63 @@ void test_v2_rejects_corrupt_checksum(void) {
     TEST_ASSERT_TRUE(Serial1.outputContains("Checksum mismatch"));
 }
 
+// --- V6: strict frame fields ---
+
+// "#<body>*<checksum text>", where the text is written as given.
+static String frameWithChecksumText(const char *body, const char *checksumText) {
+    String frame = "#";
+    frame += body;
+    frame += "*";
+    frame += checksumText;
+    return frame;
+}
+
+// "#<body>*XX" with the body's correct checksum, whatever the body holds.
+static String frameWithValidChecksum(const char *body) {
+    String b = body;
+    char buf[64];
+    snprintf(buf, sizeof(buf), "#%s*%02X", body, xorChecksum(b, 0, b.length()));
+    return String(buf);
+}
+
+static void assertMalformed(const String &frame) {
+    Serial1.reset();
+    String inner = "UNTOUCHED";
+    TEST_ASSERT_FALSE_MESSAGE(parseV2Frame(frame, inner), frame.c_str());
+    TEST_ASSERT_TRUE(inner == "UNTOUCHED");
+    TEST_ASSERT_EQUAL(-1, (int)currentCmdSeq);
+    TEST_ASSERT_TRUE(Serial1.outputContains("Malformed frame"));
+}
+
+void test_v2_checksum_must_be_exactly_two_hex_digits(void) {
+    // "*5", "*5zz" and "*zz" used to parse through strtol, "*zz" as 0.
+    const char *bad[] = {"5", "5zz", "zz", "5Z", "G5", "5A0", "+5", " 5"};
+    for (const char *text : bad)
+        assertMalformed(frameWithChecksumText("7:P10", text));
+}
+
+void test_v2_sequence_must_be_one_to_nine_digits(void) {
+    // Valid checksums, so only the sequence field can be the reason.
+    const char *bad[] = {"-5:P10", "5a:P10", "+5:P10", " 5:P10", "1234567890:P10"};
+    for (const char *body : bad)
+        assertMalformed(frameWithValidChecksum(body));
+}
+
+void test_v2_strict_fields_still_accept_valid_frames(void) {
+    String inner = "";
+    TEST_ASSERT_TRUE(parseV2Frame(frameWithValidChecksum("123456789:K1500"), inner));
+    TEST_ASSERT_TRUE(inner == "K1500");
+    TEST_ASSERT_EQUAL(123456789L, currentCmdSeq);
+    // Lowercase hex is still two hex digits.
+    String body = "8:P10";
+    char lower[32];
+    snprintf(lower, sizeof(lower), "#%s*%02x", body.c_str(),
+             xorChecksum(body, 0, body.length()));
+    TEST_ASSERT_TRUE(parseV2Frame(String(lower), inner));
+    TEST_ASSERT_EQUAL(8, (int)currentCmdSeq);
+    currentCmdSeq = -1;
+}
+
 void test_v2_emitAck_formats(void) {
     emitAck("DONE", 13);
     TEST_ASSERT_TRUE(Serial1.outputContains("DONE|13"));
@@ -526,6 +583,9 @@ int main(int argc, char **argv) {
     RUN_TEST(test_K_within_deadband_completes_immediately);
     RUN_TEST(test_v2_parse_valid_frame);
     RUN_TEST(test_v2_rejects_corrupt_checksum);
+    RUN_TEST(test_v2_checksum_must_be_exactly_two_hex_digits);
+    RUN_TEST(test_v2_sequence_must_be_one_to_nine_digits);
+    RUN_TEST(test_v2_strict_fields_still_accept_valid_frames);
     RUN_TEST(test_v2_emitAck_formats);
     RUN_TEST(test_v2_emitCmdError_formats);
     RUN_TEST(test_v2_emergency_buffer_detection);

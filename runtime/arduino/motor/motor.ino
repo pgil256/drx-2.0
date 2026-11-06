@@ -705,19 +705,36 @@ bool rejectIfStopEngaged() {
   return false;
 }
 
+// One hex digit's value, or -1.
+static int hexDigitValue(char c) {
+  if (c >= '0' && c <= '9') return c - '0';
+  if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+  if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+  return -1;
+}
+
 // Parse "#<seq>:<CMD>*<XX>" into inner CMD; verifies the checksum.
 // Returns false (after emitting an error) on a malformed/corrupt frame.
+// Strict (checklist V6): <seq> is 1-9 decimal digits and <XX> exactly two
+// hex digits ending the line. strtol and toInt() used to accept "*5",
+// "*5zz" and "*zz" (read as 0), and a negative or partly numeric sequence;
+// a negative one then ran the command as v1.
 bool parseV2Frame(const String &raw, String &inner) {
   int colon = raw.indexOf(':');
   int star = raw.indexOf('*');
-  if (colon < 2 || star < colon + 2 || star + 1 >= (int)raw.length()) {
+  bool wellFormed = colon >= 2 && colon <= 10 && star >= colon + 2 &&
+                    star + 3 == (int)raw.length();
+  for (int i = 1; wellFormed && i < colon; i++)
+    wellFormed = raw.charAt(i) >= '0' && raw.charAt(i) <= '9';
+  int high = wellFormed ? hexDigitValue(raw.charAt(star + 1)) : -1;
+  int low = wellFormed ? hexDigitValue(raw.charAt(star + 2)) : -1;
+  if (high < 0 || low < 0) {
     currentCmdSeq = -1;
     emitCmdError("Malformed frame");
     return false;
   }
-  long seq = raw.substring(1, colon).toInt();
-  uint8_t expected =
-      (uint8_t)strtol(raw.substring(star + 1).c_str(), NULL, 16);
+  long seq = raw.substring(1, colon).toInt();  // only digits now
+  uint8_t expected = (uint8_t)(high << 4 | low);
   uint8_t actual = xorChecksum(raw, 1, (unsigned int)star);
   if (actual != expected) {
     currentCmdSeq = seq;

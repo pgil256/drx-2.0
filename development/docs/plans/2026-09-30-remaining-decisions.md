@@ -278,6 +278,26 @@ with this flash.
   The reject reason is a shorter string than the old fault reason.
 - **Bench check for V5:** none on the device; the Pi never sends such a
   target. The native and simulator tests cover it.
+- **V6, strict frame fields (2026-11-06).**
+  - **The bug:** `parseV2Frame` read the checksum with `strtol` and never
+    checked where it stopped, so `*5`, `*5zz` and `*zz` (as 0) passed as
+    checksum fields. The sequence used `toInt()`, which accepts leading
+    digits and negatives, and a negative sequence ran the command as v1.
+  - **The fix (option (a), firmware only):** a frame must be `#`, 1-9
+    decimal digits, `:`, the command, `*` and exactly two hex digits ending
+    the line. Anything else is `Malformed frame`, as before for frames
+    with no `:` or `*`. Every frame the Pi sends already fits: its sequence
+    numbers wrap below 1,000,000 and its checksum is `%02X`.
+  - **Not done:** option (b), a CRC-8 instead of the XOR checksum. It needs a
+    coordinated Pi change and stays a separate decision.
+  - **The simulator** (`development/simulator/controller/serial_model.py`)
+    parses frames just as strictly.
+  - **`VERSION`** is unchanged. It is the same batch.
+- **Image after V6:** flash 34,308 bytes, RAM 2,708 bytes (local WSL build,
+  sha256 `905f38e91ef75baea14992de7dbef872463972413b553bcca53c014a311445a8`).
+  Flash shrinks because the parser no longer needs `strtol`.
+- **Bench check for V6:** a normal session runs as before with no
+  `Malformed frame` lines in the Arduino log.
 
 ## 2. UI changes to look at on the Pi or simulator
 
