@@ -5,6 +5,9 @@ After=network.target
 [Service]
 User=pi
 WorkingDirectory=/home/pi/drx-2.0
+# Restore the app folder if a software install was interrupted (U1). With the
+# desktop launcher's lock it changes nothing while another KneeSpa is running.
+ExecStartPre=/bin/bash /home/pi/drx-2.0/runtime/restore_update.sh --lock /home/pi/drx-2.0/devices/local/raspberry-pi/logs/desktop-launch.lock /home/pi/drx-2.0/runtime
 ExecStart=/home/pi/kneespa_env/bin/python /home/pi/drx-2.0/runtime/raspberry-pi/main/kneespa.py
 Restart=on-failure
 RestartSec=5

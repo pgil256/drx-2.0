@@ -17,9 +17,11 @@ fail() {
     exit 1
 }
 
-[[ -f "$APP_DIR/runtime/raspberry-pi/main/kneespa.py" ]] ||
+# The app folder itself is checked after the restore below.
+[[ -d "$APP_DIR/runtime" ]] ||
     fail "Cannot find KneeSpa in $APP_DIR. Check KNEESPA_APP_DIR or reinstall the shortcut."
 APP_DIR="$(cd -- "$APP_DIR" && pwd)"
+APP_MAIN="$APP_DIR/runtime/raspberry-pi/main"
 
 # A service started outside this launcher does not share its desktop lock.
 if command -v systemctl >/dev/null 2>&1 &&
@@ -42,9 +44,13 @@ fi
 [[ -n "$PYTHON" && -x "$PYTHON" && ! -d "$PYTHON" ]] ||
     fail "Python was not found. Install Python 3 or set KNEESPA_PYTHON to its full path."
 
-# Resolve relative state paths from the same working directory used by the app.
-cd -- "$APP_DIR/runtime/raspberry-pi/main" || fail "Cannot open the app directory."
+# Resolve relative state paths from the same working directory used by the app
+# (its main/ folder) without needing that folder yet: an interrupted update can
+# leave it missing until the restore below.
 DEVICE_DIR="${KNEESPA_DEVICE_DIR:-$APP_DIR/devices/local}"
+if [[ "$DEVICE_DIR" != /* ]]; then
+    DEVICE_DIR="$(realpath -m -- "$APP_MAIN/$DEVICE_DIR")"
+fi
 LOG_DIR="$DEVICE_DIR/raspberry-pi/logs"
 mkdir -p -- "$LOG_DIR" || fail "Cannot create the startup log directory: $LOG_DIR"
 
@@ -68,6 +74,18 @@ fi
 exec >"$LOG_FILE" 2>&1 || fail "Cannot write the startup log: $LOG_FILE"
 printf 'KneeSpa desktop launch: %s\nPython: %s\nApp: %s\n' \
     "$(date --iso-8601=seconds)" "$PYTHON" "$APP_DIR"
+
+# A software install interrupted between its two folder renames leaves no app
+# folder; restore the previous software first. This runs under the lock above,
+# so a running app's own install is never touched.
+RESTORE="$APP_DIR/runtime/restore_update.sh"
+if [[ -f "$RESTORE" ]]; then
+    bash "$RESTORE" "$APP_DIR/runtime" ||
+        fail "The previous software could not be restored after an interrupted update. See $LOG_FILE."
+fi
+[[ -f "$APP_MAIN/kneespa.py" ]] ||
+    fail "Cannot find KneeSpa in $APP_DIR. Check KNEESPA_APP_DIR or reinstall the shortcut."
+cd -- "$APP_MAIN" || fail "Cannot open the app directory."
 
 # Inherit the desktop display session and retain the lock across app restarts.
 exec "$PYTHON" -u kneespa.py "$@"
