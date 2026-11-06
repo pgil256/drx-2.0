@@ -44,6 +44,13 @@ LEGACY_ADVISORY_MESSAGES = {
 # the advisory "Motor stalled" above, this is a fault.
 STALL_TIMEOUT_PREFIX = "Motor stall timeout"
 
+# Operator wording for latched firmware fault reasons whose code alone does
+# not say what to do. Other reasons are shown as sent.
+FAULT_MESSAGES = {
+    # A sustained negative load: tension past zero or zero drift (V2).
+    "PRESSURE_NEGATIVE": "Load cell reading is negative. Check wiring and re-zero.",
+}
+
 # Status telemetry can briefly land a few counts (or a fraction of a pound)
 # outside a boundary while the device settles. Confirm small excursions across
 # several frames; gross excursions bypass debounce.
@@ -314,8 +321,9 @@ class SafetyMonitor:
         reason = result["reason"]
         self.window.logger.error("Controller fault: %s", reason)
         self.window._measurement_fault = reason
-        self.window.protocol.stop_without_recovery(reason, fault=True)
-        self.window._show_safety_alert("CONTROLLER FAULT: " + reason)
+        message = FAULT_MESSAGES.get(reason, reason)
+        self.window.protocol.stop_without_recovery(message, fault=True)
+        self.window._show_safety_alert("CONTROLLER FAULT: " + message)
 
     def on_command_rejected(self, result: dict) -> None:
         """Reject the active operation promptly without an automatic homing retry."""
