@@ -25,13 +25,23 @@ firmware native tests 8 suites / 165 tests; Mega build warning-free;
   CI's firmware job uploads the same image with its checksum. The `L5`,
   overflow and pulse changes alter behavior; the cleanup commits leave the code
   identical (at most the LTO trampoline order moves).
-- **The Pi does not need this flash:** it already sends only `L5|a|b`, and it
-  checks the HX711 driver identity, not the version string.
+- **Superseded by the home-release batch (PR #29):** that merge folds this batch
+  into the verified home release, release margin and position re-read. `VERSION`
+  becomes `2026-10-28-DRX2-release-margin`, and the checksum above describes the
+  earlier image only; CI's firmware job publishes the current image and its
+  checksum. **That image does need the Pi update and the flash together:** the
+  app refuses treatment on firmware without the `HOME_RELEASE_V1` capability.
+  The pulse-overshoot change then moves `VERSION` to
+  `2026-10-28-DRX2-pulse-overshoot`.
+  (Before that batch the Pi did not need this flash: it already sends only
+  `L5|a|b`, and it checks the HX711 driver identity, not the version string.)
 - **Decide:** when to flash, after the deployment bench checks in
   `development/docs/hardware-service.md#verification-before-deployment`.
   For the pulse change, also run the slowest Pulse Rates (0.2/sec is a
   5-second release): a release that unloads the leg must get back to target
-  within 5 seconds, or the firmware latches `PULSE_RECOVERY_TIMEOUT`.
+  within 5 seconds (10 seconds in the first 30 seconds of pulsing), or the
+  firmware latches `PULSE_RECOVERY_TIMEOUT`. Also check how far the actuator
+  coasts after a pulse stop against `PULSE_STOP_LEAD_MS` (100 ms).
 - **Also decide:** whether motion should continue when the app dies. The
   host heartbeat only warns, so after an app abort a pressure ramp runs to its
   target or its 90-second deadline, and pulsing continues until the restarted
@@ -62,6 +72,10 @@ with this flash.
     boot, and the stop sent when a target is already in band.
   - No Pi change is needed; the error text is the one the E-stop already used.
 - **`VERSION`:** `2026-11-05-DRX2-STOP-CHECKS`.
+  When the home-release batch (PR #29) merges, it folds F1 and F2 into the
+  verified home release and pulse changes as `2026-11-06-DRX2-home-release`.
+  The image sizes and checksum below then describe the earlier image only, and
+  that image needs the Pi update and the flash together (`HOME_RELEASE_V1`).
 - **Image after F1:** flash 34,162 bytes, RAM 2,694 bytes, with the pinned
   `atmelavr@5.3.0` (sha256
   `d35640beff4a37ab134b1e3867059ed09bab104c4b194519416fa0e81bccb11b` from a

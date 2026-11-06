@@ -264,7 +264,7 @@ rollback when operating a device with older bare-`J` firmware.
 
 **Before flashing firmware to a device**, complete the deployment bench checks in
 [Hardware Tests & Calibration](development/docs/hardware-service.md#verification-before-deployment)
-for the current image (`VERSION` in `motor.ino`, now `2026-11-05-DRX2-STOP-CHECKS`).
+for the current image (`VERSION` in `motor.ino`, now `2026-11-06-DRX2-home-release`).
 The older [Flash Batch 1 checklist](development/docs/plans/2026-06-11-batch1-hardware-checklist.md)
 was written for `2026-06-11-FAILSAFE-2`. Its watchdog/bootloader recovery check (A2)
 and the position-convention measurements (E1–E3) that later math corrections are
