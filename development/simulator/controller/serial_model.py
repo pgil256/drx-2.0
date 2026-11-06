@@ -5,7 +5,6 @@ remain accelerated for existing serial integration tests.
 """
 import re
 import threading
-import re
 import time
 from collections import deque
 from typing import List, Optional
