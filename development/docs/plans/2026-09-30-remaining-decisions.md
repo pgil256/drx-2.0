@@ -255,6 +255,29 @@ with this flash.
   `DIAG|HX711` line in the Arduino log ends with a free-RAM figure. Record
   it. A figure below about 1,000 bytes is the evidence that would justify
   the `char[]` rewrite.
+- **V5, a malformed `P` target is rejected (2026-11-06).**
+  - **The bug:** an empty, non-numeric, negative or too-large target, or a
+    `|limit` below it, latched `PRESSURE_TARGET_INVALID`. That stopped every
+    axis with no release, also ended a pressure move already running, and
+    needed a reset.
+  - **The fix (the owner chose "reject instead"):** the firmware replies
+    `COMMAND_REJECTED|P|INVALID_TARGET`, like every other refused command,
+    and changes nothing else; a running move goes on.
+    - **No `ERR` ack for framed commands, unlike the item's wording.** No
+      other `COMMAND_REJECTED` sends one. On the Pi an `ERR` reason either
+      resends the command ("Invalid P value" is a parse rejection) or shows
+      a second, raw warning. The worker and controller operations already
+      end on `COMMAND_REJECTED`, and an unanswered framed command is never
+      resent.
+  - **No Pi change:** the Pi validates targets before sending, and already
+    ends the operation on any `COMMAND_REJECTED`. The simulator now rejects
+    the same way.
+  - **`VERSION`** is unchanged. It is the same batch.
+- **Image after V5:** flash 34,654 bytes, RAM 2,708 bytes (local WSL build,
+  sha256 `4fd00b96dc82159bc3d2f76c6f4022b748179aabd1308e891d7b0f6f6432d578`).
+  The reject reason is a shorter string than the old fault reason.
+- **Bench check for V5:** none on the device; the Pi never sends such a
+  target. The native and simulator tests cover it.
 
 ## 2. UI changes to look at on the Pi or simulator
 
