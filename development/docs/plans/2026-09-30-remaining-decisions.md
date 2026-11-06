@@ -121,6 +121,41 @@ with this flash.
 - **Bench check for F3:** a pulsed treatment on a test load completes as
   before, with no `AXIAL_` faults in the Arduino log. Do not provoke the
   limits with a patient on the device.
+- **F4, a long stall ends the move (2026-11-06).**
+  - **The bug:** a position move (`I`, `K`, `A`) that stopped making
+    progress only sent `WARNING: Motor stalled` after 20 s
+    (`POSITION_STALL_MS`). The Pi treats that warning as advisory, so a jam,
+    or a stuck but valid encoder reading, kept the motor driving until the
+    operator pressed stop.
+  - **The fix:**
+    - The 20 s warning stays.
+    - With still no progress at 60 s (`POSITION_STALL_TIMEOUT_MS`,
+      3 × `POSITION_STALL_MS`), the firmware calls `emergencyStop()` and
+      sends `ERROR: Motor stall timeout <device>`, for example
+      `ERROR: Motor stall timeout 13`.
+    - The stopped move never reports `MOTION_DONE` or `DONE`.
+    - Progress toward the target (4 counts or more) still restarts both
+      timers.
+  - **Pi change (ships with the app, not the flash):**
+    `controllers/safety_monitor.py` handles `Motor stall timeout …` as a
+    controller fault: the treatment or reset stops, there is no automatic
+    homing, and a `CONTROLLER FAULT` alert asks for Reset.
+    - An app on this change that talks to older firmware is unchanged,
+      because older firmware never sends the new error.
+    - Older firmware has no timeout, so flashing this image is what makes
+      the motor stop.
+  - **`VERSION`** is unchanged. It is the same batch.
+- **Image after F4:** flash 34,288 bytes, RAM 2,694 bytes (local WSL build,
+  sha256 `452cc0fb03d190729c478ea4e29cba25548c395ee5d429a811f8e09be63326e7`).
+  The message string is kept in flash with `F()`, so RAM is unchanged.
+- **Bench check for F4** (device unoccupied):
+  1. Block one actuator mechanically, or hold its SMC disabled, and command
+     a Setup move on that axis.
+  2. At about 20 s the operator sees the `Motor stalled` warning.
+  3. At about 60 s the motor stops. The Arduino log shows
+     `ERROR: Motor stall timeout <n>`, and the app shows
+     `CONTROLLER FAULT: Motor stall timeout <n>` and requires Reset.
+  4. A normal long move, for example homing during Reset, still completes.
 
 ## 2. UI changes to look at on the Pi or simulator
 
