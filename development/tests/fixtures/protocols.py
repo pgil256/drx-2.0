@@ -12,7 +12,7 @@ from helpers.arduino import Arduino, CommandHandle
 def make_arduino() -> MagicMock:
     """Expose only the serial operations and signals used by these unit tests."""
     arduino = MagicMock(spec_set=[
-        "send", "send_tracked", "cancel_pending_commands", "disconnect",
+        "send", "send_tracked", "cancel_pending_commands", "cancel_connect", "disconnect",
         "verify_connection", "is_connected", "connected", "protocol_v2", "ready_event",
         "done_emit", "error_emit", "status_emit",
         "motion_done", "calibration_result", "zeros_emit", "ready_to_go_emit",
