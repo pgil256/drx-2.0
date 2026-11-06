@@ -86,7 +86,7 @@ class CloudClient:
             try:
                 self.on_status(message)
             except Exception:
-                self.logger.warning("Cloud status display is no longer available")
+                self.logger.exception("Cloud status display is no longer available")
 
     def _headers(self) -> Dict[str, str]:
         return {"Authorization": f"Bearer {self.device_token}", "X-Device-Id": self.device_id,
@@ -115,7 +115,7 @@ class CloudClient:
                 messages = list(dict.fromkeys(failure[1] for failure in failures))
                 self.on_upload_error("\n\n".join(messages), any(item[2] for item in failures))
             except Exception:
-                self.logger.warning("Upload error display is no longer available")
+                self.logger.exception("Upload error display is no longer available")
 
     @staticmethod
     def _retry_delay(body: Dict[str, Any], headers: Any) -> int:
@@ -179,8 +179,9 @@ class CloudClient:
             return result
         except (ValueError, UnicodeError):
             return {"error": "invalid_response", "retryable": True}
-        except Exception:
-            # Remote exception text can include credentials, URLs or PINs.
+        except Exception:  # noqa: BLE001
+            # Remote exception text can include credentials, URLs or PINs, so
+            # it is never logged; the caller sees a retryable "unavailable".
             return {"error": "unavailable", "retryable": True}
 
     def ping(self) -> Dict[str, Any]:

@@ -324,7 +324,7 @@ class DeviceController(QObject):
             try:
                 result = work()
                 self.completed.emit(result, "")
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001
                 # System exceptions can contain secrets or record contents. Log only the type.
                 self.logger.error("Device operation %s failed (%s)", key, type(exc).__name__)
                 safe = str(exc) if isinstance(exc, (RuntimeError, ValueError)) else (
@@ -676,7 +676,7 @@ class DeviceController(QObject):
                 try:
                     self.backend.write("brightness", value)
                 except Exception:
-                    self.logger.warning("Could not restore brightness during shutdown")
+                    self.logger.exception("Could not restore brightness during shutdown")
 
             self._worker = threading.Thread(target=restore, daemon=True)
             self._worker.start()

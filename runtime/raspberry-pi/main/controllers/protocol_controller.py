@@ -162,8 +162,8 @@ class ProtocolController:
                 return False
             settings = dict(window.shell.treatment.settings_values())
             settings["duration"] = int(window._duration_minutes())
-        except Exception as e:
-            window.logger.error("Error reading protocol parameters for confirmation: %s", e)
+        except Exception:
+            window.logger.exception("Error reading protocol parameters for confirmation")
             return False
 
         patient = getattr(window, "cloud_patient", None)
@@ -315,9 +315,10 @@ class ProtocolController:
             duration = 12  # Default to 12 minutes
             try:
                 duration = int(window._duration_minutes())
-            except Exception as e:
-                window.logger.warning(
-                    "Error getting time value: %s, using default 5 minutes", e
+            except Exception:
+                window.logger.exception(
+                    "Could not read the treatment duration; using the default %d minutes",
+                    duration,
                 )
 
             if duration == 0:
@@ -617,8 +618,8 @@ class ProtocolController:
             self._set_phase_from_text(
                 "Protocol complete" if success else "Protocol stopped"
             )
-        except Exception as e:
-            window.logger.error("Error updating status label: %s", e)
+        except Exception:
+            window.logger.exception("Error updating status label")
         window.mid_protocol_warning_shown = False
         if safety_fault_active:
             # Preserve an existing command/device fault. A later worker
@@ -686,7 +687,7 @@ class ProtocolController:
                     "The treatment record could not be saved for upload. Contact support.", False
                 )
             except Exception:
-                window.logger.error("Could not display the treatment recording failure")
+                window.logger.exception("Could not display the treatment recording failure")
         try:
             window.shell.treatment.set_outcome(session.outcome, session.elapsed())
         except Exception:
@@ -696,7 +697,7 @@ class ProtocolController:
             try:
                 sign_in.treatment_finished()
             except Exception:
-                window.logger.error("Could not finish sign-out presentation after treatment")
+                window.logger.exception("Could not finish sign-out presentation after treatment")
 
     def _session_progress(self, text: str, session: TreatmentSession) -> None:
         if session is self._session and not session.finalized:
@@ -740,8 +741,8 @@ class ProtocolController:
         # hardware measurement must confirm before this ships to a device.
         try:
             GPIO.output(EMERGENCYSTOP, GPIO.LOW)
-        except Exception as e:
-            window.logger.error("Could not assert EMERGENCYSTOP GPIO: %s", e)
+        except Exception:
+            window.logger.exception("Could not assert EMERGENCYSTOP GPIO")
         # Logged only after the hardware line is asserted.
         window.logger.warning("Emergency stop triggered")
         if window.worker:
@@ -756,8 +757,8 @@ class ProtocolController:
         if hasattr(window, "protocol_state"):
             try:
                 self.set_state("stopping")
-            except Exception as e:
-                window.logger.error("Could not update emergency-stop UI state: %s", e)
+            except Exception:
+                window.logger.exception("Could not update emergency-stop UI state")
         # Use QTimer instead of sleep to avoid blocking UI
         QTimer.singleShot(1000, self._emergency_stop_phase2)
 
@@ -782,8 +783,8 @@ class ProtocolController:
             return
         try:
             GPIO.output(EMERGENCYSTOP, GPIO.HIGH)
-        except Exception as e:
-            self.window.logger.error("Could not release EMERGENCYSTOP GPIO: %s", e)
+        except Exception:
+            self.window.logger.exception("Could not release EMERGENCYSTOP GPIO")
         # Same release-then-ask ordering as the staged stop
         self._reset_after_release(time.time())
 
@@ -795,8 +796,8 @@ class ProtocolController:
         clean = str(text).lstrip(">")
         try:
             self._set_phase_from_text(clean)
-        except Exception as e:
-            window.logger.error("Error updating status label: %s", e)
+        except Exception:
+            window.logger.exception("Error updating status label")
         window.treatment_panel.set_phase(clean.upper())
 
     def _set_phase_from_text(self, text: str) -> None:

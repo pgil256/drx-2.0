@@ -400,12 +400,14 @@ class TestAtomicWrite:
             assert config.b_factor == 3720
             assert config.config["Options"]["b_factor"] == "3720"
             errors = [
-                record.getMessage() for record in caplog.records
+                record for record in caplog.records
                 if record.name == "KneeSpa.config" and record.levelname == "ERROR"
             ]
-            assert errors == [
-                "disk full", f'Fatal error, could not write config file to "{cfg_path}"',
+            assert [record.getMessage() for record in errors] == [
+                f'Fatal error, could not write config file to "{cfg_path}"',
             ]
+            # The cause travels with the record as its traceback.
+            assert str(errors[0].exc_info[1]) == "disk full"
 
         assert cfg_path.read_bytes() == original
         assert not list(tmp_path.glob(".kneespa_cfg_*"))

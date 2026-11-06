@@ -97,7 +97,7 @@ class Probe:
         while self.running:
             try:
                 raw = self.ser.readline()
-            except Exception as exc:  # port vanished etc.
+            except OSError as exc:  # port vanished etc. (SerialException is an OSError)
                 self._out("!! read error: {}".format(exc))
                 return
             if not raw:
@@ -127,7 +127,7 @@ class Probe:
                 # Ack so the firmware keeps streaming and its heartbeat stays fed
                 try:
                     self.ser.write(b"Q\n")
-                except Exception:
+                except OSError:  # the reader reports a dead port
                     pass
         elif line.startswith(("DONE", "BUSY", "OK", "ERR", "COMMAND_REJECTED",
                               "CALIBRATION|TARE|REJECTED", "CALIBRATION|TARE|CANCELLED")):
@@ -180,7 +180,7 @@ class Probe:
             self.command("X", 3.0)
             time.sleep(0.5)
             self.command("HF0", 3.0)
-        except Exception:
+        except OSError:  # best effort: the port may already be gone
             pass
 
     def close(self):
@@ -295,7 +295,7 @@ def read_banner(usb_port, seconds=8.0):
     print("Opening {} at 9600 and pulsing DTR (this resets the Mega)".format(usb_port))
     try:
         s = serial.Serial(usb_port, 9600, timeout=0.5)
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         print("Could not open {}: {}".format(usb_port, exc))
         return 1
     try:
@@ -349,7 +349,7 @@ def main():
         setup_app_gpio()
     try:
         probe = Probe(args.port, args.log, (args.c_min, args.c_max))
-    except Exception as exc:
+    except (OSError, ValueError) as exc:
         print("Could not open {}: {}".format(args.port, exc))
         sys.exit(1)
 
@@ -401,7 +401,7 @@ def main():
     except KeyboardInterrupt:
         print("\nInterrupted: sending X")
         probe.stop()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - any failure must still send X
         print("\nError: {}: sending X".format(exc))
         probe.stop()
     finally:

@@ -283,8 +283,8 @@ class SafetyMonitor:
             if window.protocol_running and window.worker:
                 try:
                     window.worker.cancel()
-                except Exception as e:
-                    window.logger.error("Error flagging worker stop: %s", e)
+                except Exception:
+                    window.logger.exception("Error flagging worker stop")
             fault = f"COMMAND REJECTED: {message}"
             window.treatment_panel.set_fault(fault)
             window.set_protocol_state("fault")
@@ -395,8 +395,8 @@ class SafetyMonitor:
                 window._show_timed_error(msg)
             else:
                 window.logger.info("Zero marks verified: A=%s B=%s", a_zero, b_zero)
-        except Exception as e:
-            window.logger.error("Error verifying zero marks: %s", e)
+        except Exception:
+            window.logger.exception("Error verifying zero marks")
 
     def on_connection_lost(self):
         """Present connection loss as an advisory warning."""
