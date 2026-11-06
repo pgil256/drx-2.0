@@ -18,8 +18,10 @@ import time
 from dataclasses import dataclass
 from typing import Dict, Mapping, Tuple
 
+import RPi.GPIO as GPIO
 from PyQt5.QtCore import QTimer
 
+from config.constants import EMERGENCYSTOP
 from helpers.stop_commands import RELEASE_SEQUENCE, STOP_ALL, TELEMETRY_ON
 
 OPERATOR = "operator"   # the treatment STOP (ProtocolController.stop_protocol)
@@ -131,6 +133,7 @@ class StopController:
         """Run one kind of stop; ``options`` are that kind's arguments."""
         handlers = {
             OPERATOR: self._operator_stop,
+            ESTOP: self._estop_stop,
         }
         handlers[kind](**options)
 
@@ -248,3 +251,72 @@ class StopController:
         window.shell.setup.set_reset_enabled(True)
         window.treatment_panel.set_idle()
         window._show_rehome_prompt(load_cleared)
+
+    def _estop_stop(self, outcome: str = "fault"):
+        """Handle emergency stop button press."""
+        window = self.window
+        # Mark this as an intentional stop before any firmware responses can
+        # arrive. Command rejections from the follow-up pressure-release
+        # cleanup must not be mislabeled as a new physical device fault.
+        window.protocol_stop_requested = True
+        self.protocol.latch_session_outcome(outcome)
+        # The banner's EMERGENCY STOP reaches here directly (not via the
+        # Treatment screen's _on_estop), so clear the UI pause anchor here
+        # too -- it used to survive an e-stop taken while paused, after
+        # which PAUSE did nothing for every later treatment.
+        window._paused_at = None
+        # Assert the hardware EMERGENCYSTOP line FIRST - it does not depend
+        # on the serial link being alive. setup_gpio() parks the pin HIGH
+        # (run-permitted) at boot, so LOW is the asserted/stop state; it was
+        # configured but never driven before. Released again in phase 3,
+        # before the operator is asked to re-home: homing needs a live
+        # machine. Polarity is inferred from the boot default - Phase E
+        # hardware measurement must confirm before this ships to a device.
+        try:
+            GPIO.output(EMERGENCYSTOP, GPIO.LOW)
+        except Exception:
+            window.logger.exception("Could not assert EMERGENCYSTOP GPIO")
+        # Logged only after the hardware line is asserted.
+        window.logger.warning("Emergency stop triggered")
+        if window.worker:
+            window.worker.cancel()
+        # arduino.send never blocks or reconnects; 'X' jumps the tx queue
+        # and stop_actuators alarms the operator if the link is down.
+        window.stop_actuators()
+        self.protocol.finalize_session()
+        # UI state changes come after both independent stop mechanisms so a
+        # broken widget can never delay either safety action. The raw stop
+        # flag above is already sufficient to classify an immediate reply.
+        if hasattr(window, "protocol_state"):
+            try:
+                self.protocol.set_state("stopping")
+            except Exception:
+                window.logger.exception("Could not update emergency-stop UI state")
+        # Use QTimer instead of sleep to avoid blocking UI
+        QTimer.singleShot(1000, self._emergency_stop_phase2)
+
+    def _emergency_stop_phase2(self):
+        """Phase 2 of emergency stop after 1 second delay."""
+        window = self.window
+        if getattr(window, "_no_automatic_recovery", False) is True:
+            return
+        if getattr(window, "_closing", False) is True:
+            return
+        self._release_after_stop()
+        # Continue to phase 3 after another second
+        QTimer.singleShot(1000, self._emergency_stop_phase3)
+
+    def _emergency_stop_phase3(self):
+        """Phase 3: release the hardware stop line, then ask the operator to
+        re-home (the reset sequence homes actuators, which needs the machine
+        powered)."""
+        if getattr(self.window, "_no_automatic_recovery", False) is True:
+            return
+        if getattr(self.window, "_closing", False) is True:
+            return
+        try:
+            GPIO.output(EMERGENCYSTOP, GPIO.HIGH)
+        except Exception:
+            self.window.logger.exception("Could not release EMERGENCYSTOP GPIO")
+        # Same release-then-ask ordering as the staged stop
+        self._reset_after_release(time.time())

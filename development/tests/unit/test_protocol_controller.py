@@ -620,24 +620,24 @@ class TestReleaseBeforeRehome:
     def test_emergency_stop_phase3_also_waits(self, controller):
         pc, w = controller
         w.last_measured_pressure = 30.0
-        pc._emergency_stop_phase3()
+        pc.stops._emergency_stop_phase3()
         w._show_rehome_prompt.assert_not_called()
         w.reset_arduino.assert_not_called()
 
     def test_emergency_stop_phase3_asks_once_released(self, controller):
         pc, w = controller
         w.last_measured_pressure = 0.5
-        pc._emergency_stop_phase3()
+        pc.stops._emergency_stop_phase3()
         w._show_rehome_prompt.assert_called_once_with(True)
         w.reset_arduino.assert_not_called()
 
     def test_waits_for_a_cancelled_reset_then_asks(self, controller, monkeypatch):
         """Stop during a reset cancels it; the prompt follows its failure."""
-        from controllers import protocol_controller as pc_mod
+        from controllers import stop_controller as sc_mod
 
         pc, w = controller
         polls = []
-        monkeypatch.setattr(pc_mod.QTimer, "singleShot",
+        monkeypatch.setattr(sc_mod.QTimer, "singleShot",
                             lambda ms, callback: polls.append(callback))
         w.protocol_state = "stopping"
         w.reset_in_progress = True

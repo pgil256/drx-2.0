@@ -11,7 +11,6 @@ from unittest.mock import MagicMock
 
 import pytest
 
-import controllers.protocol_controller as pc_mod
 import controllers.stop_controller as sc_mod
 from fixtures.controllers import make_window
 from fixtures.protocols import make_protocol
@@ -24,14 +23,12 @@ PHASES = ("_stop_phase2", "_emergency_stop_phase2")
 @pytest.fixture(autouse=True)
 def no_timers(monkeypatch):
     # The phases schedule their successors; these tests drive one phase.
-    monkeypatch.setattr(pc_mod, "QTimer", MagicMock())
     monkeypatch.setattr(sc_mod, "QTimer", MagicMock())
 
 
 def phase_of(window, name):
-    """A stop phase, wherever it lives (StopController, or not yet moved)."""
-    stops = window.protocol.stops
-    return getattr(stops if hasattr(stops, name) else window.protocol, name)
+    """One of the stop phases, which StopController runs."""
+    return getattr(window.protocol.stops, name)
 
 
 def sent(window):
@@ -97,7 +94,7 @@ def test_fault_stop_still_sends_no_release():
 
     window.protocol.stop_without_recovery("PRESSURE_LIMIT", fault=True)
     window.protocol.stops._stop_phase2()
-    window.protocol._emergency_stop_phase2()
+    window.protocol.stops._emergency_stop_phase2()
 
     assert "P0" not in sent(window)
 

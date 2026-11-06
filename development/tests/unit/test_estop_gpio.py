@@ -9,7 +9,6 @@ to re-home, since homing needs a powered machine.
 import pytest
 from unittest.mock import MagicMock
 
-import controllers.protocol_controller as pc_mod
 import controllers.stop_controller as sc_mod
 from controllers.protocol_controller import ProtocolController
 from config.constants import EMERGENCYSTOP
@@ -36,10 +35,9 @@ def estop_env(monkeypatch):
     events = []
     gpio = MagicMock()
     gpio.output.side_effect = lambda pin, level: events.append(("gpio", pin, level))
-    monkeypatch.setattr(pc_mod, "GPIO", gpio)
+    monkeypatch.setattr(sc_mod, "GPIO", gpio)
     # The tests call each phase directly. Real timers would run the later
     # phases after the test, against this stub, during some other test.
-    monkeypatch.setattr(pc_mod, "QTimer", MagicMock())
     monkeypatch.setattr(sc_mod, "QTimer", MagicMock())
     window = RecordingWindow(events)
     controller = ProtocolController(window)
@@ -77,20 +75,20 @@ class TestEmergencyStopGpio:
 
     def test_phase2_stops_worker(self, estop_env):
         events, _, controller, _ = estop_env
-        controller._emergency_stop_phase2()
+        controller.stops._emergency_stop_phase2()
         assert events == ["worker.stop"]
 
     def test_phase3_releases_gpio_then_asks_to_rehome(self, estop_env):
         """Homing needs the machine powered: HIGH before the operator is
         asked, and nothing resets on its own."""
         events, gpio, controller, _ = estop_env
-        controller._emergency_stop_phase3()
+        controller.stops._emergency_stop_phase3()
         assert events == [("gpio", EMERGENCYSTOP, gpio.HIGH), "ask_rehome"]
 
     def test_phase3_asks_even_if_gpio_release_fails(self, estop_env):
         events, gpio, controller, _ = estop_env
         gpio.output.side_effect = RuntimeError("gpio unavailable")
-        controller._emergency_stop_phase3()
+        controller.stops._emergency_stop_phase3()
         assert events == ["ask_rehome"]
 
     def test_phase3_does_not_release_after_physical_stop(self, estop_env):
@@ -98,5 +96,5 @@ class TestEmergencyStopGpio:
         after a physical stop the automatic recovery never runs."""
         events, _, controller, window = estop_env
         window._no_automatic_recovery = True
-        controller._emergency_stop_phase3()
+        controller.stops._emergency_stop_phase3()
         assert events == []

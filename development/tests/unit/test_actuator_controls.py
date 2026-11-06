@@ -20,7 +20,7 @@ from fixtures.actuators import ControlsHarness
 
 import kneespa
 from kneespa import KneeSpa
-import controllers.protocol_controller as pc_mod
+import controllers.stop_controller as sc_mod
 from controllers.protocol_controller import ProtocolController
 from config.config import Configuration
 from config.constants import (
@@ -405,8 +405,8 @@ class TestEmergencyStop:
         stub.stop_actuators = lambda: KneeSpa.stop_actuators(stub)
         controller = ProtocolController(stub)
 
-        with patch.object(pc_mod, "QTimer") as mock_qtimer, \
-                patch.object(pc_mod, "GPIO"):
+        with patch.object(sc_mod, "QTimer") as mock_qtimer, \
+                patch.object(sc_mod, "GPIO"):
             controller.emergency_stop_clicked(None)
 
         stub.arduino.send.assert_called_once_with("X")
@@ -418,14 +418,14 @@ class TestEmergencyStop:
         stub = MagicMock()
         controller = ProtocolController(stub)
 
-        with patch.object(pc_mod, "QTimer") as mock_qtimer, \
-                patch.object(pc_mod, "GPIO"):
+        with patch.object(sc_mod, "QTimer") as mock_qtimer, \
+                patch.object(sc_mod, "GPIO"):
             controller.emergency_stop_clicked(None)
 
         stub.stop_actuators.assert_called_once()
         args, _ = mock_qtimer.singleShot.call_args
         assert args[0] == 1000
-        assert args[1] == controller._emergency_stop_phase2
+        assert args[1] == controller.stops._emergency_stop_phase2
 
     def test_marks_intentional_stop_before_sending_commands(self):
         """Firmware cleanup responses must observe the stopping state."""
@@ -433,7 +433,7 @@ class TestEmergencyStop:
         stub.protocol_state = "running"
         controller = ProtocolController(stub)
 
-        with patch.object(pc_mod, "QTimer"), patch.object(pc_mod, "GPIO"):
+        with patch.object(sc_mod, "QTimer"), patch.object(sc_mod, "GPIO"):
             controller.emergency_stop_clicked(None)
 
         assert stub.protocol_stop_requested is True

@@ -702,7 +702,7 @@ def test_fault_survives_completion_and_stale_callbacks_after_close(
     assert not run.view._start_btn.isEnabled()
     run.window.close()
     run.window.protocol.stops._stop_phase2()
-    run.window.protocol._emergency_stop_phase2()
+    run.window.protocol.stops._emergency_stop_phase2()
     run.window.connection._on_reset_finished(True)
     worker.signals.finished.emit(True)
     assert run.window.protocol_state == "fault"
