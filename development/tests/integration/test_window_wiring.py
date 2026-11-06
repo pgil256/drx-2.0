@@ -647,6 +647,25 @@ def test_rehome_prompt_defers_to_a_later_safety_stop(window_run: SimpleNamespace
     assert errors and "Reset in Setup" in errors[0]
 
 
+def test_window_flags_live_in_device_state(window_run: SimpleNamespace,
+                                          monkeypatch: pytest.MonkeyPatch) -> None:
+    """A1: the window's flags are its DeviceState, and the guards read it."""
+    run = window_run
+    w = run.window
+    reset = MagicMock(signals=ResetWorkerSignals())
+    monkeypatch.setattr(connection_manager, "ResetWorker", lambda *args: reset)
+    run.pool.start.side_effect = None
+    w.reset_arduino()
+    assert w.device_state.reset_in_progress is True
+    assert not w.device_state.can_exit() and not w.device_state.can_move()
+    assert w._block_active_treatment_exit() is True
+    reset.signals.finished.emit(True)
+    assert w.device_state.reset_in_progress is False
+    assert w.device_state.initial_setup_complete is True
+    assert w.device_state.protocol_state == "idle"
+    assert w.device_state.can_exit() and w.device_state.can_move()
+
+
 @pytest.mark.parametrize("result", ["success", "failure", "error"])
 def test_reset_signals_drive_real_controls(window_run: SimpleNamespace,
                                            monkeypatch: pytest.MonkeyPatch,
