@@ -187,6 +187,19 @@ def test_server_roundtrip_fragmentation_and_control_authorization(tmp_path):
 
 
 @pytest.mark.unit
+@pytest.mark.parametrize("command", ["P999", "P-10", "Pabc", "P40|30", "P40|20|50"])
+def test_a_malformed_pressure_target_is_rejected_not_latched(command):
+    """Matches firmware V5: a reject, with no fault and no motion."""
+    device = SimulatedController()
+    prepare(device)
+    replies = send(device, command)
+    assert "COMMAND_REJECTED|P|INVALID_TARGET" in replies
+    assert "FAULT|" not in replies
+    assert not device.measure_pressure
+    assert "MOTION_DONE|P|20.00" in send(device, "P20|20", 5)  # still usable
+
+
+@pytest.mark.unit
 def test_pressure_increase_only_completes_at_or_above_requested_target():
     device = SimulatedController()
     prepare(device)
