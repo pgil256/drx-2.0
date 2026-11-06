@@ -410,7 +410,7 @@ def test_protected_device_work_blocks_treatment_reset_and_manual_motion(window_r
     try:
         w.protocol.start_protocol()
         w.connection.reset_arduino()
-        assert not w._send_motion_command("K1200", "test device guard")
+        assert not w.motion.send_motion_command("K1200", "test device guard")
         assert not run.workers
         run.arduino.send.assert_not_called()
     finally:

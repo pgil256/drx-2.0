@@ -3,7 +3,8 @@
 # Union of the two development lines (Phase B replay):
 #   * Backend/controllers (improvement-plan): the Arduino QThread, controllers/
 #     (auth, connection, protocol, safety), frozen calibration math
-#     (set_to_distance / set_to_c_distance / move_actuator),
+#     (set_to_distance / set_to_c_distance / move_actuator, now in
+#     controllers/motion_controller.py),
 #     GPIO handling with auto-release timers, and the reset paths are preserved
 #     from the improvement-plan KneeSpa.
 #   * View (feat/gui-modernization): the monolithic kneespa.ui + findChild wiring
@@ -47,7 +48,6 @@ if __name__ == "__main__":
 from config.constants import (
     APP_VERSION,
     WINDOW_TITLE,
-    DEGREES,
     ACTUATORS,
     SUCCESS_MESSAGES,
     EMERGENCYSTOP,
@@ -56,19 +56,12 @@ from config.constants import (
     EXTRAENABLE,
     EMAIL_CONFIG,
     PRESSURE_MAX,
-    AXIAL_MAX_INCHES,
-    AXIAL_MIN_INCHES,
-    LATERAL_MIN_DEGREES,
     LATERAL_MAX_DEGREES,
-    HORIZONTAL_MIN_DEGREES,
-    HORIZONTAL_MAX_DEGREES,
     DEFAULT_HORIZONTAL_POSITION,
-    MIN_PRESSURE,
     DEFAULT_PROTOCOL_MINUTES,
     PROTOCOL_MINUTES_MIN,
     PROTOCOL_MINUTES_MAX,
     DATA_PATHS,
-    SETUP_MOTION_DONE_TIMEOUT_S,
 )
 
 from ui.modals.pressure_notice import PressureNotice
@@ -79,21 +72,19 @@ from helpers.csv import CSVHelper
 from helpers.measurement_state import DIAGNOSTICS_MAX_AGE_S, MeasurementState
 from helpers.app_restart import restart_app
 from helpers.device_system import DeviceSystem
-from helpers.conversions import (
-    lateral_degrees_to_position,
-    horizontal_degrees_to_position,
-)
 from helpers.cloud_client import CloudClient
 from helpers.cloud_contract import cloud_error_message, validate_patient
 from controllers.hardware_service_controller import HardwareServiceController
 from controllers.device_controller import DeviceController
 from controllers.device_state import DeviceStateAttributes
+from controllers.motion_controller import (
+    MotionAttributes, MotionController, WindowSetupView,
+)
 from controllers.linked_patient import link_patient, unlink_patient
 from controllers.patient_controller import PatientController
 from controllers.machine_sign_in_controller import MachineSignInController, authorize
 from helpers.support_ticket import create_ticket, validate_ticket
 from controllers.leg_length_controller import LegLengthController
-from helpers.hardware_service import axial_position
 
 from helpers.logging import LoggerSetup, read_recent_log_lines, setup_logger
 from helpers.watchdog import extend_watchdog_for_shutdown, start_watchdog
@@ -136,58 +127,18 @@ class _CloudBridge(QObject):
 
 
 # Main Python class
-class KneeSpa(DeviceStateAttributes, QMainWindow):
+class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
     """Main application class for KneeSpa."""
 
     support_email_result = pyqtSignal(bool, str)
 
     def set_to_distance(self, inches, actuator):
-        command = "A{}{:.1f}".format(actuator, inches)
-        config = getattr(self, "config", None)
-        if str(actuator) == "12" and getattr(config, "axial_service_calibrated", False) is True:
-            try:
-                command = f"I12{axial_position(config.AMarks, inches)}"
-            except (ValueError, TypeError, KeyError) as exc:
-                self._show_timed_error(f"Axial calibration is invalid: {exc}")
-                return False
-        self.I2Cstatus_event.clear()
-        if not KneeSpa._send_motion_command(self, command, "axial movement"):
-            return False
-        self.logger.debug("Sent cmd %s", command.strip())
-        self.logger.debug("End set to distance")
-        return True
+        """Send an axial (or other A-channel) target: see MotionController."""
+        return self.motion.set_to_distance(inches, actuator)
 
     def set_to_c_distance(self, degrees):
-        """
-        Set the C actuator position based on degrees with proper type handling.
-
-        Args:
-            degrees (float): Target angle in degrees
-        """
-        self.loading_spinner.show()
-        self.disable_actuator_controls()
-        try:
-            position, degrees = lateral_degrees_to_position(
-                self.config.CMarks, degrees
-            )
-
-            self.logger.debug(" positioned to %s degrees pos %s", degrees, position)
-            command = f"K{position}"
-            self.I2Cstatus_event.clear()
-            if not KneeSpa._send_motion_command(self, command, "lateral movement"):
-                return False
-            self.logger.debug("cmd %s", command)
-
-            self.logger.debug("End set to c.")
-            self.loading_spinner.hide()
-            return True
-
-        except Exception:
-            self.loading_spinner.hide()
-            self.logger.exception("Error in set_to_c_distance")
-            self.logger.error("Degrees: %s, Type: %s", degrees, type(degrees))
-            self.logger.error("CMarks: %s", self.config.CMarks)
-            return False
+        """Send a lateral target in degrees: see MotionController."""
+        return self.motion.set_to_c_distance(degrees)
 
     ### App Initialization ####
     def __init__(self, debug_mode=False, config_path=None):
@@ -231,11 +182,6 @@ class KneeSpa(DeviceStateAttributes, QMainWindow):
         self.actuator_b = ACTUATORS["HORIZONTAL"]["ID"]
         self.actuator_c = ACTUATORS["LATERAL"]["ID"]
 
-        # Actuator position tracking (legacy setup_actuator_controls defaults).
-        self.axial_flexion_position = 0
-        self.horizontal_flexion_position = DEFAULT_HORIZONTAL_POSITION
-        self.lateral_flexion_position = 0
-
         # Backend initialization
         # QObject already exposes a thread() method. Keep the owned Arduino
         # QThread under a distinct name so first-time connection setup cannot
@@ -243,6 +189,17 @@ class KneeSpa(DeviceStateAttributes, QMainWindow):
         self.arduino = None
         self.arduino_thread = None
         self.I2Cstatus_event = threading.Event()  # Thread-safe event for synchronization
+        # Setup movement and its commanded positions (checklist A3). The
+        # window's position and timer attributes delegate to it.
+        self.motion = MotionController(
+            lambda: self.arduino, lambda: self.config, self.device_state,
+            WindowSetupView(self), logger=self.logger,
+            leg=lambda: getattr(self, "leg", None),
+            done_event=self.I2Cstatus_event,
+            protocol_running=lambda: self.protocol_running,
+            release_leg_gpio=self._release_leg_gpio,
+            timer_parent=self,
+        )
         self.config = Configuration(config_path=config_path)
         self.config.get_config()
         self.logger.info(
@@ -256,8 +213,6 @@ class KneeSpa(DeviceStateAttributes, QMainWindow):
         self.initial_setup_complete = False
         self.reset_in_progress = False  # Flag to prevent overlapping resets
         self.actuator_command_in_progress = False  # Prevents simultaneous actuator commands
-        self.controls_enable_timer = None  # Single pending-enable timer for all controls
-        self._motion_watchdog = None  # Backstop for a Setup move whose DONE never arrives
         self.mid_protocol_warning_shown = False
         self.protocol_stop_requested = False
         self._physical_stop_active = False
@@ -478,132 +433,17 @@ class KneeSpa(DeviceStateAttributes, QMainWindow):
 
     def _reflect_setup(self, key, value):
         """Reflect a commanded target without claiming that a sensor measured it."""
-        present(self.logger, "Setup position",
-                lambda: self.shell.setup.set_position(key, value))
-
-    def _send_motion_command(self, command, context):
-        """Queue a Setup motion without fabricating success in the UI."""
-        if getattr(self, "_closing", False) is True:
-            return False
-        if (getattr(self, "_calibration_active", False) is True
-                or getattr(self, "_device_maintenance_active", False) is True):
-            self._show_timed_error("Finish device service before normal movement.")
-            return False
-        try:
-            queued = bool(self.arduino and self.arduino.send(command))
-        except Exception:
-            queued = False
-            self.logger.exception("Could not queue %s command %s", context, command)
-        if queued:
-            # Position (A/I/K) and pressure (P) moves re-enable the controls
-            # only on the firmware's DONE; F0 is a stop the leg controller owns.
-            if command[:1] in ("A", "I", "K", "P"):
-                KneeSpa._arm_motion_watchdog(self)
-            return True
-
-        self.logger.error("Could not queue %s command %s", context, command)
-        self._set_badge(False)
-        self._show_timed_error(
-            f"{context.capitalize()} was not sent. Check the Arduino connection."
-        )
-        self.enable_actuator_controls()
-        self.loading_spinner.hide()
-        return False
-
-    def _arm_motion_watchdog(self):
-        """Start the backstop for a queued Setup move awaiting its DONE."""
-        KneeSpa._stop_motion_watchdog(self)
-        # Parent it to the window so it cannot outlive it.
-        timer = QTimer(self) if isinstance(self, QObject) else QTimer()
-        timer.setSingleShot(True)
-        timer.timeout.connect(lambda: KneeSpa._on_motion_watchdog(self))
-        timer.start(int(SETUP_MOTION_DONE_TIMEOUT_S * 1000))
-        self._motion_watchdog = timer
-
-    def _stop_motion_watchdog(self):
-        timer = getattr(self, "_motion_watchdog", None)
-        if timer is not None:
-            timer.stop()
-            self._motion_watchdog = None
-
-    def _on_motion_watchdog(self):
-        """No DONE for a Setup move: hand the controls back to the operator.
-
-        Without this a lost DONE kept actuator_command_in_progress set, which
-        also blocks logout and exit. enable_actuator_controls keeps its own
-        guards, so a reset, service session or fault still owns the controls.
-        """
-        self._motion_watchdog = None
-        # Read every flag with a default: this fires from a timer, where an
-        # exception would only reach the excepthook and leave controls locked.
-        if (getattr(self, "actuator_command_in_progress", False) is not True
-                or getattr(self, "_closing", False) is True
-                or getattr(self, "protocol_running", False) is True):
-            return
-        self.logger.error(
-            "No DONE from the device within %s s of a Setup move; re-enabling controls",
-            SETUP_MOTION_DONE_TIMEOUT_S,
-        )
-        self.loading_spinner.hide()
-        self._show_timed_error(
-            "The device did not report that the movement finished. "
-            "Check the device before moving again."
-        )
-        self.enable_actuator_controls()
+        self.motion.view.show_position(key, value)
 
     ### UI Methods ###
 
     def disable_actuator_controls(self):
-        # A new command or operation supersedes any pending move's backstop.
-        KneeSpa._stop_motion_watchdog(self)
-        # Cancel any pending enable so it cannot fire mid-command and
-        # re-enable controls while the MCU is still busy
-        if self.controls_enable_timer is not None:
-            self.controls_enable_timer.stop()
-            self.controls_enable_timer = None
-        self.actuator_command_in_progress = True
-        for w in self.actuator_controls:
-            w.setEnabled(False)
+        """Lock the Setup motion controls: see MotionController."""
+        self.motion.disable_actuator_controls()
 
     def enable_actuator_controls(self):
-        # Completion (or an owner taking over) ends the pending move's backstop.
-        KneeSpa._stop_motion_watchdog(self)
-        if getattr(getattr(self, "leg", None), "active", False) is True:
-            return
-        if not self.device_state.can_move():
-            return
-        self.actuator_command_in_progress = False
-        if self.protocol_running == False:
-            self.logger.debug("Scheduling controls to enable with delay...")
-            # Single timer instance shared by all controls: a new enable
-            # request supersedes any pending one instead of stacking
-            # per-widget timers that can interleave with a later disable
-            if self.controls_enable_timer is not None:
-                self.controls_enable_timer.stop()
-            self.controls_enable_timer = QTimer()
-            self.controls_enable_timer.setSingleShot(True)
-            self.controls_enable_timer.timeout.connect(
-                self._apply_enable_actuator_controls
-            )
-            self.controls_enable_timer.start(200)
-
-    def _apply_enable_actuator_controls(self):
-        self.controls_enable_timer = None
-        if getattr(getattr(self, "leg", None), "active", False) is True:
-            return
-        if (getattr(self, "_calibration_active", False) is True
-                or getattr(self, "_device_maintenance_active", False) is True):
-            return
-        # The state may have changed during the 200 ms debounce window.
-        if (
-            self.reset_in_progress
-            or not self.initial_setup_complete
-            or self.protocol_running
-            or self.protocol_state == "fault"
-        ):
-            return
-        for w in self.actuator_controls:
-            w.setEnabled(True)
+        """Unlock the Setup motion controls after a 200 ms debounce: see MotionController."""
+        self.motion.enable_actuator_controls()
 
     def reset_setup_readings(self):
         """Reset setup readings to default values (modern Setup rows)."""
@@ -872,7 +712,7 @@ class KneeSpa(DeviceStateAttributes, QMainWindow):
         if not authorize(self, "setup", lambda: self._on_setup_jog(key, action)):
             return
         if action == "reset":
-            self._setup_reset(key)
+            self.motion.setup_reset(key)
             return
         if key == "leg_length":
             self._leg_jog(action)
@@ -900,121 +740,15 @@ class KneeSpa(DeviceStateAttributes, QMainWindow):
         if handler:
             handler()
 
-    def _setup_reset(self, key):
-        if key == "axial":
-            self.reset_flexion_button_clicked(self.actuator_a)
-        elif key == "lateral":
-            self.reset_flexion_button_clicked(self.actuator_c)
-        elif key == "horizontal":
-            self.reset_flexion_button_clicked(self.actuator_b)
-        elif key == "leg_length":
-            self.reset_extra_button_clicked()
-        elif key == "pressure":
-            self.loading_spinner.show()
-            self.disable_actuator_controls()
-            # DONE re-enables the controls via set_done. The treatment banner
-            # is reserved for protocol stops: set_stopping() here had no
-            # matching set_idle(), so "STOPPING - RELEASING TRACTION" stayed
-            # over the top bar until the next treatment or Arduino reset.
-            KneeSpa._send_motion_command(self, "P0", "pressure release")
-            self.loading_spinner.hide()
-
     def _on_setup_go(self, key):
-        """Move an actuator to its row's current slider value (the legacy Go
-        path), preserving the per-actuator unit conversions and clamps."""
+        """Setup Go, once the operator is authorized: see MotionController.setup_go."""
         if not authorize(self, "setup", lambda: self._on_setup_go(key)):
             return False
-        if key in ("axial", "horizontal", "lateral") and not self.config.marks_valid:
-            self._warn_uncalibrated()
-            return False
-        if key == "pressure" and not self.config.scale_calibrated:
-            self._warn_uncalibrated()
-            return False
-        if key == "leg_length":
-            return self.leg.move_to(self.shell.setup.row_value("leg_length"))
-
-        self.loading_spinner.show()
-        self.disable_actuator_controls()
-        moved = False
-        try:
-            if key == "axial":
-                inches = self.shell.setup.row_value("axial")
-                inches = max(AXIAL_MIN_INCHES, min(AXIAL_MAX_INCHES, inches))
-                if not self.set_to_distance(inches, self.actuator_a):
-                    return False
-                self.axial_flexion_position = inches
-                self._reflect_setup("axial", inches)
-            elif key == "horizontal":
-                degrees = self.shell.setup.row_value("horizontal")
-                degrees = max(HORIZONTAL_MIN_DEGREES, min(HORIZONTAL_MAX_DEGREES, degrees))
-                position = horizontal_degrees_to_position(self.config.BMarks, degrees)
-                if not KneeSpa._send_motion_command(
-                    self, f"I13{position}", "horizontal movement"
-                ):
-                    return False
-                self.horizontal_flexion_position = degrees
-                self._reflect_setup("horizontal", degrees)
-            elif key == "lateral":
-                degrees = self.shell.setup.row_value("lateral")
-                degrees = max(LATERAL_MIN_DEGREES, min(LATERAL_MAX_DEGREES, degrees))
-                if not self.set_to_c_distance(degrees):
-                    return False
-                self.lateral_flexion_position = degrees
-                self._reflect_setup("lateral", degrees)
-            elif key == "pressure":
-                moved = self._apply_setup_pressure()
-                return moved
-            moved = True
-            return True
-        except Exception as e:
-            self.logger.exception("Error in Setup Go")
-            self._show_timed_error(f"Error moving actuator: {str(e)}")
-        finally:
-            self.loading_spinner.hide()
-            if not moved:
-                # Nothing is moving, so no DONE will re-enable the controls.
-                # Leaving them disabled also blocked logout and exit.
-                self.enable_actuator_controls()
-
-    def _apply_setup_pressure(self):
-        """Setup pressure Go: clamp to [MIN_PRESSURE, PRESSURE_MAX] and send P."""
-        if not self.config.scale_calibrated:
-            self._warn_uncalibrated()
-            return False
-        pressure = self.shell.setup.row_value("pressure")
-        if pressure > PRESSURE_MAX:
-            pressure = PRESSURE_MAX
-            self.logger.warning(f"Pressure request exceeds max {PRESSURE_MAX}, clamping")
-            self._show_timed_error(f"Pressure limited to maximum {PRESSURE_MAX} lbs for safety")
-        elif pressure < MIN_PRESSURE:
-            pressure = MIN_PRESSURE
-            self.logger.warning(f"Pressure request below minimum, setting to {MIN_PRESSURE}")
-        pressure = int(pressure)
-        if not KneeSpa._send_motion_command(
-            self, "P{}".format(pressure), "pressure movement"
-        ):
-            return False
-        self.logger.info("Pressure cmd sent P%s", pressure)
-        # This is a target, not measured pressure. The live readout is updated
-        # only by status_emit feedback.
-        self._reflect_setup("pressure", pressure)
-        return True
+        return self.motion.setup_go(key)
 
     def _on_setup_stop(self, key):
-        """Per-row Stop. The firmware's 'X' stops all actuators regardless of
-        suffix; route through the base stop paths so a link-down failure is
-        alarmed, not just logged."""
-        if key == "leg_length":
-            self.stop_leg_movement()
-            return
-        actuator = {
-            "axial": self.actuator_a,
-            "horizontal": self.actuator_b,
-            "lateral": self.actuator_c,
-            "pressure": self.actuator_a,  # pressure rides the axial channel
-        }.get(key)
-        if actuator is not None:
-            self.stop_position_flexion_button(actuator)
+        """A Setup row's Stop: see MotionController.setup_stop."""
+        self.motion.setup_stop(key)
 
     def _on_mark_default(self):
         """Mark As Default: persist the current Treatment Settings as protocol
@@ -1331,209 +1065,8 @@ class KneeSpa(DeviceStateAttributes, QMainWindow):
             QTimer.singleShot(50, self.close)
 
     def move_actuator(self, actuator, speed_factor, direction):
-        """
-        Move an actuator in the specified direction.
-
-        The position math, clamps, and emitted serial commands are FROZEN (unit
-        tested). Only the UI feedback is rerouted to the modern Setup screen.
-        """
-        if self.actuator_command_in_progress:
-            self.logger.info("Actuator command already in progress - ignoring input")
-            return
-        if not self.config.marks_valid:
-            # Generated default marks are fabricated geometry; jogging on
-            # them moves the mechanism to unintended positions
-            self._warn_uncalibrated()
-            return
-        self.logger.debug("Speed factor: %s", speed_factor)
-        if actuator == self.actuator_b:  # Horizontal Flexion
-            step = 10 if int(speed_factor) > 4 else 5
-            new_position = self.horizontal_flexion_position + (step * direction)
-
-            # Check position limits
-            if direction >= 0 and new_position > HORIZONTAL_MAX_DEGREES:
-                return
-            if direction < 0 and new_position < HORIZONTAL_MIN_DEGREES:
-                return
-
-            self.loading_spinner.show()
-            self.disable_actuator_controls()
-
-            # Same handling as the lateral branch: invalid BMarks used to raise
-            # out of this slot with the controls already disabled.
-            try:
-                position = horizontal_degrees_to_position(
-                    self.config.BMarks, new_position
-                )
-            except ValueError as e:
-                self.logger.error("Invalid horizontal position: %s", e)
-                self.enable_actuator_controls()
-                self.loading_spinner.hide()
-                return
-            command = f"I13{position}"
-            if not KneeSpa._send_motion_command(
-                self, command, "horizontal movement"
-            ):
-                return False
-
-            self.horizontal_flexion_position = new_position
-            self.logger.info("B position: %s", self.horizontal_flexion_position)
-
-            self._reflect_setup("horizontal", self.horizontal_flexion_position)
-            self.loading_spinner.hide()
-
-        elif actuator == self.actuator_a:  # Axial Flexion
-            step = 1 if int(speed_factor) > 4 else 0.5
-            new_position = self.axial_flexion_position + (step * direction)
-
-            if direction > 0 and new_position > AXIAL_MAX_INCHES:
-                self._show_timed_error(
-                    f"Axial position limited to {AXIAL_MAX_INCHES} inches (max)"
-                )
-                return
-            if direction < 0 and new_position < AXIAL_MIN_INCHES:
-                return
-
-            self.loading_spinner.show()
-            self.disable_actuator_controls()
-
-            # Send command to Arduino
-            # Arduino expects: A[2-digit device][float value starting at position 3]
-            # Format position with at least 1 decimal place to ensure proper parsing
-            command = f"A12{new_position:.1f}"
-            if getattr(self.config, "axial_service_calibrated", False) is True:
-                try:
-                    command = f"I12{axial_position(self.config.AMarks, new_position)}"
-                except (ValueError, TypeError, KeyError) as exc:
-                    self._show_timed_error(f"Axial calibration is invalid: {exc}")
-                    self.loading_spinner.hide()
-                    self.enable_actuator_controls()
-                    return False
-            self.logger.info("Sending axial command: %s", command)
-            if not KneeSpa._send_motion_command(self, command, "axial movement"):
-                return False
-            self.axial_flexion_position = new_position
-            self.logger.info("A position: %s", self.axial_flexion_position)
-            self.logger.info("Axial flexion position: %s in", self.axial_flexion_position)
-
-            # Removed problematic L5 command that was sent without proper parameters
-            # This was causing malformed commands after forward axial movement
-
-            self._reflect_setup("axial", self.axial_flexion_position)
-            self.loading_spinner.hide()
-
-        elif actuator == self.actuator_c:  # Lateral Flexion
-            step = 5 if int(speed_factor) > 4 else 2.5  # Use 2.5 degree increments
-            new_position = self.lateral_flexion_position + (step * direction)
-
-            # Round to nearest 2.5 degree increment
-            new_position = round(new_position / 2.5) * 2.5
-
-            # Check position limits using constants
-            if direction > 0 and new_position > LATERAL_MAX_DEGREES:
-                self._show_timed_error(
-                    f"Lateral position limited to {LATERAL_MAX_DEGREES}{DEGREES} (max)"
-                )
-                return
-            if direction < 0 and new_position < LATERAL_MIN_DEGREES:
-                self._show_timed_error(
-                    f"Lateral position limited to {LATERAL_MIN_DEGREES}{DEGREES} (min)"
-                )
-                return
-
-            self.loading_spinner.show()
-            self.disable_actuator_controls()
-
-            # Interpolate between marks; an exact-key-only lookup used to
-            # silently no-op the button press when a 2.5-degree mark was
-            # missing from the table
-            try:
-                position, new_position = lateral_degrees_to_position(
-                    self.config.CMarks, new_position
-                )
-            except ValueError as e:
-                self.logger.error("Invalid lateral position: %s", e)
-                self.enable_actuator_controls()
-                self.loading_spinner.hide()
-                return
-
-            self.logger.info(
-                " positioned to %s degrees pos %s", new_position, position
-            )
-
-            # Send command to Arduino
-            command = f"K{position}"
-            if not KneeSpa._send_motion_command(self, command, "lateral movement"):
-                return False
-
-            self.lateral_flexion_position = new_position
-
-            self._reflect_setup("lateral", self.lateral_flexion_position)
-            self.loading_spinner.hide()
-
-        return True
-
-    def reset_flexion_button_clicked(self, actuator):
-        self.loading_spinner.show()
-        self.disable_actuator_controls()
-        self.logger.debug("%s", actuator)
-        if actuator == self.actuator_c:
-            # Tolerant lookup (same as the horizontal branch): a hand-edited
-            # CMarks without an exact "0.0" key raised KeyError out of this
-            # slot, which PyQt5 turns into a process abort.
-            try:
-                position, _ = lateral_degrees_to_position(self.config.CMarks, 0)
-            except ValueError as e:
-                self.logger.error("Invalid lateral position: %s", e)
-                self.enable_actuator_controls()
-                self.loading_spinner.hide()
-                return
-            self.logger.info(" positioned to 0 degrees pos %s", position)
-            command = f"I14{position}"
-            if not KneeSpa._send_motion_command(self, command, "lateral reset"):
-                return False
-            self.lateral_flexion_position = 0
-            self._reflect_setup("lateral", 0)
-            self.loading_spinner.hide()
-
-            return
-
-        if actuator == self.actuator_b:
-            # Home the horizontal actuator to the calibrated
-            # DEFAULT_HORIZONTAL_POSITION via its BMarks position, the same way
-            # the lateral branch above homes from CMarks. The old 'A132' inches
-            # path ignored BMarks and under-shot the true angle.
-            try:
-                position = horizontal_degrees_to_position(
-                    self.config.BMarks, DEFAULT_HORIZONTAL_POSITION
-                )
-            except ValueError as e:
-                self.logger.error("Invalid horizontal position: %s", e)
-                self.enable_actuator_controls()
-                self.loading_spinner.hide()
-                return
-            command = f"I13{position}"
-            if not KneeSpa._send_motion_command(self, command, "horizontal reset"):
-                return False
-            self.horizontal_flexion_position = DEFAULT_HORIZONTAL_POSITION
-            self._reflect_setup("horizontal", DEFAULT_HORIZONTAL_POSITION)
-            self.loading_spinner.hide()
-
-            return
-
-        if actuator == self.actuator_a:
-            # 'R12' was never a firmware command (parsed as Unknown); the
-            # UI then showed 0 in / 0 lb while nothing moved. Home the
-            # axial actuator for real, the way the reset sequence does.
-            command = "I120"
-            if not KneeSpa._send_motion_command(self, command, "axial reset"):
-                return False
-            self.axial_flexion_position = 0
-            self._reflect_setup("axial", 0)
-            # Automatic reset/protocol workflows own pressure zeroing.
-            self.loading_spinner.hide()
-
-            return
+        """Jog an actuator one step: see MotionController."""
+        return self.motion.move_actuator(actuator, speed_factor, direction)
 
     def stop_actuators(self):
         """Emergency stop for all actuators."""
@@ -1552,22 +1085,6 @@ class KneeSpa(DeviceStateAttributes, QMainWindow):
         except Exception as e:
             self.logger.exception("Error in emergency stop")
             self._show_timed_error(f"Emergency stop failed: {str(e)}")
-
-    def stop_position_flexion_button(self, actuator):
-        # Firmware 'X' stops all actuators regardless of suffix. Guarded like
-        # stop_actuators: a torn-down transport (arduino is None) must still
-        # produce the STOP NOT DELIVERED alarm rather than an AttributeError.
-        try:
-            sent = bool(self.arduino and self.arduino.send("X"))
-        except Exception:
-            self.logger.exception("Actuator stop raised")
-            sent = False
-        if not sent:
-            self.logger.error("Actuator stop could not be sent - link down")
-            self._show_timed_error(
-                "STOP NOT DELIVERED - connection down. "
-                "Press the physical emergency stop immediately."
-            )
 
     # ----- leg-length (FIT) jog handlers (open-loop F-commands + GPIO) -----
     def _move_leg(self, command):
@@ -1611,20 +1128,6 @@ class KneeSpa(DeviceStateAttributes, QMainWindow):
     def reset_extra_button_clicked(self):
         """Home the open-loop FIT axis, updating zero only after completion."""
         return self.leg.home()
-
-    def stop_leg_movement(self):
-        """Stop leg length actuator movement."""
-        self.leg.cancel()
-        self.loading_spinner.show()
-        if not KneeSpa._send_motion_command(self, "F0", "leg-length stop"):
-            # Local GPIO stop remains mandatory even when serial is down.
-            self._release_leg_gpio()
-            return False
-        GPIO.output(EXTRAFORWARD, GPIO.LOW)
-        GPIO.output(EXTRABACKWARD, GPIO.LOW)
-        # GPIO.output(EXTRAENABLE, GPIO.LOW)
-        self.loading_spinner.hide()
-        return True
 
     def ensure_arduino_connection(self):
         return self.connection.ensure_arduino_connection()

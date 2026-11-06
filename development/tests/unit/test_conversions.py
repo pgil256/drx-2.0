@@ -1,12 +1,12 @@
 # development/tests/unit/test_conversions.py
 """Conversion tests: the extracted lateral_degrees_to_position helper (base)
-plus the GUI line's window-method tests for KneeSpa.set_to_distance /
-set_to_c_distance, called UNBOUND against lightweight stubs.
+plus the GUI line's tests for set_to_distance / set_to_c_distance, which moved
+from the window to MotionController (checklist A3) and run here on one built
+with fakes.
 
 FROZEN-CONVENTION POLICY: these pin CURRENT behavior (A-command format,
 half-degree snapping, integer-truncating interpolation) as regression guards,
 not as a statement that the numbers are "correct"."""
-import types
 from unittest.mock import MagicMock
 
 import pytest
@@ -15,7 +15,7 @@ from helpers.conversions import (
     lateral_degrees_to_position,
     horizontal_degrees_to_position,
 )
-from kneespa import KneeSpa
+from fixtures.motion import make_motion
 from config.config import Configuration
 
 CMARKS = {
@@ -133,28 +133,18 @@ def make_config_with_defaults():
 
 
 def make_c_stub(config=None):
-    """Lightweight stub carrying only what KneeSpa.set_to_c_distance reads."""
+    """A MotionController for set_to_c_distance, with the control lock and
+    the DONE event mocked."""
     if config is None:
         config = make_config_with_defaults()
-    return types.SimpleNamespace(
-        logger=MagicMock(),
-        loading_spinner=MagicMock(),
-        disable_actuator_controls=MagicMock(),
-        enable_actuator_controls=MagicMock(),
-        config=config,
-        arduino=MagicMock(),
-        I2Cstatus_event=MagicMock(),
-    )
+    stub = make_motion(config=config, arduino=MagicMock(), mock_controls=True)
+    stub.done_event = MagicMock()
+    return stub
 
 
 def make_distance_stub():
-    """Lightweight stub carrying only what KneeSpa.set_to_distance reads."""
-    return types.SimpleNamespace(
-        logger=MagicMock(),
-        arduino=MagicMock(),
-        I2Cstatus_event=MagicMock(),
-        enable_actuator_controls=MagicMock(),
-    )
+    """A MotionController for set_to_distance, as make_c_stub."""
+    return make_c_stub()
 
 
 def sent_command(stub):
@@ -169,44 +159,44 @@ class TestSetToDistance:
     def test_sends_a_command_with_actuator_and_inches(self):
         """Command is 'A<actuator><inches:.1f>' per the frozen format."""
         stub = make_distance_stub()
-        KneeSpa.set_to_distance(stub, 3.0, "A")
+        stub.set_to_distance(3.0, "A")
         stub.arduino.send.assert_called_once_with("AA3.0")
 
     def test_inches_formatted_to_one_decimal(self):
         """Inches always render with exactly one decimal place."""
         stub = make_distance_stub()
-        KneeSpa.set_to_distance(stub, 2, "A")
+        stub.set_to_distance(2, "A")
         assert sent_command(stub) == "AA2.0"
 
     def test_fractional_inches_preserved(self):
         """A fractional input keeps its one-decimal representation."""
         stub = make_distance_stub()
-        KneeSpa.set_to_distance(stub, 1.5, "A")
+        stub.set_to_distance(1.5, "A")
         assert sent_command(stub) == "AA1.5"
 
     def test_zero_inches(self):
         """Zero inches is sent as the literal 'A<actuator>0.0'."""
         stub = make_distance_stub()
-        KneeSpa.set_to_distance(stub, 0, "A")
+        stub.set_to_distance(0, "A")
         assert sent_command(stub) == "AA0.0"
 
     def test_actuator_letter_is_embedded(self):
         """The actuator identifier is placed between the 'A' prefix and value."""
         stub = make_distance_stub()
-        KneeSpa.set_to_distance(stub, 4.0, "B")
+        stub.set_to_distance(4.0, "B")
         assert sent_command(stub) == "AB4.0"
 
     def test_clears_status_event(self):
         """Side effect: the thread-safe DONE event is cleared for the next
         command (the legacy I2CStatus flag write was retired on the base)."""
         stub = make_distance_stub()
-        KneeSpa.set_to_distance(stub, 1.0, "A")
-        stub.I2Cstatus_event.clear.assert_called_once()
+        stub.set_to_distance(1.0, "A")
+        stub.done_event.clear.assert_called_once()
 
     def test_keeps_controls_locked_until_firmware_done(self):
         """Queue acceptance is not physical completion; DONE unlocks later."""
         stub = make_distance_stub()
-        KneeSpa.set_to_distance(stub, 1.0, "A")
+        stub.set_to_distance(1.0, "A")
         stub.enable_actuator_controls.assert_not_called()
 
 
@@ -218,7 +208,7 @@ class TestSetToCDistanceExactMarks:
         """Zero degrees uses the configured CMarks center position."""
         stub = make_c_stub()
         expected_position = int(stub.config.CMarks["0.0"])
-        result = KneeSpa.set_to_c_distance(stub, 0.0)
+        result = stub.set_to_c_distance(0.0)
         assert result is True
         stub.arduino.send.assert_called_with(f"K{expected_position}")
 
@@ -226,7 +216,7 @@ class TestSetToCDistanceExactMarks:
         """The minimum angle uses its configured CMarks position."""
         stub = make_c_stub()
         expected_position = int(stub.config.CMarks["-20.0"])
-        result = KneeSpa.set_to_c_distance(stub, -20.0)
+        result = stub.set_to_c_distance(-20.0)
         assert result is True
         stub.arduino.send.assert_called_with(f"K{expected_position}")
 
@@ -234,7 +224,7 @@ class TestSetToCDistanceExactMarks:
         """The maximum angle uses its configured CMarks position."""
         stub = make_c_stub()
         expected_position = int(stub.config.CMarks["20.0"])
-        result = KneeSpa.set_to_c_distance(stub, 20.0)
+        result = stub.set_to_c_distance(20.0)
         assert result is True
         stub.arduino.send.assert_called_with(f"K{expected_position}")
 
@@ -242,7 +232,7 @@ class TestSetToCDistanceExactMarks:
         """A positive angle uses its configured CMarks position."""
         stub = make_c_stub()
         expected_position = int(stub.config.CMarks["17.5"])
-        result = KneeSpa.set_to_c_distance(stub, 17.5)
+        result = stub.set_to_c_distance(17.5)
         assert result is True
         stub.arduino.send.assert_called_with(f"K{expected_position}")
 
@@ -250,7 +240,7 @@ class TestSetToCDistanceExactMarks:
         """Input is rounded to the nearest configured half-degree mark."""
         stub = make_c_stub()
         expected_position = int(stub.config.CMarks["0.0"])
-        result = KneeSpa.set_to_c_distance(stub, 0.1)
+        result = stub.set_to_c_distance(0.1)
         assert result is True
         stub.arduino.send.assert_called_with(f"K{expected_position}")
 
@@ -258,7 +248,7 @@ class TestSetToCDistanceExactMarks:
         """Degrees are coerced via float(); a numeric string works."""
         stub = make_c_stub()
         expected_position = int(stub.config.CMarks["0.0"])
-        result = KneeSpa.set_to_c_distance(stub, "0.0")
+        result = stub.set_to_c_distance("0.0")
         assert result is True
         stub.arduino.send.assert_called_with(f"K{expected_position}")
 
@@ -273,7 +263,7 @@ class TestSetToCDistanceInterpolation:
         expected_position, _ = lateral_degrees_to_position(
             stub.config.CMarks, -16.0
         )
-        result = KneeSpa.set_to_c_distance(stub, -16.0)
+        result = stub.set_to_c_distance(-16.0)
         assert result is True
         stub.arduino.send.assert_called_with(f"K{expected_position}")
 
@@ -287,7 +277,7 @@ class TestSetToCDistanceInterpolation:
         expected_position, _ = lateral_degrees_to_position(
             stub.config.CMarks, 14.0
         )
-        result = KneeSpa.set_to_c_distance(stub, 14.0)
+        result = stub.set_to_c_distance(14.0)
         assert result is True
         stub.arduino.send.assert_called_with(f"K{expected_position}")
 
@@ -297,7 +287,7 @@ class TestSetToCDistanceInterpolation:
         expected_position, _ = lateral_degrees_to_position(
             stub.config.CMarks, -16.0
         )
-        KneeSpa.set_to_c_distance(stub, -16.0)
+        stub.set_to_c_distance(-16.0)
         call_arg = sent_command(stub)
         assert call_arg.startswith("K")
         assert int(call_arg[1:]) == expected_position
@@ -311,7 +301,7 @@ class TestSetToCDistanceClamping:
         """Degrees below -20 use the configured -20-degree position."""
         stub = make_c_stub()
         expected_position = int(stub.config.CMarks["-20.0"])
-        result = KneeSpa.set_to_c_distance(stub, -25.0)
+        result = stub.set_to_c_distance(-25.0)
         assert result is True
         stub.arduino.send.assert_called_with(f"K{expected_position}")
 
@@ -319,7 +309,7 @@ class TestSetToCDistanceClamping:
         """Degrees above 20 use the configured 20-degree position."""
         stub = make_c_stub()
         expected_position = int(stub.config.CMarks["20.0"])
-        result = KneeSpa.set_to_c_distance(stub, 25.0)
+        result = stub.set_to_c_distance(25.0)
         assert result is True
         stub.arduino.send.assert_called_with(f"K{expected_position}")
 
@@ -327,8 +317,8 @@ class TestSetToCDistanceClamping:
         """The clamped boundary value resolves through the exact-mark path."""
         stub_clamped = make_c_stub()
         stub_exact = make_c_stub()
-        KneeSpa.set_to_c_distance(stub_clamped, 100.0)
-        KneeSpa.set_to_c_distance(stub_exact, 20.0)
+        stub_clamped.set_to_c_distance(100.0)
+        stub_exact.set_to_c_distance(20.0)
         assert sent_command(stub_clamped) == sent_command(stub_exact)
 
 
@@ -338,19 +328,19 @@ class TestSetToCDistanceSideEffects:
 
     def test_clears_status_event_on_success(self):
         stub = make_c_stub()
-        KneeSpa.set_to_c_distance(stub, 0.0)
-        stub.I2Cstatus_event.clear.assert_called_once()
+        stub.set_to_c_distance(0.0)
+        stub.done_event.clear.assert_called_once()
 
     def test_toggles_loading_spinner(self):
         """Spinner shows on entry and hides before the successful return."""
         stub = make_c_stub()
-        KneeSpa.set_to_c_distance(stub, 0.0)
-        stub.loading_spinner.show.assert_called_once()
-        stub.loading_spinner.hide.assert_called_once()
+        stub.set_to_c_distance(0.0)
+        stub.view.show_busy.assert_called_once()
+        stub.view.hide_busy.assert_called_once()
 
     def test_disables_until_firmware_done(self):
         stub = make_c_stub()
-        KneeSpa.set_to_c_distance(stub, 0.0)
+        stub.set_to_c_distance(0.0)
         stub.disable_actuator_controls.assert_called_once()
         stub.enable_actuator_controls.assert_not_called()
 
@@ -358,7 +348,7 @@ class TestSetToCDistanceSideEffects:
         """FROZEN: non-numeric degrees raise inside the try; the method swallows
         the error, hides the spinner, and returns False (no command sent)."""
         stub = make_c_stub()
-        result = KneeSpa.set_to_c_distance(stub, "not-a-number")
+        result = stub.set_to_c_distance("not-a-number")
         assert result is False
         stub.arduino.send.assert_not_called()
-        stub.loading_spinner.hide.assert_called_once()
+        stub.view.hide_busy.assert_called_once()
