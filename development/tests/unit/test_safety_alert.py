@@ -3,7 +3,10 @@ import sys
 from unittest.mock import MagicMock
 
 import pytest
-from PyQt5 import sip
+try:
+    from PyQt5 import sip
+except ImportError:  # Buster's apt PyQt5 5.11, as on the Pi, ships sip on its own
+    import sip
 from PyQt5.QtCore import QEvent
 from PyQt5.QtWidgets import QApplication, QMainWindow, QMessageBox
 
