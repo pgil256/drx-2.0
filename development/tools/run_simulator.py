@@ -140,7 +140,7 @@ def main() -> int:
         return asyncio.run(supervise(args))
     except KeyboardInterrupt:
         return 130
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - top level: print the traceback, exit 1
         print(f"Simulator failed: {exc}", file=sys.stderr)
         traceback.print_exc()
         return 1
