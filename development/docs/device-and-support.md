@@ -153,6 +153,10 @@ not greatest version), and downloads the reviewed UUID from the same origin's
 Downloads are capped at 256 MiB and five minutes, with per-read timeouts; size,
 checksum header, and actual SHA-256 must match the selected metadata. Partial
 files are deleted. A prepared download is explicitly distinguished from installation.
+Each download is then checked against its detached signature with `gpgv`. In the
+default `warn` mode a missing or bad signature is shown on the release screen and
+the install continues; `enforce` refuses it. See
+[Release signing](release-signing.md) for the cloud side and the key.
 
 Flash Software / Flash Firmware reviews the version, notes and target, downloads,
 validates and stages under device `updates/`, then asks to install on an unloaded
