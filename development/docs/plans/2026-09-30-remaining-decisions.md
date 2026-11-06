@@ -110,10 +110,11 @@ Each item is its own commit, so any one can be reverted alone.
 
 ## 4. Repository and CI changes that cannot be verified locally
 
-- **Other videos in Git LFS:** only `Next Level Integrative Medicine HCT_P Details.mp4`
-  (392 MB) is in LFS. The other 8 mp4s (about 121 MB) are plain blobs. Moving
-  them to LFS for new commits only is cheap; converting existing history needs
-  `git lfs migrate` and a force-push.
+- **Other videos in Git LFS:** done 2026-11-05, for new commits only. All nine
+  `.mp4` files under `runtime/raspberry-pi/main/ui/media/videos/` are now LFS
+  pointers: the other 8 (about 116 MB) joined `Next Level Integrative Medicine
+  HCT_P Details.mp4`. Older commits keep the plain blobs. Shrinking the pack
+  would need `git lfs migrate` and a force-push, which the owner declined.
 - **`xvfb-run` in CI:** probably unnecessary, since `QT_QPA_PLATFORM=offscreen`
   is set in CI and in `tests/conftest.py`. Removing it needs a CI run to confirm.
 - **Separate `check_limits_sync.py` CI step:** it repeats
