@@ -22,9 +22,20 @@ def test_full_order_requires_calibration_and_baseline(protocol_clock, v2):
     link = NB2Controller(v2)
     _, finished, errors = run_reset(link)
     assert finished == [True] and not errors
-    assert link.commands == ["Y", "L5|0|1900", "K1450", "I131140", "I120",
+    assert link.commands == ["Y", "L5|0|1900", "I120", "K1450", "I131140",
                              "L01.0", "L1|BASELINE"]
     assert link.baseline_valid
+
+
+def test_axial_that_never_reaches_home_stops_before_lateral_or_horizontal(protocol_clock):
+    # A retracts first, so a patient still under load is not moved sideways,
+    # and a failed retract is never followed by C or B moves.
+    link = NB2Controller()
+    link.hook = lambda command, replies: [] if command == "I120" else replies
+    _, finished, errors = run_reset(link)
+    assert finished == [False] and errors
+    assert link.commands.count("I120") == 2  # One whole-sequence replay.
+    assert not any(c.startswith(("K", "I13")) for c in link.commands)
 
 
 @pytest.mark.parametrize("missing", ["Y", "L5", "K", "I13", "I120", "L0"])
