@@ -129,23 +129,25 @@ class Protocols(QtCore.QRunnable):
             ser.fault_emit.connect(self._on_controller_fault, Qt.DirectConnection)
             ser.command_rejected.connect(self._on_command_rejected, Qt.DirectConnection)
             ser.connection_lost.connect(self._on_link_lost, Qt.DirectConnection)
+        # disconnect() raises TypeError (or RuntimeError for a deleted
+        # object) when the slot was not connected; that is the normal case.
         if ser is not None and hasattr(ser, "done_emit"):
             try:
                 ser.done_emit.disconnect(self._on_firmware_done)
-            except Exception:
+            except (TypeError, RuntimeError):
                 pass
             ser.done_emit.connect(self._on_firmware_done)
         if ser is not None and hasattr(ser, "error_emit"):
             try:
                 ser.error_emit.disconnect(self._on_firmware_error)
-            except Exception:
+            except (TypeError, RuntimeError):
                 pass
             ser.error_emit.connect(self._on_firmware_error)
         if ser is not None and hasattr(ser, "status_emit"):
             # First disconnect any existing connections to avoid duplicates
             try:
                 ser.status_emit.disconnect(self.update_status)
-            except Exception:
+            except (TypeError, RuntimeError):
                 pass  # Ignore if not previously connected
                 
             # Now connect the signal
@@ -455,8 +457,8 @@ class Protocols(QtCore.QRunnable):
             return False
         try:
             ok = self._send_command("JS")
-        except Exception as e:
-            self.logger.error("Error sending JS: %s", e)
+        except Exception:
+            self.logger.exception("Error sending JS")
             ok = False
         if ok:
             self._pulse_active = False
@@ -523,9 +525,14 @@ class Protocols(QtCore.QRunnable):
             return True
         except OperationCancelled:
             return False
-        except Exception as exc:
+        except (OperationRejected, TimeoutError) as exc:
             self._failure_reason = str(exc)
             self.logger.error("Controller operation failed: %s", exc)
+            return False
+        except Exception as exc:
+            # Not a controller rejection or timeout: a bug. Keep the traceback.
+            self._failure_reason = str(exc)
+            self.logger.exception("Controller operation failed unexpectedly")
             return False
         finally:
             if temporary:
@@ -679,7 +686,10 @@ class Protocols(QtCore.QRunnable):
                 self.signals.baseline_changed.emit(True)
         except OperationCancelled:
             return False
+        except (OperationRejected, TimeoutError) as exc:
+            return self._fail(str(exc))
         except Exception as exc:
+            self.logger.exception("Unexpected error while retracting and zeroing")
             return self._fail(str(exc))
         self.signals.progress.emit("Protocol complete")
         return True
@@ -871,7 +881,10 @@ class Protocols(QtCore.QRunnable):
             handler()
         except OperationCancelled:
             pass
+        except (OperationRejected, TimeoutError) as exc:
+            self._fail(str(exc))
         except Exception as exc:
+            self.logger.exception("Unexpected error in protocol %s", self.protocol)
             self._fail(str(exc))
         finally:
             if not self._stop_requested.is_set() and not self._run_success:
@@ -936,6 +949,6 @@ class Protocols(QtCore.QRunnable):
             # active-motion status path even after HF mode is off
             self.arduino.send("HF0")
 
-        except Exception as e:
-            self.logger.error("Error during protocol stop: %s", e)
+        except Exception:
+            self.logger.exception("Error during protocol stop")
         return bool(release_sent)
