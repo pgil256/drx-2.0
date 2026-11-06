@@ -38,6 +38,11 @@ LEGACY_ADVISORY_MESSAGES = {
     "Motor stalled",
 }
 
+# "ERROR: Motor stall timeout <device>": the firmware has already stopped
+# every axis because a move made no progress for 3 x POSITION_STALL_MS. Unlike
+# the advisory "Motor stalled" above, this is a fault.
+STALL_TIMEOUT_PREFIX = "Motor stall timeout"
+
 # Status telemetry can briefly land a few counts (or a fraction of a pound)
 # outside a boundary while the device settles. Confirm small excursions across
 # several frames; gross excursions bypass debounce.
@@ -238,6 +243,11 @@ class SafetyMonitor:
         if message == "BUSY":
             # A command was refused because a move is running; transient
             window.logger.warning("Firmware busy: %s", message)
+            return
+
+        if message.startswith(STALL_TIMEOUT_PREFIX):
+            # Latch a fault with no automatic homing; Reset is the way back.
+            self.on_controller_fault({"reason": message})
             return
 
         if message in LEGACY_ADVISORY_MESSAGES:

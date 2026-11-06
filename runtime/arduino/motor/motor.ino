@@ -92,6 +92,9 @@ int pulseSpeed = TREATMENT_SPEED_MAX;
 #define PRESSURE_MOVE_TIMEOUT 80000  // ms before advisory pressure warning
 #define POSITION_DEADBAND     25     // counts: symmetric close-enough band
 #define POSITION_STALL_MS     20000  // sustained no-progress time before warning
+// No progress for this long ends the move (E-stop + ERROR). Unsigned long:
+// 3 * 20000 overflows the Mega's 16-bit int.
+#define POSITION_STALL_TIMEOUT_MS (3UL * POSITION_STALL_MS)
 #define POSITION_PROGRESS_COUNTS 4   // encoder progress that resets stall timer
 #define ACTIVE_STATUS_INTERVAL 1000  // ms: status cadence during motion (non-HF)
 
@@ -1916,6 +1919,7 @@ void loop() {
     // (and its stop sent to the wrong SMC)
     smcDeviceNumber = runningDevice;
     uint16_t currentPos = readPosition();
+    bool stallTimedOut = false;
 
     if (positionReadValid) {
       // Debug output, rate-limited: this used to print every loop pass
@@ -1963,6 +1967,15 @@ void loop() {
           loopLastPosition = currentPos;
           loopStallStart = millis();
           positionStallWarningIssued = false;
+        } else if (millis() - loopStallStart >= POSITION_STALL_TIMEOUT_MS) {
+          // The warning alone never stopped a jammed move: the Pi treats
+          // "Motor stalled" as advisory. A stall that outlasts this ends
+          // the move with its own error, which the Pi handles as a fault.
+          uint8_t stalledDevice = runningDevice;
+          emergencyStop();
+          stallTimedOut = true;
+          Serial1.print(F("ERROR: Motor stall timeout "));
+          Serial1.println(stalledDevice);
         } else if (millis() - loopStallStart >= POSITION_STALL_MS &&
                    !positionStallWarningIssued) {
           emitSafetyWarning("Motor stalled");
@@ -1975,8 +1988,9 @@ void loop() {
     // iteration rather than acting on garbage (0 was both the error
     // value and a legal position)
 
-    // Cleanup after run complete
-    if (!bRunning && !pressureFault) {
+    // Cleanup after run complete. A stall timeout is not a completion:
+    // it must never report MOTION_DONE for the move it stopped.
+    if (!bRunning && !pressureFault && !stallTimedOut) {
       position = currentPos;
       reportPositionDone(positionCommandKind, desiredPosition, currentPos, activeCmdSeq);
       sendStatus();

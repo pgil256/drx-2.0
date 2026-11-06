@@ -319,6 +319,36 @@ class TestFirmwareEvents:
         assert w.alerts == []
         assert w.treatment_panel.warnings == []
 
+    @pytest.mark.parametrize("message", ["Motor stall timeout 12", "Motor stall timeout 14"])
+    def test_stall_timeout_is_a_fault_not_an_advisory(self, monitor, message):
+        """F4: unlike "Motor stalled", the timeout ends the operation."""
+        sm, w = monitor
+        w._closing = False
+        w.protocol = MagicMock()
+        w.protocol_running = True
+
+        sm.on_firmware_error(message)
+
+        w.protocol.stop_without_recovery.assert_called_once_with(message, fault=True)
+        assert w._measurement_fault == message
+        assert w.alerts == ["CONTROLLER FAULT: " + message]
+        assert w.treatment_panel.warnings == []
+        assert w.resets == 0
+
+    def test_stall_timeout_during_a_reset_is_still_a_fault(self, monitor):
+        """The advisory stall warning is silenced while homing; the timeout is not."""
+        sm, w = monitor
+        w._closing = False
+        w.protocol = MagicMock()
+        w.initial_setup_complete = False
+        w.reset_in_progress = True
+
+        sm.on_firmware_error("Motor stall timeout 12")
+
+        w.protocol.stop_without_recovery.assert_called_once_with(
+            "Motor stall timeout 12", fault=True)
+        assert w.alerts == ["CONTROLLER FAULT: Motor stall timeout 12"]
+
     def test_firmware_warning_after_setup_remains_visible(self, monitor):
         sm, w = monitor
 

@@ -1367,6 +1367,57 @@ void test_position_read_does_not_burn_dead_wait(void) {
     TEST_ASSERT_EQUAL(0, (int)_millis_value);
 }
 
+// F4: the stall warning alone left a jammed move driving. A stall that
+// outlasts POSITION_STALL_TIMEOUT_MS stops it with its own error and never
+// reports the move as done.
+void test_stall_timeout_ends_the_move_with_a_distinct_error(void) {
+    TEST_ASSERT_EQUAL_UINT32(60000UL, (unsigned long)POSITION_STALL_TIMEOUT_MS);
+    keepAlive();
+    runningDevice = 13;
+    smcDeviceNumber = 13;
+    desiredPosition = 1500;
+    forward = 1;
+    Wire.position_13 = 800;          // frozen, far from the target
+    bRunning = true;
+    activeCmdSeq = 7;
+    loopLastPosition = 800;
+    loopStallStart = _millis_value;
+
+    _millis_value = POSITION_STALL_MS;
+    lastActiveStatus = _millis_value;
+    keepAlive();
+    loop();
+    TEST_ASSERT_TRUE(bRunning);
+    TEST_ASSERT_EQUAL(1, countInOutput("WARNING: Motor stalled"));
+
+    _millis_value = POSITION_STALL_TIMEOUT_MS - 1;
+    lastActiveStatus = _millis_value;
+    keepAlive();
+    loop();
+    TEST_ASSERT_TRUE(bRunning);
+    TEST_ASSERT_FALSE(Serial1.outputContains("Motor stall timeout"));
+
+    int stopsBefore = countSpeedZeroWrites(13);
+    _millis_value = POSITION_STALL_TIMEOUT_MS;
+    lastActiveStatus = _millis_value;
+    keepAlive();
+    loop();
+    TEST_ASSERT_FALSE(bRunning);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Motor stall timeout 13"));
+    TEST_ASSERT_TRUE(countSpeedZeroWrites(13) > stopsBefore);
+    TEST_ASSERT_FALSE(Serial1.outputContains("MOTION_DONE"));
+    TEST_ASSERT_FALSE(Serial1.outputContains("DONE|7"));
+    TEST_ASSERT_EQUAL(1, countInOutput("WARNING: Motor stalled"));
+    TEST_ASSERT_EQUAL(1, countInOutput("Motor stall timeout"));
+
+    // The stopped move stays stopped on later passes.
+    _millis_value += 1000;
+    keepAlive();
+    loop();
+    TEST_ASSERT_EQUAL(1, countInOutput("Motor stall timeout"));
+    TEST_ASSERT_FALSE(Serial1.outputContains("MOTION_DONE"));
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
 
@@ -1401,6 +1452,7 @@ int main(int argc, char **argv) {
     RUN_TEST(test_axial_home_within_deadband_not_stalled);
     RUN_TEST(test_genuine_stall_warns_after_sustained_interval_without_stopping);
     RUN_TEST(test_position_progress_restarts_stall_timer);
+    RUN_TEST(test_stall_timeout_ends_the_move_with_a_distinct_error);
     RUN_TEST(test_p0_with_no_load_completes_done_without_error);
     RUN_TEST(test_release_reaching_zero_with_target_met_completes_done);
     RUN_TEST(test_release_at_home_with_load_cannot_report_success);
