@@ -142,6 +142,7 @@ def test_shutdown_suppresses_delayed_recovery(qtbot: QtBot) -> None:
     manager._on_reset_finished(True)
 
     window.reset_arduino.assert_not_called()
+    window._show_rehome_prompt.assert_not_called()
     window.worker.stop.assert_not_called()
 
 

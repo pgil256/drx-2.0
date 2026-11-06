@@ -3,8 +3,8 @@
 
 Hazard: a serial-only e-stop silently does nothing when the link is down.
 Acceptance: the GPIO line is asserted (LOW) before - and independent of -
-the serial 'X'; it is released (HIGH) again before the recovery reset,
-which needs a powered machine to home the actuators.
+the serial 'X'; it is released (HIGH) again before the operator is asked
+to re-home, since homing needs a powered machine.
 """
 import pytest
 from unittest.mock import MagicMock
@@ -36,8 +36,16 @@ def estop_env(monkeypatch):
     gpio = MagicMock()
     gpio.output.side_effect = lambda pin, level: events.append(("gpio", pin, level))
     monkeypatch.setattr(pc_mod, "GPIO", gpio)
+    # The tests call each phase directly. Real timers would run the later
+    # phases after the test, against this stub, during some other test.
+    monkeypatch.setattr(pc_mod, "QTimer", MagicMock())
     window = RecordingWindow(events)
-    return events, gpio, ProtocolController(window), window
+    controller = ProtocolController(window)
+    # Its state changes are covered in test_protocol_controller; record
+    # only where the operator prompt falls in the stop sequence.
+    monkeypatch.setattr(controller, "_require_operator_rehome",
+                        lambda load_cleared: events.append("ask_rehome"))
+    return events, gpio, controller, window
 
 
 @pytest.mark.unit
@@ -70,17 +78,18 @@ class TestEmergencyStopGpio:
         controller._emergency_stop_phase2()
         assert events == ["worker.stop"]
 
-    def test_phase3_releases_gpio_then_resets(self, estop_env):
-        """Recovery homing needs the machine powered: HIGH before reset."""
+    def test_phase3_releases_gpio_then_asks_to_rehome(self, estop_env):
+        """Homing needs the machine powered: HIGH before the operator is
+        asked, and nothing resets on its own."""
         events, gpio, controller, _ = estop_env
         controller._emergency_stop_phase3()
-        assert events == [("gpio", EMERGENCYSTOP, gpio.HIGH), "reset_arduino"]
+        assert events == [("gpio", EMERGENCYSTOP, gpio.HIGH), "ask_rehome"]
 
-    def test_phase3_resets_even_if_gpio_release_fails(self, estop_env):
+    def test_phase3_asks_even_if_gpio_release_fails(self, estop_env):
         events, gpio, controller, _ = estop_env
         gpio.output.side_effect = RuntimeError("gpio unavailable")
         controller._emergency_stop_phase3()
-        assert "reset_arduino" in events
+        assert events == ["ask_rehome"]
 
     def test_phase3_does_not_release_after_physical_stop(self, estop_env):
         """Documents why the operator reset must release the line itself:

@@ -572,38 +572,103 @@ class TestStartRecheck:
         assert w.protocol_state == "starting"
 
 
-# ----- release before the recovery reset -----
-class TestReleaseBeforeReset:
-    def test_reset_waits_while_load_present(self, controller):
+# ----- release, then an operator re-home (S2) -----
+class TestReleaseBeforeRehome:
+    @pytest.fixture
+    def controller(self, qtbot):
+        """Phase 3 runs while the Stop chain holds the "stopping" state."""
+        window = make_window("stopping")
+        return ProtocolController(window), window
+
+    def test_prompt_waits_while_load_present(self, controller):
         pc, w = controller
         w.last_measured_pressure = 30.0
         pc._stop_phase3()
+        w._show_rehome_prompt.assert_not_called()
         w.reset_arduino.assert_not_called()
 
-    def test_reset_runs_once_load_cleared(self, controller):
+    def test_asks_to_rehome_once_load_cleared(self, controller):
         pc, w = controller
+        w.protocol_state = "stopping"
         w.last_measured_pressure = 1.0
         pc._stop_phase3()
-        w.reset_arduino.assert_called_once()
+        w._show_rehome_prompt.assert_called_once_with(True)
+        # Nothing homes without the operator: no automatic reset.
+        w.reset_arduino.assert_not_called()
+        assert w.protocol_state == "fault"  # shown as "Recovery required"
+        assert w.initial_setup_complete is False
+        w.disable_actuator_controls.assert_called_once()
+        w.shell.setup.set_reset_enabled.assert_called_with(True)
+        w.treatment_panel.set_idle.assert_called_once()
 
-    def test_reset_runs_immediately_without_telemetry(self, controller):
+    def test_asks_immediately_without_telemetry(self, controller):
         pc, w = controller
         w.last_measured_pressure = None  # no status frame ever arrived
         pc._stop_phase3()
-        w.reset_arduino.assert_called_once()
+        w._show_rehome_prompt.assert_called_once_with(True)
+        w.reset_arduino.assert_not_called()
 
-    def test_reset_runs_after_bounded_wait(self, controller):
+    def test_asks_after_bounded_wait_and_says_load_remains(self, controller):
         import time as _time
 
         pc, w = controller
         w.last_measured_pressure = 30.0
         pc._reset_after_release(started=_time.time() - pc.RELEASE_WAIT_S - 1)
-        w.reset_arduino.assert_called_once()
+        w._show_rehome_prompt.assert_called_once_with(False)
+        w.reset_arduino.assert_not_called()
 
     def test_emergency_stop_phase3_also_waits(self, controller):
         pc, w = controller
         w.last_measured_pressure = 30.0
         pc._emergency_stop_phase3()
+        w._show_rehome_prompt.assert_not_called()
+        w.reset_arduino.assert_not_called()
+
+    def test_emergency_stop_phase3_asks_once_released(self, controller):
+        pc, w = controller
+        w.last_measured_pressure = 0.5
+        pc._emergency_stop_phase3()
+        w._show_rehome_prompt.assert_called_once_with(True)
+        w.reset_arduino.assert_not_called()
+
+    def test_waits_for_a_cancelled_reset_then_asks(self, controller, monkeypatch):
+        """Stop during a reset cancels it; the prompt follows its failure."""
+        from controllers import protocol_controller as pc_mod
+
+        pc, w = controller
+        polls = []
+        monkeypatch.setattr(pc_mod.QTimer, "singleShot",
+                            lambda ms, callback: polls.append(callback))
+        w.protocol_state = "stopping"
+        w.reset_in_progress = True
+        w.last_measured_pressure = 0.0
+        pc._stop_phase3()
+        w._show_rehome_prompt.assert_not_called()
+        assert len(polls) == 1
+        w.reset_in_progress = False
+        w.protocol_state = "fault"  # the cancelled reset reported failure
+        polls.pop()()
+        w._show_rehome_prompt.assert_called_once_with(True)
+        w.reset_arduino.assert_not_called()
+
+    def test_operator_reset_that_finished_needs_no_prompt(self, controller):
+        pc, w = controller
+        w.protocol_state = "idle"  # an operator reset completed meanwhile
+        w.last_measured_pressure = 0.0
+        pc._stop_phase3()
+        w._show_rehome_prompt.assert_not_called()
+        assert w.initial_setup_complete is True
+
+    def test_late_worker_completion_keeps_recovery_required(self, controller):
+        """A worker that finishes after the prompt must not reopen Start."""
+        pc, w = controller
+        w.protocol_state = "stopping"
+        w.protocol_stop_requested = True
+        w.last_measured_pressure = 0.0
+        pc._stop_phase3()
+        pc.protocol_completed(True)
+        assert w.protocol_state == "fault"
+        assert w.initial_setup_complete is False
         w.reset_arduino.assert_not_called()
 
 
