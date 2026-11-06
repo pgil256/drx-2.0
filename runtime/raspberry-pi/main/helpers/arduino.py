@@ -475,6 +475,7 @@ class Arduino(QObject):
         self.logger.info("I/O loop exited")
 
     def _handle_link_lost(self):
+        self._send_final_stop()
         self._invalidate_identity()
         self.connected = False
         self.connection_ready_event.clear()
@@ -483,6 +484,26 @@ class Arduino(QObject):
             self._fail_pending("DISCONNECTED", "Serial link lost")
             self._queue_condition.notify_all()
         self.connection_lost.emit()
+
+    def _send_final_stop(self) -> None:
+        """One best-effort X before the link is declared lost (checklist V7).
+
+        If only the receive path failed, the firmware is still running whatever
+        it was doing, and its heartbeat only warns. Once the link is lost every
+        send() is refused, so this is the last chance to stop it. Runs on the
+        I/O thread, which owns the port. If the port is really gone the write
+        fails, and that is logged.
+        """
+        port = self.serial_com
+        if port is None or not getattr(port, "is_open", False):
+            self.logger.warning("Serial link lost; the port is closed, so no stop was sent")
+            return
+        try:
+            self._write_now("X")
+        except Exception:
+            self.logger.exception("Serial link lost; the final stop (X) could not be written")
+        else:
+            self.logger.warning("Serial link lost; sent a final stop (X)")
 
     def _discard_queued(self, result: str, reason: str) -> None:
         """Cancel unsent commands under the queue lock without claiming a write."""

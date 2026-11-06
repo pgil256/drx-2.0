@@ -311,6 +311,43 @@ class TestIoLoopLinkLoss:
         assert lost == ["lost"]
 
     @pytest.mark.timeout(10)
+    def test_unanswered_probe_sends_a_final_stop_before_giving_up(
+        self, arduino, lost, monkeypatch
+    ):
+        """V7: the receive path may be the only part that failed."""
+        monkeypatch.setattr(arduino, "RX_SILENCE_LIMIT_S", 0.0)
+        monkeypatch.setattr(arduino, "PROBE_TIMEOUT_S", 0.05)
+        arduino.serial_com.in_waiting = 0
+        order = []
+        arduino.serial_com.write.side_effect = lambda payload: order.append(payload)
+        arduino.connection_lost.connect(lambda: order.append("lost"))
+
+        arduino.read_from_com()
+
+        assert order == [b"T\n", b"X\n", "lost"]
+        assert lost == ["lost"]
+
+    @pytest.mark.timeout(10)
+    def test_failed_probe_write_still_tries_the_final_stop(self, arduino, lost, monkeypatch):
+        monkeypatch.setattr(arduino, "RX_SILENCE_LIMIT_S", 0.0)
+        arduino.serial_com.in_waiting = 0
+        arduino.serial_com.write.side_effect = OSError(5, "Input/output error")
+
+        arduino.read_from_com()
+
+        # Both the probe and the stop were attempted; the failure is logged.
+        assert [c[0][0] for c in arduino.serial_com.write.call_args_list] == [b"T\n", b"X\n"]
+        assert lost == ["lost"]
+        assert arduino.connected is False
+
+    @pytest.mark.timeout(10)
+    def test_closed_port_skips_the_final_stop(self, arduino, lost):
+        arduino.serial_com.is_open = False
+        arduino._handle_link_lost()
+        arduino.serial_com.write.assert_not_called()
+        assert lost == ["lost"]
+
+    @pytest.mark.timeout(10)
     def test_line_handling_error_is_not_a_link_loss(self, arduino, lost, monkeypatch):
         arduino.serial_com.in_waiting = 1
         arduino.serial_com.readline.return_value = b"S|1|2|3|4\n"
