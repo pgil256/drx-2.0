@@ -39,6 +39,42 @@ firmware native tests 8 suites / 165 tests; Mega build warning-free;
   current behavior. Making the heartbeat stop pulsing again would be a
   firmware change for this batch.
 
+### Batch 2026-11: stop hardening (queued, not flashed)
+
+These items come from the checklist in
+`development/docs/plans/2026-11-04-improvement-checklist.md` (F1–F4). The
+image is built from `main`, so it also contains everything in the
+2026-10-28 batch above. A device still on an older image gets both changes
+with this flash.
+
+- **F1, checked stop writes (2026-11-05).**
+  - Every zero-speed write to an SMC is checked: up to 3 attempts. An
+    unacknowledged stop is reported once, as
+    `ERROR: Motor stop not acknowledged <n>`, until a later stop on that SMC
+    is acknowledged.
+  - A position arrival, a pressure arrival and the end of a release complete
+    (`DONE` or `RELEASED`) only once the stop is acknowledged. The next pass
+    retries it. Before this, a NACKed stop left the SMC driving while the
+    firmware reported it stopped.
+  - The pulse speed cache only updates when the SMC acknowledges the write.
+  - Stops on SMCs that no move owns are retried every 200 ms: E-stop, `JS`,
+    boot, and the stop sent when a target is already in band.
+  - No Pi change is needed; the error text is the one the E-stop already used.
+- **`VERSION`:** `2026-11-05-DRX2-STOP-CHECKS`.
+- **Image after F1:** flash 34,162 bytes, RAM 2,694 bytes, with the pinned
+  `atmelavr@5.3.0` (sha256
+  `d35640beff4a37ab134b1e3867059ed09bab104c4b194519416fa0e81bccb11b` from a
+  local WSL build; CI's firmware job uploads its own image and checksum).
+- **Bench checks for F1:**
+  - Normal Setup moves on all three axes, a pressure Go and a pulsed
+    treatment complete as before.
+  - The Arduino log for that session has no
+    `Motor stop not acknowledged` lines.
+  - Optional, with the device unoccupied: power the Mega with one SMC's I2C
+    lead disconnected. Boot reports `ERROR: Motor stop not acknowledged <n>`
+    once and keeps retrying, then stops reporting once the lead is
+    reconnected.
+
 ## 2. UI changes to look at on the Pi or simulator
 
 - **Pressed state:** the top-bar knee logo and wordmark now dim to 50% while
@@ -74,10 +110,11 @@ Each item is its own commit, so any one can be reverted alone.
 
 ## 4. Repository and CI changes that cannot be verified locally
 
-- **Other videos in Git LFS:** only `Next Level Integrative Medicine HCT_P Details.mp4`
-  (392 MB) is in LFS. The other 8 mp4s (about 121 MB) are plain blobs. Moving
-  them to LFS for new commits only is cheap; converting existing history needs
-  `git lfs migrate` and a force-push.
+- **Other videos in Git LFS:** done 2026-11-05, for new commits only. All nine
+  `.mp4` files under `runtime/raspberry-pi/main/ui/media/videos/` are now LFS
+  pointers: the other 8 (about 116 MB) joined `Next Level Integrative Medicine
+  HCT_P Details.mp4`. Older commits keep the plain blobs. Shrinking the pack
+  would need `git lfs migrate` and a force-push, which the owner declined.
 - **`xvfb-run` in CI:** probably unnecessary, since `QT_QPA_PLATFORM=offscreen`
   is set in CI and in `tests/conftest.py`. Removing it needs a CI run to confirm.
 - **Separate `check_limits_sync.py` CI step:** it repeats

@@ -5,10 +5,42 @@ It is also usable during the one-time upgrade while the service is stopped.
 """
 
 import argparse
+import logging
 import os
 from pathlib import Path
 import shutil
+import stat
 from typing import List, Optional
+
+# config.constants.APP_NAME; this module must stay importable on its own.
+_logger = logging.getLogger("KneeSpa.config")
+_POSIX = os.name == "posix"
+
+# Device env files that hold credentials (SMTP password, cloud device token).
+SECRET_FILES = (".env", "cloud.env")
+
+
+def restrict_secret_file(path) -> bool:
+    """Make a secrets file owner-only (0600) when group or others have access.
+
+    POSIX only; returns True when the mode was changed. Shared with
+    config.paths. Never raises: a file that cannot be fixed is still used.
+    """
+    if not _POSIX:
+        return False
+    name = os.path.basename(str(path))
+    try:
+        mode = stat.S_IMODE(os.stat(str(path)).st_mode)
+        if not mode & 0o077:
+            return False
+        os.chmod(str(path), 0o600)
+    except FileNotFoundError:
+        return False
+    except OSError:
+        _logger.warning("Could not restrict permissions on %s", name)
+        return False
+    _logger.warning("Restricted %s to owner-only access (was %03o)", name, mode)
+    return True
 
 
 def _copy_missing(source: Path, destination: Path) -> bool:
@@ -71,6 +103,9 @@ def migrate_state(project: Path, device: Path) -> List[str]:
     for source, relative in files:
         if _copy_missing(project / source, destination / relative):
             copied.append(relative)
+            if relative in SECRET_FILES:
+                # copystat kept the legacy file's mode, which may be world-readable.
+                restrict_secret_file(destination / relative)
     destination.mkdir(parents=True, exist_ok=True)
     marker.touch(exist_ok=True)
     return copied

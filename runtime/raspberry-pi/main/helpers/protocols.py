@@ -898,18 +898,22 @@ class Protocols(QtCore.QRunnable):
         the old 60s keepalive thread this method used to spawn per stop
         flushed buffers and fought reconnects concurrently with whatever
         the user started next.
+
+        Returns True when this call queued the pressure release (P0), and
+        False when it did not, so the caller can release traction itself.
         """
         self.logger.info("Initiating protocol stop sequence")
         self.cancel()
         if self._firmware_stopped:
             # X aborts firmware's autonomous release, and P0 is rejected while
             # the physical button is held. Leave that release in control.
-            return
+            return False
 
         if not self.arduino:
             self.logger.warning("No Arduino connection available for stop sequence")
-            return
+            return False
 
+        release_sent = False
         try:
             # Emergency stop first: halts pulsing/motion immediately
             # (X jumps the transport's queue and the firmware's limiter)
@@ -934,3 +938,4 @@ class Protocols(QtCore.QRunnable):
 
         except Exception as e:
             self.logger.error("Error during protocol stop: %s", e)
+        return bool(release_sent)

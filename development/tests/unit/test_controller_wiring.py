@@ -379,6 +379,45 @@ class TestSetupGo:
         stub.arduino.send.assert_called_once_with("I131900")
         assert stub.horizontal_flexion_position == 0
 
+    # A failed Go leaves nothing moving, so no DONE will re-enable the
+    # controls; left disabled they also blocked logout and exit.
+    def test_invalid_axial_calibration_reenables_controls(self):
+        stub = make_stub()
+        stub.shell.setup.row_value.return_value = 3.0
+        stub.set_to_distance.return_value = False
+        assert KneeSpa._on_setup_go(stub, "axial") is False
+        stub.enable_actuator_controls.assert_called_once()
+        stub.loading_spinner.hide.assert_called_once()
+
+    def test_failed_lateral_go_reenables_controls(self):
+        stub = make_stub()
+        stub.shell.setup.row_value.return_value = 10.0
+        stub.set_to_c_distance.return_value = False
+        assert KneeSpa._on_setup_go(stub, "lateral") is False
+        stub.enable_actuator_controls.assert_called_once()
+
+    def test_invalid_horizontal_marks_reenable_controls(self):
+        stub = make_stub()
+        stub.shell.setup.row_value.return_value = -10
+        stub.config.BMarks = {}
+        KneeSpa._on_setup_go(stub, "horizontal")
+        stub.arduino.send.assert_not_called()
+        stub._show_timed_error.assert_called_once()
+        stub.enable_actuator_controls.assert_called_once()
+
+    @pytest.mark.parametrize("applied", [False, True])
+    def test_pressure_go_reenables_only_when_not_applied(self, applied):
+        stub = make_stub()
+        stub._apply_setup_pressure.return_value = applied
+        assert KneeSpa._on_setup_go(stub, "pressure") is applied
+        assert stub.enable_actuator_controls.called is not applied
+
+    def test_successful_go_leaves_controls_for_done(self):
+        stub = make_stub()
+        stub.shell.setup.row_value.return_value = 3.0
+        assert KneeSpa._on_setup_go(stub, "axial") is True
+        stub.enable_actuator_controls.assert_not_called()
+
     def test_apply_pressure_clamps_above_max(self):
         stub = make_stub()
         stub.shell.setup.row_value.return_value = 95.0  # above PRESSURE_MAX (80)

@@ -1,11 +1,12 @@
-"""DSNavRailButton — dark left-rail nav item (icon over label, active = cyan).
+"""DSNavRailButton — left-rail nav item (icon over label, active = action blue).
 
-Mirrors `NavRailButton`: square (rail-width), icon-over-label, checkable. Active
-state paints black bg + cyan label + a 4px cyan left border. Icon recoloring on
-active is wired in Phase 2 when the real Lucide SVGs are supplied.
+Mirrors `NavRailButton`: square (rail-width), icon-over-label, checkable. The
+active item gets the soft action fill, an action-blue label + icon and a 4px left
+edge in the same blue; the rest sit quietly in ink on the white rail. The icon
+recolours with the label through ``icon_factory``.
 """
 
-from PyQt5.QtCore import QSize, Qt
+from PyQt5.QtCore import QEvent, QSize, Qt
 from PyQt5.QtWidgets import QSizePolicy, QToolButton
 
 from ._common import px, repolish, resolve, sans_font
@@ -37,20 +38,29 @@ class DSNavRailButton(QToolButton):
         self.toggled.connect(lambda _checked: self._render())
         self._render()
 
+    def changeEvent(self, event):
+        super().changeEvent(event)
+        if event.type() == QEvent.EnabledChange:
+            self._render()
+
     def _render(self):
         active = self.isChecked()
-        fg = resolve("--brand-cyan") if active else "#ffffff"
-        bg = "#000000" if active else resolve("--surface-chrome")
-        hover = "#000000" if active else "#2a2a2a"
-        left = resolve("--brand-cyan") if active else "transparent"
+        accent = resolve("--chrome-accent")
+        if not self.isEnabled():
+            fg = resolve("--text-chrome-disabled")
+        else:
+            fg = accent if active else resolve("--text-chrome")
+        bg = resolve("--surface-chrome-active") if active else "transparent"
+        hover = resolve("--surface-chrome-active") if active else resolve("--surface-chrome-hover")
+        left = accent if active else "transparent"
         if self._icon_factory is not None:
             self.setIcon(self._icon_factory(fg, 28))
         self.setStyleSheet(
             f"QToolButton {{ color: {fg}; background: {bg}; border: none;"
             f" border-left: 4px solid {left}; padding: 18px 0; }}"
             f" QToolButton:hover {{ background: {hover}; }}"
-            f" QToolButton:pressed {{ background: #333333; }}"
-            f" QToolButton[keyboardFocus=\"true\"]:focus {{ border: 3px solid #ffffff;"
-            f" border-left: 4px solid {left}; }}"
+            f" QToolButton:pressed {{ background: {resolve('--surface-chrome-active')}; }}"
+            f" QToolButton[keyboardFocus=\"true\"]:focus {{"
+            f" border: 2px solid {resolve('--border-focus')}; border-left: 4px solid {left}; }}"
         )
         repolish(self)

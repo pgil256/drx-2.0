@@ -498,10 +498,32 @@ class ProtocolController:
             return
         if getattr(window, "_closing", False) is True:
             return
-        if window.worker:
-            window.worker.stop()
+        self._release_after_stop()
         # Continue to phase 3 after another 0.5 seconds
         QTimer.singleShot(500, self._stop_phase3)
+
+    def _release_after_stop(self):
+        """Release traction for an operator STOP or on-screen emergency stop.
+
+        The treatment worker's stop() normally sends X, P0 and HF0. When there
+        is no worker (pressure applied from the Setup screen), or a finished
+        worker declines because an earlier physical stop marked it, P0 used
+        to be skipped: the load stayed on until the recovery reset re-homed
+        the axial actuator, up to RELEASE_WAIT_S later. Fault stops never
+        reach here (stop_without_recovery sets _no_automatic_recovery).
+        """
+        window = self.window
+        worker = window.worker
+        if worker is not None and worker.stop() is not False:
+            return
+        if getattr(window, "_physical_stop_active", False) is True:
+            # The firmware's own release owns the load; X would abort it.
+            return
+        arduino = getattr(window, "arduino", None)
+        if arduino is None or not arduino.send("P0"):
+            window.logger.error("Pressure release (P0) could not be sent after stop")
+            return
+        window.logger.info("Pressure release command sent")
 
     def _stop_phase3(self):
         """Phase 3 of stop protocol - recovery reset once the load has cleared."""
@@ -724,8 +746,7 @@ class ProtocolController:
             return
         if getattr(window, "_closing", False) is True:
             return
-        if window.worker:
-            window.worker.stop()
+        self._release_after_stop()
         # Continue to phase 3 after another second
         QTimer.singleShot(1000, self._emergency_stop_phase3)
 

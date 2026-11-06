@@ -206,6 +206,13 @@ PRESSURE_BUILD_TIMEOUT_S = 95
 # reports its own no-progress stall (POSITION_STALL_MS = 20 s), so this
 # only needs to be a backstop above the longest legitimate move.
 LATERAL_MOVE_TIMEOUT_S = 45
+# A Setup move disables the actuator controls until the firmware's DONE. If
+# that DONE never arrives (lost frame, fault without a reply), this backstop
+# hands the controls back instead of leaving logout and exit blocked until a
+# power cycle. It sits above the longest legitimate Setup move: a pressure Go
+# can run to the firmware's 90 s PRESSURE_MOVE_DEADLINE (the host waits
+# PRESSURE_BUILD_TIMEOUT_S), and position moves slow down at low motor speed.
+SETUP_MOTION_DONE_TIMEOUT_S = 120
 
 # Protocol Default Settings
 PROTOCOL_DEFAULT_SETTINGS = {
