@@ -27,4 +27,3 @@ select = [
 # file's entry in the commit that converts it. A catch-all that is truly
 # needed stays, with `# noqa: BLE001 - <reason>`.
 [lint.per-file-ignores]
-"devices/maintenance/raspberry-pi/version-chooser/version_chooser.py" = ["BLE001", "S110"]
