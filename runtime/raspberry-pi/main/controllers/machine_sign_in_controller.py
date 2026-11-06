@@ -74,7 +74,8 @@ class MachineSignInController(QObject):
         def execute() -> None:
             try:
                 result = operation()
-            except Exception:
+            # Exception text can carry sign-in tokens: log only the action.
+            except Exception:  # noqa: BLE001
                 self.logger.warning("Machine sign-in operation failed: %s", action)
                 result = {"error": "invalid_response"}
             if retired.is_set():
