@@ -735,6 +735,22 @@ def test_progress_view_error_still_updates_banner(window_run: SimpleNamespace,
     assert run.window.treatment_panel.phase_label.text() == "PRESSURE RAMP"
 
 
+def test_firmware_stall_timeout_faults_the_running_treatment(window_run):
+    """F4: the firmware stopped a jammed move; the Pi must not treat it as advisory."""
+    run = window_run
+    w = run.window
+    worker = start(run)
+    run.arduino.send.reset_mock()
+    w.handle_firmware_error("Motor stall timeout 14")
+    assert w.protocol_state == "fault" and w._no_automatic_recovery
+    assert not w.initial_setup_complete
+    worker.cancel.assert_called_once_with(firmware_stopped=True)
+    assert "X" in [c[0][0] for c in run.arduino.send.call_args_list]
+    assert not run.view._start_btn.isEnabled()
+    assert w.treatment_panel.phase_label.text() == "SAFETY STOP: Motor stall timeout 14"
+    w._show_safety_alert.assert_called_once_with("CONTROLLER FAULT: Motor stall timeout 14")
+
+
 @pytest.mark.parametrize("action", ["Dismiss", "Stop"])
 def test_pressure_notice_actions_keep_recovery_explicit(window_run, action, qtbot):
     run = window_run
