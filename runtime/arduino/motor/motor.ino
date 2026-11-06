@@ -1223,7 +1223,11 @@ void processCommand(const String &cmd) {
             localPressure > MAX_PRESSURE_LBS ||
             !isfinite(localPressureLimit) || localPressureLimit < localPressure ||
             localPressureLimit > MAX_PRESSURE_LBS) {
-          tripPressureFault("PRESSURE_TARGET_INVALID");
+          // Rejected, like every other refused command, and nothing else
+          // changes: a running move goes on. This used to latch a pressure
+          // fault, stopping every axis with no release, so getting back
+          // needed a reset (checklist V5).
+          rejectCommand("P", "INVALID_TARGET");
           return;
         }
       }

@@ -79,25 +79,52 @@ void test_P_busy_reply_when_running(void) {
     TEST_ASSERT_TRUE(Serial1.outputContains("BUSY"));
 }
 
+// A malformed target is rejected (COMMAND_REJECTED), not latched as a
+// pressure fault that stopped every axis and needed a reset (V5).
+static void assertTargetRejected(void) {
+    TEST_ASSERT_TRUE(Serial1.outputContains("COMMAND_REJECTED|P|INVALID_TARGET"));
+    TEST_ASSERT_FALSE(Serial1.outputContains("FAULT|"));
+    TEST_ASSERT_FALSE(pressureFault);
+}
+
 void test_P_garbage_rejected(void) {
     processCommand("Pabc");
-    TEST_ASSERT_TRUE(Serial1.outputContains("FAULT|PRESSURE_TARGET_INVALID"));
+    assertTargetRejected();
     TEST_ASSERT_FALSE(measurePressure);
 }
 
 // Out-of-range targets are rejected, never clamped into range and applied.
 void test_P_above_max_rejected(void) {
     processCommand("P999");
-    TEST_ASSERT_TRUE(Serial1.outputContains("FAULT|PRESSURE_TARGET_INVALID"));
+    assertTargetRejected();
     TEST_ASSERT_FALSE(measurePressure);
     TEST_ASSERT_EQUAL_FLOAT(0.0, desiredPressure);
 }
 
 void test_P_below_min_rejected(void) {
     processCommand("P-10");
-    TEST_ASSERT_TRUE(Serial1.outputContains("FAULT|PRESSURE_TARGET_INVALID"));
+    assertTargetRejected();
     TEST_ASSERT_FALSE(measurePressure);
     TEST_ASSERT_EQUAL_FLOAT(0.0, desiredPressure);
+}
+
+void test_P_other_malformed_targets_rejected(void) {
+    const char *bad[] = {"P", "P40x", "P40|", "P40|30", "P40|81", "Pnan", "P50|abc"};
+    for (const char *cmd : bad) {
+        setUp();
+        processCommand(cmd);
+        assertTargetRejected();
+        TEST_ASSERT_FALSE(measurePressure);
+    }
+}
+
+void test_P_malformed_target_leaves_a_running_move_alone(void) {
+    processCommand("P40");
+    TEST_ASSERT_TRUE(measurePressure);
+    processCommand("P999");
+    assertTargetRejected();
+    TEST_ASSERT_TRUE(measurePressure);           // the move goes on
+    TEST_ASSERT_EQUAL_FLOAT(40.0, desiredPressure);
 }
 
 void test_P_at_max_boundary_accepted(void) {
@@ -472,6 +499,8 @@ int main(int argc, char **argv) {
     RUN_TEST(test_P_garbage_rejected);
     RUN_TEST(test_P_above_max_rejected);
     RUN_TEST(test_P_below_min_rejected);
+    RUN_TEST(test_P_other_malformed_targets_rejected);
+    RUN_TEST(test_P_malformed_target_leaves_a_running_move_alone);
     RUN_TEST(test_P_at_max_boundary_accepted);
     RUN_TEST(test_I_sets_position);
     RUN_TEST(test_I_ignored_when_running);
