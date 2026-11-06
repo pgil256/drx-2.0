@@ -298,8 +298,8 @@ class ConnectionManager:
         """Drive the hardware EMERGENCYSTOP output to its idle (HIGH) level."""
         try:
             GPIO.output(EMERGENCYSTOP, GPIO.HIGH)
-        except Exception as exc:
-            self.logger.error("Could not release EMERGENCYSTOP GPIO before reset: %s", exc)
+        except Exception:
+            self.logger.exception("Could not release EMERGENCYSTOP GPIO before reset")
 
     def _on_reset_finished(self, success, worker=None):
         """Slot called when ResetWorker finishes."""

@@ -39,7 +39,6 @@ select = [
 "development/tools/run_simulator.py" = ["BLE001", "S110"]
 "devices/maintenance/raspberry-pi/version-chooser/version_chooser.py" = ["BLE001", "S110"]
 "runtime/raspberry-pi/main/config/config.py" = ["BLE001", "S110"]
-"runtime/raspberry-pi/main/controllers/connection_manager.py" = ["BLE001", "S110"]
 "runtime/raspberry-pi/main/controllers/device_controller.py" = ["BLE001", "S110"]
 "runtime/raspberry-pi/main/controllers/machine_sign_in_controller.py" = ["BLE001", "S110"]
 "runtime/raspberry-pi/main/controllers/patient_controller.py" = ["BLE001", "S110"]
