@@ -101,7 +101,7 @@ class TestLogin:
         stub.update_ui_after_login = partial(KneeSpa.update_ui_after_login, stub)
         stub.auth = AuthController(stub, state_path=str(tmp_path / "auth_state.json"))
         if outcome == "locked":
-            stub.auth.lockout_until = time.time() + 60
+            stub.auth.lockout_until = time.monotonic() + 60
         shell.login_attempted.connect(partial(KneeSpa._on_login_attempt, stub))
         shell.nav_rail.navigate.emit("protocols")
         assert shell.stack.currentIndex() == PAGES.index("home")
