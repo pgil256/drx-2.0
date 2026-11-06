@@ -36,6 +36,9 @@ def estop_env(monkeypatch):
     gpio = MagicMock()
     gpio.output.side_effect = lambda pin, level: events.append(("gpio", pin, level))
     monkeypatch.setattr(pc_mod, "GPIO", gpio)
+    # The tests call each phase directly. Real timers would run the later
+    # phases after the test, against this stub, during some other test.
+    monkeypatch.setattr(pc_mod, "QTimer", MagicMock())
     window = RecordingWindow(events)
     controller = ProtocolController(window)
     # Its state changes are covered in test_protocol_controller; record
