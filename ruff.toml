@@ -54,5 +54,4 @@ select = [
 "runtime/raspberry-pi/main/helpers/staff_client.py" = ["BLE001", "S110"]
 "runtime/raspberry-pi/main/kneespa.py" = ["BLE001", "S110"]
 "runtime/raspberry-pi/main/ui/modals/release_install.py" = ["BLE001", "S110"]
-"runtime/raspberry-pi/main/ui/modals/vlc_engine.py" = ["BLE001", "S110"]
 "runtime/raspberry-pi/main/ui/widgets/treatment_status_panel.py" = ["BLE001", "S110"]
