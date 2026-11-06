@@ -43,5 +43,15 @@ fi
 exec >"$LOG_FILE" 2>&1 || fail "Cannot write $LOG_FILE."
 printf 'KneeSpa version chooser: %s\nPython: %s\n' "$(date --iso-8601=seconds)" "$PYTHON"
 
+# Restore the new app's folder if a software install was interrupted. With the
+# shared launcher lock, the script changes nothing while KneeSpa runs (it may be
+# installing); the chooser then reports the running app. A failure is logged,
+# not fatal: the legacy version can still be chosen.
+RESTORE="$APP_DIR/runtime/restore_update.sh"
+if [[ -f "$RESTORE" ]]; then
+    bash "$RESTORE" --lock "$LOG_DIR/desktop-launch.lock" "$APP_DIR/runtime" ||
+        printf 'KneeSpa version chooser: the new software could not be restored.\n' >&2
+fi
+
 # The chooser shows its own errors, then replaces itself with the chosen app.
 exec "$PYTHON" -u "$SCRIPT_DIR/version_chooser.py" "$@"

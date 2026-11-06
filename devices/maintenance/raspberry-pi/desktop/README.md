@@ -51,6 +51,9 @@ See [firmware flashing](../firmware.md) for the USB and app-close requirements.
 - Forwards command-line arguments and preserves the display/session environment.
 - Uses `flock` to prevent a second app opened through this launcher. The lock
   releases when the app exits and survives its in-app restart.
+- Once it holds the lock, runs `runtime/restore_update.sh` (when present). It
+  restores the app folder if a software install was interrupted between its two
+  renames, then checks that the app is there.
 - Refuses to launch while the standard system `kneespa.service` is active.
   It does not stop services or detect every app started by other commands or
   custom service names; choose one way to start the app.
