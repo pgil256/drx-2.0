@@ -22,8 +22,5 @@ select = [
     "BLE001", # `except Exception` that neither re-raises nor logger.exception()s
     "S110",   # `try`/`except`/`pass`
 ]
-
-# Files not yet converted to the blind-except rules (checklist L2). Remove a
-# file's entry in the commit that converts it. A catch-all that is truly
-# needed stays, with `# noqa: BLE001 - <reason>`.
-[lint.per-file-ignores]
+# A catch-all that is truly needed stays, with `# noqa: BLE001` and its reason
+# (for example: remote error text can carry credentials, so it is not logged).
