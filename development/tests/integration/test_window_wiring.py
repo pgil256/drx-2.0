@@ -730,6 +730,11 @@ def test_worker_progress_phase_precedence_and_full_banner(window_run: SimpleName
 def test_progress_view_error_still_updates_banner(window_run: SimpleNamespace,
                                                   monkeypatch: pytest.MonkeyPatch) -> None:
     run = window_run
+    # The 250 ms measurement refresh also calls set_phase. If it fires while
+    # set_phase is broken (pytest-qt processes events after the test; a slow
+    # runner leaves the timer due), the failure lands in the Qt event loop.
+    # This test is about the progress path only.
+    run.window._pressure_state_timer.stop()
     monkeypatch.setattr(run.view, "set_phase", MagicMock(side_effect=RuntimeError("view")))
     run.window.protocol.update_status_label(">>Pressure ramp")
     assert run.window.treatment_panel.phase_label.text() == "PRESSURE RAMP"
