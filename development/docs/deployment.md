@@ -137,19 +137,25 @@ The unit example sets `WatchdogSec=60` and `NotifyAccess=main`. The app pings
 systemd from its GUI thread, so a screen that stops responding for 60 seconds is
 aborted and restarted by `Restart=on-failure`.
 
-An abort does not stop motion. The firmware's host-heartbeat timeout only sends
-`WARNING: Host heartbeat lost` after 10 seconds without host traffic. Motion
-that is already running continues within the firmware's own bounds:
+A frozen screen alone does not stop motion: the app's serial I/O thread keeps
+sending the `W` heartbeat. Once the abort ends the process, firmware that
+advertises `HOST_HEARTBEAT_V1` stops every actuator 3 seconds after the last
+host traffic and latches `FAULT|HOST_TIMEOUT`; the autonomous traction release
+is not interrupted. When the restarted app connects, its automatic reset sends
+`Y`, which clears the fault and restarts the firmware.
+
+Older firmware, without that capability, only sends `WARNING: Host heartbeat
+lost` after 10 seconds without host traffic, and motion that is already running
+continues within the firmware's own bounds:
 
 - A position move runs to its target.
 - A pressure ramp stops at its target pressure, or faults and stops at its
   90-second deadline.
 - Pulsing continues with no time limit.
 
-When the restarted app connects, its automatic reset sends `Y`, which stops
-every actuator and restarts the firmware. With the example unit that is at
-least `RestartSec` (5 seconds) plus the app's startup time after the abort.
-Until then, the physical STOP is the only immediate way to stop motion.
+There the automatic reset is the stop. With the example unit that is at least
+`RestartSec` (5 seconds) plus the app's startup time after the abort. Until
+then, the physical STOP is the only immediate way to stop motion.
 
 Add the two lines to an installed unit only after the device runs a build that
 contains `helpers/watchdog.py`; an older build never pings and would be

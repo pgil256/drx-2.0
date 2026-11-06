@@ -4,6 +4,9 @@ import re
 
 
 HX711_PROTOCOL_DRIVER = "DRX-HX711-NB2"
+# Optional capability fields after the driver: FIRMWARE|<version>|<driver>|<CAP>...
+# Known ones become flags in the parsed identity; unknown ones are ignored.
+FIRMWARE_CAPABILITIES = {"HOST_HEARTBEAT_V1": "host_heartbeat"}
 
 
 def _number(value, nonzero=False):
@@ -89,9 +92,16 @@ def parse_diagnostic_frame(frame):
         values["valid"] = values["age_ms"] >= 0
         return "sensor_diagnostics", values
     if parts[0] == "FIRMWARE":
-        if len(parts) != 3:
+        capabilities = parts[3:]
+        if (len(parts) < 3 or len(capabilities) > 8
+                or len(set(capabilities)) != len(capabilities)
+                or not all(re.fullmatch(r"[A-Z][A-Z0-9_]{0,31}", c) for c in capabilities)):
             raise ValueError("Malformed firmware identity")
-        return "firmware_identity", {"version": _label(parts[1]), "driver": _label(parts[2])}
+        identity = {"version": _label(parts[1]), "driver": _label(parts[2])}
+        for capability in capabilities:
+            if capability in FIRMWARE_CAPABILITIES:
+                identity[FIRMWARE_CAPABILITIES[capability]] = True
+        return "firmware_identity", identity
     if parts[0] == "NOTICE":
         if len(parts) != 5 or parts[1] != "PRESSURE_NO_PROGRESS":
             raise ValueError("Malformed pressure notice")

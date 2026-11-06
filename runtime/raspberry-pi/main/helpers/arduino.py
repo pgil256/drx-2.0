@@ -114,6 +114,9 @@ class Arduino(QObject):
     # triggers an active probe
     RX_SILENCE_LIMIT_S = 15.0
     PROBE_TIMEOUT_S = 5.0
+    # Firmware advertising HOST_HEARTBEAT_V1 latches a stop after 3 s with no
+    # host line during motion, once it has seen one W. Send W well inside that.
+    HEARTBEAT_INTERVAL_S = 0.5
 
     def __init__(self, transport_factory: Optional[Callable[..., object]] = None,
                  port: Optional[str] = None) -> None:
@@ -158,6 +161,9 @@ class Arduino(QObject):
         self._write_generation = 0
         self.firmware_driver = None
         self.firmware_version = None
+        self.host_heartbeat = False  # firmware advertised HOST_HEARTBEAT_V1
+        self._last_heartbeat = None
+        self.heartbeats_sent = 0
         self.baseline_valid = False
         self.link_retries = 0  # parse rejections answered with a resend
         # Every run records traffic using this single-owner transport. The E2E
@@ -395,6 +401,28 @@ class Arduino(QObject):
         if queued is not None:
             self._write_queued(*queued)
 
+    def _service_heartbeat(self, clock=time.monotonic):
+        """Write W every HEARTBEAT_INTERVAL_S from the I/O thread.
+
+        The I/O thread is the port's only owner and runs independently of the
+        protocol worker and the GUI thread, so neither can hold the heartbeat
+        up. W goes only to firmware that advertised HOST_HEARTBEAT_V1, and
+        only while connected. It is sent unframed and untracked, even with
+        protocol v2: the firmware consumes it before framing and never
+        replies. It is left out of the serial trace, which it would flood.
+        Raises on a port failure, like every other write here.
+        """
+        if not (self.connected and self.host_heartbeat):
+            self._last_heartbeat = None
+            return
+        now = clock()
+        if self._last_heartbeat is not None and now - self._last_heartbeat < self.HEARTBEAT_INTERVAL_S:
+            return
+        self._last_heartbeat = now
+        self.serial_com.write(b"W\n")
+        self.serial_com.flush()
+        self.heartbeats_sent += 1
+
     def wait_for_drain(self, timeout_s=1.0):
         """Wait until all queued writes have reached ``serial.flush()``."""
         deadline = time.monotonic() + max(0.0, float(timeout_s))
@@ -418,6 +446,7 @@ class Arduino(QObject):
             raw_data = ""
             try:
                 self._service_tx_queue()
+                self._service_heartbeat()
                 if self.serial_com.in_waiting > 0:
                     raw_data = self.serial_com.readline().decode(errors="replace")
                 else:
@@ -519,6 +548,7 @@ class Arduino(QObject):
     def _invalidate_identity(self) -> None:
         """A reboot/disconnect removes authority to send live calibration."""
         self.firmware_driver = self.firmware_version = None
+        self.host_heartbeat = False
         self.baseline_valid = False
 
     def _requeue_front(self, wire: str, handle: CommandHandle) -> None:
@@ -653,6 +683,7 @@ class Arduino(QObject):
                 if signal == "firmware_identity":
                     self.firmware_driver = result["driver"]
                     self.firmware_version = result["version"]
+                    self.host_heartbeat = result.get("host_heartbeat") is True
                 elif signal == "fault_emit":
                     self.baseline_valid = False
                 elif signal == "calibration_result" and result["operation"] == "tare":

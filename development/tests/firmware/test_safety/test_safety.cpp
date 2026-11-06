@@ -59,6 +59,7 @@ void setUp(void) {
     pulseSpeed = TREATMENT_SPEED_MAX;
     pressureWarningIssued = false;
     heartbeatWarningIssued = false;
+    hostHeartbeatArmed = false;
     scaleWarningIssued = false;
     pressureTimeoutWarningIssued = false;
     positionStallWarningIssued = false;
@@ -322,6 +323,146 @@ void test_heartbeat_not_tripped_when_idle(void) {
     loop();
 
     TEST_ASSERT_FALSE(releasingPressure);
+}
+
+// --- Host heartbeat cutoff (HOST_HEARTBEAT_V1) ---
+
+static void armHeartbeat(void) {
+    keepAlive();
+    Serial1.injectCommand("W");
+    loop();
+    TEST_ASSERT_TRUE(hostHeartbeatArmed);
+}
+
+// Silence measured from the last host byte: no fault at exactly the limit,
+// a latched HOST_TIMEOUT stop one millisecond later.
+static void assertCutoffAtLimit(void) {
+    unsigned long last = lastHostTraffic;
+    _millis_value = last + HOST_SILENCE_LIMIT;
+    lastScaleReady = _millis_value;
+    loop();
+    TEST_ASSERT_FALSE(pressureFault);
+    TEST_ASSERT_FALSE(Serial1.outputContains("HOST_TIMEOUT"));
+    _millis_value = last + HOST_SILENCE_LIMIT + 1;
+    lastScaleReady = _millis_value;
+    Wire.commandCount = 0;
+    loop();
+    TEST_ASSERT_TRUE(pressureFault);
+    TEST_ASSERT_TRUE(Serial1.outputContains("FAULT|HOST_TIMEOUT|"));
+    TEST_ASSERT_FALSE(bRunning || measurePressure || jerking || moveFITForward);
+    TEST_ASSERT_FALSE(releasingPressure);  // A stop, not an autonomous release.
+    bool found_12 = false, found_13 = false, found_14 = false;
+    for (int i = 0; i < Wire.commandCount; i++) {
+        if (Wire.commands[i].address == 12) found_12 = true;
+        if (Wire.commands[i].address == 13) found_13 = true;
+        if (Wire.commands[i].address == 14) found_14 = true;
+    }
+    TEST_ASSERT_TRUE(found_12 && found_13 && found_14);
+}
+
+void test_w_is_consumed_without_reply_or_rate_limit(void) {
+    keepAlive();
+    lastCommandTime = _millis_value;  // the limiter window is still closed
+    Serial1.injectCommand("W");
+    loop();
+    TEST_ASSERT_TRUE(hostHeartbeatArmed);
+    TEST_ASSERT_FALSE(isCommandComplete);
+    TEST_ASSERT_EQUAL(0, (int)commandBuffer.length());
+    TEST_ASSERT_EQUAL(0, (int)Serial1.getOutput().length());
+}
+
+void test_w_is_accepted_silently_while_a_fault_is_latched(void) {
+    tripPressureFault("TEST");
+    Serial1.reset();
+    keepAlive();
+    Serial1.injectCommand("W");
+    loop();
+    TEST_ASSERT_FALSE(Serial1.outputContains("FAULT_LATCHED"));
+}
+
+void test_armed_silence_during_position_move_latches_host_timeout(void) {
+    armHeartbeat();
+    bRunning = true;
+    desiredPosition = 60000;  // unreachable: move stays active
+    assertCutoffAtLimit();
+}
+
+void test_armed_silence_during_pressure_ramp_latches_host_timeout(void) {
+    armHeartbeat();
+    measurePressure = true;
+    pressureDirection = 1;
+    desiredPressure = 40;
+    pressureMoveStarted = _millis_value;
+    assertCutoffAtLimit();
+}
+
+void test_armed_silence_during_pulsing_latches_host_timeout(void) {
+    armHeartbeat();
+    jerking = true;
+    desiredPressure = 40;
+    assertCutoffAtLimit();
+}
+
+void test_armed_silence_during_fit_motion_latches_host_timeout(void) {
+    armHeartbeat();
+    moveFITForward = true;
+    FITDelay = FIT_FAST_DELAY;
+    timeInFIT = 0;
+    _pin_levels[DIR_FIT_FORWARD] = HIGH;
+    assertCutoffAtLimit();
+    TEST_ASSERT_EQUAL(LOW, _pin_levels[DIR_FIT_FORWARD]);
+}
+
+void test_armed_silence_while_idle_is_not_a_fault(void) {
+    armHeartbeat();
+    _millis_value += 60000;
+    lastScaleReady = _millis_value;
+    loop();
+    TEST_ASSERT_FALSE(pressureFault);
+}
+
+void test_host_lines_other_than_w_keep_the_cutoff_away(void) {
+    armHeartbeat();
+    bRunning = true;
+    desiredPosition = 60000;
+    for (int i = 0; i < 6; i++) {
+        _millis_value += 1000;
+        lastScaleReady = _millis_value;
+        Serial1.injectCommand("Q");
+        loop();
+    }
+    TEST_ASSERT_FALSE(pressureFault);
+    TEST_ASSERT_TRUE(bRunning);
+    assertCutoffAtLimit();
+}
+
+void test_unarmed_host_keeps_the_advisory_warning_only(void) {
+    bRunning = true;
+    desiredPosition = 60000;
+    lastHostTraffic = 0;
+    _millis_value = HEARTBEAT_TIMEOUT + 1000;
+    lastScaleReady = _millis_value;
+    loop();
+    TEST_ASSERT_FALSE(pressureFault);
+    TEST_ASSERT_TRUE(bRunning);
+    TEST_ASSERT_TRUE(Serial1.outputContains("WARNING: Host heartbeat lost"));
+}
+
+void test_silence_never_interrupts_the_autonomous_release(void) {
+    armHeartbeat();
+    releasingPressure = true;
+    releaseStart = _millis_value;
+    scale._raw = 30;
+    _millis_value += HOST_SILENCE_LIMIT + 1;
+    lastScaleReady = _millis_value;
+    loop();
+    TEST_ASSERT_FALSE(pressureFault);
+    TEST_ASSERT_TRUE(releasingPressure);
+}
+
+void test_identity_advertises_host_heartbeat(void) {
+    reportFirmwareIdentity();
+    TEST_ASSERT_TRUE(Serial1.outputContains("|" HX711_DRIVER "|HOST_HEARTBEAT_V1\n"));
 }
 
 void test_load_cell_warning_does_not_stop_pressure_move(void) {
@@ -1439,6 +1580,17 @@ int main(int argc, char **argv) {
     RUN_TEST(test_heartbeat_loss_warns_without_stopping);
     RUN_TEST(test_heartbeat_loss_does_not_stop_fit_motion);
     RUN_TEST(test_heartbeat_not_tripped_when_idle);
+    RUN_TEST(test_w_is_consumed_without_reply_or_rate_limit);
+    RUN_TEST(test_w_is_accepted_silently_while_a_fault_is_latched);
+    RUN_TEST(test_armed_silence_during_position_move_latches_host_timeout);
+    RUN_TEST(test_armed_silence_during_pressure_ramp_latches_host_timeout);
+    RUN_TEST(test_armed_silence_during_pulsing_latches_host_timeout);
+    RUN_TEST(test_armed_silence_during_fit_motion_latches_host_timeout);
+    RUN_TEST(test_armed_silence_while_idle_is_not_a_fault);
+    RUN_TEST(test_host_lines_other_than_w_keep_the_cutoff_away);
+    RUN_TEST(test_unarmed_host_keeps_the_advisory_warning_only);
+    RUN_TEST(test_silence_never_interrupts_the_autonomous_release);
+    RUN_TEST(test_identity_advertises_host_heartbeat);
     RUN_TEST(test_load_cell_warning_does_not_stop_pressure_move);
     RUN_TEST(test_release_drives_axial_backward);
     RUN_TEST(test_release_completes_when_load_clears);
