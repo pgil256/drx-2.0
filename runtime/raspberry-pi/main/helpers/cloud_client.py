@@ -37,6 +37,13 @@ class _NoRedirect(HTTPRedirectHandler):
 class CloudClient:
     TIMEOUT_S = 10
     _pending_lock = threading.Lock()
+    # Records the cloud refused (non-retryable) and unreadable queue files hold
+    # patient IDs. Keep them long enough for support, not for the device's life.
+    REJECTED_MAX_AGE_S = 90 * 24 * 3600
+    REJECTED_MAX_COUNT = 500
+    # Blocked by the device's credentials or configuration, not by the record:
+    # fixing the token makes them uploadable, so retention never removes them.
+    _NOT_REJECTED = ("unauthorized", "forbidden", "disabled")
 
     def __init__(self, cloud_url: Optional[str] = None, device_token: Optional[str] = None,
                  device_id: Optional[str] = None,
@@ -307,6 +314,11 @@ class CloudClient:
             quarantine = f"{pending_path}.corrupt-{uuid4().hex}"
             # Propagate quarantine failures, so unreadable data is never overwritten.
             os.replace(pending_path, quarantine)
+            try:
+                # Retention counts from quarantine, not from the queue's last write.
+                os.utime(quarantine, None)
+            except OSError:
+                pass
             self._notify("Unreadable cloud queue preserved for support; contact support")
             return []
 
@@ -314,8 +326,18 @@ class CloudClient:
     def _write_pending(pending_path: str, entries: List[Dict[str, Any]]) -> None:
         directory = os.path.dirname(os.path.abspath(pending_path))
         os.makedirs(directory, exist_ok=True)
+        if os.name == "posix":
+            try:
+                # Queued treatment records stay readable by the app's user only.
+                os.chmod(directory, 0o700)
+            except OSError:
+                setup_logger(component="Cloud").warning(
+                    "Could not restrict the upload queue directory permissions")
         temporary = f"{pending_path}.tmp"
-        with open(temporary, "w", encoding="utf-8") as stream:
+        descriptor = os.open(temporary, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+        if os.name == "posix":
+            os.fchmod(descriptor, 0o600)  # A leftover temp file keeps its old mode.
+        with os.fdopen(descriptor, "w", encoding="utf-8") as stream:
             json.dump(entries, stream, allow_nan=False)
             stream.flush()
             os.fsync(stream.fileno())
@@ -354,6 +376,89 @@ class CloudClient:
         except (KeyError, TypeError, ValueError, AttributeError):
             return False
 
+    @classmethod
+    def _rejected(cls, entry: Dict[str, Any]) -> bool:
+        error = entry.get("error")
+        code = error.get("error") if isinstance(error, dict) else None
+        return entry.get("blocked") is True and code not in cls._NOT_REJECTED
+
+    @staticmethod
+    def _corrupt_queues(pending_path: str) -> List[Path]:
+        path = Path(pending_path)
+        return sorted(path.parent.glob(path.name + ".corrupt-*"))
+
+    def _apply_retention(self, pending_path: str) -> None:
+        """Drop refused records and unreadable queues past their limits.
+
+        The caller holds _pending_lock. Retryable records are never removed.
+        """
+        now = time.time()
+        entries = self._read_pending(pending_path)
+        changed = False
+        for entry in entries:
+            stamp = entry.get("blocked_at")
+            if self._rejected(entry) and not (isinstance(stamp, (int, float))
+                                              and math.isfinite(stamp)):
+                # Records rejected before this field existed start counting now.
+                entry["blocked_at"] = now
+                changed = True
+        rejected = sorted((entry for entry in entries if self._rejected(entry)),
+                          key=lambda entry: entry["blocked_at"])
+        expired = {id(entry) for entry in rejected
+                   if now - entry["blocked_at"] > self.REJECTED_MAX_AGE_S}
+        kept = [entry for entry in rejected if id(entry) not in expired]
+        if len(kept) > self.REJECTED_MAX_COUNT:
+            expired.update(id(entry) for entry in kept[:len(kept) - self.REJECTED_MAX_COUNT])
+        if expired:
+            entries = [entry for entry in entries if id(entry) not in expired]
+            self.logger.warning(
+                "Removed %d rejected upload(s) past the retention limit "
+                "(%d days or %d records)", len(expired),
+                self.REJECTED_MAX_AGE_S // 86400, self.REJECTED_MAX_COUNT)
+            changed = True
+        if changed:
+            self._write_pending(pending_path, entries)
+        removed = 0
+        for corrupt in self._corrupt_queues(pending_path):
+            try:
+                info = corrupt.stat()
+                # ctime moves on rename (quarantine) on the Pi's filesystem.
+                if now - max(info.st_mtime, info.st_ctime) > self.REJECTED_MAX_AGE_S:
+                    corrupt.unlink()
+                    removed += 1
+            except OSError:
+                self.logger.warning("Could not remove an expired unreadable upload queue")
+        if removed:
+            self.logger.warning("Removed %d unreadable upload queue file(s) older than %d days",
+                                removed, self.REJECTED_MAX_AGE_S // 86400)
+
+    def purge_counts(self, pending_path: str) -> Dict[str, int]:
+        """Count what the operator purge would delete, without deleting."""
+        with self._pending_lock:
+            entries = self._read_pending(pending_path, quarantine=False)
+            return {"records": sum(self._rejected(entry) for entry in entries),
+                    "files": len(self._corrupt_queues(pending_path))}
+
+    def purge_rejected(self, pending_path: str) -> Dict[str, int]:
+        """Operator action: delete refused records and unreadable queue files now.
+
+        Records blocked only by credentials stay; fixing the token uploads them.
+        An unreadable live queue raises instead of being quarantined and deleted.
+        """
+        with self._operation_lock, self._pending_lock:
+            entries = self._read_pending(pending_path, quarantine=False)
+            kept = [entry for entry in entries if not self._rejected(entry)]
+            records = len(entries) - len(kept)
+            if records:
+                self._write_pending(pending_path, kept)
+            files = 0
+            for corrupt in self._corrupt_queues(pending_path):
+                corrupt.unlink()
+                files += 1
+        self.logger.warning("Operator purged %d rejected upload(s) and %d unreadable "
+                            "upload queue file(s)", records, files)
+        return {"records": records, "files": files}
+
     def retry_pending(self, pending_path: str, retry_blocked: bool = False) -> None:
         """Delete only receipted entries; retain backoff and rejection details."""
         if not self.enabled or not pending_path or self._closing.is_set():
@@ -368,6 +473,7 @@ class CloudClient:
         if retry_blocked:
             self._reported_upload_errors.clear()
         with self._pending_lock:
+            self._apply_retention(pending_path)
             entries = self._read_pending(pending_path)
         # A 429 pauses the device's entire upload queue, including records
         # enqueued later. Persisted deadlines survive application restarts.
@@ -400,6 +506,11 @@ class CloudClient:
                     entry, attempts=attempts, error=result,
                     blocked=not result.get("retryable", False), retry_at=time.time() + delay,
                 )
+                if entry["blocked"]:
+                    # A repeat rejection keeps the original retention clock.
+                    entry.setdefault("blocked_at", time.time())
+                else:
+                    entry.pop("blocked_at", None)
             with self._pending_lock:
                 current = self._read_pending(pending_path)
                 updated = []

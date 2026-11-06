@@ -306,6 +306,10 @@ class DeviceScreen(QWidget):
             self._action("View Selected Report", "view_report", self.selected_report),
             self._action("Export Diagnostics", "export_diagnostics"),
         )
+        self._row(history, self._action(
+            "Purge Rejected Uploads", "purge_rejected_uploads", variant="destructive"),
+            self._note("Deletes treatment records the cloud refused, after confirmation."),
+            stretch_last=True)
         self._finish(history)
         layout.addWidget(history, 1, 0)
         backups = self._card("Calibration backups")
