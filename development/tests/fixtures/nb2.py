@@ -29,6 +29,11 @@ class NB2Controller(Arduino):
         for reply in replies:
             if reply in ("DONE", "OK", "BUSY") and self.protocol_v2:
                 reply += "|" + str(handle.sequence)
+            elif reply.startswith("ERR|"):
+                # A command error, framed as the firmware's emitSeqError does.
+                reason = reply[len("ERR|"):]
+                reply = (f"ERR|{handle.sequence}|{reason}" if self.protocol_v2
+                         else "ERROR: " + reason)
             self.handle_com(reply)
         return handle
 
