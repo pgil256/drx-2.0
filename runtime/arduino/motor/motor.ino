@@ -84,6 +84,12 @@ int pulseSpeed = TREATMENT_SPEED_MAX;
 #define HEARTBEAT_TIMEOUT     10000  // sustained host silence before warning
 #define SCALE_READ_TIMEOUT    500    // ms without HX711 ready -> warning
 #define PRESSURE_RELEASE_LBS  5.0    // autonomous release target after E-stop
+// A signed load below -NEGATIVE_LOAD_LBS for NEGATIVE_LOAD_SAMPLES samples in
+// a row is tension past zero or zero drift, not load (checklist V2). 5 lb is a
+// starting value: bench data should set it above the tension normally seen at
+// the end of a release.
+#define NEGATIVE_LOAD_LBS     5.0
+#define NEGATIVE_LOAD_SAMPLES 3
 #define RELEASE_TIMEOUT       15000  // ms bound on E-stop pressure release
 // Advisory only: the move keeps going until the host acts. Must stay
 // BELOW the host's PRESSURE_BUILD_TIMEOUT_S (constants.py, 90 s) so this
@@ -111,8 +117,10 @@ const unsigned long STATUS_TIMEOUT = 2000; // Force-reset acknowledgment after 2
 // Load cell setup
 Hx711Sampler scale;
 float calibration_factor = -4360.14;
-float pressure = 0;          // filtered magnitude used by control/safety logic
-float signedPressure = 0;    // filtered signed value (negative = wiring/drift fault)
+float pressure = 0;          // magnitude (0.5 lb deadband) used by control/safety logic
+float signedPressure = 0;    // signed value; sustained negative is checked (V2)
+uint8_t negativeLoadSamples = 0;  // consecutive samples below -NEGATIVE_LOAD_LBS
+bool negativeLoadWarned = false;  // warning sent; cleared once the reading recovers
 
 // Non-blocking load-cell sampling state
 unsigned long lastScaleReady = 0;    // last time the HX711 had data for us
@@ -734,10 +742,11 @@ bool isNumeric(const String &s) {
   return seenDigit;
 }
 
-// Non-blocking load-cell sampling: one HX711 read when data is ready
-// (~10 Hz), saturation-rejected, median-of-3 filtered. Maintains the
-// global `pressure` (magnitude) and `signedPressure` without ever
-// stalling loop() the way blocking get_units() calls did.
+// Non-blocking load-cell sampling (servicePressure, below): one HX711 read
+// when data is ready (~10 Hz), saturation-rejected and not otherwise
+// filtered. Maintains the global `pressure` (magnitude) and
+// `signedPressure` without ever stalling loop() the way blocking
+// get_units() calls did.
 void reportFirmwareIdentity() {
   Serial1.print("FIRMWARE|");
   Serial1.print(VERSION);
@@ -870,6 +879,33 @@ void tripPressureFault(const char *reason) {
   Serial1.println(pressure);
 }
 
+// `pressure` is a magnitude, so a negative reading (tension past zero, or
+// the zero drifting) used to count as load. Once it has stayed below
+// -NEGATIVE_LOAD_LBS for NEGATIVE_LOAD_SAMPLES samples, it latches
+// PRESSURE_NEGATIVE during a pressure move or pulsing, and otherwise warns
+// once until the reading recovers (checklist V2). True when it latched.
+bool checkNegativeLoad() {
+  if (!(pressureCalibrated || pressureGuardActive) ||
+      signedPressure >= -NEGATIVE_LOAD_LBS) {
+    negativeLoadSamples = 0;
+    negativeLoadWarned = false;
+    return false;
+  }
+  if (negativeLoadSamples < NEGATIVE_LOAD_SAMPLES)
+    ++negativeLoadSamples;
+  if (negativeLoadSamples < NEGATIVE_LOAD_SAMPLES)
+    return false;
+  if (measurePressure || jerking) {
+    tripPressureFault("PRESSURE_NEGATIVE");
+    return true;
+  }
+  if (!negativeLoadWarned) {
+    Serial1.println(F("WARNING: Load cell reads negative; re-tare"));
+    negativeLoadWarned = true;
+  }
+  return false;
+}
+
 void servicePressure() {
   // A latched fault stops pressure service, except while a release runs:
   // the release needs fresh samples to see the load clear. Nothing else
@@ -919,6 +955,8 @@ void servicePressure() {
       tripPressureFault("PRESSURE_LIMIT");
       return;
     }
+    if (checkNegativeLoad())
+      return;
     if (measurePressure &&
         ((pressureDirection > 0 && pressure >= desiredPressure) ||
          (pressureDirection < 0 && pressure <= desiredPressure + PRESSURE_TARGET_BAND))) {

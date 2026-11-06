@@ -174,6 +174,39 @@ with this flash.
 - **Bench check for V1:** none beyond the F1 checks; a normal session's
   stops and status updates behave as before. The timing is covered by a
   native test.
+- **V2, a sustained negative load is not load (2026-11-06).**
+  - **The bug:** `pressure` is the magnitude of the signed reading, so
+    tension past zero, or the zero drifting (drx-rd drifted by up to about
+    30 lb on 2026-10-28), counted as load. A pressure move or pulse could
+    act on load that was not there.
+  - **The fix:** while the scale is tared or a pressure guard is active, a
+    signed reading below -5 lb (`NEGATIVE_LOAD_LBS`) for 3 samples in a row
+    (`NEGATIVE_LOAD_SAMPLES`, about 0.3 s):
+    - during a pressure move or pulsing, latches
+      `FAULT|PRESSURE_NEGATIVE|<target>|<magnitude>`, through the same path
+      as the other pressure faults;
+    - otherwise sends `WARNING: Load cell reads negative; re-tare` once,
+      again only after the reading has recovered.
+  - **Limit:** a negative offset large enough to reach a move's target can
+    still satisfy that move's arrival on its first sample, before three
+    samples latch the fault; the warning then follows. Arrival is
+    unchanged.
+  - **Pi change (ships with the app, not the flash):**
+    `controllers/safety_monitor.py` shows `PRESSURE_NEGATIVE` as
+    "Load cell reading is negative. Check wiring and re-zero." Older
+    firmware never sends it.
+  - **The threshold is a starting value.** Bench data should set it above
+    the tension normally seen at the end of a release.
+- **Image after V2:** flash 34,524 bytes, RAM 2,714 bytes (local WSL build,
+  sha256 `44be785aab989c9c9bcd5225455a5be5d9774cb50ba53b92fb5725298a6ed3b1`).
+  RAM grows by the two new state bytes and the fault reason string.
+- **Bench checks for V2:**
+  - After a P0 release on a test load, the Arduino log has no
+    `Load cell reads negative` warning. If it does, record the reading and
+    raise `NEGATIVE_LOAD_LBS` above it.
+  - With the device unoccupied, offset the zero by more than 5 lb (tare with
+    about 10 lb on, then remove it): the warning appears once, and a pressure
+    Go then stops with the new operator message.
 
 ## 2. UI changes to look at on the Pi or simulator
 
