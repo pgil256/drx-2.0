@@ -132,6 +132,34 @@ jobs:
           shellcheck --version
           git ls-files -z '*.sh' | xargs -0 shellcheck --severity=warning
 
+  # The simulator's 3D viewer: its vitest suite (session parsing and the
+  # model rig). The simulator README is tested with Node 24; this pins the
+  # 24.x release the job was verified with locally. npm ci installs exactly
+  # the lockfile.
+  simulator-viewer-tests:
+    name: Simulator viewer tests (vitest)
+    timeout-minutes: 10
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: development/simulator/viewer
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node 24
+        uses: actions/setup-node@v4
+        with:
+          node-version: "24.16.0"
+          cache: npm
+          cache-dependency-path: development/simulator/viewer/package-lock.json
+
+      - name: Install viewer dependencies
+        run: npm ci --no-audit --no-fund
+
+      - name: Run vitest
+        run: npm test
+
   # A real Python 3.7 (the Pi's interpreter) byte-compiles the shipped code and
   # imports every runtime module. Gates the PR.
   python37-imports:
