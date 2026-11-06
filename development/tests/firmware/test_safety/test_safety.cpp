@@ -30,6 +30,7 @@ void setUp(void) {
     jerking = false;
     releasingPressure = false;
     isCommandComplete = false;
+    pendingCommand = "";
     commandBuffer = "";
     isProcessingStatus = false;
     statusAcknowledged = true;
@@ -1623,6 +1624,125 @@ void test_speed_write_logs_after_the_i2c_write(void) {
     TEST_ASSERT_TRUE(Serial.outputContains("Set motor speed on: 13 at -500"));
 }
 
+// --- Stops jump the rate-limit queue ---
+
+// A command just ran, so the limiter is closed and a new one has to wait.
+static void closeLimiter(void) {
+    keepAlive();
+    lastCommandTime = _millis_value;
+}
+
+void test_x_runs_at_once_behind_a_waiting_command(void) {
+    bRunning = true;
+    desiredPosition = 60000;  // unreachable: the move cannot self-complete
+    closeLimiter();
+    Serial1.injectCommand("HF1");
+    loop();
+    TEST_ASSERT_TRUE(isCommandComplete);  // HF1 waits in the slot.
+    Serial1.injectCommand("X");
+    loop();  // No time has passed: X did not wait for the limiter.
+    TEST_ASSERT_FALSE(bRunning);
+    TEST_ASSERT_TRUE(Serial1.outputContains("DONE"));
+    // The older waiting command must never run after the stop.
+    TEST_ASSERT_FALSE(isCommandComplete);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Superseded by stop"));
+    _millis_value += MIN_COMMAND_INTERVAL + 1;
+    keepAlive();
+    loop();
+    TEST_ASSERT_FALSE(highFrequencyStatus);
+}
+
+void test_x_in_the_same_burst_supersedes_the_waiting_command(void) {
+    bRunning = true;
+    desiredPosition = 60000;
+    closeLimiter();
+    Serial1.injectCommand("HF1");
+    Serial1.injectCommand("X");
+    loop();
+    TEST_ASSERT_FALSE(bRunning);
+    TEST_ASSERT_FALSE(isCommandComplete);
+    TEST_ASSERT_FALSE(highFrequencyStatus);
+}
+
+void test_js_runs_at_once_behind_a_waiting_command(void) {
+    jerking = true;
+    closeLimiter();
+    Serial1.injectCommand("HF1");
+    Serial1.injectCommand("JS");
+    loop();
+    TEST_ASSERT_FALSE(jerking);
+    TEST_ASSERT_FALSE(isCommandComplete);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Superseded by stop"));
+}
+
+void test_framed_x_supersedes_a_framed_waiting_command(void) {
+    bRunning = true;
+    desiredPosition = 60000;
+    closeLimiter();
+    Serial1.injectCommand(std::string(v2Frame(5, "HF1").c_str()));
+    Serial1.injectCommand(std::string(v2Frame(6, "X").c_str()));
+    loop();
+    TEST_ASSERT_FALSE(bRunning);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ERR|5|Superseded by stop"));
+    TEST_ASSERT_TRUE(Serial1.outputContains("DONE|6"));
+}
+
+void test_waiting_command_runs_after_the_interval(void) {
+    closeLimiter();
+    Serial1.injectCommand("HF1");
+    loop();
+    TEST_ASSERT_TRUE(isCommandComplete);
+    _millis_value += MIN_COMMAND_INTERVAL;
+    keepAlive();
+    loop();
+    TEST_ASSERT_FALSE(highFrequencyStatus);  // Not before the interval has passed.
+    _millis_value += 1;
+    keepAlive();
+    loop();
+    TEST_ASSERT_TRUE(highFrequencyStatus);
+    TEST_ASSERT_FALSE(isCommandComplete);
+}
+
+void test_q_never_takes_the_slot(void) {
+    closeLimiter();
+    Serial1.injectCommand("HF1");
+    loop();
+    statusAcknowledged = false;
+    Serial1.injectCommand("Q");
+    loop();
+    TEST_ASSERT_TRUE(statusAcknowledged);
+    TEST_ASSERT_TRUE(isCommandComplete);  // HF1 still waits, not replaced.
+    TEST_ASSERT_FALSE(Serial1.outputContains("BUSY"));
+}
+
+void test_second_waiting_command_is_dropped_busy(void) {
+    closeLimiter();
+    Serial1.injectCommand("HF1");
+    Serial1.injectCommand("K1500");
+    Serial1.injectCommand(std::string(v2Frame(8, "I12100").c_str()));
+    loop();
+    TEST_ASSERT_TRUE(Serial1.outputContains("BUSY\n"));
+    TEST_ASSERT_TRUE(Serial1.outputContains("BUSY|8"));
+    _millis_value += MIN_COMMAND_INTERVAL + 1;
+    keepAlive();
+    loop();
+    TEST_ASSERT_TRUE(highFrequencyStatus);
+    TEST_ASSERT_FALSE(bRunning);  // Neither dropped move ever started.
+}
+
+void test_command_runs_at_once_when_the_limiter_is_open(void) {
+    keepAlive();
+    _millis_value = 1000;
+    keepAlive();
+    lastCommandTime = 0;
+    Serial1.injectCommand("HF1");
+    Serial1.injectCommand("Q");
+    loop();
+    TEST_ASSERT_TRUE(highFrequencyStatus);
+    TEST_ASSERT_FALSE(isCommandComplete);
+    TEST_ASSERT_FALSE(Serial1.outputContains("BUSY"));
+}
+
 int main(int argc, char **argv) {
     UNITY_BEGIN();
 
@@ -1719,6 +1839,15 @@ int main(int argc, char **argv) {
     RUN_TEST(test_emergency_stop_writes_every_stop_before_any_output);
     RUN_TEST(test_physical_stop_writes_every_stop_before_its_debug_line);
     RUN_TEST(test_speed_write_logs_after_the_i2c_write);
+
+    RUN_TEST(test_x_runs_at_once_behind_a_waiting_command);
+    RUN_TEST(test_x_in_the_same_burst_supersedes_the_waiting_command);
+    RUN_TEST(test_js_runs_at_once_behind_a_waiting_command);
+    RUN_TEST(test_framed_x_supersedes_a_framed_waiting_command);
+    RUN_TEST(test_waiting_command_runs_after_the_interval);
+    RUN_TEST(test_q_never_takes_the_slot);
+    RUN_TEST(test_second_waiting_command_is_dropped_busy);
+    RUN_TEST(test_command_runs_at_once_when_the_limiter_is_open);
 
     return UNITY_END();
 }
