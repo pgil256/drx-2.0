@@ -1,7 +1,8 @@
 """Unit tests for the modern view <-> backend wiring in kneespa.py.
 
-Like test_actuator_controls / test_conversions, these call ``KneeSpa`` methods
-UNBOUND against an explicit facade without constructing the hardware window;
+These call ``KneeSpa`` methods UNBOUND against an explicit facade without
+constructing the hardware window, and the Setup handlers that moved to
+MotionController (checklist A3) on one built with fakes;
 the login flow uses a real AppShell and AuthController. Gate W separately tests
 the actual constructor and control signals.
 They verify the seam between the AppShell view layer and the FAILSAFE
@@ -25,10 +26,22 @@ from controllers.auth_controller import AuthController
 from helpers.secure_auth import SecureAuthHelper
 from kneespa import KneeSpa
 from fixtures.controllers import make_stub
+from fixtures.motion import make_motion
 from controllers.protocol_controller import ProtocolController
 from ui.app_shell import AppShell, PAGES
 
 pytestmark = pytest.mark.unit
+
+
+def make_setup_motion():
+    """A MotionController whose sub-steps are mocks, so a test sees which one a
+    Setup handler routes to. Sending stays real."""
+    motion = make_motion(mock_controls=True)
+    for name in ("set_to_distance", "set_to_c_distance", "apply_setup_pressure",
+                 "reset_flexion_button_clicked", "stop_position_flexion_button",
+                 "stop_leg_movement"):
+        setattr(motion, name, MagicMock())
+    return motion
 
 
 # ----- cloud patient lookup result (external data) -----
@@ -68,11 +81,11 @@ class TestCloudLookupResult:
 # ----- stop paths must alarm, never raise -----
 class TestStopGuards:
     def test_row_stop_with_no_transport_alarms_instead_of_raising(self):
-        stub = make_stub()
-        stub.arduino = None
-        KneeSpa.stop_position_flexion_button(stub, "12")
-        stub._show_timed_error.assert_called_once()
-        assert "STOP NOT DELIVERED" in stub._show_timed_error.call_args[0][0]
+        stub = make_motion()
+        stub._arduino = lambda: None  # the transport has been torn down
+        stub.stop_position_flexion_button("12")
+        stub.view.show_error.assert_called_once()
+        assert "STOP NOT DELIVERED" in stub.view.show_error.call_args[0][0]
 
 
 # ----- auth (verification itself lives in controllers.auth_controller) -----
@@ -260,7 +273,7 @@ class TestSetupJog:
     def test_reset_routes_to_setup_reset(self):
         stub = make_stub()
         KneeSpa._on_setup_jog(stub, "axial", "reset")
-        stub._setup_reset.assert_called_once_with("axial")
+        stub.motion.setup_reset.assert_called_once_with("axial")
         stub.move_actuator.assert_not_called()
 
     def test_leg_length_routes_to_leg_jog(self):
@@ -278,30 +291,30 @@ class TestSetupJog:
 
 class TestSetupReset:
     def test_axial_reset(self):
-        stub = make_stub()
-        KneeSpa._setup_reset(stub, "axial")
+        stub = make_setup_motion()
+        stub.setup_reset("axial")
         stub.reset_flexion_button_clicked.assert_called_once_with("12")
 
     def test_lateral_reset(self):
-        stub = make_stub()
-        KneeSpa._setup_reset(stub, "lateral")
+        stub = make_setup_motion()
+        stub.setup_reset("lateral")
         stub.reset_flexion_button_clicked.assert_called_once_with("14")
 
     def test_leg_reset(self):
-        stub = make_stub()
-        KneeSpa._setup_reset(stub, "leg_length")
-        stub.reset_extra_button_clicked.assert_called_once()
+        stub = make_setup_motion()
+        stub.setup_reset("leg_length")
+        stub.leg.home.assert_called_once()
 
     def test_pressure_reset_sends_real_release(self):
-        stub = make_stub()
-        KneeSpa._setup_reset(stub, "pressure")
+        stub = make_setup_motion()
+        stub.setup_reset("pressure")
         stub.arduino.send.assert_called_once_with("P0")
-        stub._reflect_setup.assert_not_called()
+        stub.view.show_position.assert_not_called()
         # The treatment banner is reserved for protocol stops: set_stopping()
         # here had no matching set_idle(), so "STOPPING - RELEASING TRACTION"
         # stayed over the top bar until the next treatment or Arduino reset.
-        stub.treatment_panel.set_stopping.assert_not_called()
-        stub.loading_spinner.hide.assert_called_once()
+        # MotionController has no access to the banner at all.
+        stub.view.hide_busy.assert_called_once()
 
 
 # ----- Setup stop -----
@@ -316,107 +329,116 @@ class TestSetupStop:
         ("pressure", "12"),    # pressure rides the axial channel
     ])
     def test_stop_routes_correct_actuator(self, key, expected):
-        stub = make_stub()
-        KneeSpa._on_setup_stop(stub, key)
+        stub = make_setup_motion()
+        stub.setup_stop(key)
         stub.stop_position_flexion_button.assert_called_once_with(expected)
 
     def test_leg_stop_uses_stop_leg_movement(self):
-        stub = make_stub()
-        KneeSpa._on_setup_stop(stub, "leg_length")
+        stub = make_setup_motion()
+        stub.setup_stop("leg_length")
         stub.stop_leg_movement.assert_called_once()
         stub.stop_position_flexion_button.assert_not_called()
+
+    def test_window_stop_delegates_to_the_motion_controller(self):
+        stub = make_stub()
+        KneeSpa._on_setup_stop(stub, "lateral")
+        stub.motion.setup_stop.assert_called_once_with("lateral")
 
 
 # ----- Setup go -----
 class TestSetupGo:
-    def test_axial_go_calls_set_to_distance(self):
+    def test_window_go_delegates_after_authorizing(self):
         stub = make_stub()
-        stub.shell.setup.row_value.return_value = 3.0
-        stub.config.a_factor = 1900
-        KneeSpa._on_setup_go(stub, "axial")
+        stub.motion.setup_go.return_value = True
+        assert KneeSpa._on_setup_go(stub, "axial") is True
+        stub.motion.setup_go.assert_called_once_with("axial")
+
+    def test_axial_go_calls_set_to_distance(self):
+        stub = make_setup_motion()
+        stub.view.row_value.return_value = 3.0
+        stub.setup_go("axial")
         stub.set_to_distance.assert_called_once_with(3.0, "12")
 
     def test_lateral_go_calls_set_to_c_distance(self):
-        stub = make_stub()
-        stub.shell.setup.row_value.return_value = 10.0
-        KneeSpa._on_setup_go(stub, "lateral")
+        stub = make_setup_motion()
+        stub.view.row_value.return_value = 10.0
+        stub.setup_go("lateral")
         stub.set_to_c_distance.assert_called_once_with(10.0)
 
     def test_pressure_go_routes_to_apply_pressure(self):
-        stub = make_stub()
-        KneeSpa._on_setup_go(stub, "pressure")
-        stub._apply_setup_pressure.assert_called_once()
+        stub = make_setup_motion()
+        stub.setup_go("pressure")
+        stub.apply_setup_pressure.assert_called_once()
 
     def test_leg_go_uses_tracked_leg_controller(self):
-        stub = make_stub()
-        stub.shell.setup.row_value.return_value = 1.25
-        stub.leg = MagicMock()
+        stub = make_setup_motion()
+        stub.view.row_value.return_value = 1.25
         stub.leg.move_to.return_value = True
-        result = KneeSpa._on_setup_go(stub, "leg_length")
+        result = stub.setup_go("leg_length")
         assert result is True
         stub.leg.move_to.assert_called_once_with(1.25)
         stub.disable_actuator_controls.assert_not_called()
-        stub.loading_spinner.show.assert_not_called()
+        stub.view.show_busy.assert_not_called()
 
     def test_horizontal_go_uses_calibrated_absolute_position(self):
-        stub = make_stub()
-        stub.shell.setup.row_value.return_value = -10
+        stub = make_setup_motion()
+        stub.view.row_value.return_value = -10
         stub.config.BMarks = {
             "-25": 0, "-20": 380, "-15": 760, "-10": 1140,
             "-5": 1520, "0": 1900, "5": 2280,
         }
-        KneeSpa._on_setup_go(stub, "horizontal")
+        stub.setup_go("horizontal")
         stub.arduino.send.assert_called_once_with("I131140")
 
     # A failed Go leaves nothing moving, so no DONE will re-enable the
     # controls; left disabled they also blocked logout and exit.
     def test_invalid_axial_calibration_reenables_controls(self):
-        stub = make_stub()
-        stub.shell.setup.row_value.return_value = 3.0
+        stub = make_setup_motion()
+        stub.view.row_value.return_value = 3.0
         stub.set_to_distance.return_value = False
-        assert KneeSpa._on_setup_go(stub, "axial") is False
+        assert stub.setup_go("axial") is False
         stub.enable_actuator_controls.assert_called_once()
-        stub.loading_spinner.hide.assert_called_once()
+        stub.view.hide_busy.assert_called_once()
 
     def test_failed_lateral_go_reenables_controls(self):
-        stub = make_stub()
-        stub.shell.setup.row_value.return_value = 10.0
+        stub = make_setup_motion()
+        stub.view.row_value.return_value = 10.0
         stub.set_to_c_distance.return_value = False
-        assert KneeSpa._on_setup_go(stub, "lateral") is False
+        assert stub.setup_go("lateral") is False
         stub.enable_actuator_controls.assert_called_once()
 
     def test_invalid_horizontal_marks_reenable_controls(self):
-        stub = make_stub()
-        stub.shell.setup.row_value.return_value = -10
+        stub = make_setup_motion()
+        stub.view.row_value.return_value = -10
         stub.config.BMarks = {}
-        KneeSpa._on_setup_go(stub, "horizontal")
+        stub.setup_go("horizontal")
         stub.arduino.send.assert_not_called()
-        stub._show_timed_error.assert_called_once()
+        stub.view.show_error.assert_called_once()
         stub.enable_actuator_controls.assert_called_once()
 
     @pytest.mark.parametrize("applied", [False, True])
     def test_pressure_go_reenables_only_when_not_applied(self, applied):
-        stub = make_stub()
-        stub._apply_setup_pressure.return_value = applied
-        assert KneeSpa._on_setup_go(stub, "pressure") is applied
+        stub = make_setup_motion()
+        stub.apply_setup_pressure.return_value = applied
+        assert stub.setup_go("pressure") is applied
         assert stub.enable_actuator_controls.called is not applied
 
     def test_successful_go_leaves_controls_for_done(self):
-        stub = make_stub()
-        stub.shell.setup.row_value.return_value = 3.0
-        assert KneeSpa._on_setup_go(stub, "axial") is True
+        stub = make_setup_motion()
+        stub.view.row_value.return_value = 3.0
+        assert stub.setup_go("axial") is True
         stub.enable_actuator_controls.assert_not_called()
 
     def test_apply_pressure_clamps_above_max(self):
-        stub = make_stub()
-        stub.shell.setup.row_value.return_value = 95.0  # above PRESSURE_MAX (80)
-        KneeSpa._apply_setup_pressure(stub)
+        stub = make_motion(mock_controls=True)
+        stub.view.row_value.return_value = 95.0  # above PRESSURE_MAX (80)
+        stub.apply_setup_pressure()
         stub.arduino.send.assert_called_once_with("P80")
 
     def test_apply_pressure_clamps_below_min(self):
-        stub = make_stub()
-        stub.shell.setup.row_value.return_value = 2.0  # below MIN_PRESSURE (10)
-        KneeSpa._apply_setup_pressure(stub)
+        stub = make_motion(mock_controls=True)
+        stub.view.row_value.return_value = 2.0  # below MIN_PRESSURE (10)
+        stub.apply_setup_pressure()
         stub.arduino.send.assert_called_once_with("P10")
 
 
