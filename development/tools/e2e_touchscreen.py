@@ -733,7 +733,7 @@ class E2ERunner:
                 )
                 self.current_actuator = None
                 self._wait_done(marker, "best-effort actuator stop")
-        except Exception as exc:
+        except Exception as exc:  # noqa: BLE001 - best-effort stop; recorded in the E2E log
             self.log.write("E2E", f"Best-effort safety stop failed: {exc}")
 
     def close_app(self) -> None:
@@ -949,7 +949,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             runner.safe_stop()
             runner.write_summary("FAIL", error)
         return 130
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001 - top level: record FAIL and stop the device
         error = str(exc)
         if runner:
             runner.log.write("RESULT", f"FAIL {error}")
