@@ -233,7 +233,29 @@ elapsedMillis timeSinceLastStatus = 0; // Timer for high-frequency updates
 const unsigned long HIGH_FREQ_INTERVAL = 1000; // ms for frequent updates (adjust as needed)
 
 // Command handling
-String commandBuffer = "";
+String commandBuffer = "";  // reserve()d to MAX_COMMAND_LENGTH in setup() (V4)
+
+// The lowest free RAM seen since boot: the gap between the heap's top
+// (__brkval) and the stack pointer, sampled on every loop() pass and every
+// command (checklist V4). DIAG|HX711 reports it, so field logs show whether
+// heap pressure from the String command path is real before anyone rewrites
+// that path.
+#ifndef UNIT_TEST
+extern char __heap_start;
+extern char *__brkval;
+static int freeRamNow() {
+  char top;
+  return (int)(&top - (__brkval ? __brkval : &__heap_start));
+}
+#else
+int testFreeRam = 4096;  // native tests set the "measured" gap
+static int freeRamNow() { return testFreeRam; }
+#endif
+int minFreeRam = 32767;
+static void noteFreeRam() {
+  int freeBytes = freeRamNow();
+  if (freeBytes < minFreeRam) minFreeRam = freeBytes;
+}
 bool isCommandComplete = false;
 // Set when a line overflows commandBuffer: the rest of that line is
 // dropped up to its newline instead of being run as a new command.
@@ -784,7 +806,9 @@ void reportSensorDiagnostics() {
   Serial1.print("|");
   Serial1.print(lastPressureReadUs);
   Serial1.print("|");
-  Serial1.println(scale.is_ready() ? 1 : 0);
+  Serial1.print(scale.is_ready() ? 1 : 0);
+  Serial1.print("|");
+  Serial1.println(minFreeRam);  // bytes, lowest since boot (V4)
 }
 
 // Explicit, read-only service probe. A cached position cannot establish that
@@ -1042,7 +1066,9 @@ int positionMoveSpeed(uint8_t device) {
   return BC_SPEED;
 }
 
-void processCommand(String cmd) {
+// By reference: the caller's buffer used to be copied again on every call.
+void processCommand(const String &cmd) {
+  noteFreeRam();  // the command's Strings are live here
   if (cmd.length() == 0) return;
 
   // Validate command length
@@ -1752,6 +1778,10 @@ void setup() {
   wdt_disable();  // a pending watchdog must not fire again mid-setup
 #endif
 
+  // One allocation up front: the buffer grows a byte at a time and used to
+  // reallocate as it did (checklist V4).
+  commandBuffer.reserve(MAX_COMMAND_LENGTH);
+
   // Join I2C bus as slave
   Wire.begin(0x8);
   // Wire busy-waits with no timeout by default; a wedged bus or dead
@@ -1821,6 +1851,8 @@ void loop() {
 #if ENABLE_WDT
   wdt_reset();
 #endif
+
+  noteFreeRam();
 
   // Read stop pin
   STOP = digitalRead(STOP_PIN);
