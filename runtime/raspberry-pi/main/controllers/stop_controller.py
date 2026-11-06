@@ -16,7 +16,7 @@ Where two paths of one kind behave differently today, the table records both
 
 import time
 from dataclasses import dataclass
-from typing import Dict, Mapping, Tuple
+from typing import Dict, Mapping, Optional, Tuple
 
 import RPi.GPIO as GPIO
 from PyQt5.QtCore import QTimer
@@ -42,6 +42,7 @@ class StopPolicy:
     commands: Tuple[str, ...]        # sent when the stop begins, in order
     hardware_line: bool              # drives EMERGENCYSTOP low before anything else
     release: str                     # how traction comes off
+    release_after_ms: Optional[int]  # when the release phase is scheduled, if it is
     recovery: str                    # how the device gets back to ready
     outcome: str                     # the session outcome it latches
     flags: Mapping[str, object]      # DeviceState fields it sets when it begins
@@ -52,18 +53,21 @@ POLICIES: Dict[str, StopPolicy] = {
     OPERATOR: StopPolicy(
         commands=(STOP_ALL,), hardware_line=False,
         release="after 0.5 s the worker's stop() sends X, P0, HF0; P0 alone if it did not",
+        release_after_ms=500,
         recovery="operator re-home prompt once the load clears (S2)",
         outcome="stopped", flags={}, screen="stopping",
     ),
     ESTOP: StopPolicy(
         commands=(STOP_ALL,), hardware_line=True,
         release="after 1 s, as the operator stop; the stop line goes high after 2 s",
+        release_after_ms=1000,
         recovery="operator re-home prompt once the load clears (S2)",
         outcome="fault", flags={}, screen="stopping",
     ),
     PHYSICAL: StopPolicy(
         commands=(), hardware_line=False,
         release="the firmware's own release; queued commands are dropped",
+        release_after_ms=None,
         recovery="Reset in Setup",
         outcome="fault",
         flags={"physical_stop_active": True, "no_automatic_recovery": True,
@@ -75,7 +79,7 @@ POLICIES: Dict[str, StopPolicy] = {
     # leaves the treatment banner alone.
     FAULT: StopPolicy(
         commands=(STOP_ALL, STOP_ALL, TELEMETRY_ON), hardware_line=False,
-        release="none: no automatic movement",
+        release="none: no automatic movement", release_after_ms=None,
         recovery="Reset in Setup",
         outcome="fault",
         flags={"no_automatic_recovery": True, "initial_setup_complete": False},
@@ -83,7 +87,7 @@ POLICIES: Dict[str, StopPolicy] = {
     ),
     COMMAND_FAULT: StopPolicy(
         commands=(STOP_ALL,), hardware_line=False,
-        release="none: no automatic movement",
+        release="none: no automatic movement", release_after_ms=None,
         recovery="Reset in Setup",
         outcome="fault",
         flags={"no_automatic_recovery": True, "initial_setup_complete": False},
@@ -92,6 +96,7 @@ POLICIES: Dict[str, StopPolicy] = {
     SHUTDOWN: StopPolicy(
         commands=RELEASE_SEQUENCE, hardware_line=False,
         release="P0 at shutdown; after a physical stop, queued commands are dropped instead",
+        release_after_ms=None,
         recovery="none: the app is closing",
         outcome="fault", flags={"no_automatic_recovery": True}, screen="unchanged",
     ),
