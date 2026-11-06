@@ -18,6 +18,7 @@ void delay(unsigned long ms) { _millis_value += ms; }  // advance mock clock
 #include "../../../../runtime/arduino/motor/motor.ino"
 
 void setUp(void) {
+    zerosValid = czeroValid = true;  // as after a reset, which sends L5 first
     Serial.reset();
     Serial1.reset();
     Wire.reset();
@@ -1030,6 +1031,77 @@ void test_three_minute_adjustable_pulsing_with_recovery(void) {
 
 // --- FAILSAFE-6: input validation ---
 
+// --- Zeros come from L5 (with an optional C zero) ---
+
+static void bootZeros(void) {
+    zerosValid = czeroValid = false;  // as after boot or Y
+    AZERO = BZERO = CZERO = 0;
+    Wire.position_12 = 2000;
+    Wire.position_14 = 1200;
+}
+
+void test_moves_to_a_zero_are_rejected_before_l5(void) {
+    bootZeros();
+    processCommand("I120");
+    TEST_ASSERT_TRUE(Serial1.outputContains("COMMAND_REJECTED|I|ZEROS_NOT_SET"));
+    TEST_ASSERT_FALSE(bRunning);
+    Serial1.reset();
+    processCommand("A120");
+    TEST_ASSERT_TRUE(Serial1.outputContains("COMMAND_REJECTED|A|ZEROS_NOT_SET"));
+    TEST_ASSERT_FALSE(bRunning);
+}
+
+void test_absolute_targets_run_before_l5(void) {
+    // The reset's K and I13 do not depend on a zero.
+    bootZeros();
+    processCommand("K1500");
+    TEST_ASSERT_TRUE(bRunning);
+    TEST_ASSERT_FALSE(Serial1.outputContains("ZEROS_NOT_SET"));
+    processCommand("X");
+    processCommand("I121000");
+    TEST_ASSERT_TRUE(bRunning);
+    TEST_ASSERT_FALSE(Serial1.outputContains("ZEROS_NOT_SET"));
+}
+
+void test_l5_without_c_leaves_the_c_zero_unknown(void) {
+    bootZeros();
+    processCommand("L5|150|1900");
+    TEST_ASSERT_TRUE(zerosValid);
+    TEST_ASSERT_FALSE(czeroValid);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ZEROS|150|1900\n"));  // unchanged echo
+    processCommand("I120");
+    TEST_ASSERT_TRUE(bRunning);
+    TEST_ASSERT_EQUAL(150, desiredPosition);
+    processCommand("X");
+    Serial1.reset();
+    processCommand("A140");
+    TEST_ASSERT_TRUE(Serial1.outputContains("COMMAND_REJECTED|A|ZEROS_NOT_SET"));
+}
+
+void test_l5_with_c_sets_the_c_zero(void) {
+    bootZeros();
+    processCommand("L5|150|1900|1450");
+    TEST_ASSERT_TRUE(zerosValid && czeroValid);
+    TEST_ASSERT_EQUAL(1450, CZERO);
+    TEST_ASSERT_TRUE(Serial1.outputContains("ZEROS|150|1900|1450"));
+    processCommand("A140");
+    TEST_ASSERT_TRUE(bRunning);
+    TEST_ASSERT_EQUAL(1450, desiredPosition);
+}
+
+void test_l5_rejects_a_bad_c_zero_and_extra_fields(void) {
+    bootZeros();
+    processCommand("L5|150|1900|1450");
+    const char *bad[] = {"L5|150|1900|100", "L5|150|1900|9000", "L5|150|1900|abc",
+                         "L5|150|1900|1450|7"};
+    for (const char *command : bad) {
+        Serial1.reset();
+        processCommand(command);
+        TEST_ASSERT_TRUE(Serial1.outputContains("ERROR: Invalid L5 zero marks"));
+        TEST_ASSERT_EQUAL(1450, CZERO);
+    }
+}
+
 void test_l5_rejects_out_of_range_zero_marks(void) {
     AZERO = 100;
     BZERO = 1900;
@@ -1337,6 +1409,11 @@ int main(int argc, char **argv) {
     RUN_TEST(test_pulse_start_refused_during_axial_pressure_move);
     RUN_TEST(test_three_minute_adjustable_pulsing_with_recovery);
     RUN_TEST(test_l5_rejects_out_of_range_zero_marks);
+    RUN_TEST(test_moves_to_a_zero_are_rejected_before_l5);
+    RUN_TEST(test_absolute_targets_run_before_l5);
+    RUN_TEST(test_l5_without_c_leaves_the_c_zero_unknown);
+    RUN_TEST(test_l5_with_c_sets_the_c_zero);
+    RUN_TEST(test_l5_rejects_a_bad_c_zero_and_extra_fields);
     RUN_TEST(test_axial_floor_applied_before_clamp);
     RUN_TEST(test_l0_rejects_zero_or_garbage_factor);
     RUN_TEST(test_emergency_stop_retries_unacknowledged_write);

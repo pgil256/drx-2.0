@@ -22,7 +22,7 @@ def test_full_order_requires_calibration_and_baseline(protocol_clock, v2):
     link = NB2Controller(v2)
     _, finished, errors = run_reset(link)
     assert finished == [True] and not errors
-    assert link.commands == ["Y", "L5|0|1900", "K1450", "I131140", "I120",
+    assert link.commands == ["Y", "L5|0|1900|1450", "K1450", "I131140", "I120",
                              "L01.0", "L1|BASELINE"]
     assert link.baseline_valid
 

@@ -204,6 +204,10 @@ uint8_t smcDeviceNumber = 13;
 int AZERO = 0;
 int BZERO = 0;
 int CZERO = 0;
+// The zeros are only known after L5: boot and Y clear these, so a move to
+// a zero cannot use the 0 left by a reboot. czeroValid means L5 also
+// carried the C zero (older hosts send only A and B).
+bool zerosValid = false, czeroValid = false;
 float CInches = 0;
 bool STOP = true;            // mirrors STOP_PIN: INPUT_PULLUP idles HIGH (= not pressed)
 bool stopWasPressed = false; // previous loop's button state (press-edge detection)
@@ -928,6 +932,12 @@ void rejectCommand(const char *command, const char *reason) {
   Serial1.print("|"); Serial1.println(reason);
 }
 
+bool rejectWithoutZeros(const char *command, bool needsC) {
+  if (zerosValid && (!needsC || czeroValid)) return false;
+  rejectCommand(command, "ZEROS_NOT_SET");
+  return true;
+}
+
 void updatePressure() { servicePressure(); }
 
 
@@ -1182,6 +1192,7 @@ void processCommand(String cmd) {
       releasingPressure = false;
       emergencyStop();
       Serial1.println("Reset|");
+      zerosValid = czeroValid = false;  // setup() clears them too; a reset must forget the zeros
       resetBoard();
       break;
 
@@ -1235,6 +1246,10 @@ void processCommand(String cmd) {
         return;
       }
       localDesiredPosition = parameter.toInt();
+      // The axial home (a target at or below AZERO) depends on a zero.
+      if (smcDeviceNumber == 12 && (long)localDesiredPosition <= (long)AZERO &&
+          rejectWithoutZeros("I", false))
+        return;
       // Axial floor FIRST, then the travel clamp, so AZERO can never
       // re-raise a target the clamp just bounded (L5 rejects out-of-range
       // marks too; this keeps the order right regardless)
@@ -1388,6 +1403,9 @@ void processCommand(String cmd) {
         emitCmdError("A value out of range");
         return;
       }
+      // Inches 0 means that axis's zero.
+      if (inches == 0 && rejectWithoutZeros("A", smcDeviceNumber == 14))
+        return;
 
       // NOTE: target math intentionally preserves the historical
       // convention (no ZERO offset for nonzero inches). The offset
@@ -1498,6 +1516,10 @@ void processCommand(String cmd) {
             }
             long newAZero = getValue(cmd, '|', 1).toInt();
             long newBZero = getValue(cmd, '|', 2).toInt();
+            // Optional C zero, the lateral calibration centre: L5|<a>|<b>|<c>.
+            String cField = getValue(cmd, '|', 3);
+            bool hasC = cField.length() > 0;
+            long newCZero = hasC ? cField.toInt() : CZERO;
             // The marks feed the axial floor (I/A), the E-stop release
             // floor and the "at home" checks as signed ints compared
             // against uint16 positions. An unvalidated value (typo'd
@@ -1506,12 +1528,20 @@ void processCommand(String cmd) {
             // travel limit; negative it wrapped to ~65k and ended the
             // release after one iteration. Keep the previous marks instead.
             if (newAZero < AXIAL_MIN_POS || newAZero > 4095 ||
-                newBZero < HORIZONTAL_MIN_POS || newBZero > 4095) {
+                newBZero < HORIZONTAL_MIN_POS || newBZero > 4095 ||
+                (hasC && (!isNumeric(cField) || newCZero < LATERAL_MIN_POS ||
+                          newCZero > LATERAL_MAX_POS)) ||
+                getValue(cmd, '|', 4).length() > 0) {
               emitCmdError("Invalid L5 zero marks");
               break;
             }
             AZERO = (int)newAZero;
             BZERO = (int)newBZero;
+            if (hasC) {
+              CZERO = (int)newCZero;
+              czeroValid = true;
+            }
+            zerosValid = true;
           }
           Dbg.print("AZERO: ");
           Dbg.print(AZERO);
@@ -1521,7 +1551,14 @@ void processCommand(String cmd) {
           Serial1.print("ZEROS|");
           Serial1.print(AZERO);
           Serial1.print("|");
-          Serial1.println(BZERO);
+          Serial1.print(BZERO);
+          // Echo the C zero only when L5 carried it, so a host that sends
+          // just A and B still sees the three-field ZEROS it expects.
+          if (getValue(cmd, '|', 3).length() > 0) {
+            Serial1.print("|");
+            Serial1.print(CZERO);
+          }
+          Serial1.println("");
           emitAck("DONE", currentCmdSeq);
           break;
 
