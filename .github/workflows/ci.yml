@@ -280,17 +280,13 @@ jobs:
 
       # Runs as an ordinary user, like the other test jobs (the firmware
       # flash script refuses root by design).
-      # Known Qt 5.11 failure, deselected until checklist item T5 resolves
-      # it: test_help_overflow_can_reveal_every_reference leaves the last
-      # Help line 1 px outside the scrolled viewport.
       - name: Run pytest
         env:
           QT_QPA_PLATFORM: offscreen
         run: |
           useradd --create-home tester
           chown -R tester .
-          runuser -u tester -- python3 -m pytest -q \
-            --deselect development/tests/integration/test_help_layout.py::test_help_overflow_can_reveal_every_reference
+          runuser -u tester -- python3 -m pytest -q
 
   # Hermetic: system g++ + the vendored Unity framework in
   # development/tests/firmware/unity/,
