@@ -100,7 +100,7 @@ class UxVerification(GuiVerification):
                 self.note(f"protocol {expected_protocol} review",
                           parameters=rows, action="Start" if start else "Back")
                 self.click(dialog.start_button if start else dialog.back_button)
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - re-raised below, after the dialog closes
                 errors.append(exc)
                 if dialog is not None:
                     dialog.reject()
