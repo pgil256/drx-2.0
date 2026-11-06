@@ -113,6 +113,13 @@ Hx711Sampler scale;
 float calibration_factor = -4360.14;
 float pressure = 0;          // filtered magnitude used by control/safety logic
 float signedPressure = 0;    // filtered signed value (negative = wiring/drift fault)
+// Force below the tared zero is reported, never acted on: control keeps using
+// the magnitude. drx-demo's ks-floor saw patient-in tares up to 46 lb below
+// the empty reading, which makes the sign worth recording.
+const float NEGATIVE_FORCE_REPORT_LB = -2.0;
+const unsigned long NEGATIVE_FORCE_REPORT_INTERVAL = 5000UL;
+bool negativeForceReported = false;
+unsigned long lastNegativeForceReport = 0;
 
 // Non-blocking load-cell sampling state
 unsigned long lastScaleReady = 0;    // last time the HX711 had data for us
@@ -901,6 +908,13 @@ void servicePressure() {
     lastScaleReady = now;
     pressureSampleValid = true;
     if (tareActive) { acceptTareSample(raw); return; }
+    if (pressureCalibrated && signedPressure < NEGATIVE_FORCE_REPORT_LB &&
+        (!negativeForceReported || now - lastNegativeForceReport >= NEGATIVE_FORCE_REPORT_INTERVAL)) {
+      negativeForceReported = true;
+      lastNegativeForceReport = now;
+      Serial1.print("DIAG|PRESSURE|NEGATIVE|"); Serial1.print(signedPressure);
+      Serial1.print("|"); Serial1.println(raw);
+    }
     if (((pressureCalibrated || pressureGuardActive) && pressure > PRESSURE_HARD_LIMIT) ||
         (pressureGuardActive && pressure > pressureCeiling)) {
       tripPressureFault("PRESSURE_LIMIT");

@@ -45,6 +45,8 @@ void setUp(void) {
     pressureCeiling = 100;
     protocolPressureLimit = 0;
     lastPressureSample = pressureMoveStarted = 0;
+    negativeForceReported = false;
+    lastNegativeForceReport = 0;
     lastPressurePoll = maxPressurePollGap = lastPressureReadUs = 0;
     pressurePollStarted = false;
     pressureProgressActive = pressureProgressNotified = false;
@@ -648,6 +650,74 @@ static void setMeasuredPressure(float value) {
     pressure = value;
     scale._scale = 100.0;
     scale.setRawForUnits(value);
+}
+
+// --- Force below the tared zero is reported, never acted on ---
+
+static int negativeReports(void) {
+    std::string out = Serial1.getOutput();
+    int count = 0;
+    for (size_t at = out.find("DIAG|PRESSURE|NEGATIVE|"); at != std::string::npos;
+         at = out.find("DIAG|PRESSURE|NEGATIVE|", at + 1))
+        count++;
+    return count;
+}
+
+// Feed the same signed reading through the real sampling path a few times,
+// so any filtering in servicePressure settles on it.
+static void sampleSigned(float value) {
+    scale._scale = 100.0;
+    scale._offset = 0.0;
+    scale.setRawForUnits(value);
+    scale._ready = true;
+    for (int i = 0; i < 3; i++) {
+        keepAlive();
+        servicePressure();
+    }
+}
+
+void test_negative_force_is_reported_with_the_raw_reading(void) {
+    _millis_value = 1000;
+    sampleSigned(-3.0f);
+    TEST_ASSERT_EQUAL(1, negativeReports());
+    // The host mock prints floats with one decimal; the AVR prints two.
+    TEST_ASSERT_TRUE(Serial1.outputContains("DIAG|PRESSURE|NEGATIVE|-3."));
+    TEST_ASSERT_TRUE(Serial1.outputContains("|-300\n"));
+    TEST_ASSERT_TRUE(pressure > 2.9f && pressure < 3.1f);  // control sees the magnitude
+    TEST_ASSERT_FALSE(pressureFault);
+}
+
+void test_negative_force_is_reported_at_most_every_5_s(void) {
+    _millis_value = 1000;
+    sampleSigned(-4.0f);
+    _millis_value = 1000 + NEGATIVE_FORCE_REPORT_INTERVAL - 1;
+    sampleSigned(-4.0f);
+    TEST_ASSERT_EQUAL(1, negativeReports());
+    _millis_value = 1000 + NEGATIVE_FORCE_REPORT_INTERVAL;
+    sampleSigned(-4.0f);
+    TEST_ASSERT_EQUAL(2, negativeReports());
+}
+
+void test_negative_force_threshold_is_minus_2_lb(void) {
+    _millis_value = 1000;
+    sampleSigned(-1.99f);
+    sampleSigned(-2.0f);
+    sampleSigned(15.0f);
+    TEST_ASSERT_EQUAL(0, negativeReports());
+    sampleSigned(-2.5f);
+    TEST_ASSERT_EQUAL(1, negativeReports());
+}
+
+void test_negative_force_not_reported_during_or_before_a_tare(void) {
+    _millis_value = 1000;
+    pressureCalibrated = false;
+    sampleSigned(-6.0f);
+    TEST_ASSERT_EQUAL(0, negativeReports());
+    pressureCalibrated = true;
+    tareActive = true;
+    tareStarted = _millis_value;
+    sampleSigned(-6.0f);
+    TEST_ASSERT_EQUAL(0, negativeReports());
 }
 
 void test_pressure_at_or_above_target_in_band_completes(void) {
@@ -1457,6 +1527,10 @@ int main(int argc, char **argv) {
     RUN_TEST(test_release_reaching_zero_with_target_met_completes_done);
     RUN_TEST(test_release_at_home_with_load_cannot_report_success);
     RUN_TEST(test_pressure_at_or_above_target_in_band_completes);
+    RUN_TEST(test_negative_force_is_reported_with_the_raw_reading);
+    RUN_TEST(test_negative_force_is_reported_at_most_every_5_s);
+    RUN_TEST(test_negative_force_threshold_is_minus_2_lb);
+    RUN_TEST(test_negative_force_not_reported_during_or_before_a_tare);
     RUN_TEST(test_pressure_command_outside_control_band_starts_correction);
     RUN_TEST(test_increase_reaches_exact_target_before_completion);
     RUN_TEST(test_first_sample_crossing_stops_without_reversal);

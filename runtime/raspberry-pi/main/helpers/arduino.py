@@ -102,6 +102,7 @@ class Arduino(QObject):
     calibration_result = pyqtSignal(dict)
     firmware_identity = pyqtSignal(dict)
     sensor_diagnostics = pyqtSignal(dict)
+    negative_force = pyqtSignal(dict)  # Logged only; no UI or control change.
     hardware_diagnostics = pyqtSignal(dict)
     pressure_warning = pyqtSignal(dict)
     command_rejected = pyqtSignal(dict)
@@ -658,6 +659,9 @@ class Arduino(QObject):
                 elif signal == "calibration_result" and result["operation"] == "tare":
                     # Only the worker's STARTED/OK/DONE transaction grants authority.
                     self.baseline_valid = False
+                elif signal == "negative_force":
+                    self.logger.warning("Force below the tared zero: %.2f lb (raw %d)",
+                                        result["signed_lb"], result["raw"])
                 if signal == "motion_done":
                     self.motion_done.emit(result["kind"], result["target"], result["actual"])
                 else:
