@@ -209,10 +209,15 @@ timestamped reports under `~/KneeSpa-display-diagnostics/`.
 
 ## Safety and warning behavior
 
-The physical STOP input, on-screen EMERGENCY STOP, and explicit firmware
-`X` command are the motion-interrupting paths. Other device conditions
-(heartbeat, sensor, travel, pressure timeout, and motor stall) emit advisory
-`WARNING:` notices without stopping or resetting operation. Treatment pressure
+The physical STOP input, on-screen EMERGENCY STOP, explicit firmware `X`
+command and the host-silence cutoff are the motion-interrupting paths. The
+app's serial I/O thread sends `W` every 0.5 s to firmware that advertises
+`HOST_HEARTBEAT_V1`. After the first `W`, 3 s without host traffic during
+motion stops every actuator and latches `FAULT|HOST_TIMEOUT` until reset; it
+never interrupts the autonomous traction release. Other device conditions
+(sensor, travel, pressure timeout, and motor stall, plus heartbeat loss for a
+host that never sends `W`) emit advisory `WARNING:` notices without stopping or
+resetting operation. Treatment pressure
 commands remain capped at 80 lbs; measured pressure warns above 100 lbs.
 The firmware still uses its watchdog and performs bounded traction release
 after an E-stop. The Pi surfaces warnings in the always-visible treatment

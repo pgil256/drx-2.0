@@ -82,6 +82,9 @@ int pulseSpeed = TREATMENT_SPEED_MAX;
 
 // Fail-safe parameters
 #define HEARTBEAT_TIMEOUT     10000  // sustained host silence before warning
+// Once the host has sent W (HOST_HEARTBEAT_V1), this much silence during
+// motion is a latched stop instead of a warning.
+#define HOST_SILENCE_LIMIT    3000
 #define SCALE_READ_TIMEOUT    500    // ms without HX711 ready -> warning
 #define PRESSURE_RELEASE_LBS  5.0    // autonomous release target after E-stop
 #define RELEASE_TIMEOUT       15000  // ms bound on E-stop pressure release
@@ -172,6 +175,7 @@ void emergencyStop();
 
 // Fail-safe state
 unsigned long lastHostTraffic = 0;   // last byte received from the Pi
+bool hostHeartbeatArmed = false;     // set by the first W since boot or reset
 bool releasingPressure = false;      // autonomous post-fault release active
 unsigned long releaseStart = 0;
 bool pressureWarningIssued = false;
@@ -676,7 +680,8 @@ void reportFirmwareIdentity() {
   Serial1.print("FIRMWARE|");
   Serial1.print(VERSION);
   Serial1.print("|");
-  Serial1.println(HX711_DRIVER);
+  Serial1.print(HX711_DRIVER);
+  Serial1.println("|HOST_HEARTBEAT_V1");
 }
 
 void reportSensorDiagnostics() {
@@ -1133,6 +1138,7 @@ void processCommand(String cmd) {
       releasingPressure = false;
       emergencyStop();
       Serial1.println("Reset|");
+      hostHeartbeatArmed = false;  // setup() clears it too; a reset must disarm
       resetBoard();
       break;
 
@@ -1725,8 +1731,14 @@ void loop() {
     pressureWarningIssued = false;
   }
 
-  // Host heartbeat remains advisory; servicePressure owns latched sensor faults.
-  if (activeMotion && millis() - lastHostTraffic > HEARTBEAT_TIMEOUT) {
+  // Host heartbeat. A host that has sent W gets a latched stop after
+  // HOST_SILENCE_LIMIT of silence during motion. A host that never sends W
+  // keeps the advisory warning below. The autonomous load release is not
+  // activeMotion, so silence never interrupts it.
+  if (hostHeartbeatArmed && activeMotion && millis() - lastHostTraffic > HOST_SILENCE_LIMIT) {
+    tripPressureFault("HOST_TIMEOUT");
+    activeMotion = false;
+  } else if (activeMotion && millis() - lastHostTraffic > HEARTBEAT_TIMEOUT) {
     if (!heartbeatWarningIssued) {
       emitSafetyWarning("Host heartbeat lost");
       heartbeatWarningIssued = true;
@@ -1962,6 +1974,13 @@ void loop() {
       // The end of an overlong line: the buffer is already empty, so
       // nothing from that line runs.
       discardingOverlongCommand = false;
+      if (commandBuffer == "W") {
+        // Heartbeat: consumed here, ahead of the rate limiter and framing.
+        // It is not a command and gets no reply.
+        hostHeartbeatArmed = true;
+        commandBuffer = "";
+        continue;
+      }
       if (commandBuffer.length() > 0) { // Only process non-empty commands
         isCommandComplete = true;
         break;
