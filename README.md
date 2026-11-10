@@ -83,7 +83,10 @@ the application falls back to, so it can still be corrected:
   the text found. Treatments stay disabled; a mistyped factor also disables
   jogging. Correct the line and restart the application. A hardware service
   save or calibration restore that supplies the value also replaces it, and
-  the device is calibrated again after the restart.
+  the device is calibrated again after the restart. Back Up Calibration is
+  refused until then, so the fallback default is never saved as the device's
+  own value; restoring an earlier backup still works, and the backup it takes
+  first has no value for the mistyped option and cannot itself be restored.
 - An invalid device number does not disable the device. It runs as number 1
   and the application log names the text found. Correct the line and restart.
 

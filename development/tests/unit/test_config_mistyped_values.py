@@ -12,7 +12,9 @@ from typing import Callable
 import pytest
 
 from config.config import Configuration
+from config.constants import SERVICE_AXES
 from helpers.calibration_backup import CalibrationBackups
+from helpers.device_records import read_json
 from helpers.hardware_service import HardwareServiceDraft
 
 pytestmark = pytest.mark.unit
@@ -243,3 +245,95 @@ def test_a_value_set_in_code_replaces_the_mistyped_text(
     cfg.update_config()
     assert written in lines(cfg_path)
     assert getattr(load(cfg_path), attribute) == value
+
+
+# --- A calibration backup never holds the stand-in default ------------------
+# A backup taken while a value is mistyped would record the default as if it
+# were the device's own, and restoring that backup would write the default
+# over the mistyped text.
+
+CALIBRATION_MISTYPES = [
+    ("a_factor", "365O"),
+    ("b_factor", "372O"),
+    ("c_factor", "381O"),
+    ("calibration", "-28369.O"),
+    ("axial_service_calibrated", "Ture"),
+]
+
+
+def recorded(data: dict, option: str) -> object:
+    """What a backup file holds for one [Options] calibration value."""
+    if option == "calibration":
+        return data["scale"]
+    if option == "axial_service_calibrated":
+        return data[option]
+    axis = next(axis for axis, spec in SERVICE_AXES.items() if spec["factor"] == option)
+    return data["factors"][axis]
+
+
+@pytest.mark.parametrize("option, text", CALIBRATION_MISTYPES)
+def test_backup_is_refused_while_a_calibration_value_is_mistyped(
+    cfg_path: Path, tmp_path: Path, option: str, text: str,
+) -> None:
+    backups = CalibrationBackups(tmp_path / "state")
+    bad = mistype(cfg_path, option, text)
+    with pytest.raises(ValueError, match=option):
+        backups.create(load(cfg_path), "Technician")
+    assert backups.list() == []
+    assert bad in lines(cfg_path)
+
+
+@pytest.mark.parametrize("option, text", [("flexion_position", "1O"), ("number", "2O")])
+def test_backup_is_taken_when_the_mistyped_value_is_not_calibration(
+    cfg_path: Path, tmp_path: Path, option: str, text: str,
+) -> None:
+    backups = CalibrationBackups(tmp_path / "state")
+    mistype(cfg_path, option, text)
+    cfg = load(cfg_path)
+    saved = backups.create(cfg, "Technician")
+    assert backups.load(saved.name, cfg)["factors"]["horizontal"] == 3720
+
+
+def test_backup_records_a_factor_set_in_code_over_a_mistyped_one(
+    cfg_path: Path, tmp_path: Path,
+) -> None:
+    backups = CalibrationBackups(tmp_path / "state")
+    mistype(cfg_path, "b_factor", "372O")
+    cfg = load(cfg_path)
+    cfg.b_factor = 2800
+    saved = backups.create(cfg, "Technician")
+    assert backups.load(saved.name, cfg)["factors"]["horizontal"] == 2800
+
+
+@pytest.mark.parametrize("option, text", CALIBRATION_MISTYPES)
+def test_restoring_an_earlier_backup_replaces_any_mistyped_calibration_value(
+    cfg_path: Path, tmp_path: Path, option: str, text: str,
+) -> None:
+    backups = CalibrationBackups(tmp_path / "state")
+    earlier = backups.create(load(cfg_path), "Technician")
+    mistype(cfg_path, option, text)
+    backups.restore(earlier.name, load(cfg_path), "Administrator")
+    assert GOOD_LINES[option] in lines(cfg_path)
+    reloaded = load(cfg_path)
+    assert reloaded.calibration_errors == []
+    assert reloaded.calibrated is True
+
+
+@pytest.mark.parametrize("option, text", CALIBRATION_MISTYPES)
+def test_pre_restore_backup_cannot_bring_the_stand_in_default_back(
+    cfg_path: Path, tmp_path: Path, option: str, text: str,
+) -> None:
+    backups = CalibrationBackups(tmp_path / "state")
+    earlier = backups.create(load(cfg_path), "Technician")
+    mistype(cfg_path, option, text)
+    cfg = load(cfg_path)
+    previous = backups.restore(earlier.name, cfg, "Administrator")
+    data = read_json(previous)
+    # No value is recorded for the mistyped option; the rest is kept.
+    assert recorded(data, option) is None
+    assert data["marks"] == read_json(earlier)["marks"]
+    after_restore = cfg_path.read_bytes()
+    with pytest.raises(ValueError, match="mistyped"):
+        backups.restore(previous.name, cfg, "Administrator")
+    assert cfg_path.read_bytes() == after_restore
+    assert len(backups.list()) == 2

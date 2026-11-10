@@ -257,6 +257,15 @@ class Configuration:
         del self._mistyped[key]
         return False
 
+    def is_mistyped(self, option: str) -> bool:
+        """Whether an [Options] value in memory is only a stand-in default.
+
+        A calibration backup must not record that default as the device's
+        own value: restoring it would write the default over the text.
+        """
+        key = ("Options", option)
+        return key in self._mistyped and getattr(self, option) == self._mistyped[key]
+
     def _load_protocol_defaults(self):
         """Load persisted Treatment Settings defaults, keeping __init__ fallbacks
         for any malformed/absent value."""
