@@ -162,6 +162,16 @@ def test_service_save_of_a_measured_scale_factor_restores_pressure(tmp_path):
     draft.save(config)
     assert config.scale_calibrated is True
     assert config.calibrated is True
+    assert config.calibration_errors == []
+
+
+@pytest.mark.parametrize("text", ["1.0", "nan"])
+def test_revalidating_does_not_repeat_the_scale_error(tmp_path, text):
+    config = _load(tmp_path, calibration=text)
+    config._validate_calibration()
+    config._validate_calibration()
+    assert len(_scale_errors(config)) == 1
+    assert config.scale_calibrated is False
 
 
 def test_calibration_restore_replaces_an_unusable_factor(tmp_path):
@@ -174,5 +184,20 @@ def test_calibration_restore_replaces_an_unusable_factor(tmp_path):
     assert config.marks_valid is False
     backups.restore(selected.name, config, "Technician")
     assert config.b_factor == 1900
+    assert config.calibrated is True
+    assert config.calibration_errors == []
+
+
+def test_calibration_restore_replaces_an_oversized_scale_factor(tmp_path):
+    # A finite value: the backup taken before a restore cannot hold nan or inf.
+    config = _load(tmp_path)
+    backups = CalibrationBackups(tmp_path)
+    selected = backups.create(config, "Technician")
+    config.config["Options"]["calibration"] = "-1e9"
+    config._atomic_write()
+    config.get_config()
+    assert config.scale_calibrated is False
+    backups.restore(selected.name, config, "Technician")
+    assert config.calibration == -28369.0
     assert config.calibrated is True
     assert config.calibration_errors == []

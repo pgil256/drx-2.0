@@ -388,9 +388,14 @@ class Configuration:
         # table. Keep load/fallback errors: untouched defaults are not measured.
         service_error_prefix = "Axial service calibration: "
         factor_error_prefix = "Distance factor "
+        # The scale factor is judged again below as well. Its message used to
+        # be added on every pass, and stayed after a service save fixed it.
+        scale_error_prefix = "Load-cell scale factor "
         self.calibration_errors = [
             error for error in self.calibration_errors
-            if not error.startswith((service_error_prefix, factor_error_prefix))
+            if not error.startswith(
+                (service_error_prefix, factor_error_prefix, scale_error_prefix)
+            )
         ]
         marks_ok = True
         # CMarks is operator-calibrated device data. Once its keys and values
@@ -440,7 +445,7 @@ class Configuration:
         if abs(float(self.calibration)) < MIN_PLAUSIBLE_SCALE_FACTOR:
             self.scale_calibrated = False
             self._flag_error(
-                f"Load-cell scale factor {self.calibration} is implausible "
+                f"{scale_error_prefix}{self.calibration} is implausible "
                 "(factory default?); pressure readings would be raw counts"
             )
         else:
@@ -455,7 +460,7 @@ class Configuration:
             except ValueError as error:
                 self.scale_calibrated = False
                 self._flag_error(
-                    f"Load-cell scale factor {self.calibration} is not usable. "
+                    f"{scale_error_prefix}{self.calibration} is not usable. "
                     f"{error} Pressure stays disabled until the load cell is "
                     "calibrated in hardware service or the value is corrected "
                     "in kneespa.cfg."
