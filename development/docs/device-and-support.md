@@ -79,6 +79,11 @@ Settings and Service scroll vertically on the touchscreen.
   review, saves the current values first, and writes the replacement atomically.
   It leaves unrelated configuration intact and puts the device in recovery until
   an explicit unloaded reset. Verify calibration afterward before treatment.
+  When the load-cell scale factor in `kneespa.cfg` is not a finite number (`nan`
+  or `inf`), Back Up Calibration is refused with a message naming it, because that
+  backup could never be restored. A restore of an earlier backup still works: the
+  values saved first record the scale factor as `null`, and that saved file is
+  itself refused as a restore source.
 - **Date and time** shows local time, time zone, automatic-time state, and actual
   synchronization state. Operators with access can select an installed time zone
   and enable automatic synchronization; enabling NTP is not reported as already
