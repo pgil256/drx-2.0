@@ -147,6 +147,8 @@ MISTYPED = [
     ("calibration", "-28369.O"),
     ("flexion_position", "O"),
     ("axial_service_calibrated", "Ture"),
+    ("number", "2O"),
+    ("number", "7"),
 ]
 
 
@@ -180,6 +182,16 @@ def test_startup_without_a_device_id_leaves_the_mistyped_text(
     generated = cfg.ensure_device_id()
     assert bad in lines(cfg_path)
     assert f"id = {generated}" in lines(cfg_path)
+
+
+def test_calibration_restore_leaves_a_mistyped_device_number(
+    cfg_path: Path, tmp_path: Path,
+) -> None:
+    backups = CalibrationBackups(tmp_path / "state")
+    selected = backups.create(load(cfg_path), "Technician")
+    bad = mistype(cfg_path, "number", "2O")
+    backups.restore(selected.name, load(cfg_path), "Administrator")
+    assert bad in lines(cfg_path)
 
 
 # --- A value the technician supplies on purpose still replaces it -----------
@@ -220,6 +232,7 @@ def test_service_save_of_a_new_scale_factor_replaces_a_mistyped_one(cfg_path: Pa
 
 @pytest.mark.parametrize("option, text, attribute, value, written", [
     ("b_factor", "372O", "b_factor", 3720, "b_factor = 3720"),
+    ("number", "2O", "device_number", 3, "number = 3"),
 ])
 def test_a_value_set_in_code_replaces_the_mistyped_text(
     cfg_path: Path, option: str, text: str, attribute: str, value: int, written: str,

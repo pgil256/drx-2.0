@@ -334,8 +334,15 @@ class Configuration:
             if number not in (1, 2, 3):
                 raise ValueError("must be 1, 2, or 3")
         except (ValueError, TypeError):
-            logger.warning("Invalid Device.number %r; using default 1", raw_number)
-            number = 1
+            # A label, not calibration: the device runs as number 1 and is
+            # not disabled. The text stays in the file so it can be corrected.
+            logger.warning(
+                "Invalid Device.number %r; running as device 1. The value was "
+                "left in the file: correct it there and restart.", raw_number,
+            )
+            self.device_number = 1
+            self._mistyped[("Device", "number")] = 1
+            return
         self.device_number = number
         self._set_section("Device", {"number": number})
 
@@ -578,9 +585,10 @@ class Configuration:
             }, parser)
         elif parser.has_section("ProtocolDefaults"):
             parser.remove_section("ProtocolDefaults")
-        self._set_section("Device", {
-            "id": self.device_id, "number": self.device_number,
-        }, parser)
+        device: Dict[str, object] = {"id": self.device_id}
+        if not self._keeps_mistyped("Device", "number", self.device_number):
+            device["number"] = self.device_number
+        self._set_section("Device", device, parser)
 
     def update_config(self):
         """Update current values, retaining this caller's legacy error reporting."""
