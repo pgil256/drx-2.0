@@ -790,6 +790,32 @@ def test_firmware_stall_timeout_faults_the_running_treatment(window_run):
     w._show_safety_alert.assert_called_once_with("CONTROLLER FAULT: Motor stall timeout 14")
 
 
+def test_controller_restart_faults_the_running_treatment(window_run):
+    """The Mega rebooted mid-treatment: its tare is gone, so the readout is not live."""
+    run = window_run
+    w = run.window
+    worker = start(run)
+    w.status_emit(700, 1900, 1450, 42.0)
+    w.on_baseline_changed(True)
+    w.on_sensor_diagnostics({"valid": True, "age_ms": 0})
+    assert run.view._pressure_caption == "Pressure live"
+    run.arduino.send.reset_mock()
+
+    w.safety.on_controller_restart()
+    w.status_emit(700, 1900, 1450, 137.5)  # the un-tared, default-factor value
+
+    assert w.protocol_state == "fault" and w._no_automatic_recovery
+    assert not w.initial_setup_complete
+    worker.cancel.assert_called_once_with(firmware_stopped=True)
+    worker.stop.assert_not_called()
+    assert [c[0][0] for c in run.arduino.send.call_args_list] == ["X", "X", "HF1"]
+    assert run.view._pressure_caption == "Controller fault — last reading stale"
+    assert not run.view._start_btn.isEnabled()
+    w._show_safety_alert.assert_called_once()
+    alert = w._show_safety_alert.call_args[0][0]
+    assert alert.startswith("CONTROLLER FAULT: ") and "Reset" in alert
+
+
 @pytest.mark.parametrize("action", ["Dismiss", "Stop"])
 def test_pressure_notice_actions_keep_recovery_explicit(window_run, action, qtbot):
     run = window_run

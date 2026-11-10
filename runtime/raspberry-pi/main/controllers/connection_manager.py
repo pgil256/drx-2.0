@@ -87,6 +87,7 @@ class ConnectionManager:
             window.arduino.released_emit.connect(window.handle_pressure_released)
             window.arduino.zeros_emit.connect(window.handle_zeros_echo)
             window.arduino.fault_emit.connect(window.safety.on_controller_fault)
+            window.arduino.unexpected_reboot.connect(window.safety.on_controller_restart)
             window.arduino.command_rejected.connect(window.safety.on_command_rejected)
             window.arduino.sensor_diagnostics.connect(window.on_sensor_diagnostics)
             window.arduino.calibration_result.connect(window.on_calibration_result)
