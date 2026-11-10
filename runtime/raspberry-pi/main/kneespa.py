@@ -216,6 +216,9 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
         self.mid_protocol_warning_shown = False
         self.protocol_stop_requested = False
         self._physical_stop_active = False
+        # time.monotonic() of the device's stop button press while the
+        # firmware's release may still run (see StopController); else None.
+        self._firmware_release_since = None
         self.worker = None
 
     def _init_window(self, debug_mode) -> None:

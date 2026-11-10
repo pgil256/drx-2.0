@@ -14,7 +14,9 @@ from config.constants import (
     LATERAL_MAX,
 )
 from controllers.stop_controller import COMMAND_FAULT, PHYSICAL, stops_for
-from helpers.stop_commands import PHYSICAL_STOP_MESSAGES
+from helpers.stop_commands import (
+    PHYSICAL_STOP_MESSAGES, PHYSICAL_STOP_PRESSED, RELEASE_INCOMPLETE,
+)
 
 
 COMMAND_REJECTION_MESSAGES = {
@@ -246,8 +248,13 @@ class SafetyMonitor:
         window.logger.error("FIRMWARE ERROR: %s", message)
 
         if message in PHYSICAL_STOP_MESSAGES:
-            self.on_physical_stop()
+            self.on_physical_stop(release_started=message == PHYSICAL_STOP_PRESSED)
             return
+
+        if message == RELEASE_INCOMPLETE:
+            # The firmware's release has ended, with the load still on. Reset
+            # may run now; the warning below still reaches the operator.
+            stops_for(window).end_firmware_release()
 
         if message == "BUSY":
             # A command was refused because a move is running; transient
@@ -287,9 +294,9 @@ class SafetyMonitor:
 
         self._present_warning(message)
 
-    def on_physical_stop(self) -> None:
+    def on_physical_stop(self, release_started: bool = False) -> None:
         """The device's stop button: see StopController (kind "physical")."""
-        stops_for(self.window).stop(PHYSICAL)
+        stops_for(self.window).stop(PHYSICAL, release_started=release_started)
 
     def on_firmware_warning(self, message: str) -> None:
         """Handle advisory firmware notices without startup alert noise.
@@ -339,6 +346,7 @@ class SafetyMonitor:
     def on_pressure_released(self):
         """Firmware completed its autonomous post-fault pressure release."""
         self.window.logger.info("Firmware reports traction released")
+        stops_for(self.window).end_firmware_release()
 
     def on_zeros_echo(self, a_zero, b_zero):
         """Verify the zero marks the firmware applied match the config."""

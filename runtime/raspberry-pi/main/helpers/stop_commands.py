@@ -19,3 +19,6 @@ RELEASE_SEQUENCE = (STOP_ALL, RELEASE, TELEMETRY_OFF)
 # firmware does not start another while the button stays down.
 PHYSICAL_STOP_PRESSED = "Stop button pressed"
 PHYSICAL_STOP_MESSAGES = (PHYSICAL_STOP_PRESSED, "Stop button engaged")
+# That release ends with the line "RELEASED", or with this "ERROR:" when it
+# stopped at home or after RELEASE_TIMEOUT with the load still on.
+RELEASE_INCOMPLETE = "Release incomplete"

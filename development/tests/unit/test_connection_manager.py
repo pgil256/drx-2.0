@@ -77,6 +77,26 @@ class TestResetGating:
         w.threadpool.start.assert_not_called()
         assert not w.reset_in_progress
 
+    def test_reset_waits_for_the_firmware_release_after_the_stop_button(self, manager):
+        """Reset's Y ends the firmware's release, and homing unloads axial last."""
+        cm, w = manager
+        w._no_automatic_recovery = True
+        w._physical_stop_active = True
+        w._firmware_release_since = time.monotonic()
+
+        cm.reset_arduino()
+
+        w.threadpool.start.assert_not_called()
+        assert not w.reset_in_progress
+        assert w._no_automatic_recovery and w._physical_stop_active
+        assert any("releasing traction" in error for error in w.errors)
+
+        w._firmware_release_since = None  # RELEASED, incomplete, or the bound passed
+        cm.reset_arduino()
+
+        w.threadpool.start.assert_called_once()
+        assert not w._physical_stop_active
+
     def test_overlapping_reset_ignored(self, manager):
         cm, w = manager
         w.reset_in_progress = True
