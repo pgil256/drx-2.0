@@ -7,10 +7,13 @@ correct what is still in the file.
 """
 
 from pathlib import Path
+from typing import Callable
 
 import pytest
 
 from config.config import Configuration
+from helpers.calibration_backup import CalibrationBackups
+from helpers.hardware_service import HardwareServiceDraft
 
 pytestmark = pytest.mark.unit
 
@@ -117,3 +120,113 @@ def test_mistyped_device_number_runs_as_one_without_disabling_the_device(cfg_pat
     assert cfg.device_number == 1
     assert cfg.calibrated is True
     assert cfg.device_id == "keep-this-id"
+
+
+# --- No save replaces the mistyped text with the default --------------------
+
+def _update_config(cfg: Configuration, state_dir: Path) -> None:
+    cfg.update_config()
+
+
+def _mark_as_default(cfg: Configuration, state_dir: Path) -> None:
+    cfg.save_protocol_defaults(35.0, 8.0, 8.0, 1.5)
+
+
+def _service_save_of_another_value(cfg: Configuration, state_dir: Path) -> None:
+    draft = HardwareServiceDraft(cfg)
+    draft.record("horizontal", 0, 1905)
+    assert draft.save(cfg)
+
+
+SAVES = [_update_config, _mark_as_default, _service_save_of_another_value]
+
+MISTYPED = [
+    ("a_factor", "365O"),
+    ("b_factor", "372O"),
+    ("c_factor", "381O"),
+    ("calibration", "-28369.O"),
+    ("flexion_position", "O"),
+    ("axial_service_calibrated", "Ture"),
+]
+
+
+@pytest.mark.parametrize("save", SAVES, ids=lambda save: save.__name__.lstrip("_"))
+@pytest.mark.parametrize("option, text", MISTYPED)
+def test_a_save_leaves_the_mistyped_text_in_the_file(
+    cfg_path: Path, tmp_path: Path, option: str, text: str,
+    save: Callable[[Configuration, Path], None],
+) -> None:
+    bad = mistype(cfg_path, option, text)
+    first = load(cfg_path)
+    errors = list(first.calibration_errors)
+    save(first, tmp_path)
+    assert bad in lines(cfg_path)
+    # The next start reports exactly what this one did: a save used to make
+    # the default load cleanly from then on.
+    again = load(cfg_path)
+    assert again.calibration_errors == errors
+    assert again.calibrated is first.calibrated
+
+
+@pytest.mark.parametrize("option, text", MISTYPED)
+def test_startup_without_a_device_id_leaves_the_mistyped_text(
+    cfg_path: Path, option: str, text: str,
+) -> None:
+    content = cfg_path.read_text(encoding="utf-8")
+    assert "id = keep-this-id\n" in content
+    cfg_path.write_text(content.replace("id = keep-this-id\n", ""), encoding="utf-8")
+    bad = mistype(cfg_path, option, text)
+    cfg = load(cfg_path)
+    generated = cfg.ensure_device_id()
+    assert bad in lines(cfg_path)
+    assert f"id = {generated}" in lines(cfg_path)
+
+
+# --- A value the technician supplies on purpose still replaces it -----------
+
+def test_calibration_restore_replaces_a_mistyped_factor_with_the_reviewed_one(
+    cfg_path: Path, tmp_path: Path,
+) -> None:
+    backups = CalibrationBackups(tmp_path / "state")
+    selected = backups.create(load(cfg_path), "Technician")
+    mistype(cfg_path, "b_factor", "372O")
+    backups.restore(selected.name, load(cfg_path), "Administrator")
+    assert "b_factor = 3720" in lines(cfg_path)
+    assert load(cfg_path).calibrated is True
+
+
+def test_service_save_of_the_mistyped_factor_itself_replaces_it(cfg_path: Path) -> None:
+    mistype(cfg_path, "b_factor", "372O")
+    cfg = load(cfg_path)
+    draft = HardwareServiceDraft(cfg)
+    draft.factors["horizontal"] = 3725
+    draft.save(cfg)
+    assert "b_factor = 3725" in lines(cfg_path)
+    # A later ordinary save must not bring the mistyped text back either.
+    cfg.update_config()
+    assert "b_factor = 3725" in lines(cfg_path)
+    assert load(cfg_path).calibrated is True
+
+
+def test_service_save_of_a_new_scale_factor_replaces_a_mistyped_one(cfg_path: Path) -> None:
+    mistype(cfg_path, "calibration", "-28369.O")
+    cfg = load(cfg_path)
+    draft = HardwareServiceDraft(cfg)
+    draft.scale = -29000.0
+    draft.save(cfg)
+    assert "calibration = -29000.0" in lines(cfg_path)
+    assert load(cfg_path).calibrated is True
+
+
+@pytest.mark.parametrize("option, text, attribute, value, written", [
+    ("b_factor", "372O", "b_factor", 3720, "b_factor = 3720"),
+])
+def test_a_value_set_in_code_replaces_the_mistyped_text(
+    cfg_path: Path, option: str, text: str, attribute: str, value: int, written: str,
+) -> None:
+    mistype(cfg_path, option, text)
+    cfg = load(cfg_path)
+    setattr(cfg, attribute, value)
+    cfg.update_config()
+    assert written in lines(cfg_path)
+    assert getattr(load(cfg_path), attribute) == value
