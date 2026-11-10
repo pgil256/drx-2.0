@@ -8,6 +8,7 @@ from typing import Callable, Optional, Tuple
 from PyQt5.QtCore import Qt
 
 from helpers.firmware_protocol import HX711_PROTOCOL_DRIVER
+from helpers.stop_commands import PHYSICAL_STOP_MESSAGES
 
 
 class OperationCancelled(RuntimeError):
@@ -46,6 +47,10 @@ class ControllerOperations:
         self._started = False
         self._error: Optional[str] = None
         self.actual: Optional[float] = None
+        # Set once the device's stop button has been reported. The owner must
+        # then send no X: the firmware is releasing the load by itself, and an
+        # X ends that release.
+        self.physical_stop = False
         self._connections = (
             (arduino.motion_done, self._motion),
             (arduino.calibration_result, self._calibration),
@@ -133,6 +138,11 @@ class ControllerOperations:
         self._fault({"reason": "DISCONNECTED"})
 
     def _error_reply(self, reason: str) -> None:
+        if reason in PHYSICAL_STOP_MESSAGES:
+            # Before the failure below, so the worker that sees the failure
+            # already knows its cause. The window learns of the button on the
+            # GUI thread, which can be later than the worker's next poll.
+            self.physical_stop = True
         self._fault({"reason": reason})
 
     def perform(self, command: str, expected: Tuple, timeout: float) -> Optional[float]:
@@ -184,6 +194,12 @@ class ControllerOperations:
                 raise FirmwareCompatibilityError("Controller requires DRX-HX711-NB2 firmware")
             time.sleep(0.02)
 
+    def home_axial(self, config: object) -> None:
+        """Retract the axial actuator and wait for it to report inside its home band."""
+        home = float(config.AMarks.get("0.0", config.AMarks.get("0")))
+        self.perform("I120", ("motion", "I", home, max(0, home - 25),
+                               min(4095, home + 25)), 60.0)
+
     def baseline(self, config: object, retract: bool = False) -> None:
         """Zero supported resting weight only after the owning workflow stops motion."""
         self.arduino.baseline_valid = False
@@ -191,9 +207,7 @@ class ControllerOperations:
             if retract:
                 if not self.send("X"):
                     raise BaselineError("Cannot stop pressure control before axial home")
-                home = float(config.AMarks.get("0.0", config.AMarks.get("0")))
-                self.perform("I120", ("motion", "I", home, max(0, home - 25),
-                                       min(4095, home + 25)), 60.0)
+                self.home_axial(config)
             self.perform("L1|BASELINE", ("tare", float(config.calibration)), 10.0)
             # The owner serializes this final update with cancellation too.
             self.check_cancelled()

@@ -74,6 +74,7 @@ def test_missing_firmware_ack_prevents_treatment(monkeypatch):
     worker.arduino.send_tracked.return_value = CommandHandle("V50,50,50")
     worker.set_to_c_distance = Mock(return_value=True)
     monkeypatch.setattr("helpers.controller_operations.ControllerOperations.baseline", Mock())
+    monkeypatch.setattr("helpers.controller_operations.ControllerOperations.home_axial", Mock())
     worker.protocol_1 = Mock()
     finished, errors = [], []
     worker.signals.finished.connect(finished.append)

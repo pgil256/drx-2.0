@@ -124,6 +124,41 @@ uploads is a backup, not permission to replay treatment records on another devic
 State scripts target the default `devices/local/` on the Pi. For a custom service
 state directory, transfer explicitly to that directory instead of using this helper.
 
+### A configuration file that will not load
+
+If `config/kneespa.cfg` exists but cannot be opened (wrong owner or mode) or
+parsed (a duplicate key or stray text from a hand edit, storage corruption),
+the app starts, shows the
+`DEVICE UNCALIBRATED` alert with `Config file unreadable (...)` and the parser's
+reason, and keeps treatments and jogging disabled. It runs on generated defaults
+in memory and writes nothing to the file: Mark As Default, a hardware service
+save and calibration backup or restore all report a failure instead. The Device
+ID shown for that run starts with `temporary-` and is not stored anywhere.
+
+The file is left exactly as found, and a copy is kept beside it as
+`kneespa.cfg.unreadable-<UTC time>` (owner-only, one copy per distinct content;
+the path is in the application log). No copy can be made of a file the app
+cannot open. To recover:
+
+1. Fix the reported line or the file's permissions, or replace the file with this
+   device's last good copy: its PC profile from a `config` pull, or a
+   `kneespa.cfg.<time>.bak` left beside it by a hardware service save.
+2. Restart the application. Nothing is reloaded while it is running.
+3. Check that the alert is gone and the Device ID and device number are the
+   device's own. Remove the `.unreadable-` copies once they are no longer needed.
+
+Recalibrating in the hardware service wizard does not clear this state, because
+the save is refused. A missing file is different: defaults are written and the
+device starts uncalibrated, as on a new device.
+
+A file that loads but has lost a whole mark table (`[CMarks]`, `[AMarks]` or
+`[BMarks]`, for example after a truncation) is different again. The alert reads
+`CMarks section missing; defaults in use` on every start, and saves still work
+but never add the generated table to the file. Replace the file with the
+device's last good copy, or measure that axis again in the hardware service
+wizard, then restart. A calibration backup also writes the table, but is refused
+as another device's if the file lost its `[Device]` id as well.
+
 ## Upgrade an existing device
 
 Do this once per device, with the application stopped. Preserve the old `main/`,

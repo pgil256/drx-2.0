@@ -11,3 +11,14 @@ TELEMETRY_ON = "HF1"   # keeps high-frequency status on after a fault stop
 
 # The release after an operator or on-screen stop, and the shutdown stop.
 RELEASE_SEQUENCE = (STOP_ALL, RELEASE, TELEMETRY_OFF)
+
+# The firmware's "ERROR:" lines for the device's own stop button. After
+# "pressed" the firmware backs the axial actuator off by itself until the load
+# clears; "engaged" refuses a motion command while the button is held. An X or
+# a Y from the host ends that release (motor.ino, cases 'X' and 'Y'), and the
+# firmware does not start another while the button stays down.
+PHYSICAL_STOP_PRESSED = "Stop button pressed"
+PHYSICAL_STOP_MESSAGES = (PHYSICAL_STOP_PRESSED, "Stop button engaged")
+# That release ends with the line "RELEASED", or with this "ERROR:" when it
+# stopped at home or after RELEASE_TIMEOUT with the load still on.
+RELEASE_INCOMPLETE = "Release incomplete"
