@@ -84,6 +84,56 @@ def test_unknown_firmware_never_receives_calibration(protocol_clock):
     assert not any(c.startswith("L") for c in link.commands)
 
 
+def watch_reboots(link):
+    seen = []
+    link.unexpected_reboot.connect(lambda: seen.append(list(link.commands)))
+    return seen
+
+
+@pytest.mark.parametrize("v2", [False, True])
+def test_reset_banner_is_expected_at_connect_and_on_every_later_reset(protocol_clock, v2):
+    """The automatic reset after a connect, then the operator's Reset."""
+    link = NB2Controller(v2)
+    reboots = watch_reboots(link)
+    for _ in range(3):
+        _, finished, errors = run_reset(link)
+        assert finished == [True] and not errors
+    assert reboots == []
+
+
+def test_banner_of_a_replayed_reset_is_expected(protocol_clock):
+    link = NB2Controller()
+    run_reset(link)  # the device is set up; this banner is the connect's
+    reboots = watch_reboots(link)
+    dropped = []
+    def hook(command, replies):
+        if command == "Y" and not dropped:
+            dropped.append(command)
+            return []
+        return replies
+    link.hook = hook
+    _, finished, errors = run_reset(link)
+    assert finished == [True] and not errors
+    assert link.commands.count("Y") == 3
+    assert reboots == []
+
+
+def test_reboot_in_the_middle_of_a_reset_is_unexpected(protocol_clock):
+    """Only the banner that answers Y is the reset's own; a later one means the
+    zero marks the reset had already sent are gone."""
+    link = NB2Controller()
+    reboots = watch_reboots(link)
+    rebooted = []
+    def hook(command, replies):
+        if command.startswith("K") and not rebooted:
+            rebooted.append(command)
+            return ["Ready to Go"]
+        return replies
+    link.hook = hook
+    run_reset(link)
+    assert reboots == [["Y", "L5|0|1900", "K1450"]]
+
+
 def test_bare_done_cannot_skip_zero_echo(protocol_clock):
     link = NB2Controller()
     link.hook = lambda command, replies: ["DONE"] if command.startswith("L5") else replies
