@@ -423,7 +423,24 @@ class Configuration:
                 "(factory default?); pressure readings would be raw counts"
             )
         else:
-            self.scale_calibrated = True
+            # `calibration = nan` or `inf` parses as a float and is not below
+            # the minimum, so it used to load as a calibrated load cell. The
+            # service and backup paths already refuse such a factor; apply
+            # the same rule here. Lazy import, as above, avoids the cycle.
+            from helpers.hardware_service import _validate_scale
+
+            try:
+                _validate_scale(self.calibration)
+            except ValueError as error:
+                self.scale_calibrated = False
+                self._flag_error(
+                    f"Load-cell scale factor {self.calibration} is not usable. "
+                    f"{error} Pressure stays disabled until the load cell is "
+                    "calibrated in hardware service or the value is corrected "
+                    "in kneespa.cfg."
+                )
+            else:
+                self.scale_calibrated = True
 
     def _ensure_config_sections(
         self, parser: Optional[configparser.ConfigParser] = None,
