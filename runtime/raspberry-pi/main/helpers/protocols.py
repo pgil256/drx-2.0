@@ -865,6 +865,13 @@ class Protocols(QtCore.QRunnable):
                 raise OperationRejected("Cannot prepare controller")
             self.signals.progress.emit("Preparing: centering and zeroing resting pressure")
             self.signals.baseline_changed.emit(False)
+            # Setup pressure or an axial jog can leave the actuator extended
+            # with traction on the leg. X clears the firmware's pressure guard
+            # and the baseline tare accepts any steady reading, so that load
+            # would become zero and the ramp would add the full target on top
+            # of it. Retract to a confirmed home first; the lateral centre
+            # then never moves under a held load either.
+            self._operations.home_axial(self.config)
             if not self.set_to_c_distance(0):
                 raise OperationRejected(self._failure_reason or "Lateral centering failed")
             self._operations.baseline(self.config)

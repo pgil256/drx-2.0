@@ -184,6 +184,12 @@ class ControllerOperations:
                 raise FirmwareCompatibilityError("Controller requires DRX-HX711-NB2 firmware")
             time.sleep(0.02)
 
+    def home_axial(self, config: object) -> None:
+        """Retract the axial actuator and wait for it to report inside its home band."""
+        home = float(config.AMarks.get("0.0", config.AMarks.get("0")))
+        self.perform("I120", ("motion", "I", home, max(0, home - 25),
+                               min(4095, home + 25)), 60.0)
+
     def baseline(self, config: object, retract: bool = False) -> None:
         """Zero supported resting weight only after the owning workflow stops motion."""
         self.arduino.baseline_valid = False
@@ -191,9 +197,7 @@ class ControllerOperations:
             if retract:
                 if not self.send("X"):
                     raise BaselineError("Cannot stop pressure control before axial home")
-                home = float(config.AMarks.get("0.0", config.AMarks.get("0")))
-                self.perform("I120", ("motion", "I", home, max(0, home - 25),
-                                       min(4095, home + 25)), 60.0)
+                self.home_axial(config)
             self.perform("L1|BASELINE", ("tare", float(config.calibration)), 10.0)
             # The owner serializes this final update with cancellation too.
             self.check_cancelled()

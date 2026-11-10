@@ -20,6 +20,11 @@ def test_full_protocol_orders_preparation_and_final_baseline(protocol_clock, v2,
     worker.signals.finished.connect(lambda value: finished.append((value, list(link.commands))))
     worker.run()
     assert prepared and prepared[0][-2:] == ["L1|BASELINE", "V50,50,50"]
+    # The axial actuator is confirmed home before the centre and the tare: a
+    # load left by Setup pressure must never be zeroed and then added to.
+    assert prepared[0][:3] == ["X", "HF1", "I120"]
+    centre = next(i for i, c in enumerate(prepared[0]) if c.startswith("K"))
+    assert 2 < centre < prepared[0].index("L1|BASELINE")
     assert not any(c.startswith("P") for c in prepared[0])
     assert finished[0][0] and worker.completed.is_set() and link.baseline_valid
     assert link.commands[-4:] == ["P0|0", "X", "I120", "L1|BASELINE"]
@@ -29,7 +34,8 @@ def test_full_protocol_orders_preparation_and_final_baseline(protocol_clock, v2,
         assert "J250" in link.commands and "JS" in link.commands
 
 
-@pytest.mark.parametrize("stage", ["center", "baseline", "pressure", "final_home", "final_baseline"])
+@pytest.mark.parametrize("stage", ["start_home", "center", "baseline", "pressure", "final_home",
+                                   "final_baseline"])
 def test_failed_stage_never_reports_success_or_replays(protocol_clock, stage):
     link = NB2Controller()
     worker = make_protocol(ser=link, duration=1)
@@ -39,15 +45,18 @@ def test_failed_stage_never_reports_success_or_replays(protocol_clock, stage):
     worker.signals.prepared.connect(lambda *a: prepared.append(a))
     worker.signals.operation_failed.connect(failures.append)
     worker.signals.finished.connect(finished.append)
-    baseline_count = 0
+    baseline_count = home_count = 0
     def hook(command, replies):
-        nonlocal baseline_count
+        nonlocal baseline_count, home_count
         if command == "L1|BASELINE":
             baseline_count += 1
-        fail = ((stage == "center" and command.startswith("K"))
+        if command == "I120":
+            home_count += 1
+        fail = ((stage == "start_home" and home_count == 1 and command == "I120")
+                or (stage == "center" and command.startswith("K"))
                 or (stage == "baseline" and baseline_count == 1 and command.startswith("L1"))
                 or (stage == "pressure" and command.startswith("P"))
-                or (stage == "final_home" and command == "I120")
+                or (stage == "final_home" and home_count == 2 and command == "I120")
                 or (stage == "final_baseline" and baseline_count == 2 and command.startswith("L1")))
         return [] if fail else replies
     link.hook = hook
@@ -56,8 +65,26 @@ def test_failed_stage_never_reports_success_or_replays(protocol_clock, stage):
     assert not link.baseline_valid
     assert link.commands[-1] == "X"
     assert "Y" not in link.commands
-    if stage in ("center", "baseline"):
+    if stage in ("start_home", "center", "baseline"):
         assert not prepared and not any(c.startswith("P") for c in link.commands)
+    if stage == "start_home":
+        # Nothing else moves and nothing is zeroed without a confirmed home.
+        assert not any(c.startswith(("K", "L1")) for c in link.commands)
+
+
+def test_start_home_outside_the_band_is_not_a_confirmation(protocol_clock):
+    link = NB2Controller()
+    worker = make_protocol(ser=link, duration=1)
+    link.factor = worker.config.calibration
+    link.a_zero = int(worker.config.AMarks.get("0.0", worker.config.AMarks.get("0")))
+    finished = []
+    worker.signals.finished.connect(finished.append)
+    stuck = link.a_zero + 2000
+    link.hook = lambda command, replies: (
+        ["MOTION_DONE|I|{}|{}".format(link.a_zero, stuck), "DONE"] if command == "I120" else replies)
+    worker.run()
+    assert finished == [False]
+    assert not any(c.startswith(("K", "L1", "P")) for c in link.commands)
 
 
 def test_late_baseline_reply_after_cancel_cannot_reenable(protocol_clock):
