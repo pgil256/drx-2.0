@@ -9,6 +9,7 @@ import pytest
 from PyQt5.QtCore import QEvent, Qt
 from PyQt5.QtWidgets import QApplication, QMainWindow, QMessageBox
 
+from config.config import Configuration
 from controllers import device_controller as module
 from helpers.service_auth import ServiceAccess
 from ui.screens.device import DeviceScreen
@@ -403,3 +404,21 @@ def test_purge_with_nothing_rejected_asks_nothing(controller, monkeypatch):
 
     question.assert_not_called()
     assert controller.screen.status.text() == "No rejected uploads to purge."
+
+
+def test_backup_refused_for_a_non_finite_scale_factor_names_the_cause(
+        controller, qtbot, tmp_path):
+    unlock_service(controller)
+    config = Configuration(str(tmp_path / "kneespa.cfg"))
+    config._write_default_config()
+    config.get_config()
+    config.calibration = float("nan")
+    controller.window.config = config
+
+    controller.action("backup_calibration")
+    settled(controller, qtbot)
+
+    status = controller.screen.status.text()
+    assert "load-cell scale factor" in status and "(nan)" in status
+    assert "JSON" not in status
+    assert controller.backups.list() == []

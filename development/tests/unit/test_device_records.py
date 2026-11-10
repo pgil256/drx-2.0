@@ -154,6 +154,18 @@ def test_backup_without_a_scale_factor_cannot_be_restored(tmp_path, config):
     assert sorted(backups.list()) == sorted([selected.name, before.name])
 
 
+@pytest.mark.parametrize("text", ["nan", "inf", "-inf"])
+def test_manual_backup_of_a_non_finite_scale_factor_is_refused_with_the_cause(
+        tmp_path, config, text):
+    backups = CalibrationBackups(tmp_path)
+    broken = reloaded_with_scale(config, text)
+    with pytest.raises(ValueError, match="load-cell scale factor") as refused:
+        backups.create(broken, "Technician")
+    assert f"({text})" in str(refused.value)
+    assert "JSON" not in str(refused.value)
+    assert backups.list() == []
+
+
 def test_diagnostics_export_only_fixed_categories_and_allowlisted_metadata(tmp_path):
     logs = tmp_path / "logs"
     logs.mkdir()

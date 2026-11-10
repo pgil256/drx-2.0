@@ -19,7 +19,12 @@ class CalibrationBackups:
 
     def create(self, config: object, operator: str, pre_restore: bool = False) -> Path:
         scale = config.calibration
-        if pre_restore and not math.isfinite(scale):
+        if not math.isfinite(scale):
+            if not pre_restore:
+                raise ValueError(
+                    f"The load-cell scale factor in the configuration ({scale}) is not a "
+                    "finite number, so this calibration cannot be backed up. Restore an "
+                    "earlier backup, or calibrate the load cell in Calibration.")
             # JSON has no nan or inf. Record that there was no usable factor, so a
             # restore can still replace it; load() refuses this file as a source.
             scale = None
