@@ -29,6 +29,15 @@ logger = logging.getLogger(f"{APP_NAME}.config")
 MIN_PLAUSIBLE_SCALE_FACTOR = 1000.0
 
 
+class ConfigUnreadableError(OSError):
+    """A save was refused because the file on disk failed to load.
+
+    Saving would replace whatever calibration and identity the file still
+    holds with generated defaults. An OSError, so callers report it the way
+    they already report any other failed write.
+    """
+
+
 class Configuration:
     def __init__(self, config_path: Optional[str] = None):
         self.flexion_position = 0
@@ -54,6 +63,12 @@ class Configuration:
         self.marks_valid = False
         self.scale_calibrated = False
         self.calibration_errors = []
+        # True when the file exists but could not be loaded (a bad line from
+        # a hand edit, SD-card corruption). The values in memory are then
+        # generated defaults, so every write is refused: the next startup
+        # used to save them over the calibration and identity in the file.
+        # Cleared only by a load that succeeds.
+        self.unreadable = False
 
         # Treatment Settings defaults persisted by Setup's "Mark As Default"
         # (Phase 3.5 §15.4). Fallbacks: 40 lbs / 10° / 10° + a 2/sec pulse.
@@ -91,6 +106,7 @@ class Configuration:
         self.calibration_errors = []
         self.marks_valid = False
         self.scale_calibrated = False
+        self.unreadable = False
         # Load configuration
         self.axial_service_calibrated = False
         self._migrate_legacy_config()
@@ -122,12 +138,14 @@ class Configuration:
 
         except Exception as e:
             logger.exception('Fatal error, could not load config file from "%s"', self.configFile)
+            self.unreadable = True
             self._set_default_c_marks()
             self._set_default_a_marks()
             self._set_default_b_marks()
             self._flag_error(
                 f"Config file unreadable ({e}); generated default marks in use. "
-                "Device is UNCALIBRATED."
+                "Device is UNCALIBRATED. The file was left unchanged: fix or "
+                "restore it, then restart."
             )
 
     def _load_marks(self, allSections):
@@ -455,8 +473,15 @@ class Configuration:
                 This method does not publish the candidate to live state.
 
         Raises:
+            ConfigUnreadableError: The file failed to load; nothing is written.
             Exception: Write errors propagate to the caller after temp-file cleanup.
         """
+        if self.unreadable:
+            raise ConfigUnreadableError(
+                f'"{self.configFile}" failed to load and was left unchanged; '
+                "nothing can be saved until it is fixed or restored and the "
+                "application restarted"
+            )
         parser = self.config if candidate is None else candidate
         directory = os.path.dirname(os.path.abspath(self.configFile)) or "."
         os.makedirs(directory, exist_ok=True)
@@ -528,6 +553,12 @@ class Configuration:
 
     def update_config(self):
         """Update current values, retaining this caller's legacy error reporting."""
+        if self.unreadable:
+            logger.error(
+                'Config not written: "%s" failed to load and was left unchanged. '
+                "Fix or restore the file, then restart.", self.configFile,
+            )
+            return
         self._populate_config(self.config)
         logger.info("Config updated")
         try:
