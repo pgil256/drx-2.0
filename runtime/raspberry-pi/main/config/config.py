@@ -15,6 +15,7 @@ from config.constants import (
     DEFAULT_CONFIG_PATH,
     DEFAULT_PROTOCOL_MINUTES,
     LEGACY_CONFIG_PATH,
+    SERVICE_AXES,
 )
 
 # A plain child of the application logger: helpers.logging creates the run's
@@ -386,9 +387,10 @@ class Configuration:
         # Re-evaluate service validation errors after a technician repairs a
         # table. Keep load/fallback errors: untouched defaults are not measured.
         service_error_prefix = "Axial service calibration: "
+        factor_error_prefix = "Distance factor "
         self.calibration_errors = [
             error for error in self.calibration_errors
-            if not error.startswith(service_error_prefix)
+            if not error.startswith((service_error_prefix, factor_error_prefix))
         ]
         marks_ok = True
         # CMarks is operator-calibrated device data. Once its keys and values
@@ -410,6 +412,25 @@ class Configuration:
             except (ValueError, TypeError) as error:
                 marks_ok = False
                 self._flag_error(f"{service_error_prefix}{error}")
+        # A factor of 0, a negative one or one above the service limit parses
+        # as an integer and used to load without a flag. Hold the file to the
+        # rule the hardware service and calibration backups enforce. The value
+        # stays in memory and so in the file; a reviewed service save or a
+        # calibration restore replaces it and clears the flag here.
+        from helpers.hardware_service import validate_distance_factor
+
+        for spec in SERVICE_AXES.values():
+            name = spec["factor"]
+            try:
+                validate_distance_factor(getattr(self, name), spec["label"])
+            except ValueError as error:
+                marks_ok = False
+                self._flag_error(
+                    f"{factor_error_prefix}{name} = {getattr(self, name)} is "
+                    f"not usable. {error} Device is UNCALIBRATED until the "
+                    "factor is measured in hardware service or corrected in "
+                    "kneespa.cfg."
+                )
         # Only meaningful if nothing already flagged a fallback
         self.marks_valid = marks_ok and not any(
             "defaults in use" in e or "UNCALIBRATED" in e
