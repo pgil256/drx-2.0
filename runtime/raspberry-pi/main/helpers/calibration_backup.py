@@ -16,7 +16,21 @@ class CalibrationBackups:
     def __init__(self, state_dir: Path) -> None:
         self.directory = state_dir / "calibration-backups"
 
+    @staticmethod
+    def _require_loaded(config: object) -> None:
+        """Refuse to work from a configuration whose file failed to load.
+
+        Its values are generated defaults and its device id is temporary: a
+        backup would file fabricated calibration under an id no device keeps.
+        """
+        if getattr(config, "unreadable", False) is True:
+            raise ValueError(
+                "The configuration file failed to load, so calibration backups "
+                "are unavailable. Fix or restore the file, then restart."
+            )
+
     def create(self, config: object, operator: str) -> Path:
+        self._require_loaded(config)
         payload = {
             "schema": 1, "device_id": config.ensure_device_id(),
             "created_at": datetime.now(timezone.utc).isoformat(), "operator": operator,
@@ -38,6 +52,7 @@ class CalibrationBackups:
                 if p.is_file() and not p.is_symlink()][:200]
 
     def load(self, name: str, config: object) -> Dict[str, Any]:
+        self._require_loaded(config)
         if name not in self.list():
             raise ValueError("Select an existing calibration backup.")
         data = read_json(self.directory / name)

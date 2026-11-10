@@ -12,6 +12,7 @@ from pathlib import Path
 import pytest
 
 from config.config import ConfigUnreadableError, Configuration
+from helpers.calibration_backup import CalibrationBackups
 
 pytestmark = pytest.mark.unit
 
@@ -158,3 +159,53 @@ def test_malformed_values_in_a_readable_file_are_handled_as_before(cfg_path: Pat
     assert config.unreadable is False
     assert config.calibrated is False
     assert any("CMarks malformed" in error for error in config.calibration_errors)
+
+
+def test_the_device_id_for_this_run_is_temporary_and_never_saved(cfg_path: Path) -> None:
+    config = load(cfg_path, UNREADABLE["duplicate key"])
+
+    first = config.ensure_device_id()
+
+    assert first.startswith("temporary-") and len(first) > len("temporary-")
+    assert config.ensure_device_id() == first
+    assert config.device_id == ""
+
+    cfg_path.write_bytes(CALIBRATED)
+    config.get_config()
+    assert config.ensure_device_id() == "keep-this-id"
+    assert b"temporary-" not in cfg_path.read_bytes()
+
+
+def test_a_temporary_id_is_not_saved_into_a_repaired_file_without_one(cfg_path: Path) -> None:
+    config = load(cfg_path, UNREADABLE["duplicate key"])
+    temporary = config.ensure_device_id()
+    cfg_path.write_bytes(CALIBRATED.replace(b"id = keep-this-id\n", b""))
+
+    config.get_config()
+    permanent = config.ensure_device_id()
+
+    assert permanent != temporary and not permanent.startswith("temporary-")
+    reloaded = Configuration(config_path=str(cfg_path))
+    reloaded.get_config()
+    assert reloaded.device_id == permanent
+    assert reloaded.calibration == -28369.0
+
+
+def test_calibration_backups_are_refused_while_unreadable(
+    tmp_path: Path, cfg_path: Path,
+) -> None:
+    """A backup would file generated defaults under an id that is never saved."""
+    backups = CalibrationBackups(tmp_path / "state")
+    saved = backups.create(load(cfg_path, CALIBRATED), "Technician")
+    content = UNREADABLE["duplicate key"]
+    config = load(cfg_path, content)
+
+    with pytest.raises(ValueError, match="failed to load"):
+        backups.create(config, "Technician")
+    with pytest.raises(ValueError, match="failed to load"):
+        backups.load(saved.name, config)
+    with pytest.raises(ValueError, match="failed to load"):
+        backups.restore(saved.name, config, "Technician")
+
+    assert backups.list() == [saved.name]
+    assert cfg_path.read_bytes() == content

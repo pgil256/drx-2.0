@@ -88,6 +88,7 @@ class Configuration:
 
         # Per-device id for support tickets (Phase 3.5 §15.5); generated once.
         self.device_id = ""
+        self._temporary_device_id = ""
         self.device_number = 1
 
     @property
@@ -373,10 +374,21 @@ class Configuration:
             self._validate_calibration()
 
     def ensure_device_id(self):
-        """Return the persisted per-device id, generating + saving one if absent."""
-        if not self.device_id:
-            self.device_id = uuid.uuid4().hex
-            self.update_config()
+        """Return the persisted per-device id, generating + saving one if absent.
+
+        While the file is unreadable its own id cannot be read and nothing
+        may be saved, so the caller gets an id for this run only. It is
+        marked "temporary-" wherever it is shown, is never stored in
+        device_id, and is not written to the file once that loads again.
+        """
+        if self.device_id:
+            return self.device_id
+        if self.unreadable:
+            if not self._temporary_device_id:
+                self._temporary_device_id = "temporary-" + uuid.uuid4().hex[:12]
+            return self._temporary_device_id
+        self.device_id = uuid.uuid4().hex
+        self.update_config()
         return self.device_id
 
     @staticmethod
