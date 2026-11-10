@@ -203,8 +203,34 @@ class Configuration:
             except (ValueError, TypeError) as e:
                 logger.warning("Error parsing %s: %s, using default", option_name, e)
                 value = option_settings["default"]
+                self._flag_mistyped_option(option_name, raw_value, value)
                 self.config.set(section, option_name, str(value))
             setattr(self, option_name, value)
+
+    def _flag_mistyped_option(self, name: str, raw: object, default: object) -> None:
+        """Report an [Options] value that is present but did not parse.
+
+        A hand edit such as ``b_factor = 372O`` (letter O) used to load as
+        the default with only a log line, so the device ran on a factor
+        nobody measured and still looked calibrated.
+        """
+        if name == "calibration":
+            # Not worded as "UNCALIBRATED": _validate_calibration() takes
+            # that word to mean the mark tables cannot be trusted. Pressure
+            # is blocked by its check that the default 1.0 is implausible.
+            self._flag_error(
+                f"[Options] calibration = {raw!r} is not a number, so the "
+                "load-cell scale factor was not loaded. Correct the value in "
+                "the file and restart."
+            )
+        elif name in ("a_factor", "b_factor", "c_factor"):
+            self._flag_error(
+                f"[Options] {name} = {raw!r} is not a whole number; default "
+                f"{default} in use. Device is UNCALIBRATED: correct the value "
+                "in the file and restart."
+            )
+        # flexion_position is loaded and saved but used by nothing, so it
+        # gets the log line above and does not disable the device.
 
     def _load_protocol_defaults(self):
         """Load persisted Treatment Settings defaults, keeping __init__ fallbacks
