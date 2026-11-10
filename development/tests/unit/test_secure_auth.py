@@ -273,24 +273,35 @@ class TestLockoutPersistence:
     cycle, 5 more attempts -- unlimited retries on a physical kiosk.
     """
 
-    def _make(self, tmp_path):
+    def _make(self, tmp_path, **controller_kwargs):
         stored = SecureAuthHelper.hash_pin_secure("7531")
         users = {stored: {"pin_hash": stored, "username": "T", "email": "t@x", "status": "user"}}
         window = StubWindow(users)
-        return AuthController(window, state_path=str(tmp_path / "auth_state.json")), window
+        auth = AuthController(window, state_path=str(tmp_path / "auth_state.json"),
+                              **controller_kwargs)
+        return auth, window
 
     def _trip_lockout(self, auth, window):
         for _ in range(AuthController.LOCKOUT_THRESHOLD):
             auth.handle_login("0000")
 
     def test_lockout_survives_restart(self, tmp_path):
-        auth, w = self._make(tmp_path)
+        # The clock and boot ID are pinned: on the real ones the restored
+        # deadline depends on the host. Without a kernel boot ID (Windows)
+        # the whole remainder is served again, so the deadline moves by
+        # however long the "restart" took and the comparison raced the
+        # machine's load.
+        clock = FakeClock()
+        auth, w = self._make(tmp_path, clock=clock, boot_id=lambda: "boot-a")
         self._trip_lockout(auth, w)
-        assert auth.lockout_until > 0
+        assert auth.lockout_remaining() == AuthController.LOCKOUT_SECONDS
 
-        # New controller instance = process restart; same state file.
-        auth2, w2 = self._make(tmp_path)
+        # New controller instance = process restart; same state file, same
+        # boot, 5 s later. The deadline is carried over, not restarted.
+        clock.now += 5
+        auth2, w2 = self._make(tmp_path, clock=clock, boot_id=lambda: "boot-a")
         assert auth2.lockout_until == pytest.approx(auth.lockout_until)
+        assert auth2.lockout_remaining() == pytest.approx(AuthController.LOCKOUT_SECONDS - 5)
         auth2.handle_login("7531")
         assert w2.current_user is None  # still locked
 
