@@ -2,6 +2,7 @@
 
 import copy
 from datetime import datetime, timezone
+import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -16,7 +17,12 @@ class CalibrationBackups:
     def __init__(self, state_dir: Path) -> None:
         self.directory = state_dir / "calibration-backups"
 
-    def create(self, config: object, operator: str) -> Path:
+    def create(self, config: object, operator: str, pre_restore: bool = False) -> Path:
+        scale = config.calibration
+        if pre_restore and not math.isfinite(scale):
+            # JSON has no nan or inf. Record that there was no usable factor, so a
+            # restore can still replace it; load() refuses this file as a source.
+            scale = None
         payload = {
             "schema": 1, "device_id": config.ensure_device_id(),
             "created_at": datetime.now(timezone.utc).isoformat(), "operator": operator,
@@ -25,7 +31,7 @@ class CalibrationBackups:
             "factors": {
                 axis: getattr(config, spec["factor"]) for axis, spec in SERVICE_AXES.items()
             },
-            "scale": config.calibration,
+            "scale": scale,
             "axial_service_calibrated": bool(config.axial_service_calibrated),
         }
         stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
@@ -59,6 +65,10 @@ class CalibrationBackups:
             factor = data.get("factors", {}).get(axis)
             if type(factor) is not int or not 1 <= factor <= 1000000:
                 raise ValueError("Invalid calibration factor.")
+        if data.get("scale") is None:
+            raise ValueError(
+                "This backup has no usable load-cell scale factor and cannot be restored. "
+                "It was saved while the device's scale factor was not a finite number.")
         if type(data.get("scale")) not in (int, float):
             raise ValueError("Invalid load-cell calibration factor.")
         _validate_scale(data["scale"])
@@ -71,7 +81,7 @@ class CalibrationBackups:
         data = self.load(name, config)
         if reviewed is not None and data != reviewed:
             raise ValueError("The backup changed. Review it again before restoring.")
-        backup = self.create(config, operator)
+        backup = self.create(config, operator, pre_restore=True)
         candidate = copy.deepcopy(config.config)
         for axis, spec in SERVICE_AXES.items():
             candidate[spec["table"]] = {str(k): str(v) for k, v in data["marks"][axis].items()}
