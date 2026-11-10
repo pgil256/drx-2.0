@@ -13,6 +13,7 @@ import RPi.GPIO as GPIO
 from PyQt5.QtCore import QTimer, QThread
 from PyQt5.QtWidgets import QApplication
 
+from controllers.stop_controller import firmware_release_pending
 from helpers.arduino import Arduino
 from helpers.logging import setup_logger
 from helpers.reset_worker import ResetWorker
@@ -246,6 +247,17 @@ class ConnectionManager:
             self.logger.info("Reset already in progress; ignoring duplicate request")
             return
 
+        if firmware_release_pending(window):
+            # After the device's stop button the firmware backs the load off
+            # by itself. The reset's Y ends that release, and the homing that
+            # follows retracts the axial actuator last, so a Reset pressed
+            # straight after the button left the load on through the homing.
+            self.logger.info("Reset refused: the firmware is still releasing traction")
+            window._show_timed_error(
+                "The device is still releasing traction. Reset when it has finished."
+            )
+            return
+
         worker = getattr(window, "worker", None)
         completed = getattr(worker, "completed", None)
         if isinstance(completed, threading.Event) and not completed.is_set():
@@ -258,6 +270,7 @@ class ConnectionManager:
             return
 
         window._physical_stop_active = False
+        window._firmware_release_since = None
         window._no_automatic_recovery = False
         window.reset_in_progress = True  # Set flag to prevent overlapping resets
         window.initial_setup_complete = False

@@ -76,6 +76,23 @@ def test_cancel_at_every_boundary_prevents_continuation(protocol_clock, command)
     assert not link.baseline_valid
 
 
+@pytest.mark.parametrize("command", ["L5", "K", "I13", "I120", "L1"])
+def test_stop_button_during_a_step_sends_no_stop_command(protocol_clock, command):
+    """After the button the firmware releases the load itself; an X ends that.
+
+    The window's own handler has not run here, as when the worker sees the
+    failure first.
+    """
+    link = NB2Controller()
+    link.hook = lambda sent, replies: (
+        ["ERROR: Stop button pressed"] if sent.startswith(command) else replies)
+    _, finished, errors = run_reset(link)
+    assert finished == [False] and not errors
+    assert link.commands[-1].startswith(command)
+    assert link.commands.count("Y") == 1
+    assert not link.baseline_valid
+
+
 def test_unknown_firmware_never_receives_calibration(protocol_clock):
     link = NB2Controller()
     link.hook = lambda command, replies: [r for r in replies if not r.startswith("FIRMWARE")]

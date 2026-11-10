@@ -8,6 +8,7 @@ from typing import Callable, Optional, Tuple
 from PyQt5.QtCore import Qt
 
 from helpers.firmware_protocol import HX711_PROTOCOL_DRIVER
+from helpers.stop_commands import PHYSICAL_STOP_MESSAGES
 
 
 class OperationCancelled(RuntimeError):
@@ -46,6 +47,10 @@ class ControllerOperations:
         self._started = False
         self._error: Optional[str] = None
         self.actual: Optional[float] = None
+        # Set once the device's stop button has been reported. The owner must
+        # then send no X: the firmware is releasing the load by itself, and an
+        # X ends that release.
+        self.physical_stop = False
         self._connections = (
             (arduino.motion_done, self._motion),
             (arduino.calibration_result, self._calibration),
@@ -133,6 +138,11 @@ class ControllerOperations:
         self._fault({"reason": "DISCONNECTED"})
 
     def _error_reply(self, reason: str) -> None:
+        if reason in PHYSICAL_STOP_MESSAGES:
+            # Before the failure below, so the worker that sees the failure
+            # already knows its cause. The window learns of the button on the
+            # GUI thread, which can be later than the worker's next poll.
+            self.physical_stop = True
         self._fault({"reason": reason})
 
     def perform(self, command: str, expected: Tuple, timeout: float) -> Optional[float]:

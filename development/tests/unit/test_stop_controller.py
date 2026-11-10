@@ -19,7 +19,8 @@ from config.constants import EMERGENCYSTOP
 from controllers.device_state import WINDOW_ATTRIBUTES
 from controllers.safety_monitor import SafetyMonitor
 from controllers.stop_controller import (
-    COMMAND_FAULT, ESTOP, FAULT, OPERATOR, PHYSICAL, POLICIES, SHUTDOWN, stops_for,
+    COMMAND_FAULT, ESTOP, FAULT, FIRMWARE_RELEASE_WAIT_S, OPERATOR, PHYSICAL, POLICIES,
+    SHUTDOWN, firmware_release_pending, stops_for,
 )
 from fixtures.controllers import make_window
 
@@ -139,6 +140,99 @@ def test_the_physical_stop_drops_queued_commands(stopping):
     window.worker.cancel.assert_called_once_with(firmware_stopped=True)
 
 
+def test_the_physical_stop_is_latched_before_other_owners_are_cancelled(stopping):
+    """A leg move cancelled by the stop sends X unless the latch is already set."""
+    window, _, _, _ = stopping
+    latched = []
+    window.connection.cancel_reset = lambda: latched.append(window._physical_stop_active)
+
+    stops_for(window).stop(PHYSICAL)
+
+    assert latched == [True]
+
+
+@pytest.mark.parametrize("kind", [OPERATOR, ESTOP, FAULT, COMMAND_FAULT])
+def test_no_later_stop_sends_x_after_the_physical_stop(stopping, kind):
+    """An on-screen Stop tapped after the button must not end the release."""
+    window, events, _, _ = stopping
+    stops_for(window).stop(PHYSICAL)
+    events.clear()
+
+    stops_for(window).stop(kind, **OPTIONS[kind])
+
+    assert ("send", "X") not in events
+    assert window._physical_stop_active is True
+
+
+def test_reset_is_held_while_the_firmware_releases(stopping):
+    """Reset sends Y, which ends the release, and homes the axial actuator last."""
+    window, _, _, timer = stopping
+
+    stops_for(window).stop(PHYSICAL, release_started=True)
+
+    assert firmware_release_pending(window)
+    window.shell.setup.set_reset_enabled.assert_called_with(False)
+    delays = [call[0][0] for call in timer.singleShot.call_args_list]
+    assert delays == [int(FIRMWARE_RELEASE_WAIT_S * 1000)]
+
+
+@pytest.mark.parametrize("ending", ["released", "incomplete", "no result"])
+def test_reset_is_offered_once_the_firmware_release_ends(stopping, ending):
+    window, _, _, timer = stopping
+    safety = SafetyMonitor(window)
+    safety.on_firmware_error("Stop button pressed")
+    assert firmware_release_pending(window)
+    window.shell.setup.set_reset_enabled.reset_mock()
+
+    if ending == "released":
+        safety.on_pressure_released()
+    elif ending == "incomplete":
+        safety.on_firmware_error("Release incomplete")
+    else:
+        timer.singleShot.call_args[0][1]()  # the bound passes with no result
+
+    assert not firmware_release_pending(window)
+    window.shell.setup.set_reset_enabled.assert_called_with(True)
+
+
+def test_a_refused_command_while_the_button_is_held_does_not_hold_reset(stopping):
+    """ "Stop button engaged" starts no release, so there is nothing to wait for."""
+    window, _, _, timer = stopping
+
+    SafetyMonitor(window).on_firmware_error("Stop button engaged")
+
+    assert window._physical_stop_active is True
+    assert not firmware_release_pending(window)
+    window.shell.setup.set_reset_enabled.assert_called_with(True)
+    timer.singleShot.assert_not_called()
+
+
+def test_the_timer_of_an_earlier_press_cannot_end_a_later_release(stopping, monkeypatch):
+    window, _, _, timer = stopping
+    clock = [100.0]
+    monkeypatch.setattr(sc_mod.time, "monotonic", lambda: clock[0])
+    stops_for(window).stop(PHYSICAL, release_started=True)
+    first_timer = timer.singleShot.call_args[0][1]
+    clock[0] += 15.0
+    stops_for(window).stop(PHYSICAL, release_started=True)
+    clock[0] += 5.0
+
+    first_timer()
+
+    assert firmware_release_pending(window)
+
+
+def test_a_lost_timer_cannot_hold_reset_for_good(stopping, monkeypatch):
+    window, _, _, _ = stopping
+    clock = [100.0]
+    monkeypatch.setattr(sc_mod.time, "monotonic", lambda: clock[0])
+    stops_for(window).stop(PHYSICAL, release_started=True)
+
+    clock[0] += FIRMWARE_RELEASE_WAIT_S
+
+    assert not firmware_release_pending(window)
+
+
 def _cleanup(window):
     window.arduino = None  # Stop polling at the transport; only the stop matters.
     kneespa.KneeSpa.cleanup(window)
@@ -152,10 +246,12 @@ def _cleanup(window):
     pytest.param(lambda w: w.protocol.stop_without_recovery("Load cell fault", fault=True),
                  FAULT, {"reason": "Load cell fault", "fault": True},
                  id="stop_without_recovery"),
-    pytest.param(lambda w: SafetyMonitor(w).on_physical_stop(), PHYSICAL, {},
-                 id="on_physical_stop"),
+    pytest.param(lambda w: SafetyMonitor(w).on_physical_stop(), PHYSICAL,
+                 {"release_started": False}, id="on_physical_stop"),
     pytest.param(lambda w: SafetyMonitor(w).on_firmware_error("Stop button pressed"),
-                 PHYSICAL, {}, id="stop_button_notice"),
+                 PHYSICAL, {"release_started": True}, id="stop_button_notice"),
+    pytest.param(lambda w: SafetyMonitor(w).on_firmware_error("Stop button engaged"),
+                 PHYSICAL, {"release_started": False}, id="stop_button_refusal"),
     pytest.param(lambda w: SafetyMonitor(w).on_firmware_error("Invalid P value"),
                  COMMAND_FAULT, {"message": "Invalid P value"}, id="command_rejection"),
     pytest.param(_cleanup, SHUTDOWN, {}, id="cleanup"),

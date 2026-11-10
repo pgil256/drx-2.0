@@ -516,6 +516,22 @@ class Protocols(QtCore.QRunnable):
             self._check_cancelled()
             return self.arduino.send_tracked(command)
 
+    def _yield_to_stop_button(self, operations: Optional[ControllerOperations]) -> bool:
+        """Cancel this run if the device's stop button ended an operation.
+
+        The firmware then releases the load by itself, and an X from this
+        worker would end that release. The serial thread records the button
+        before the failure it causes, so the worker knows as soon as it sees
+        the failure, without waiting for the window's handler on the GUI
+        thread. The run then ends as it does when the window cancels it.
+        """
+        if operations is None or not operations.physical_stop:
+            return False
+        if not self._firmware_stopped:
+            self.logger.info("Device stop button pressed; leaving the firmware's release alone")
+            self.cancel(firmware_stopped=True)
+        return True
+
     def _perform(self, command: str, expected: tuple, timeout: float) -> bool:
         operations = self._operations
         temporary = operations is None
@@ -527,6 +543,8 @@ class Protocols(QtCore.QRunnable):
         except OperationCancelled:
             return False
         except (OperationRejected, TimeoutError) as exc:
+            if self._yield_to_stop_button(operations):
+                return False
             self._failure_reason = str(exc)
             self.logger.error("Controller operation failed: %s", exc)
             return False
@@ -895,6 +913,9 @@ class Protocols(QtCore.QRunnable):
             self.logger.exception("Unexpected error in protocol %s", self.protocol)
             self._fail(str(exc))
         finally:
+            # Before the failure stop below: after the device's stop button
+            # that X would end the firmware's own release.
+            self._yield_to_stop_button(self._operations)
             if not self._stop_requested.is_set() and not self._run_success:
                 self._send_command("X")
                 self.arduino.baseline_valid = False
