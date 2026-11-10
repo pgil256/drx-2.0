@@ -131,6 +131,28 @@ def test_no_save_writes_generated_marks_into_the_file(cfg_path: Path) -> None:
         assert dict(saved[table]) == dict(parse(MEASURED)[table])
 
 
+def test_generated_marks_are_not_merged_into_a_table_with_a_mistyped_row(
+    cfg_path: Path,
+) -> None:
+    """A save used to add every default row the table lacked; they outlived the typo."""
+    mistyped = MEASURED.replace("0.0 = 1695", "0.0 = l695")
+    cfg_path.write_text(mistyped, encoding="utf-8")
+    config = start(cfg_path)
+    assert any(error.startswith("CMarks malformed") for error in config.calibration_errors)
+
+    config.update_config()
+
+    assert dict(on_disk(cfg_path)["CMarks"]) == dict(parse(mistyped)["CMarks"])
+    cfg_path.write_text(
+        cfg_path.read_text(encoding="utf-8").replace("l695", "1695"), encoding="utf-8"
+    )
+    repaired = start(cfg_path)
+    assert repaired.calibration_errors == []
+    assert repaired.CMarks == {
+        "-20.0": 520, "-10.0": 1050, "0.0": 1695, "10.0": 2170, "20.0": 2390,
+    }
+
+
 def test_a_file_without_a_device_section_still_gets_an_id_saved(cfg_path: Path) -> None:
     cfg_path.write_text(without(MEASURED, "Device"), encoding="utf-8")
 

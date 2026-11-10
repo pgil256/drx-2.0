@@ -73,10 +73,11 @@ class Configuration:
         # Where the file that failed to load was copied for whoever repairs
         # it, or None if it loaded or the copy could not be made.
         self.unreadable_copy: Optional[str] = None
-        # Mark tables that were generated at load because the file had no
-        # such section. A save does not add them to the file: once saved,
-        # they loaded as a real calibration on the next start. Only a
-        # calibration that commits the whole table writes it.
+        # Mark tables that were generated at load because the file's section
+        # was missing or would not parse. A save does not add them to the
+        # file: once saved, they loaded as a real calibration on the next
+        # start, or stayed as extra rows in a table whose typo was then
+        # fixed. Only a calibration that commits the whole table writes it.
         self._generated_marks = set()
 
         # Treatment Settings defaults persisted by Setup's "Mark As Default"
@@ -229,6 +230,7 @@ class Configuration:
                 self.CMarks = {k: int(v) for k, v in allSections["CMarks"].items()}
             except (ValueError, TypeError) as e:
                 self._set_default_c_marks()
+                self._generated_marks.add("CMarks")
                 self._flag_error(f"CMarks malformed ({e}); defaults in use")
         else:
             self._set_default_c_marks()
@@ -240,6 +242,7 @@ class Configuration:
                 self.AMarks = {k: int(v) for k, v in allSections["AMarks"].items()}
             except (ValueError, TypeError) as e:
                 self._set_default_a_marks()
+                self._generated_marks.add("AMarks")
                 self._flag_error(f"AMarks malformed ({e}); defaults in use")
         else:
             self._set_default_a_marks()
@@ -251,6 +254,7 @@ class Configuration:
                 self.BMarks = {k: int(v) for k, v in allSections["BMarks"].items()}
             except (ValueError, TypeError) as e:
                 self._set_default_b_marks()
+                self._generated_marks.add("BMarks")
                 self._flag_error(f"BMarks malformed ({e}); defaults in use")
         else:
             self._set_default_b_marks()
@@ -532,8 +536,9 @@ class Configuration:
     ) -> None:
         """Ensure the parser holds the sections a save writes.
 
-        A mark table the file lacked is left out, so the file keeps saying
-        that it is missing instead of gaining generated marks.
+        A mark table that was generated at load is left out, so the file
+        keeps its missing or mistyped section instead of gaining generated
+        marks.
         """
         parser = self.config if parser is None else parser
         if not parser.has_section("Options"):
