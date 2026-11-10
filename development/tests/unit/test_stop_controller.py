@@ -139,6 +139,17 @@ def test_the_physical_stop_drops_queued_commands(stopping):
     window.worker.cancel.assert_called_once_with(firmware_stopped=True)
 
 
+def test_the_physical_stop_is_latched_before_other_owners_are_cancelled(stopping):
+    """A leg move cancelled by the stop sends X unless the latch is already set."""
+    window, _, _, _ = stopping
+    latched = []
+    window.connection.cancel_reset = lambda: latched.append(window._physical_stop_active)
+
+    stops_for(window).stop(PHYSICAL)
+
+    assert latched == [True]
+
+
 @pytest.mark.parametrize("kind", [OPERATOR, ESTOP, FAULT, COMMAND_FAULT])
 def test_no_later_stop_sends_x_after_the_physical_stop(stopping, kind):
     """An on-screen Stop tapped after the button must not end the release."""

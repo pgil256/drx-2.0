@@ -377,13 +377,16 @@ class StopController:
         """Latch the physical stop on the host while firmware releases traction."""
         window = self.window
         window._no_automatic_recovery = True
+        already_stopped = getattr(window, "_physical_stop_active", False) is True
+        # Latched before anything is cancelled: a cancelled leg move stops
+        # itself with an X unless it sees this, and an X ends the firmware's
+        # release.
+        window._physical_stop_active = True
         window.connection.cancel_reset()
         window.logger.error("Physical emergency stop activated")
-        already_stopped = getattr(window, "_physical_stop_active", False) is True
         protocol = self.protocol
         if protocol is not None:
             protocol.latch_session_outcome("fault")
-        window._physical_stop_active = True
         window.protocol_stop_requested = True
         window.initial_setup_complete = False
         if window.worker:

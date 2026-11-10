@@ -129,6 +129,31 @@ def test_interrupted_home_never_sets_zero_or_runs_second_stroke(leg, interruptio
     assert not controller.move("F+")
 
 
+@pytest.mark.parametrize("message", ["Stop button pressed", "Stop button engaged"])
+def test_stop_button_error_ends_the_move_without_a_stop_command(leg, message):
+    """An X after the device's stop button would end the firmware's release."""
+    controller, window, _, _ = leg
+    home(leg)
+    assert controller.move("F+")
+
+    window.arduino.error_emit.emit(message)
+
+    assert not controller.active
+    assert controller.position is None
+    window.arduino.send.assert_not_called()
+
+
+def test_other_errors_still_stop_an_interrupted_move(leg):
+    controller, window, _, _ = leg
+    home(leg)
+    assert controller.move("F+")
+
+    window.arduino.error_emit.emit("Motor stall timeout 13")
+
+    assert not controller.active
+    window.arduino.send.assert_called_once_with("X")
+
+
 def test_cancelled_jog_requires_rehome(leg):
     controller, _, _, _ = leg
     home(leg)
