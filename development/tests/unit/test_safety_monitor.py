@@ -7,7 +7,7 @@ This is the 'table-top safety logic' the audit flagged as living in
 import pytest
 from unittest.mock import MagicMock
 
-from controllers.safety_monitor import LIMIT_SETTLE_TOLERANCE, SafetyMonitor
+from controllers.safety_monitor import FAULT_MESSAGES, LIMIT_SETTLE_TOLERANCE, SafetyMonitor
 from config.constants import (
     AXIAL_MAX,
     HORIZONTAL_MAX,
@@ -347,6 +347,45 @@ class TestFirmwareEvents:
         w.protocol.stop_without_recovery.assert_called_once_with(message, fault=True)
         assert w._measurement_fault == "PRESSURE_NEGATIVE"  # the code, for diagnostics
         assert w.alerts == ["CONTROLLER FAULT: " + message]
+
+    def test_controller_restart_is_a_fault_that_asks_for_reset(self, monitor):
+        """The Mega rebooted on its own: its tare and zero marks are gone."""
+        sm, w = monitor
+        w._closing = False
+        w.protocol = MagicMock()
+
+        sm.on_controller_restart()
+
+        message = FAULT_MESSAGES["CONTROLLER_RESTARTED"]
+        assert "restarted" in message and "Reset" in message
+        w.protocol.stop_without_recovery.assert_called_once_with(message, fault=True)
+        assert w._measurement_fault == "CONTROLLER_RESTARTED"
+        assert w.alerts == ["CONTROLLER FAULT: " + message]
+        assert w.resets == 0
+
+    def test_controller_restart_under_the_service_wizard_is_left_to_the_wizard(self, monitor):
+        """The wizard aborts its own session on the banner and asks for Reset."""
+        sm, w = monitor
+        w._closing = False
+        w._calibration_active = True
+        w.protocol = MagicMock()
+
+        sm.on_controller_restart()
+
+        w.protocol.stop_without_recovery.assert_not_called()
+        assert w.alerts == [] and w.timed_errors == []
+        assert not hasattr(w, "_measurement_fault")
+        assert w.initial_setup_complete  # the wizard's abort clears it, not this path
+
+    def test_controller_restart_while_closing_does_nothing(self, monitor):
+        sm, w = monitor
+        w._closing = True
+        w.protocol = MagicMock()
+
+        sm.on_controller_restart()
+
+        w.protocol.stop_without_recovery.assert_not_called()
+        assert w.alerts == []
 
     def test_other_fault_reasons_are_shown_as_sent(self, monitor):
         sm, w = monitor

@@ -1,5 +1,7 @@
 """Preparation/finalization boundaries using the real worker and serial parser."""
 import pytest
+from controllers.safety_monitor import SafetyMonitor
+from fixtures.controllers import make_window
 from fixtures.nb2 import NB2Controller
 from fixtures.protocols import make_protocol
 from helpers.measurement_state import MeasurementState
@@ -74,6 +76,76 @@ def test_late_baseline_reply_after_cancel_cannot_reenable(protocol_clock):
     assert finished == [False]
     assert not link.baseline_valid
     assert link.commands[-1] == "L1|BASELINE"
+
+
+def set_up_device(link, state):
+    """A window facade with the real safety monitor and stop controller, on a
+    link that has already had its connection's boot banner."""
+    link.handle_com("Ready to Go")
+    link.baseline_valid = True
+    window = make_window(state)
+    window.arduino = link
+    window.safety = SafetyMonitor(window)
+    link.unexpected_reboot.connect(window.safety.on_controller_restart)
+    return window
+
+
+@pytest.mark.parametrize("v2", [False, True])
+def test_reboot_during_hold_ends_the_run_as_a_fault_without_p0(protocol_clock, v2):
+    link = NB2Controller(v2)
+    window = set_up_device(link, "running")
+    worker = make_protocol(ser=link, duration=1)
+    window.worker = worker
+    link.factor = worker.config.calibration
+    link.a_zero = int(worker.config.AMarks.get("0.0", worker.config.AMarks.get("0")))
+    finished, failures, rebooted_after = [], [], []
+    worker.signals.finished.connect(finished.append)
+    worker.signals.operation_failed.connect(failures.append)
+
+    def reboot_once_while_holding():
+        if "P50|50" in link.commands and not rebooted_after:
+            rebooted_after.append(len(link.commands))
+            link.handle_com("Ready to Go")
+
+    protocol_clock.on_sleep = reboot_once_while_holding
+    worker.run()
+
+    # Outputs stopped and telemetry kept on; the worker sent nothing of its own.
+    assert link.commands[rebooted_after[0]:] == ["X", "X", "HF1"]
+    assert [c for c in link.commands if c.startswith("P")] == [
+        "P20|50", "P30|50", "P40|50", "P50|50"]
+    assert finished == [False] and not failures and worker.completed.is_set()
+    assert window.protocol._session.outcome == "fault"
+    assert window.protocol_state == "fault" and window._no_automatic_recovery
+    assert not window.initial_setup_complete
+    assert not link.baseline_valid
+    window.on_baseline_changed.assert_called_with(False)
+    assert window._measurement_fault == "CONTROLLER_RESTARTED"
+    window._show_safety_alert.assert_called_once()
+    alert = window._show_safety_alert.call_args[0][0]
+    assert "restarted" in alert and "Reset" in alert
+    window.treatment_panel.set_fault.assert_called_once()
+    window.reset_arduino.assert_not_called()
+
+
+def test_reboot_while_idle_locks_setup_and_asks_for_reset():
+    link = NB2Controller()
+    window = set_up_device(link, "idle")
+    window.worker = None
+
+    link.handle_com("Ready to Go")
+
+    # Outputs stopped; nothing moves and no reset starts by itself.
+    assert link.commands == ["X", "X", "HF1"]
+    assert not window.initial_setup_complete  # Setup motion is locked
+    assert window.protocol_state == "fault" and window._no_automatic_recovery
+    assert not link.baseline_valid
+    window.on_baseline_changed.assert_called_with(False)
+    window.shell.setup.set_reset_enabled.assert_called_with(True)
+    window.reset_arduino.assert_not_called()
+    window._show_safety_alert.assert_called_once()
+    alert = window._show_safety_alert.call_args[0][0]
+    assert "restarted" in alert and "Reset" in alert
 
 
 def test_measurement_status_never_fabricates_live_zero(monkeypatch):

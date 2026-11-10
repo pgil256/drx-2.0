@@ -175,6 +175,29 @@ class TestReadyToGo:
 
 
 @pytest.mark.unit
+class TestUnexpectedRebootWiring:
+    def test_only_an_unexpected_banner_reaches_the_safety_monitor(self, qtbot, monkeypatch):
+        class ConnectedArduino(Arduino):
+            def __init__(self):
+                super().__init__()
+                self.connection_ready_event.set()
+
+            def moveToThread(self, thread):
+                pass  # stay on the test thread so signals are delivered directly
+
+        monkeypatch.setattr(cm_mod, "Arduino", ConnectedArduino)
+        monkeypatch.setattr(cm_mod, "QThread", MagicMock())
+        window = MagicMock(arduino=None, arduino_thread=None, _closing=False)
+
+        assert ConnectionManager(window).setup_arduino(auto_reset=False) is True
+
+        window.arduino.handle_com("Ready to Go")  # the connection's own banner
+        window.safety.on_controller_restart.assert_not_called()
+        window.arduino.handle_com("Ready to Go")
+        window.safety.on_controller_restart.assert_called_once_with()
+
+
+@pytest.mark.unit
 class TestLateConnect:
     def test_late_connect_schedules_reset(self, manager, monkeypatch):
         """A connection that comes up after setup_arduino() stopped waiting

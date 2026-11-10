@@ -49,6 +49,8 @@ STALL_TIMEOUT_PREFIX = "Motor stall timeout"
 FAULT_MESSAGES = {
     # A sustained negative load: tension past zero or zero drift (V2).
     "PRESSURE_NEGATIVE": "Load cell reading is negative. Check wiring and re-zero.",
+    # Latched by the host, not sent by the firmware: see on_controller_restart.
+    "CONTROLLER_RESTARTED": "Controller restarted. Press Reset in Setup to re-home.",
 }
 
 # Status telemetry can briefly land a few counts (or a fraction of a pound)
@@ -324,6 +326,26 @@ class SafetyMonitor:
         message = FAULT_MESSAGES.get(reason, reason)
         self.window.protocol.stop_without_recovery(message, fault=True)
         self.window._show_safety_alert("CONTROLLER FAULT: " + message)
+
+    def on_controller_restart(self) -> None:
+        """The Mega restarted on its own (``Arduino.unexpected_reboot``).
+
+        Its tare, zero marks, scale factor and motor speeds are back at the
+        firmware defaults, so nothing the host set up still holds. This is a
+        latched fault: outputs are stopped, a running treatment is cancelled
+        without sending its own P0 (the firmware rejects P until the next
+        tare), Setup motion is locked and the pressure reading is marked not
+        live until the operator presses Reset. No reset or movement starts
+        here.
+
+        While the hardware service wizard is open it owns the reaction: its
+        own banner handler aborts the session and asks for a reset.
+        """
+        window = self.window
+        if getattr(window, "_calibration_active", False) is True:
+            window.logger.error("Controller restarted during hardware service")
+            return
+        self.on_controller_fault({"reason": "CONTROLLER_RESTARTED"})
 
     def on_command_rejected(self, result: dict) -> None:
         """Reject the active operation promptly without an automatic homing retry."""
