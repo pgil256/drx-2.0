@@ -14,6 +14,7 @@ from config.constants import (
     LATERAL_MAX,
 )
 from controllers.stop_controller import COMMAND_FAULT, PHYSICAL, stops_for
+from helpers.stop_commands import PHYSICAL_STOP_MESSAGES
 
 
 COMMAND_REJECTION_MESSAGES = {
@@ -244,7 +245,7 @@ class SafetyMonitor:
         window = self.window
         window.logger.error("FIRMWARE ERROR: %s", message)
 
-        if message in ("Stop button pressed", "Stop button engaged"):
+        if message in PHYSICAL_STOP_MESSAGES:
             self.on_physical_stop()
             return
 

@@ -60,6 +60,38 @@ def test_failed_stage_never_reports_success_or_replays(protocol_clock, stage):
         assert not prepared and not any(c.startswith("P") for c in link.commands)
 
 
+@pytest.mark.parametrize("stage", ["center", "baseline", "pressure", "final_home"])
+def test_stop_button_during_an_operation_sends_nothing_more(protocol_clock, stage):
+    """After the button the firmware releases the load itself; an X ends that.
+
+    The window's own handler has not run here, as when the worker sees the
+    failure first.
+    """
+    link = NB2Controller()
+    worker = make_protocol(ser=link, duration=1)
+    link.factor = worker.config.calibration
+    link.a_zero = int(worker.config.AMarks.get("0.0", worker.config.AMarks.get("0")))
+    failures, finished, pressed = [], [], []
+    worker.signals.operation_failed.connect(failures.append)
+    worker.signals.finished.connect(finished.append)
+    def hook(command, replies):
+        press = ((stage == "center" and command.startswith("K"))
+                 or (stage == "baseline" and command.startswith("L1"))
+                 or (stage == "pressure" and command.startswith("P"))
+                 or (stage == "final_home" and command == "I120"))
+        if press and not pressed:
+            pressed.append(len(link.commands))
+            return ["ERROR: Stop button pressed"]
+        return replies
+    link.hook = hook
+    worker.run()
+    assert pressed and link.commands[pressed[0]:] == []
+    # The window's physical-stop handling reports it, not a worker failure.
+    assert finished == [False] and not failures and worker.completed.is_set()
+    worker.stop()  # the later completion cleanup must not send X or P0 either
+    assert link.commands[pressed[0]:] == []
+
+
 def test_late_baseline_reply_after_cancel_cannot_reenable(protocol_clock):
     link = NB2Controller()
     worker = make_protocol(ser=link)
