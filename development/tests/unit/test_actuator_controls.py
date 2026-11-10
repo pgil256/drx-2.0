@@ -391,6 +391,23 @@ class TestEmergencyStop:
         # The staged shutdown is scheduled (non-blocking) via QTimer.singleShot.
         mock_qtimer.singleShot.assert_called_once()
 
+    def test_setup_row_stop_sends_stop_command(self):
+        motion = make_motion()
+
+        motion.setup_stop("lateral")
+
+        motion.arduino.send.assert_called_once_with("X")
+
+    def test_setup_row_stop_leaves_the_physical_stop_release_alone(self):
+        """After the device's stop button an X would end the firmware's release."""
+        motion = make_motion()
+        motion.state.physical_stop_active = True
+
+        motion.setup_stop("lateral")
+
+        motion.arduino.send.assert_not_called()
+        motion.view.show_error.assert_not_called()
+
     def test_schedules_phase_two(self):
         """After the stop command, phase 2 is scheduled with a 1s delay."""
         stub = MagicMock()

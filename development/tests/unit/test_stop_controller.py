@@ -139,6 +139,19 @@ def test_the_physical_stop_drops_queued_commands(stopping):
     window.worker.cancel.assert_called_once_with(firmware_stopped=True)
 
 
+@pytest.mark.parametrize("kind", [OPERATOR, ESTOP, FAULT, COMMAND_FAULT])
+def test_no_later_stop_sends_x_after_the_physical_stop(stopping, kind):
+    """An on-screen Stop tapped after the button must not end the release."""
+    window, events, _, _ = stopping
+    stops_for(window).stop(PHYSICAL)
+    events.clear()
+
+    stops_for(window).stop(kind, **OPTIONS[kind])
+
+    assert ("send", "X") not in events
+    assert window._physical_stop_active is True
+
+
 def _cleanup(window):
     window.arduino = None  # Stop polling at the transport; only the stop matters.
     kneespa.KneeSpa.cleanup(window)

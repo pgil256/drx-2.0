@@ -12,6 +12,10 @@ it leaves. ``development/tests/unit/test_stop_controller.py`` runs every kind
 and checks it against this table, so the table cannot drift from the code.
 Where two paths of one kind behave differently today, the table records both
 (``fault`` and ``fault/command``) instead of merging them.
+
+One rule sits above the table: once the device's own stop button is active,
+no later stop of any kind sends X until the operator's Reset. The firmware
+releases the load by itself after the button, and an X ends that release.
 """
 
 import time
@@ -344,14 +348,19 @@ class StopController:
         window.protocol_stop_requested = True
         self.protocol.latch_session_outcome("fault" if fault else "stopped")
         arduino = window.arduino
-        if arduino is not None:
+        # After the device's stop button the firmware has stopped every motor
+        # and is releasing the load by itself; an X would end that release.
+        send_stop = (arduino is not None
+                     and getattr(window, "_physical_stop_active", False) is not True)
+        if send_stop:
             arduino.send(STOP_ALL)
         window.connection.cancel_reset()
         if window.worker:
             # The explicit stop here owns output cleanup; stop() must not issue P0.
             window.worker.cancel(firmware_stopped=True)
-        if arduino is not None:
+        if send_stop:
             arduino.send(STOP_ALL)
+        if arduino is not None:
             arduino.send(TELEMETRY_ON)
             arduino.baseline_valid = False
         window._release_leg_gpio()

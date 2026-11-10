@@ -675,6 +675,11 @@ class MotionController:
         # Firmware 'X' stops all actuators regardless of suffix. Guarded like
         # stop_actuators: a torn-down transport (arduino is None) must still
         # produce the STOP NOT DELIVERED alarm rather than an AttributeError.
+        if self.state.physical_stop_active is True:
+            # Nothing is sent after the device's stop button: an X would end
+            # the firmware's own release (see KneeSpa.stop_actuators).
+            self.logger.warning("Stop not sent: the device's stop button owns the release")
+            return
         try:
             arduino = self.arduino
             sent = bool(arduino and arduino.send("X"))

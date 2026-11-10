@@ -1083,6 +1083,13 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
         """Emergency stop for all actuators."""
         self.logger.warning("Emergency stop triggered")
         self.connection.cancel_reset()
+        if getattr(self, "_physical_stop_active", False) is True:
+            # The device's stop button has already stopped every motor, and
+            # the firmware is backing the load off by itself. An X ends that
+            # release and the firmware does not start another, so a Stop
+            # tapped after the button used to leave the load on until Reset.
+            self.logger.warning("Stop not sent: the device's stop button owns the release")
+            return
         try:
             if not self.arduino.send("X"):  # Stop all movement
                 # A stop that could not even be queued is an alarm, not a
