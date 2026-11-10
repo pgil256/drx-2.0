@@ -61,7 +61,7 @@ class CalibrationBackups:
                 payload["scale" if name == "calibration" else name] = None
         if mistyped:
             payload["mistyped"] = mistyped
-        stamp =datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
+        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
         path = self.directory / f"calibration-{stamp}.json"
         write_json(path, payload)
         return path
