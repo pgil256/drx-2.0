@@ -764,3 +764,113 @@ class TestCompletionOutcomes:
         assert w.protocol_state == "idle"
         assert w.protocol_running is False
         assert w.worker is None
+
+
+# ----- Setup motion controls around a treatment -----
+class TestSetupControlsAroundTreatment:
+    """The treatment takes the Setup motion controls and hands them back.
+
+    Only a normal completion re-enables them. A stop or a fault leaves them
+    locked for the recovery reset, so the Reset button is never locked.
+    """
+
+    @pytest.fixture
+    def startable(self, controller, monkeypatch):
+        pc, w = controller
+        monkeypatch.setattr(protocols_module, "Protocols",
+                            MagicMock(return_value=make_worker_double()))
+        return pc, w
+
+    @pytest.fixture
+    def running(self, controller):
+        pc, w = controller
+        w.protocol_state = "running"
+        w.protocol_running = True
+        return pc, w
+
+    def test_start_locks_setup_controls_before_dispatch(self, startable):
+        pc, w = startable
+        locked = []
+        w.threadpool.start.side_effect = (
+            lambda worker: locked.append(w.disable_actuator_controls.called)
+        )
+        assert pc.start_protocol() is True
+        assert locked == [True]
+        w.disable_actuator_controls.assert_called_once()
+        w.enable_actuator_controls.assert_not_called()
+
+    def test_start_leaves_reset_available(self, startable):
+        """Reset shares the lock group, and some stops and faults never
+        enable it again, so the start must not leave it locked."""
+        pc, w = startable
+        calls = []
+        w.disable_actuator_controls.side_effect = lambda: calls.append("lock")
+        w.shell.setup.set_reset_enabled.side_effect = (
+            lambda enabled: calls.append(("reset", enabled))
+        )
+        w.threadpool.start.side_effect = lambda worker: calls.append("dispatch")
+        assert pc.start_protocol() is True
+        assert calls == ["lock", ("reset", True), "dispatch"]
+
+    def test_refused_start_leaves_setup_controls_alone(self, startable):
+        pc, w = startable
+        w.config.calibrated = False
+        assert pc.start_protocol() is False
+        w.disable_actuator_controls.assert_not_called()
+        w.enable_actuator_controls.assert_not_called()
+        w.shell.setup.set_reset_enabled.assert_not_called()
+
+    def test_failed_dispatch_hands_setup_controls_back(self, startable):
+        pc, w = startable
+        running_at_enable = []
+        w.enable_actuator_controls.side_effect = (
+            lambda: running_at_enable.append(w.protocol_running)
+        )
+        w.threadpool.start.side_effect = RuntimeError("no thread available")
+        assert pc.start_protocol() is False
+        # enable_actuator_controls schedules nothing while a treatment runs.
+        assert running_at_enable == [False]
+
+    def test_normal_completion_hands_setup_controls_back(self, running):
+        pc, w = running
+        state_at_enable = []
+        w.enable_actuator_controls.side_effect = (
+            lambda: state_at_enable.append((w.protocol_state, w.protocol_running))
+        )
+        pc.protocol_completed(True)
+        # Only once idle: enable_actuator_controls schedules nothing before.
+        assert state_at_enable == [("idle", False)]
+
+    def test_failed_treatment_keeps_setup_controls_locked(self, running):
+        pc, w = running
+        pc.protocol_completed(False)
+        assert w.protocol_state == "fault"
+        w.enable_actuator_controls.assert_not_called()
+        w.shell.setup.set_reset_enabled.assert_called_once_with(True)
+
+    @pytest.mark.parametrize("success", [False, True])
+    def test_latched_fault_keeps_setup_controls_locked(self, running, success):
+        pc, w = running
+        w.protocol_state = "fault"
+        w.protocol_running = False
+        pc.protocol_completed(success)
+        assert w.protocol_state == "fault"
+        w.enable_actuator_controls.assert_not_called()
+
+    @pytest.mark.parametrize("success", [False, True])
+    def test_operator_stop_keeps_setup_controls_locked(self, running, success):
+        """The release, then the re-home prompt, own the controls after STOP."""
+        pc, w = running
+        w.protocol_state = "stopping"
+        w.protocol_stop_requested = True
+        pc.protocol_completed(success)
+        assert w.protocol_state == "stopping"
+        w.enable_actuator_controls.assert_not_called()
+        w.shell.setup.set_reset_enabled.assert_not_called()
+
+    def test_completion_during_a_reset_leaves_the_controls_to_the_reset(self, running):
+        pc, w = running
+        w.reset_in_progress = True
+        pc.protocol_completed(True)
+        w.enable_actuator_controls.assert_not_called()
+        w.shell.setup.set_reset_enabled.assert_not_called()

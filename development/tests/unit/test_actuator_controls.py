@@ -490,3 +490,171 @@ class TestConfirmMidProtocolChange:
         assert stub.mid_protocol_warning_shown is False
         stub.disable_actuator_controls.assert_called_once()
         stub.enable_actuator_controls.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# Setup motion during a treatment. The treatment worker owns the actuators:
+# the firmware takes a plain P<n> during a ramp or hold as the new pressure
+# limit, and answers a position move with BUSY, which the worker treats as a
+# fault. So Setup sends nothing, whichever widget or signal asked; its Stop
+# buttons keep working.
+# ---------------------------------------------------------------------------
+SETUP_ROWS = ("axial", "horizontal", "lateral", "pressure", "leg_length")
+ACTIVE_STATES = ("starting", "running", "stopping")
+SETUP_ENTRY_POINTS = {
+    "go": lambda motion: motion.setup_go("axial"),
+    "row reset": lambda motion: motion.setup_reset("lateral"),
+    "jog": lambda motion: motion.move_actuator(ACTUATOR_B, "1", 1),
+    "pressure go": lambda motion: motion.apply_setup_pressure(),
+}
+
+
+def make_motion_in_treatment(state="running", **options):
+    """A MotionController whose window reports a treatment in ``state``."""
+    motion = make_motion(protocol_running=True, **options)
+    motion.state.protocol_state = state
+    return motion
+
+
+@pytest.mark.unit
+class TestSetupMotionRefusedDuringTreatment:
+    def test_go_is_sent_when_no_treatment_runs(self):
+        """The control case: the same call the tests below refuse."""
+        motion = make_motion()
+        assert motion.setup_go("axial") is True
+        motion.arduino.send.assert_called_once_with("A120.0")
+
+    @pytest.mark.parametrize("key", SETUP_ROWS)
+    def test_go_sends_nothing(self, key):
+        motion = make_motion_in_treatment()
+        assert not motion.setup_go(key)
+        motion.arduino.send.assert_not_called()
+        motion.leg.move_to.assert_not_called()
+        motion.view.show_position.assert_not_called()
+
+    @pytest.mark.parametrize("key", SETUP_ROWS)
+    def test_row_reset_sends_nothing(self, key):
+        motion = make_motion_in_treatment()
+        motion.setup_reset(key)
+        motion.arduino.send.assert_not_called()
+        motion.leg.home.assert_not_called()
+        motion.view.show_position.assert_not_called()
+
+    @pytest.mark.parametrize("actuator", [ACTUATOR_A, ACTUATOR_B, ACTUATOR_C])
+    def test_jog_sends_nothing_and_keeps_the_commanded_position(self, actuator):
+        motion = make_motion_in_treatment(axial=1, horizontal=-10, lateral=0)
+        assert not motion.move_actuator(actuator, "1", 1)
+        motion.arduino.send.assert_not_called()
+        assert motion.axial_flexion_position == 1
+        assert motion.horizontal_flexion_position == -10
+        assert motion.lateral_flexion_position == 0
+
+    def test_pressure_go_sends_nothing(self):
+        motion = make_motion_in_treatment()
+        motion.view.row_value.return_value = 40
+        assert motion.apply_setup_pressure() is False
+        motion.arduino.send.assert_not_called()
+        motion.view.show_position.assert_not_called()
+
+    @pytest.mark.parametrize("command", ["A121.0", "I13760", "K1500", "P40", "P0"])
+    def test_send_motion_command_sends_nothing(self, command):
+        motion = make_motion_in_treatment()
+        assert motion.send_motion_command(command, "test movement") is False
+        motion.arduino.send.assert_not_called()
+        assert motion._motion_watchdog is None
+
+    def test_axial_move_helper_sends_nothing(self):
+        # KneeSpa.set_to_distance still delegates here.
+        motion = make_motion_in_treatment()
+        assert motion.set_to_distance(1.0, ACTUATOR_A) is False
+        motion.arduino.send.assert_not_called()
+
+    def test_lateral_move_helper_sends_nothing(self):
+        # KneeSpa.set_to_c_distance still delegates here.
+        motion = make_motion_in_treatment()
+        assert motion.set_to_c_distance(5) is False
+        motion.arduino.send.assert_not_called()
+
+    @pytest.mark.parametrize("actuator", [ACTUATOR_A, ACTUATOR_B, ACTUATOR_C])
+    def test_home_helper_sends_nothing(self, actuator):
+        motion = make_motion_in_treatment(axial=1, horizontal=-5, lateral=5)
+        motion.reset_flexion_button_clicked(actuator)
+        motion.arduino.send.assert_not_called()
+        motion.view.show_position.assert_not_called()
+
+    @pytest.mark.parametrize("state", ACTIVE_STATES)
+    def test_refused_in_every_active_state(self, state):
+        """The lifecycle state refuses on its own, before the running flag."""
+        motion = make_motion(protocol_running=False)
+        motion.state.protocol_state = state
+        assert motion.setup_go("axial") is False
+        assert motion.send_motion_command("P40", "test movement") is False
+        motion.arduino.send.assert_not_called()
+
+    def test_refused_on_the_running_flag_alone(self):
+        motion = make_motion(protocol_running=True)
+        assert motion.state.protocol_state == "idle"
+        assert motion.setup_go("axial") is False
+        assert motion.send_motion_command("P40", "test movement") is False
+        motion.arduino.send.assert_not_called()
+
+    @pytest.mark.parametrize("entry", sorted(SETUP_ENTRY_POINTS))
+    def test_refusal_tells_the_operator_and_leaves_the_lock_alone(self, entry):
+        """No spinner, no link-down badge, and the control lock is untouched:
+        the treatment holds it, and a refused request must not hand it back."""
+        motion = make_motion_in_treatment(mock_controls=True, horizontal=-10)
+        SETUP_ENTRY_POINTS[entry](motion)
+        motion.view.show_error.assert_called_once()
+        assert "treatment" in motion.view.show_error.call_args[0][0].lower()
+        motion.disable_actuator_controls.assert_not_called()
+        motion.enable_actuator_controls.assert_not_called()
+        motion.view.show_busy.assert_not_called()
+        motion.view.show_link_down.assert_not_called()
+
+    def test_refused_send_does_not_leave_a_command_in_progress(self):
+        """A caller that took the controls before the send (the move helpers
+        do) must not leave the in-progress flag set: it blocks logout and
+        exit. The controls themselves stay locked for the treatment."""
+        motion = make_motion_in_treatment()
+        motion.disable_actuator_controls()
+        assert motion.send_motion_command("K1500", "lateral movement") is False
+        assert motion.state.actuator_command_in_progress is False
+        assert motion.controls_enable_timer is None
+        motion.view.set_controls_enabled.assert_called_once_with(False)
+        motion.view.hide_busy.assert_called()
+        motion.view.show_link_down.assert_not_called()
+
+
+@pytest.mark.unit
+@pytest.mark.parametrize("state", ACTIVE_STATES)
+class TestSetupStopsDuringTreatment:
+    """Every Setup stop path still reaches the device while a treatment runs."""
+
+    @pytest.mark.parametrize("key", ["axial", "horizontal", "lateral", "pressure"])
+    def test_row_stop_sends_x(self, state, key):
+        motion = make_motion_in_treatment(state)
+        motion.setup_stop(key)
+        motion.arduino.send.assert_called_once_with("X")
+        motion.view.show_error.assert_not_called()
+
+    def test_stop_button_handler_sends_x(self, state):
+        motion = make_motion_in_treatment(state)
+        motion.stop_position_flexion_button(ACTUATOR_A)
+        motion.arduino.send.assert_called_once_with("X")
+        motion.view.show_error.assert_not_called()
+
+    def test_leg_row_stop_sends_f0(self, state):
+        motion = make_motion_in_treatment(state)
+        with patch.object(mc_mod.GPIO, "output"):
+            motion.setup_stop("leg_length")
+        motion.leg.cancel.assert_called_once()
+        motion.arduino.send.assert_called_once_with("F0")
+        motion.view.show_error.assert_not_called()
+
+    def test_leg_stop_sends_f0(self, state):
+        motion = make_motion_in_treatment(state)
+        with patch.object(mc_mod.GPIO, "output") as gpio_output:
+            assert motion.stop_leg_movement() is True
+        motion.arduino.send.assert_called_once_with("F0")
+        assert gpio_output.call_count == 2
+        motion.view.show_error.assert_not_called()
