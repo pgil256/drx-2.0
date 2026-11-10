@@ -9,6 +9,7 @@ from PyQt5.QtCore import QObject, QTimer
 
 from config.constants import EXTRABACKWARD, EXTRAFORWARD, LEG_LENGTH_MAX, LEG_LENGTH_MIN
 from helpers.logging import setup_logger
+from helpers.stop_commands import PHYSICAL_STOP_MESSAGES
 
 
 # Production firmware runs F+/F- for 0.5 s and FF/FR for 6 s at the same
@@ -153,7 +154,11 @@ class LegLengthController(QObject):
 
     def _error(self, reason: str) -> None:
         if self.active:
-            self._finish(False, "Leg movement failed: " + reason)
+            # The firmware stopped the leg motor itself at the device's stop
+            # button and is releasing the load; an X would end that release.
+            # This slot can run before the window latches the physical stop.
+            self._finish(False, "Leg movement failed: " + reason,
+                         send_stop=reason not in PHYSICAL_STOP_MESSAGES)
 
     def _rejected(self, result: dict) -> None:
         if self.active and self.command.startswith(result["command"]):
@@ -202,7 +207,7 @@ class LegLengthController(QObject):
         if self.active:
             self._finish(False)
 
-    def _finish(self, success: bool, error: str = "") -> None:
+    def _finish(self, success: bool, error: str = "", send_stop: bool = True) -> None:
         self.active = False
         self.timer.stop()
         self._drive(None)
@@ -219,7 +224,7 @@ class LegLengthController(QObject):
             # Invalidate even a queued command: it may have reached the wire
             # just before cancellation. X discards pending motion before stopping.
             self.invalidate()
-            if getattr(self.window, "_physical_stop_active", False) is not True:
+            if send_stop and getattr(self.window, "_physical_stop_active", False) is not True:
                 try:
                     self.arduino.send("X")
                 except Exception:

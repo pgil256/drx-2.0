@@ -217,6 +217,9 @@ class HardwareServiceDraft:
         if self.scale != self.original_scale:
             candidate.set("Options", "calibration", str(float(self.scale)))
             changed["calibration"] = float(self.scale)
+        # commit() refuses a file that failed to load. Refuse before the
+        # backup: a .bak of that file would pass for a good copy to restore.
+        config.refuse_if_unreadable()
         backup = None
         if os.path.isfile(config.configFile):
             stamp = datetime.now().strftime("%Y%m%d-%H%M%S-%f")

@@ -14,6 +14,9 @@ from config.constants import (
     LATERAL_MAX,
 )
 from controllers.stop_controller import COMMAND_FAULT, PHYSICAL, stops_for
+from helpers.stop_commands import (
+    PHYSICAL_STOP_MESSAGES, PHYSICAL_STOP_PRESSED, RELEASE_INCOMPLETE,
+)
 
 
 COMMAND_REJECTION_MESSAGES = {
@@ -49,6 +52,8 @@ STALL_TIMEOUT_PREFIX = "Motor stall timeout"
 FAULT_MESSAGES = {
     # A sustained negative load: tension past zero or zero drift (V2).
     "PRESSURE_NEGATIVE": "Load cell reading is negative. Check wiring and re-zero.",
+    # Latched by the host, not sent by the firmware: see on_controller_restart.
+    "CONTROLLER_RESTARTED": "Controller restarted. Press Reset in Setup to re-home.",
 }
 
 # Status telemetry can briefly land a few counts (or a fraction of a pound)
@@ -244,9 +249,14 @@ class SafetyMonitor:
         window = self.window
         window.logger.error("FIRMWARE ERROR: %s", message)
 
-        if message in ("Stop button pressed", "Stop button engaged"):
-            self.on_physical_stop()
+        if message in PHYSICAL_STOP_MESSAGES:
+            self.on_physical_stop(release_started=message == PHYSICAL_STOP_PRESSED)
             return
+
+        if message == RELEASE_INCOMPLETE:
+            # The firmware's release has ended, with the load still on. Reset
+            # may run now; the warning below still reaches the operator.
+            stops_for(window).end_firmware_release()
 
         if message == "BUSY":
             # A command was refused because a move is running; transient
@@ -286,9 +296,9 @@ class SafetyMonitor:
 
         self._present_warning(message)
 
-    def on_physical_stop(self) -> None:
+    def on_physical_stop(self, release_started: bool = False) -> None:
         """The device's stop button: see StopController (kind "physical")."""
-        stops_for(self.window).stop(PHYSICAL)
+        stops_for(self.window).stop(PHYSICAL, release_started=release_started)
 
     def on_firmware_warning(self, message: str) -> None:
         """Handle advisory firmware notices without startup alert noise.
@@ -325,6 +335,26 @@ class SafetyMonitor:
         self.window.protocol.stop_without_recovery(message, fault=True)
         self.window._show_safety_alert("CONTROLLER FAULT: " + message)
 
+    def on_controller_restart(self) -> None:
+        """The Mega restarted on its own (``Arduino.unexpected_reboot``).
+
+        Its tare, zero marks, scale factor and motor speeds are back at the
+        firmware defaults, so nothing the host set up still holds. This is a
+        latched fault: outputs are stopped, a running treatment is cancelled
+        without sending its own P0 (the firmware rejects P until the next
+        tare), Setup motion is locked and the pressure reading is marked not
+        live until the operator presses Reset. No reset or movement starts
+        here.
+
+        While the hardware service wizard is open it owns the reaction: its
+        own banner handler aborts the session and asks for a reset.
+        """
+        window = self.window
+        if getattr(window, "_calibration_active", False) is True:
+            window.logger.error("Controller restarted during hardware service")
+            return
+        self.on_controller_fault({"reason": "CONTROLLER_RESTARTED"})
+
     def on_command_rejected(self, result: dict) -> None:
         """Reject the active operation promptly without an automatic homing retry."""
         window = self.window
@@ -338,6 +368,7 @@ class SafetyMonitor:
     def on_pressure_released(self):
         """Firmware completed its autonomous post-fault pressure release."""
         self.window.logger.info("Firmware reports traction released")
+        stops_for(self.window).end_firmware_release()
 
     def on_zeros_echo(self, a_zero, b_zero):
         """Verify the zero marks the firmware applied match the config."""

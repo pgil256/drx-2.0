@@ -105,10 +105,17 @@ class ResetWorker(QRunnable):
         except OperationCancelled:
             self.logger.info("Reset cancelled")
         except Exception as exc:
-            self.logger.exception("Reset failed")
-            if not self._cancelled.is_set():
-                self.arduino.send("X")
-                self.signals.error.emit(str(exc))
+            if operations is not None and operations.physical_stop:
+                # The firmware is releasing the load by itself and an X would
+                # end that release. This ends like a cancelled reset; the
+                # window's physical-stop handling reports it to the operator.
+                self.logger.info("Reset ended by the device's stop button")
+                self.cancel()
+            else:
+                self.logger.exception("Reset failed")
+                if not self._cancelled.is_set():
+                    self.arduino.send("X")
+                    self.signals.error.emit(str(exc))
         finally:
             if operations is not None:
                 operations.close()
