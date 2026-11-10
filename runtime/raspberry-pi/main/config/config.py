@@ -5,6 +5,7 @@ import os
 import shutil
 import tempfile
 import uuid
+from datetime import datetime, timezone
 from typing import Dict, Mapping, Optional
 
 from helpers.motor_speed import motor_speed_values
@@ -27,6 +28,15 @@ logger = logging.getLogger(f"{APP_NAME}.config")
 # factory default (1.0) is still in place and "pressure" would be raw
 # ADC counts.
 MIN_PLAUSIBLE_SCALE_FACTOR = 1000.0
+
+
+class ConfigUnreadableError(OSError):
+    """A save was refused because the file on disk failed to load.
+
+    Saving would replace whatever calibration and identity the file still
+    holds with generated defaults. An OSError, so callers report it the way
+    they already report any other failed write.
+    """
 
 
 class Configuration:
@@ -54,6 +64,21 @@ class Configuration:
         self.marks_valid = False
         self.scale_calibrated = False
         self.calibration_errors = []
+        # True when the file exists but could not be loaded (a bad line from
+        # a hand edit, SD-card corruption). The values in memory are then
+        # generated defaults, so every write is refused: the next startup
+        # used to save them over the calibration and identity in the file.
+        # Cleared only by a load that succeeds.
+        self.unreadable = False
+        # Where the file that failed to load was copied for whoever repairs
+        # it, or None if it loaded or the copy could not be made.
+        self.unreadable_copy: Optional[str] = None
+        # Mark tables that were generated at load because the file's section
+        # was missing or would not parse. A save does not add them to the
+        # file: once saved, they loaded as a real calibration on the next
+        # start, or stayed as extra rows in a table whose typo was then
+        # fixed. Only a calibration that commits the whole table writes it.
+        self._generated_marks = set()
 
         # Treatment Settings defaults persisted by Setup's "Mark As Default"
         # (Phase 3.5 §15.4). Fallbacks: 40 lbs / 10° / 10° + a 2/sec pulse.
@@ -73,6 +98,7 @@ class Configuration:
 
         # Per-device id for support tickets (Phase 3.5 §15.5); generated once.
         self.device_id = ""
+        self._temporary_device_id = ""
         self.device_number = 1
 
     @property
@@ -91,6 +117,9 @@ class Configuration:
         self.calibration_errors = []
         self.marks_valid = False
         self.scale_calibrated = False
+        self.unreadable = False
+        self.unreadable_copy = None
+        self._generated_marks = set()
         # Load configuration
         self.axial_service_calibrated = False
         self._migrate_legacy_config()
@@ -107,7 +136,10 @@ class Configuration:
             return
 
         try:
-            self.config.read(self.configFile, encoding="utf-8")
+            # Not ConfigParser.read(): it skips a file it cannot open, which
+            # then looks like an empty one and gets defaults saved over it.
+            with open(self.configFile, encoding="utf-8") as source:
+                self.config.read_file(source)
 
             allSections = {
                 s: dict(self.config.items(s)) for s in self.config.sections()
@@ -122,13 +154,70 @@ class Configuration:
 
         except Exception as e:
             logger.exception('Fatal error, could not load config file from "%s"', self.configFile)
+            self.unreadable = True
+            self.unreadable_copy = self._keep_unreadable_copy()
             self._set_default_c_marks()
             self._set_default_a_marks()
             self._set_default_b_marks()
             self._flag_error(
                 f"Config file unreadable ({e}); generated default marks in use. "
-                "Device is UNCALIBRATED."
+                "Device is UNCALIBRATED. The file was left unchanged: fix or "
+                "restore it, then restart."
             )
+
+    def _keep_unreadable_copy(self) -> Optional[str]:
+        """Copy the file that failed to load beside itself; return the copy's path.
+
+        The application does not write to the file in this state, but the
+        copy keeps the evidence if a repair by hand goes wrong. It is
+        named <file>.unreadable-<UTC time>, created owner-only (0600) like
+        the configuration itself, and never replaces an earlier copy. The
+        same content is kept once, so a device restarting on the same bad
+        file does not fill its storage. A failure here is logged and must
+        not stop startup.
+        """
+        try:
+            with open(self.configFile, "rb") as source:
+                content = source.read()
+            directory = os.path.dirname(os.path.abspath(self.configFile))
+            prefix = os.path.basename(self.configFile) + ".unreadable-"
+            for name in sorted(os.listdir(directory)):
+                earlier = os.path.join(directory, name)
+                if name.startswith(prefix) and os.path.isfile(earlier):
+                    with open(earlier, "rb") as kept:
+                        if kept.read() == content:
+                            logger.warning(
+                                'The unreadable config file is already kept at "%s"', earlier
+                            )
+                            return earlier
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+            for attempt in range(100):
+                path = os.path.join(
+                    directory, prefix + stamp + (f"-{attempt}" if attempt else "")
+                )
+                try:
+                    fd = os.open(path, flags, 0o600)
+                    break
+                except FileExistsError:
+                    continue
+            else:
+                raise FileExistsError(f"no free name for a copy at {path}")
+            try:
+                with os.fdopen(fd, "wb") as target:
+                    target.write(content)
+                    target.flush()
+                    os.fsync(target.fileno())
+            except Exception:
+                os.unlink(path)  # a partial copy would pass for the evidence
+                raise
+            logger.warning('Kept a copy of the unreadable config file at "%s"', path)
+            return path
+        except Exception:
+            logger.exception(
+                'Could not keep a copy of the unreadable config file "%s"', self.configFile
+            )
+            return None
 
     def _load_marks(self, allSections):
         """Load actuator marks, falling back to safe defaults on malformed data.
@@ -141,9 +230,11 @@ class Configuration:
                 self.CMarks = {k: int(v) for k, v in allSections["CMarks"].items()}
             except (ValueError, TypeError) as e:
                 self._set_default_c_marks()
+                self._generated_marks.add("CMarks")
                 self._flag_error(f"CMarks malformed ({e}); defaults in use")
         else:
             self._set_default_c_marks()
+            self._generated_marks.add("CMarks")
             self._flag_error("CMarks section missing; defaults in use")
 
         if "AMarks" in allSections:
@@ -151,9 +242,11 @@ class Configuration:
                 self.AMarks = {k: int(v) for k, v in allSections["AMarks"].items()}
             except (ValueError, TypeError) as e:
                 self._set_default_a_marks()
+                self._generated_marks.add("AMarks")
                 self._flag_error(f"AMarks malformed ({e}); defaults in use")
         else:
             self._set_default_a_marks()
+            self._generated_marks.add("AMarks")
             self._flag_error("AMarks section missing; defaults in use")
 
         if "BMarks" in allSections:
@@ -161,9 +254,11 @@ class Configuration:
                 self.BMarks = {k: int(v) for k, v in allSections["BMarks"].items()}
             except (ValueError, TypeError) as e:
                 self._set_default_b_marks()
+                self._generated_marks.add("BMarks")
                 self._flag_error(f"BMarks malformed ({e}); defaults in use")
         else:
             self._set_default_b_marks()
+            self._generated_marks.add("BMarks")
             self._flag_error("BMarks section missing; defaults in use")
 
     def _load_options(self):
@@ -355,10 +450,21 @@ class Configuration:
             self._validate_calibration()
 
     def ensure_device_id(self):
-        """Return the persisted per-device id, generating + saving one if absent."""
-        if not self.device_id:
-            self.device_id = uuid.uuid4().hex
-            self.update_config()
+        """Return the persisted per-device id, generating + saving one if absent.
+
+        While the file is unreadable its own id cannot be read and nothing
+        may be saved, so the caller gets an id for this run only. It is
+        marked "temporary-" wherever it is shown, is never stored in
+        device_id, and is not written to the file once that loads again.
+        """
+        if self.device_id:
+            return self.device_id
+        if self.unreadable:
+            if not self._temporary_device_id:
+                self._temporary_device_id = "temporary-" + uuid.uuid4().hex[:12]
+            return self._temporary_device_id
+        self.device_id = uuid.uuid4().hex
+        self.update_config()
         return self.device_id
 
     @staticmethod
@@ -428,7 +534,12 @@ class Configuration:
     def _ensure_config_sections(
         self, parser: Optional[configparser.ConfigParser] = None,
     ) -> None:
-        """Ensure defaults are persisted for sections missing from the file."""
+        """Ensure the parser holds the sections a save writes.
+
+        A mark table that was generated at load is left out, so the file
+        keeps its missing or mistyped section instead of gaining generated
+        marks.
+        """
         parser = self.config if parser is None else parser
         if not parser.has_section("Options"):
             parser.add_section("Options")
@@ -437,11 +548,26 @@ class Configuration:
             "AMarks": self.AMarks,
             "BMarks": self.BMarks,
         }.items():
+            if section_name in self._generated_marks:
+                continue
             if not parser.has_section(section_name):
                 parser.add_section(section_name)
             for key, value in marks.items():
                 if not parser.has_option(section_name, key):
                     parser.set(section_name, key, str(value))
+
+    def refuse_if_unreadable(self) -> None:
+        """Raise ConfigUnreadableError if the file failed to load.
+
+        Every write does this. A caller that prepares anything on disk
+        before its save calls it first, so a refused save leaves nothing.
+        """
+        if self.unreadable:
+            raise ConfigUnreadableError(
+                f'"{self.configFile}" failed to load and was left unchanged; '
+                "nothing can be saved until it is fixed or restored and the "
+                "application restarted"
+            )
 
     def _atomic_write(self, candidate: Optional[configparser.ConfigParser] = None) -> None:
         """Write the config file atomically (temp file + fsync + rename).
@@ -455,8 +581,10 @@ class Configuration:
                 This method does not publish the candidate to live state.
 
         Raises:
+            ConfigUnreadableError: The file failed to load; nothing is written.
             Exception: Write errors propagate to the caller after temp-file cleanup.
         """
+        self.refuse_if_unreadable()
         parser = self.config if candidate is None else candidate
         directory = os.path.dirname(os.path.abspath(self.configFile)) or "."
         os.makedirs(directory, exist_ok=True)
@@ -528,6 +656,12 @@ class Configuration:
 
     def update_config(self):
         """Update current values, retaining this caller's legacy error reporting."""
+        if self.unreadable:
+            logger.error(
+                'Config not written: "%s" failed to load and was left unchanged. '
+                "Fix or restore the file, then restart.", self.configFile,
+            )
+            return
         self._populate_config(self.config)
         logger.info("Config updated")
         try:
