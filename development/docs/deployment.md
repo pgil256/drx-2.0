@@ -151,6 +151,14 @@ Recalibrating in the hardware service wizard does not clear this state, because
 the save is refused. A missing file is different: defaults are written and the
 device starts uncalibrated, as on a new device.
 
+A file that loads but has lost a whole mark table (`[CMarks]`, `[AMarks]` or
+`[BMarks]`, for example after a truncation) is different again. The alert reads
+`CMarks section missing; defaults in use` on every start, and saves still work
+but never add the generated table to the file. Replace the file with the
+device's last good copy, or measure that axis again in the hardware service
+wizard, then restart. A calibration backup also writes the table, but is refused
+as another device's if the file lost its `[Device]` id as well.
+
 ## Upgrade an existing device
 
 Do this once per device, with the application stopped. Preserve the old `main/`,

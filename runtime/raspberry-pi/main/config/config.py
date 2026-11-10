@@ -73,6 +73,11 @@ class Configuration:
         # Where the file that failed to load was copied for whoever repairs
         # it, or None if it loaded or the copy could not be made.
         self.unreadable_copy: Optional[str] = None
+        # Mark tables that were generated at load because the file had no
+        # such section. A save does not add them to the file: once saved,
+        # they loaded as a real calibration on the next start. Only a
+        # calibration that commits the whole table writes it.
+        self._generated_marks = set()
 
         # Treatment Settings defaults persisted by Setup's "Mark As Default"
         # (Phase 3.5 §15.4). Fallbacks: 40 lbs / 10° / 10° + a 2/sec pulse.
@@ -113,6 +118,7 @@ class Configuration:
         self.scale_calibrated = False
         self.unreadable = False
         self.unreadable_copy = None
+        self._generated_marks = set()
         # Load configuration
         self.axial_service_calibrated = False
         self._migrate_legacy_config()
@@ -226,6 +232,7 @@ class Configuration:
                 self._flag_error(f"CMarks malformed ({e}); defaults in use")
         else:
             self._set_default_c_marks()
+            self._generated_marks.add("CMarks")
             self._flag_error("CMarks section missing; defaults in use")
 
         if "AMarks" in allSections:
@@ -236,6 +243,7 @@ class Configuration:
                 self._flag_error(f"AMarks malformed ({e}); defaults in use")
         else:
             self._set_default_a_marks()
+            self._generated_marks.add("AMarks")
             self._flag_error("AMarks section missing; defaults in use")
 
         if "BMarks" in allSections:
@@ -246,6 +254,7 @@ class Configuration:
                 self._flag_error(f"BMarks malformed ({e}); defaults in use")
         else:
             self._set_default_b_marks()
+            self._generated_marks.add("BMarks")
             self._flag_error("BMarks section missing; defaults in use")
 
     def _load_options(self):
@@ -521,7 +530,11 @@ class Configuration:
     def _ensure_config_sections(
         self, parser: Optional[configparser.ConfigParser] = None,
     ) -> None:
-        """Ensure defaults are persisted for sections missing from the file."""
+        """Ensure the parser holds the sections a save writes.
+
+        A mark table the file lacked is left out, so the file keeps saying
+        that it is missing instead of gaining generated marks.
+        """
         parser = self.config if parser is None else parser
         if not parser.has_section("Options"):
             parser.add_section("Options")
@@ -530,6 +543,8 @@ class Configuration:
             "AMarks": self.AMarks,
             "BMarks": self.BMarks,
         }.items():
+            if section_name in self._generated_marks:
+                continue
             if not parser.has_section(section_name):
                 parser.add_section(section_name)
             for key, value in marks.items():
