@@ -273,23 +273,30 @@ class TestLockoutPersistence:
     cycle, 5 more attempts -- unlimited retries on a physical kiosk.
     """
 
-    def _make(self, tmp_path):
+    def _make(self, tmp_path, **kwargs):
         stored = SecureAuthHelper.hash_pin_secure("7531")
         users = {stored: {"pin_hash": stored, "username": "T", "email": "t@x", "status": "user"}}
         window = StubWindow(users)
-        return AuthController(window, state_path=str(tmp_path / "auth_state.json")), window
+        return AuthController(window, state_path=str(tmp_path / "auth_state.json"),
+                              **kwargs), window
 
     def _trip_lockout(self, auth, window):
         for _ in range(AuthController.LOCKOUT_THRESHOLD):
             auth.handle_login("0000")
 
     def test_lockout_survives_restart(self, tmp_path):
-        auth, w = self._make(tmp_path)
+        # Fixed clock and boot ID. A host with no boot ID (Windows) is treated
+        # as rebooted, which serves the remainder again and so moves the
+        # deadline by however long the restart took (see TestLockoutClock).
+        clock = FakeClock()
+        same_boot = {"clock": clock, "boot_id": lambda: "boot-a"}
+        auth, w = self._make(tmp_path, **same_boot)
         self._trip_lockout(auth, w)
         assert auth.lockout_until > 0
 
         # New controller instance = process restart; same state file.
-        auth2, w2 = self._make(tmp_path)
+        clock.now += 20
+        auth2, w2 = self._make(tmp_path, **same_boot)
         assert auth2.lockout_until == pytest.approx(auth.lockout_until)
         auth2.handle_login("7531")
         assert w2.current_user is None  # still locked
