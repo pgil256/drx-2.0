@@ -5,6 +5,7 @@ import os
 import shutil
 import tempfile
 import uuid
+from datetime import datetime, timezone
 from typing import Dict, Mapping, Optional
 
 from helpers.motor_speed import motor_speed_values
@@ -69,6 +70,9 @@ class Configuration:
         # used to save them over the calibration and identity in the file.
         # Cleared only by a load that succeeds.
         self.unreadable = False
+        # Where the file that failed to load was copied for whoever repairs
+        # it, or None if it loaded or the copy could not be made.
+        self.unreadable_copy: Optional[str] = None
 
         # Treatment Settings defaults persisted by Setup's "Mark As Default"
         # (Phase 3.5 §15.4). Fallbacks: 40 lbs / 10° / 10° + a 2/sec pulse.
@@ -108,6 +112,7 @@ class Configuration:
         self.marks_valid = False
         self.scale_calibrated = False
         self.unreadable = False
+        self.unreadable_copy = None
         # Load configuration
         self.axial_service_calibrated = False
         self._migrate_legacy_config()
@@ -140,6 +145,7 @@ class Configuration:
         except Exception as e:
             logger.exception('Fatal error, could not load config file from "%s"', self.configFile)
             self.unreadable = True
+            self.unreadable_copy = self._keep_unreadable_copy()
             self._set_default_c_marks()
             self._set_default_a_marks()
             self._set_default_b_marks()
@@ -148,6 +154,60 @@ class Configuration:
                 "Device is UNCALIBRATED. The file was left unchanged: fix or "
                 "restore it, then restart."
             )
+
+    def _keep_unreadable_copy(self) -> Optional[str]:
+        """Copy the file that failed to load beside itself; return the copy's path.
+
+        The application no longer writes to the file, but the copy keeps the
+        evidence if someone repairs it by hand and gets that wrong. It is
+        named <file>.unreadable-<UTC time>, created owner-only (0600) like
+        the configuration itself, and never replaces an earlier copy. The
+        same content is kept once, so a device restarting on the same bad
+        file does not fill its storage. A failure here is logged and must
+        not stop startup.
+        """
+        try:
+            with open(self.configFile, "rb") as source:
+                content = source.read()
+            directory = os.path.dirname(os.path.abspath(self.configFile))
+            prefix = os.path.basename(self.configFile) + ".unreadable-"
+            for name in sorted(os.listdir(directory)):
+                earlier = os.path.join(directory, name)
+                if name.startswith(prefix) and os.path.isfile(earlier):
+                    with open(earlier, "rb") as kept:
+                        if kept.read() == content:
+                            logger.warning(
+                                'The unreadable config file is already kept at "%s"', earlier
+                            )
+                            return earlier
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+            for attempt in range(100):
+                path = os.path.join(
+                    directory, prefix + stamp + (f"-{attempt}" if attempt else "")
+                )
+                try:
+                    fd = os.open(path, flags, 0o600)
+                    break
+                except FileExistsError:
+                    continue
+            else:
+                raise FileExistsError(f"no free name for a copy at {path}")
+            try:
+                with os.fdopen(fd, "wb") as target:
+                    target.write(content)
+                    target.flush()
+                    os.fsync(target.fileno())
+            except Exception:
+                os.unlink(path)  # a partial copy would pass for the evidence
+                raise
+            logger.warning('Kept a copy of the unreadable config file at "%s"', path)
+            return path
+        except Exception:
+            logger.exception(
+                'Could not keep a copy of the unreadable config file "%s"', self.configFile
+            )
+            return None
 
     def _load_marks(self, allSections):
         """Load actuator marks, falling back to safe defaults on malformed data.

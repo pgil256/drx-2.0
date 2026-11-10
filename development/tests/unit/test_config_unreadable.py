@@ -7,10 +7,14 @@ replaced the calibration, device number and identity with defaults.
 """
 import logging
 import os
+import re
+import stat
+from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
 
+from config import config as config_module
 from config.config import ConfigUnreadableError, Configuration
 from helpers.calibration_backup import CalibrationBackups
 
@@ -209,3 +213,116 @@ def test_calibration_backups_are_refused_while_unreadable(
 
     assert backups.list() == [saved.name]
     assert cfg_path.read_bytes() == content
+
+
+def kept_copies(path: Path) -> list:
+    return sorted(path.parent.glob(path.name + ".unreadable-*"))
+
+
+@pytest.mark.parametrize("content", list(UNREADABLE.values()), ids=list(UNREADABLE))
+def test_the_unreadable_file_is_copied_beside_itself(
+    cfg_path: Path, caplog: pytest.LogCaptureFixture, content: bytes,
+) -> None:
+    with caplog.at_level(logging.WARNING, logger="KneeSpa.config"):
+        config = load(cfg_path, content)
+
+    [kept] = kept_copies(cfg_path)
+    assert kept.read_bytes() == content
+    assert re.fullmatch(r"kneespa\.cfg\.unreadable-\d{8}T\d{6}Z", kept.name)
+    assert config.unreadable_copy == str(kept)
+    assert any(
+        record.levelname == "WARNING" and str(kept) in record.getMessage()
+        for record in caplog.records
+    )
+    config.ensure_device_id()
+    assert cfg_path.read_bytes() == content
+    assert kept.read_bytes() == content
+
+
+def test_restarting_on_the_same_bad_file_keeps_one_copy(cfg_path: Path) -> None:
+    content = UNREADABLE["duplicate key"]
+    first = load(cfg_path, content)
+    [kept] = kept_copies(cfg_path)
+
+    second = load(cfg_path, content)
+    second.get_config()
+
+    assert kept_copies(cfg_path) == [kept]
+    assert first.unreadable_copy == second.unreadable_copy == str(kept)
+
+
+def test_a_different_bad_file_gets_its_own_copy(cfg_path: Path) -> None:
+    load(cfg_path, UNREADABLE["duplicate key"])
+    [earlier] = kept_copies(cfg_path)
+
+    later = load(cfg_path, UNREADABLE["duplicate section"])
+
+    assert len(kept_copies(cfg_path)) == 2
+    assert earlier.read_bytes() == UNREADABLE["duplicate key"]
+    assert Path(later.unreadable_copy).read_bytes() == UNREADABLE["duplicate section"]
+    assert later.unreadable_copy != str(earlier)
+
+
+def test_an_earlier_copy_is_never_overwritten(
+    cfg_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Two different bad files in the same second: both copies are kept."""
+    class FixedClock:
+        @staticmethod
+        def now(tz: object) -> datetime:
+            return datetime(2026, 11, 10, 12, 0, 0, tzinfo=timezone.utc)
+
+    monkeypatch.setattr(config_module, "datetime", FixedClock)
+    earlier = cfg_path.parent / "kneespa.cfg.unreadable-20261110T120000Z"
+    earlier.write_bytes(b"an earlier unreadable file")
+
+    config = load(cfg_path, UNREADABLE["duplicate key"])
+
+    assert earlier.read_bytes() == b"an earlier unreadable file"
+    assert config.unreadable_copy == str(earlier) + "-1"
+    assert Path(config.unreadable_copy).read_bytes() == UNREADABLE["duplicate key"]
+    assert len(kept_copies(cfg_path)) == 2
+
+
+def test_a_failed_copy_does_not_stop_startup(
+    cfg_path: Path, monkeypatch: pytest.MonkeyPatch, caplog: pytest.LogCaptureFixture,
+) -> None:
+    content = UNREADABLE["duplicate key"]
+    cfg_path.write_bytes(content)
+    config = Configuration(config_path=str(cfg_path))
+
+    def fail(*args: object) -> None:
+        raise OSError("disk full")
+
+    monkeypatch.setattr("config.config.os.fsync", fail)
+    with caplog.at_level(logging.ERROR, logger="KneeSpa.config"):
+        config.get_config()
+
+    assert config.unreadable is True and config.unreadable_copy is None
+    assert kept_copies(cfg_path) == []  # no partial copy left to mislead anyone
+    assert "Could not keep a copy" in caplog.text
+    assert config.ensure_device_id().startswith("temporary-")
+    assert cfg_path.read_bytes() == content
+
+
+@pytest.mark.skipif(os.name != "posix", reason="POSIX file modes")
+def test_the_copy_is_owner_only_whatever_the_original_allowed(cfg_path: Path) -> None:
+    cfg_path.write_bytes(UNREADABLE["duplicate key"])
+    cfg_path.chmod(0o644)
+    config = Configuration(config_path=str(cfg_path))
+    config.get_config()
+
+    [kept] = kept_copies(cfg_path)
+    assert stat.S_IMODE(kept.stat().st_mode) == 0o600
+
+
+@pytest.mark.parametrize("content", [None, CALIBRATED, (FIXTURES / "corrupt.cfg").read_bytes()],
+                         ids=["missing", "calibrated", "malformed values"])
+def test_only_a_file_that_failed_to_load_is_copied(cfg_path: Path, content: bytes) -> None:
+    if content is not None:
+        cfg_path.write_bytes(content)
+    config = Configuration(config_path=str(cfg_path))
+    config.get_config()
+
+    assert config.unreadable_copy is None
+    assert kept_copies(cfg_path) == []
