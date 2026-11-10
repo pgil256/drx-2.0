@@ -551,6 +551,19 @@ class Configuration:
                 if not parser.has_option(section_name, key):
                     parser.set(section_name, key, str(value))
 
+    def refuse_if_unreadable(self) -> None:
+        """Raise ConfigUnreadableError if the file failed to load.
+
+        Every write does this. A caller that prepares anything on disk
+        before its save calls it first, so a refused save leaves nothing.
+        """
+        if self.unreadable:
+            raise ConfigUnreadableError(
+                f'"{self.configFile}" failed to load and was left unchanged; '
+                "nothing can be saved until it is fixed or restored and the "
+                "application restarted"
+            )
+
     def _atomic_write(self, candidate: Optional[configparser.ConfigParser] = None) -> None:
         """Write the config file atomically (temp file + fsync + rename).
 
@@ -566,12 +579,7 @@ class Configuration:
             ConfigUnreadableError: The file failed to load; nothing is written.
             Exception: Write errors propagate to the caller after temp-file cleanup.
         """
-        if self.unreadable:
-            raise ConfigUnreadableError(
-                f'"{self.configFile}" failed to load and was left unchanged; '
-                "nothing can be saved until it is fixed or restored and the "
-                "application restarted"
-            )
+        self.refuse_if_unreadable()
         parser = self.config if candidate is None else candidate
         directory = os.path.dirname(os.path.abspath(self.configFile)) or "."
         os.makedirs(directory, exist_ok=True)

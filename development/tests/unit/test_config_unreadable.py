@@ -18,6 +18,7 @@ import pytest
 from config import config as config_module
 from config.config import ConfigUnreadableError, Configuration
 from helpers.calibration_backup import CalibrationBackups
+from helpers.hardware_service import HardwareServiceDraft
 
 pytestmark = pytest.mark.unit
 
@@ -126,6 +127,35 @@ def test_every_write_path_refuses(cfg_path: Path) -> None:
 def test_the_refusal_is_an_oserror_like_other_write_failures() -> None:
     """Callers already report OSError from a failed save; none needs changing."""
     assert issubclass(ConfigUnreadableError, OSError)
+
+
+def test_a_refused_hardware_service_save_leaves_no_backup_of_the_bad_file(
+    cfg_path: Path,
+) -> None:
+    """Recovery points at the .bak files; none of them may be the unreadable file."""
+    content = UNREADABLE["duplicate key"]
+    config = load(cfg_path, content)
+    draft = HardwareServiceDraft(config)
+    draft.scale = 20000.0
+
+    for _ in range(2):
+        with pytest.raises(ConfigUnreadableError, match="failed to load"):
+            draft.save(config)
+
+    assert not list(cfg_path.parent.glob("*.bak"))
+    assert cfg_path.read_bytes() == content
+    assert draft.dirty
+
+
+def test_a_hardware_service_save_still_backs_up_a_file_that_loaded(cfg_path: Path) -> None:
+    config = load(cfg_path, CALIBRATED)
+    draft = HardwareServiceDraft(config)
+    draft.scale = 20000.0
+
+    backup = draft.save(config)
+
+    assert [str(path) for path in cfg_path.parent.glob("*.bak")] == [backup]
+    assert Path(backup).read_bytes() == CALIBRATED
 
 
 def test_a_repaired_file_loads_and_saves_again(cfg_path: Path) -> None:
