@@ -129,7 +129,10 @@ class Configuration:
             return
 
         try:
-            self.config.read(self.configFile, encoding="utf-8")
+            # Not ConfigParser.read(): it skips a file it cannot open, which
+            # then looks like an empty one and gets defaults saved over it.
+            with open(self.configFile, encoding="utf-8") as source:
+                self.config.read_file(source)
 
             allSections = {
                 s: dict(self.config.items(s)) for s in self.config.sections()
@@ -158,8 +161,8 @@ class Configuration:
     def _keep_unreadable_copy(self) -> Optional[str]:
         """Copy the file that failed to load beside itself; return the copy's path.
 
-        The application no longer writes to the file, but the copy keeps the
-        evidence if someone repairs it by hand and gets that wrong. It is
+        The application does not write to the file in this state, but the
+        copy keeps the evidence if a repair by hand goes wrong. It is
         named <file>.unreadable-<UTC time>, created owner-only (0600) like
         the configuration itself, and never replaces an earlier copy. The
         same content is kept once, so a device restarting on the same bad

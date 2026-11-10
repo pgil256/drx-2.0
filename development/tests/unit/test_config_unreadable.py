@@ -5,6 +5,7 @@ overwrite the file: the load fell back to generated defaults with an empty
 device id, the startup id check generated a new one and saved, and the save
 replaced the calibration, device number and identity with defaults.
 """
+import builtins
 import logging
 import os
 import re
@@ -326,3 +327,29 @@ def test_only_a_file_that_failed_to_load_is_copied(cfg_path: Path, content: byte
 
     assert config.unreadable_copy is None
     assert kept_copies(cfg_path) == []
+
+
+def test_a_file_that_cannot_be_opened_is_not_replaced(
+    cfg_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """ConfigParser.read() skips a file it cannot open, which looked like an
+    empty one: every section "missing", no device id, defaults saved over it."""
+    cfg_path.write_bytes(CALIBRATED)
+    real_open = builtins.open
+
+    def deny(file: object, *args: object, **kwargs: object) -> object:
+        if str(file) == str(cfg_path):
+            raise PermissionError(13, "Permission denied", str(file))
+        return real_open(file, *args, **kwargs)
+
+    config = Configuration(config_path=str(cfg_path))
+    with monkeypatch.context() as patch:
+        patch.setattr(builtins, "open", deny)
+        config.get_config()
+        device_id = config.ensure_device_id()
+
+    assert cfg_path.read_bytes() == CALIBRATED
+    assert config.unreadable is True
+    assert device_id.startswith("temporary-")
+    assert "Permission denied" in config.calibration_errors[0]
+    assert config.unreadable_copy is None and kept_copies(cfg_path) == []
