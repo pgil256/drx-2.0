@@ -187,6 +187,21 @@ def test_keypad_entry_submit_clear_back(app):
     assert changes  # got change events throughout
 
 
+@pytest.mark.parametrize("compact, expected", [(False, 76), (True, 56)])
+def test_keypad_keys_keep_their_touch_height(app, qtbot, compact, expected):
+    """The theme's QPushButton min-height must not let a layout squash the keys."""
+    from PyQt5.QtWidgets import QPushButton
+
+    from ui.widgets.ds import DSKeypad
+
+    kp = DSKeypad(length=4, compact=compact)
+    qtbot.addWidget(kp)
+    kp.show()
+    qtbot.waitExposed(kp)
+    heights = {b.height() for b in kp.findChildren(QPushButton)}
+    assert heights == {expected}
+
+
 def test_protocol_and_nav_toggle(app):
     from ui.widgets.ds import DSNavRailButton, DSProtocolButton
 
