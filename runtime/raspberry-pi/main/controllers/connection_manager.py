@@ -250,9 +250,10 @@ class ConnectionManager:
 
         if firmware_release_pending(window):
             # After the device's stop button the firmware backs the load off
-            # by itself. The reset's Y ends that release, and the homing that
-            # follows retracts the axial actuator last, so a Reset pressed
-            # straight after the button left the load on through the homing.
+            # by itself. The reset's Y ends that release, and the reset's own
+            # retraction only starts once the controller has rebooted, so a
+            # Reset pressed straight after the button would keep the load on
+            # for longer than letting the release finish.
             self.logger.info("Reset refused: the firmware is still releasing traction")
             window._show_timed_error(
                 "The device is still releasing traction. Reset when it has finished."
