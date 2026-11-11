@@ -65,7 +65,6 @@ from config.constants import (
 )
 
 from ui.modals.pressure_notice import PressureNotice
-from ui.modals.rehome_prompt import RehomePrompt
 from ui.modals.upload_error import UploadErrorDialog
 from config.config import Configuration
 from helpers.csv import CSVHelper
@@ -222,6 +221,11 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
         # time.monotonic() of the device's stop button press while the
         # firmware's release may still run (see StopController); else None.
         self._firmware_release_since = None
+        # True from the end of an on-screen Stop's release until a reset
+        # starts: the screens ask the operator to re-home (see
+        # _show_rehome_prompt). The second flag is whether pressure dropped.
+        self._awaiting_rehome = False
+        self._rehome_load_cleared = True
         self.worker = None
 
     def _init_window(self, debug_mode) -> None:
@@ -408,8 +412,9 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
         s.treatment.resume_requested.connect(self._on_treatment_resume)
         s.treatment.pause_requested.connect(self._on_treatment_pause)
         s.treatment.estop_requested.connect(self._on_estop)
-        # The same request as Setup's RESET, sign-in check included.
-        s.treatment.reset_requested.connect(self._on_setup_reset_arduino)
+        # The re-home after an on-screen Stop, else Setup's RESET (see
+        # _on_treatment_reset).
+        s.treatment.reset_requested.connect(self._on_treatment_reset)
         s.treatment.setting_changed.connect(self._on_setting_changed)
         s.treatment.leg_length_step_requested.connect(self._on_treatment_leg_step)
         self._pressure_state_timer = QTimer(self)
@@ -441,6 +446,16 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
             physical_stop=getattr(self, "_physical_stop_active", False) is True,
         )
         self.shell.set_device_status(state.label, state.detail, state.can_start)
+        # The ask to re-home gives way to a reset in progress and to a later
+        # safety stop, whose recovery is Reset in Setup.
+        self.shell.set_rehome_notice(
+            getattr(self, "_awaiting_rehome", False) is True
+            and self.protocol_state == "fault"
+            and self.reset_in_progress is not True
+            and getattr(self, "_no_automatic_recovery", False) is not True
+            and getattr(self, "_physical_stop_active", False) is not True,
+            getattr(self, "_rehome_load_cleared", True) is not False,
+        )
 
     def _reflect_setup(self, key, value):
         """Reflect a commanded target without claiming that a sensor measured it."""
@@ -1361,23 +1376,35 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
         box.destroyed.connect(lambda: setattr(self, "_pressure_notice", None))
 
     def _show_rehome_prompt(self, load_cleared: bool = True) -> None:
-        """Ask before homing after an on-screen STOP; nothing moves on a timer."""
+        """Ask before homing after an on-screen STOP; nothing moves on a timer.
+
+        The ask is part of the Treatment and Setup screens, not a dialog:
+        both point at their RESET button, and the Protocols page's RESET is
+        the re-home itself. It stays until a reset starts.
+        """
         if self._closing:
             return
-        existing = getattr(self, "_rehome_prompt", None)
-        if existing is not None and existing.isVisible():
-            return
-        box = RehomePrompt(load_cleared, self)
-        box.rehome_requested.connect(self._on_rehome_requested)
-        box.show()
-        self._rehome_prompt = box
-        box.destroyed.connect(lambda: setattr(self, "_rehome_prompt", None))
+        self._awaiting_rehome = True
+        self._rehome_load_cleared = load_cleared
+        present(self.logger, "device status", self._refresh_device_presentation)
+
+    def _on_treatment_reset(self) -> None:
+        """The Protocols page's RESET.
+
+        While the screens ask for the re-home after an on-screen Stop, it is
+        that re-home, which needs no Setup sign-in. Otherwise it is the same
+        request as Setup's RESET, sign-in check included.
+        """
+        if getattr(self, "_awaiting_rehome", False) is True:
+            self._on_rehome_requested()
+        else:
+            self._on_setup_reset_arduino()
 
     def _on_rehome_requested(self) -> None:
         """Run the reset that used to start on its own after a STOP.
 
         It replaces automatic recovery, so it needs no Setup sign-in. A fault
-        or physical stop since the prompt opened hands recovery to Setup.
+        or physical stop since the ask appeared hands recovery to Setup.
         """
         if (getattr(self, "_no_automatic_recovery", False) is True
                 or getattr(self, "_physical_stop_active", False) is True):
@@ -1386,11 +1413,6 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
             )
             return
         self.reset_arduino()
-
-    def _close_rehome_prompt(self) -> None:
-        box = getattr(self, "_rehome_prompt", None)
-        if box is not None:
-            box.close()
 
     def _show_timed_error(self, message):
         """Show error message that automatically closes after a timeout."""
@@ -1456,9 +1478,11 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
         return connected
 
     def reset_arduino(self, event=None):
-        # Reset from Setup also answers a pending re-home prompt.
-        self._close_rehome_prompt()
         self.connection.reset_arduino(event)
+        # A reset that started has answered a pending re-home (see
+        # ConnectionManager.reset_arduino); show that without waiting for
+        # the next display refresh.
+        present(self.logger, "device status", self._refresh_device_presentation)
 
     def setup_gpio(self):
         """Setup GPIO pins with proper error handling."""

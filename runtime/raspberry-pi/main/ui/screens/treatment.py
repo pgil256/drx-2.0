@@ -15,7 +15,7 @@ Signals:
     protocol_selected(int)
     patient_change_requested / patient_edit_requested / cloud_error_requested
     start_requested / resume_requested / pause_requested / estop_requested
-    reset_requested — the same reset and homing as Setup's RESET
+    reset_requested — RESET: the post-Stop re-home, or the same reset as Setup's
     setting_changed(str, float) — treatment settings and shared motor_speed
     leg_length_step_requested(str) — one slow leg-length step, "rev" or "fwd"
 """
@@ -52,7 +52,7 @@ from ui.widgets.ds import (
 )
 from ui.widgets.ds._common import mono_font, resolve, sans_font
 
-from .content import PHASES, PROTOCOLS
+from .content import PHASES, PROTOCOLS, rehome_notice
 
 _PAD = 20
 _GAP = 8
@@ -114,6 +114,7 @@ class TreatmentScreen(QWidget):
         self._device_detail = "Waiting for device readiness."
         self._device_label = "Preparing"
         self._outcome = None
+        self._rehome_text = ""
 
         root = QVBoxLayout(self)
         root.setContentsMargins(_PAD, 6, _PAD, 6)
@@ -421,6 +422,8 @@ class TreatmentScreen(QWidget):
         self._readiness.setWordWrap(True)
         self._readiness.setFont(sans_font(size=16))
         self._readiness.setStyleSheet(f"color: {resolve('--readout-muted')};")
+        # After an on-screen Stop the device waits for the operator's re-home:
+        # the status line says so, and RESET (beside STOP) starts it.
         body.addWidget(self._readiness)
         self._outcome_label = QLabel()
         self._outcome_label.setWordWrap(True)
@@ -572,8 +575,24 @@ class TreatmentScreen(QWidget):
         )
         self._refresh_readiness()
 
+    def set_rehome_notice(self, visible: bool, load_cleared: bool = True) -> None:
+        """Ask for the re-home in the monitor. Nothing moves until the tap."""
+        text = rehome_notice(load_cleared, self._reset_btn.text()) if visible else ""
+        if text == self._rehome_text:
+            return
+        self._rehome_text = text
+        tone = "--readout-muted"
+        if visible:
+            tone = "--readout-fg" if load_cleared else "--readout-danger"
+        self._readiness.setStyleSheet(
+            f"color: {resolve(tone)};" + (" font-weight: 600;" if visible else "")
+        )
+        self._refresh_readiness()
+
     def _refresh_readiness(self) -> None:
-        if self._patient_pending:
+        if self._rehome_text:
+            text = self._rehome_text
+        elif self._patient_pending:
             text = "Loading or saving patient · wait before starting."
         elif self._busy or self._device_label not in ("Ready", "Treatment active"):
             text = self._device_detail

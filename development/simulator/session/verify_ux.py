@@ -224,9 +224,9 @@ class UxVerification(GuiVerification):
         assert not view._next_button.isEnabled()
         self.save("ux-rehome-prompt")
         self.note("Stop waits for the operator to re-home",
-                  elapsed=self.rehome_prompt().elapsed_label.text())
+                  notice=view._readiness.text())
         self.dismiss_messages()
-        self.click(self.rehome_prompt().rehome_button)
+        self.click(self.rehome_button())
         yield self.wait("operator re-home homes", lambda: w.protocol_state == "idle"
                         and w.initial_setup_complete and w.arduino.baseline_valid
                         and not w.reset_in_progress, 60)
@@ -349,7 +349,7 @@ class UxStopVerification(UxVerification):
         yield self.wait("preparation cancelled and release asks to re-home",
                         self.released_awaiting_rehome, 40)
         self.dismiss_messages()
-        self.click(self.rehome_prompt().rehome_button)
+        self.click(self.rehome_button())
         yield self.wait("operator re-home begins recovery", lambda: w.reset_in_progress, 10)
         self.capture_layout("reset-stop-access")
         self.note("Stop during reset activated")
@@ -357,7 +357,7 @@ class UxStopVerification(UxVerification):
         yield self.wait("Stop during reset asks to re-home again",
                         self.released_awaiting_rehome, 60)
         self.dismiss_messages()
-        self.click(self.rehome_prompt().rehome_button)
+        self.click(self.rehome_button())
         yield self.wait("repeated Stop returns to readiness", lambda: w.protocol_state == "idle"
                         and w.initial_setup_complete and not w.reset_in_progress
                         and w.arduino.baseline_valid, 60)
@@ -412,7 +412,7 @@ class UxStopVerification(UxVerification):
                         or w.reset_in_progress)
         yield self.wait("banner Stop asks to re-home", self.released_awaiting_rehome, 60)
         self.dismiss_messages()
-        self.click(self.rehome_prompt().rehome_button)
+        self.click(self.rehome_button())
         yield self.wait("banner recovery completes", lambda: w.protocol_state == "idle"
                         and not w.reset_in_progress and w.arduino.baseline_valid, 60)
         self.dismiss_messages()

@@ -274,6 +274,7 @@ class ConnectionManager:
         window._physical_stop_active = False
         window._firmware_release_since = None
         window._no_automatic_recovery = False
+        window._awaiting_rehome = False  # this reset is the re-home the screens asked for
         window.reset_in_progress = True  # Set flag to prevent overlapping resets
         window.initial_setup_complete = False
         self._set_load_released(False)  # not confirmed again until this reset succeeds
