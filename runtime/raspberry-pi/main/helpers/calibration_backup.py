@@ -2,6 +2,7 @@
 
 import copy
 from datetime import datetime, timezone
+import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -31,6 +32,16 @@ class CalibrationBackups:
 
     def create(self, config: object, operator: str, pre_restore: bool = False) -> Path:
         self._require_loaded(config)
+        scale = config.calibration
+        if not math.isfinite(scale):
+            if not pre_restore:
+                raise ValueError(
+                    f"The load-cell scale factor in the configuration ({scale}) is not a "
+                    "finite number, so this calibration cannot be backed up. Restore an "
+                    "earlier backup, or calibrate the load cell in Calibration.")
+            # JSON has no nan or inf. Record that there was no usable factor, so a
+            # restore can still replace it; load() refuses this file as a source.
+            scale = None
         payload = {
             "schema": 1, "device_id": config.ensure_device_id(),
             "created_at": datetime.now(timezone.utc).isoformat(), "operator": operator,
@@ -39,7 +50,7 @@ class CalibrationBackups:
             "factors": {
                 axis: getattr(config, spec["factor"]) for axis, spec in SERVICE_AXES.items()
             },
-            "scale": config.calibration,
+            "scale": scale,
             "axial_service_calibrated": bool(config.axial_service_calibrated),
         }
         # A value mistyped in kneespa.cfg is only a stand-in default in memory.
@@ -105,6 +116,10 @@ class CalibrationBackups:
             factor = data.get("factors", {}).get(axis)
             if type(factor) is not int or not 1 <= factor <= 1000000:
                 raise ValueError("Invalid calibration factor.")
+        if data.get("scale") is None:
+            raise ValueError(
+                "This backup has no usable load-cell scale factor and cannot be restored. "
+                "It was saved while the device's scale factor was not a finite number.")
         if type(data.get("scale")) not in (int, float):
             raise ValueError("Invalid load-cell calibration factor.")
         _validate_scale(data["scale"])
