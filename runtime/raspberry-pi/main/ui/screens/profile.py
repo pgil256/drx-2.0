@@ -32,12 +32,22 @@ class ProfileScreen(QWidget):
         head = QWidget()
         row = QHBoxLayout(head)
         row.setSpacing(24)
-        row.addWidget(image_label(image_path("buttons", "user-profile.png"), 88, 88))
+        # The glyph sits in a soft action-blue disc, like the top bar's avatar,
+        # rather than as a bare 88px black pictogram.
+        avatar = image_label(image_path("buttons", "user-profile.png"), 48, 48)
+        avatar.setFixedSize(88, 88)
+        avatar.setStyleSheet(f"background: {resolve('--blue-100')}; border-radius: 44px;")
+        row.addWidget(avatar)
         text = QVBoxLayout()
+        text.setSpacing(2)
         self._name = self._label("", large=True)
+        self._name.setStyleSheet(f"color: {resolve('--text-strong')};")
         self._title = self._label("")
+        self._title.setStyleSheet(f"color: {resolve('--text-muted')};")
+        text.addStretch(1)
         text.addWidget(self._name)
         text.addWidget(self._title)
+        text.addStretch(1)
         row.addLayout(text, 1)
         identity.add_widget(head)
         root.addWidget(identity)
@@ -62,10 +72,15 @@ class ProfileScreen(QWidget):
         grid.setColumnStretch(0, 1)
         grid.setColumnStretch(1, 1)
         root.addLayout(grid)
-        root.addWidget(self._label(
+        # Secondary copy on the page wash: muted and a step smaller, like the
+        # notes under the Device cards (it was Qt's default black).
+        note = self._label(
             "Your operator login identifies who is using this device. Technician service and "
             "cloud staff access require their own sign-in."
-        ))
+        )
+        note.setFont(sans_font(size="--text-sm"))
+        note.setStyleSheet(f"color: {resolve('--text-muted')}; padding: 0 4px;")
+        root.addWidget(note)
         root.addStretch(1)
         actions = QHBoxLayout()
         self._restart = DSButton("Restart App", variant="secondary", full_width=True)
