@@ -29,7 +29,7 @@ class CalibrationBackups:
                 "are unavailable. Fix or restore the file, then restart."
             )
 
-    def create(self, config: object, operator: str) -> Path:
+    def create(self, config: object, operator: str, pre_restore: bool = False) -> Path:
         self._require_loaded(config)
         payload = {
             "schema": 1, "device_id": config.ensure_device_id(),
@@ -42,8 +42,35 @@ class CalibrationBackups:
             "scale": config.calibration,
             "axial_service_calibrated": bool(config.axial_service_calibrated),
         }
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        path = self.directory / f"calibration-{stamp}.json"
+        # A value mistyped in kneespa.cfg is only a stand-in default in memory.
+        # Recorded here, a restore would write that default over the text.
+        factors = {spec["factor"]: axis for axis, spec in SERVICE_AXES.items()}
+        mistyped = [name for name in (*factors, "calibration", "axial_service_calibrated")
+                    if config.is_mistyped(name)]
+        if mistyped and not pre_restore:
+            raise ValueError(
+                f"Mistyped in the configuration file: {', '.join(mistyped)}. This "
+                "calibration cannot be backed up. Correct the value in the file and "
+                "restart, or restore an earlier backup.")
+        for name in mistyped:
+            # Record that there was no value, so a restore can still replace the
+            # mistyped one; load() refuses this file as a source.
+            if name in factors:
+                payload["factors"][factors[name]] = None
+            else:
+                payload["scale" if name == "calibration" else name] = None
+        if mistyped:
+            payload["mistyped"] = mistyped
+        moment = datetime.now(timezone.utc)
+        while True:
+            stamp = moment.strftime("%Y%m%dT%H%M%S%fZ")
+            path = self.directory / f"calibration-{stamp}.json"
+            if not (path.exists() or path.is_symlink()):
+                break
+            # write_json() replaces a file of the same name, and a coarse clock
+            # (Windows) can give two backups the same time. Never replace one:
+            # the backup a restore takes first would overwrite its own source.
+            moment += datetime.resolution  # one microsecond later, so it sorts as newer
         write_json(path, payload)
         return path
 
@@ -62,6 +89,10 @@ class CalibrationBackups:
             raise ValueError("Unsupported calibration backup format.")
         if data.get("device_id") != config.ensure_device_id():
             raise ValueError("This calibration backup belongs to a different device.")
+        if data.get("mistyped"):
+            raise ValueError(
+                "This backup cannot be restored. It was saved while a calibration value "
+                "was mistyped in the configuration file, and has no value for it.")
         if type(data.get("axial_service_calibrated")) is not bool:
             raise ValueError("The backup's calibration state is invalid.")
         if not isinstance(data.get("marks"), dict) or not isinstance(data.get("factors"), dict):
@@ -86,7 +117,7 @@ class CalibrationBackups:
         data = self.load(name, config)
         if reviewed is not None and data != reviewed:
             raise ValueError("The backup changed. Review it again before restoring.")
-        backup = self.create(config, operator)
+        backup = self.create(config, operator, pre_restore=True)
         candidate = copy.deepcopy(config.config)
         for axis, spec in SERVICE_AXES.items():
             candidate[spec["table"]] = {str(k): str(v) for k, v in data["marks"][axis].items()}

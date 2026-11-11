@@ -10,7 +10,8 @@
 # The values below are the factory fallbacks, shown for reference only.
 
 [Device]
-# Set this device's number to 1, 2, or 3. Missing/invalid numbers default to 1.
+# Set this device's number to 1, 2, or 3. Missing/invalid numbers run as 1;
+# an invalid number is left here as typed so it can be corrected.
 number = 1
 # A separate unique support id is generated automatically.
 id =

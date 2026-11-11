@@ -51,6 +51,12 @@ class Configuration:
         # Legacy AMarks were not used for axial commands. Opt in only after
         # a technician measures the axial endpoints in the service wizard.
         self.axial_service_calibrated = False
+        # Values that are in the file but did not parse, as (section, option)
+        # -> the default used in memory instead. A save leaves their text in
+        # the file: writing the default over `b_factor = 372O` destroyed the
+        # only record of what the technician meant, and the default then
+        # loaded cleanly on every later start.
+        self._mistyped: Dict[tuple, object] = {}
         self.configFile = config_path or CONFIG_PATH
         self.config = configparser.ConfigParser(allow_no_value=True)
         self.CMarks = {}
@@ -112,6 +118,7 @@ class Configuration:
     def get_config(self, config_path: Optional[str] = None):
 
         self.config = configparser.ConfigParser(allow_no_value=True)
+        self._mistyped = {}
         if config_path:
             self.configFile = config_path
         self.calibration_errors = []
@@ -273,6 +280,7 @@ class Configuration:
             )
         except ValueError:
             self.axial_service_calibrated = False
+            self._mistyped[(section, "axial_service_calibrated")] = False
             self._flag_error("Invalid axial_service_calibrated flag; device is UNCALIBRATED")
 
         config_options = {
@@ -298,8 +306,60 @@ class Configuration:
             except (ValueError, TypeError) as e:
                 logger.warning("Error parsing %s: %s, using default", option_name, e)
                 value = option_settings["default"]
-                self.config.set(section, option_name, str(value))
+                self._flag_mistyped_option(option_name, raw_value, value)
+                # The live parser keeps the text as written, so the saves
+                # that copy it (hardware service, calibration restore) do too.
+                self._mistyped[(section, option_name)] = value
             setattr(self, option_name, value)
+
+    def _flag_mistyped_option(self, name: str, raw: object, default: object) -> None:
+        """Report an [Options] value that is present but did not parse.
+
+        A hand edit such as ``b_factor = 372O`` (letter O) used to load as
+        the default with only a log line, so the device ran on a factor
+        nobody measured and still looked calibrated.
+        """
+        if name == "calibration":
+            # Not worded as "UNCALIBRATED": _validate_calibration() takes
+            # that word to mean the mark tables cannot be trusted. Pressure
+            # is blocked by its check that the default 1.0 is implausible.
+            self._flag_error(
+                f"[Options] calibration = {raw!r} is not a number, so the "
+                "load-cell scale factor was not loaded. Correct the value in "
+                "the file and restart."
+            )
+        elif name in ("a_factor", "b_factor", "c_factor"):
+            self._flag_error(
+                f"[Options] {name} = {raw!r} is not a whole number; default "
+                f"{default} in use. Device is UNCALIBRATED: correct the value "
+                "in the file and restart."
+            )
+        # flexion_position is loaded and saved but used by nothing, so it
+        # gets the log line above and does not disable the device.
+
+    def _keeps_mistyped(self, section: str, option: str, value: object) -> bool:
+        """Whether a save must leave this option's text as it is in the file.
+
+        True while the value in memory is still the default that stood in for
+        text that did not parse. A value set on purpose since then is saved
+        as usual, and the option is no longer treated as mistyped.
+        """
+        key = (section, option)
+        if key not in self._mistyped:
+            return False
+        if value == self._mistyped[key]:
+            return True
+        del self._mistyped[key]
+        return False
+
+    def is_mistyped(self, option: str) -> bool:
+        """Whether an [Options] value in memory is only a stand-in default.
+
+        A calibration backup must not record that default as the device's
+        own value: restoring it would write the default over the text.
+        """
+        key = ("Options", option)
+        return key in self._mistyped and getattr(self, option) == self._mistyped[key]
 
     def _load_protocol_defaults(self):
         """Load persisted Treatment Settings defaults, keeping __init__ fallbacks
@@ -378,8 +438,15 @@ class Configuration:
             if number not in (1, 2, 3):
                 raise ValueError("must be 1, 2, or 3")
         except (ValueError, TypeError):
-            logger.warning("Invalid Device.number %r; using default 1", raw_number)
-            number = 1
+            # A label, not calibration: the device runs as number 1 and is
+            # not disabled. The text stays in the file so it can be corrected.
+            logger.warning(
+                "Invalid Device.number %r; running as device 1. The value was "
+                "left in the file: correct it there and restart.", raw_number,
+            )
+            self.device_number = 1
+            self._mistyped[("Device", "number")] = 1
+            return
         self.device_number = number
         self._set_section("Device", {"number": number})
 
@@ -446,6 +513,9 @@ class Configuration:
         self.config = candidate
         for name, value in attrs.items():
             setattr(self, name, value)
+            # The caller wrote a reviewed value for this option into the
+            # candidate, so its mistyped text is gone from the file.
+            self._mistyped.pop(("Options", name), None)
         if revalidate:
             self._validate_calibration()
 
@@ -636,7 +706,9 @@ class Configuration:
 
         # Set each option in the config
         for option in config_options:
-            if hasattr(self, option):
+            if hasattr(self, option) and not self._keeps_mistyped(
+                section, option, getattr(self, option),
+            ):
                 parser.set(section, option, str(getattr(self, option)))
 
         # Persist the Phase-3.5 sections alongside the legacy Options.
@@ -650,9 +722,10 @@ class Configuration:
             }, parser)
         elif parser.has_section("ProtocolDefaults"):
             parser.remove_section("ProtocolDefaults")
-        self._set_section("Device", {
-            "id": self.device_id, "number": self.device_number,
-        }, parser)
+        device: Dict[str, object] = {"id": self.device_id}
+        if not self._keeps_mistyped("Device", "number", self.device_number):
+            device["number"] = self.device_number
+        self._set_section("Device", device, parser)
 
     def update_config(self):
         """Update current values, retaining this caller's legacy error reporting."""
