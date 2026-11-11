@@ -173,8 +173,10 @@ class SafetyMonitor:
         """Handle status updates from Arduino with safety checks."""
         window = self.window
         # Feed the always-visible banner with MEASURED pressure (the rest
-        # of the UI shows commanded values)
-        window.treatment_panel.update_pressure(pressure)
+        # of the UI shows commanded values). The banner shows a push on the
+        # footplate as negative; every check below uses the magnitude.
+        signed = getattr(window, "signed_pressure", None)
+        window.treatment_panel.update_pressure(signed(pressure) if callable(signed) else pressure)
 
         if window.initial_setup_complete:
             try:

@@ -276,6 +276,7 @@ class ConnectionManager:
         window._no_automatic_recovery = False
         window.reset_in_progress = True  # Set flag to prevent overlapping resets
         window.initial_setup_complete = False
+        self._set_load_released(False)  # not confirmed again until this reset succeeds
 
         if not hasattr(window, 'arduino') or window.arduino is None:
             self.logger.warning("Arduino object not ready for reset")
@@ -311,6 +312,16 @@ class ConnectionManager:
         self.logger.debug("Starting ResetWorker in threadpool")
         window.threadpool.start(reset_worker)
         window.reset_setup_readings()
+
+    def _set_load_released(self, released: bool) -> None:
+        """Display only: the Protocols page hides its reading once released."""
+        update = getattr(self.window, "set_load_released", None)
+        if not callable(update):
+            return
+        try:
+            update(released)
+        except Exception:
+            self.logger.exception("Could not update the pressure waiting text")
 
     def _release_estop_line(self) -> None:
         """Drive the hardware EMERGENCYSTOP output to its idle (HIGH) level."""
@@ -372,6 +383,7 @@ class ConnectionManager:
             window.lateral_flexion_position = 0
             window._measurement_fault = None
             window.on_baseline_changed(True)
+            self._set_load_released(True)  # retracted, homed and zeroed
             window.loading_spinner.hide() # Hide spinner when done
             window._show_timed_error(
                 "Arduino reset and actuators reinitialized."

@@ -20,6 +20,7 @@ from typing import Callable, Optional
 from PyQt5.QtCore import QSize, Qt, QEvent, pyqtSignal
 from PyQt5.QtWidgets import QFrame, QHBoxLayout, QLabel, QPushButton, QWidget
 
+from ui.measurements import signed_text
 from ui.theme import close_icon
 
 _BASE_STYLE = """
@@ -241,7 +242,7 @@ class TreatmentStatusPanel(QFrame):
     def update_pressure(self, pressure: float) -> None:
         """Measured pressure from device status, not the commanded value."""
         try:
-            self.pressure_label.setText(f"{float(pressure):.1f} lbs")
+            self.pressure_label.setText(f"{signed_text(float(pressure))} lbs")
         except (TypeError, ValueError):
             pass
 

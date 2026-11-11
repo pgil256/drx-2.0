@@ -131,7 +131,7 @@ def make_stub() -> SimpleNamespace:
     # authorizes and delegates.
     window.motion = MagicMock(spec=MotionController)
     for name in (
-        "close", "_seed_modern_run_inputs", "_reflect_setup", "_leg_jog",
+        "close", "_seed_modern_run_inputs", "_reflect_setup", "_leg_jog", "set_load_released",
         "move_actuator", "_show_patient_modal", "_on_patient_edit", "_on_mark_default",
     ):
         setattr(window, name, MagicMock())

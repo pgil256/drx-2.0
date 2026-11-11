@@ -36,6 +36,7 @@ from config.constants import (
     MOTOR_SPEED_DEFAULT, MOTOR_SPEED_DEFAULTS, MOTOR_SPEED_MAX, MOTOR_SPEED_MIN, MOTOR_SPEED_STEP,
 )
 from helpers.motor_speed import treatment_motor_speed
+from ui.measurements import signed_text
 from ui.modals.treatment_editor import TreatmentEditorDialog
 from ui.theme import pause_icon, play_icon
 from ui.widgets.common import eyebrow
@@ -54,6 +55,7 @@ _PAD = 20
 _GAP = 8
 _TOTAL = DEFAULT_PROTOCOL_MINUTES * 60
 NO_PATIENT = "No patient linked"
+WAITING_FOR_START = "Waiting for protocol start"
 
 # Settings sliders: (key, label, default, min, max, step, unit)
 SETTING_SPECS = [
@@ -101,6 +103,7 @@ class TreatmentScreen(QWidget):
         self._progress_fraction = 0.0
         self._pressure_value = None
         self._pressure_caption = "Waiting for pressure"
+        self._awaiting_start = False
         self._adjusting = False
         self._can_start = False
         self._device_detail = "Waiting for device readiness."
@@ -598,15 +601,36 @@ class TreatmentScreen(QWidget):
         self._render_pressure()
 
     def _render_pressure(self) -> None:
-        live = self._pressure_caption == "Pressure live" and self._pressure_value is not None
-        self._pressure_stat.set_value(f"{self._pressure_value:.1f}" if live else "—", "lbs")
+        live = (self._pressure_caption == "Pressure live" and self._pressure_value is not None
+                and not self._awaiting_start)
+        # A push on the footplate arrives negative and shows a true minus sign.
+        self._pressure_stat.set_value(signed_text(self._pressure_value) if live else "—", "lbs")
         # Only a live reading takes the accent; stale or missing stays plain.
         self._pressure_stat.set_tone("cyan" if live else "default")
 
     def set_pressure_state(self, caption: str) -> None:
         self._pressure_caption = caption
-        self._pressure_stat.set_label("Measured pressure" if caption == "Pressure live" else caption)
+        if caption != "Pressure live":
+            # Fault, zero-required, stale and connection captions keep priority.
+            label = caption
+        elif self._awaiting_start:
+            label = WAITING_FOR_START
+        else:
+            label = "Measured pressure"
+        self._pressure_stat.set_label(label)
         self._render_pressure()
+
+    def set_awaiting_start(self, awaiting: bool) -> None:
+        """Show no number while idle with the leg confirmed released.
+
+        Staff set leg length by the leg, not by steering this reading to zero
+        (ks-fb, 11 November 2026). The controller decides when that holds: a
+        run that stopped without releasing keeps its reading until a reset.
+        """
+        if awaiting == self._awaiting_start:
+            return
+        self._awaiting_start = awaiting
+        self.set_pressure_state(self._pressure_caption)
 
     def set_angle(self, degrees):
         import math

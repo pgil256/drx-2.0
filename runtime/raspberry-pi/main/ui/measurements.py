@@ -4,6 +4,12 @@ import math
 from typing import Mapping, Optional
 
 
+def signed_text(value: float, spec: str = ".1f") -> str:
+    """Format a reading with a true minus sign; one that rounds to zero carries none."""
+    text = format(abs(value), spec)
+    return "−" + text if value < 0 and float(text) != 0 else text
+
+
 def calibrated_reading(position: float, marks: Mapping) -> Optional[float]:
     """Interpolate within a valid monotonic calibration table, otherwise return None."""
     try:
