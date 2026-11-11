@@ -102,15 +102,29 @@ def test_every_page_paints_the_page_wash(shell, qtbot):
     qtbot.waitExposed(shell)
     shell.set_user("Dr. Vasquez")
     wash = resolve("--surface-page")
-    for key in ("home", "setup", "protocols", "support", "device", "profile"):
-        shell.navigate(key)
+    window_grey = shell.palette().window().color().name()
+    assert window_grey != wash
+
+    def check(name):
         page = shell.stack.currentWidget()
         qtbot.wait(20)
+        shot = page.grab().toImage()
         # The outermost pixel is page margin on every screen, never a card.
-        assert page.grab().toImage().pixelColor(2, 2).name() == wash, key
-        origin = page.mapTo(shell, page.rect().topLeft())
-        shot = shell.grab().toImage()
-        assert shot.pixelColor(origin.x() + 2, origin.y() + 2).name() == wash, key
+        assert shot.pixelColor(2, 2).name() == wash, name
+        # Nor may the default grey show anywhere else: between cards, in a
+        # scroll area's content widget or beside its scrollbar.
+        grey = [(x, y) for x in range(0, shot.width(), 6) for y in range(0, shot.height(), 6)
+                if shot.pixelColor(x, y).name() == window_grey]
+        assert not grey, "%s paints the default window grey at %s" % (name, grey[:3])
+
+    for key in ("home", "setup", "protocols", "profile"):
+        shell.navigate(key)
+        check(key)
+    for key, sections in (("support", 4), ("device", 3)):
+        shell.navigate(key)
+        for index in range(sections):
+            getattr(shell, key)._select_section(index)
+            check("%s section %d" % (key, index))
 
 
 def test_gated_pages_bounce_to_login_when_logged_out(shell):

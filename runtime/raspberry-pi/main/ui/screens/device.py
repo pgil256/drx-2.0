@@ -93,7 +93,11 @@ class DeviceScreen(QWidget):
         scroll.setWidgetResizable(True)
         scroll.setFrameShape(QFrame.NoFrame)
         QScroller.grabGesture(scroll.viewport(), QScroller.TouchGesture)
+        # A scroll area's content widget fills itself with the palette's window
+        # grey unless told otherwise; that showed between and beside the cards.
         host = QWidget()
+        host.setObjectName("DevicePage")
+        host.setStyleSheet(f"#DevicePage {{ background: {resolve('--surface-page')}; }}")
         layout = QGridLayout(host)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(16)
