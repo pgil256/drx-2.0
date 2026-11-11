@@ -95,6 +95,30 @@ def test_restore_write_failure_leaves_live_configuration_untouched(tmp_path, con
     assert len(backups.list()) == 2  # The pre-restore backup still exists.
 
 
+def test_a_backup_never_replaces_one_made_in_the_same_clock_tick(tmp_path, config, monkeypatch):
+    """A Windows clock advances in coarse ticks, so two backups can share a time."""
+    from datetime import datetime, timezone
+
+    class StoppedClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 11, 11, 0, 6, 11, 480365, tzinfo=timezone.utc)
+
+    monkeypatch.setattr("helpers.calibration_backup.datetime", StoppedClock)
+    backups = CalibrationBackups(tmp_path)
+    first = backups.create(config, "Technician")
+    saved = first.read_bytes()
+    config.b_factor = 2800
+    second = backups.create(config, "Technician")
+    assert second != first
+    assert first.read_bytes() == saved
+    assert backups.list() == [second.name, first.name]  # Newest first.
+    # The backup a restore takes first must not replace the one being restored.
+    before = backups.restore(first.name, config, "Administrator")
+    assert first.read_bytes() == saved
+    assert backups.list() == [before.name, second.name, first.name]
+
+
 def test_backup_changed_after_review_must_be_reviewed_again(tmp_path, config):
     backups = CalibrationBackups(tmp_path)
     selected = backups.create(config, "Technician")

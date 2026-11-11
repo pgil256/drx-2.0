@@ -61,8 +61,16 @@ class CalibrationBackups:
                 payload["scale" if name == "calibration" else name] = None
         if mistyped:
             payload["mistyped"] = mistyped
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        path = self.directory / f"calibration-{stamp}.json"
+        moment = datetime.now(timezone.utc)
+        while True:
+            stamp = moment.strftime("%Y%m%dT%H%M%S%fZ")
+            path = self.directory / f"calibration-{stamp}.json"
+            if not (path.exists() or path.is_symlink()):
+                break
+            # write_json() replaces a file of the same name, and a coarse clock
+            # (Windows) can give two backups the same time. Never replace one:
+            # the backup a restore takes first would overwrite its own source.
+            moment += datetime.resolution  # one microsecond later, so it sorts as newer
         write_json(path, payload)
         return path
 
