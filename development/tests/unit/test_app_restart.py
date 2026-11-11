@@ -32,7 +32,7 @@ def test_relaunch_preserves_interpreter_spaced_arguments_and_mode(monkeypatch, p
 def test_restart_requests_one_close_and_defers_launch():
     window = make_window()
     window.restart_requested = False
-    window._block_active_treatment_exit.return_value = False
+    window._block_active_treatment_exit.return_value = True
     window.close = Mock()
     KneeSpa._on_restart_app(window)
     KneeSpa._on_restart_app(window)
