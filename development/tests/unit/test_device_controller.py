@@ -143,6 +143,44 @@ def test_power_rechecks_state_after_confirmation(controller, monkeypatch):
     assert not hasattr(controller.window, "_system_power_action")
 
 
+def test_restart_app_works_after_a_fault(controller, monkeypatch):
+    """A fault keeps the Setup lock until a reset succeeds, which a faulted
+    controller may never allow. Restart App must not wait for it."""
+    monkeypatch.setattr(module.QMessageBox, "question", lambda *args: QMessageBox.Yes)
+    controller.window.protocol_state = "fault"
+    controller.window.actuator_command_in_progress = True
+    controller.window._physical_stop_active = True
+    controller.action("restart_app")
+    controller.window._on_restart_app.assert_called_once()
+
+
+@pytest.mark.parametrize("flag", [
+    "reset_in_progress", "_calibration_active", "_device_maintenance_active", "_closing",
+])
+def test_restart_app_after_a_fault_still_waits_for_reset_and_service(
+        controller, monkeypatch, flag):
+    monkeypatch.setattr(module.QMessageBox, "question", lambda *args: QMessageBox.Yes)
+    controller.window.protocol_state = "fault"
+    setattr(controller.window, flag, True)
+    controller.action("restart_app")
+    controller.window._on_restart_app.assert_not_called()
+
+
+@pytest.mark.parametrize("state", ["starting", "running", "stopping"])
+def test_restart_app_is_refused_during_a_treatment(controller, monkeypatch, state):
+    monkeypatch.setattr(module.QMessageBox, "question", lambda *args: QMessageBox.Yes)
+    controller.window.protocol_state = state
+    controller.action("restart_app")
+    controller.window._on_restart_app.assert_not_called()
+
+
+def test_a_fault_still_blocks_device_changes(controller):
+    controller.window.protocol_state = "fault"
+    called = Mock()
+    controller._authorize(called)
+    called.assert_not_called()
+
+
 def test_restore_rechecks_state_after_review(controller, monkeypatch, qtbot):
     controller._service_user = dict(controller.window.current_user)
     controller.screen.unlock_service()

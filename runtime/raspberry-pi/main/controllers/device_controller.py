@@ -91,6 +91,27 @@ class DeviceController(QObject):
             )
         )
 
+    def can_restart_app(self) -> bool:
+        """Restart App is also the way out of a fault that Reset cannot clear.
+
+        ``idle`` refuses the fault state, and a fault keeps the Setup lock
+        (``actuator_command_in_progress``) and the stop-button latch until a
+        reset succeeds. A faulted or unplugged controller may never allow
+        that reset. This matches the window's exit gate
+        (``DeviceState.busy_reason``): in a fault only a reset in progress,
+        device service or a shutdown already under way block the restart,
+        which still runs the shutdown stop.
+        """
+        w = self.window
+        if getattr(w, "protocol_state", "idle") != "fault":
+            return self.idle()
+        return not any(
+            getattr(w, name, False) is True for name in (
+                "reset_in_progress", "_calibration_active",
+                "_device_maintenance_active", "_closing",
+            )
+        )
+
     def _owned_idle(self, user: dict) -> bool:
         return bool(user) and user == self.window.current_user and self.idle()
 
@@ -368,16 +389,19 @@ class DeviceController(QObject):
         self._next()
 
     def _authorize(self, callback: Callable, technician: bool = False,
-                   service: bool = False) -> None:
+                   service: bool = False, ready: Optional[Callable] = None) -> None:
+        """``ready`` replaces the idle check for an action with its own gate."""
         from controllers.machine_sign_in_controller import authorize
         if not authorize(self.window, "service" if technician else "device",
-                         lambda: self._authorize(callback, technician, service)):
+                         lambda: self._authorize(callback, technician, service, ready)):
             return
         self.wake()
         user = dict(self.window.current_user or {})
+        if ready is None:
+            ready = self.window.hardware_service.can_open if service else self.idle
+
         def eligible() -> bool:
-            return (bool(user) and user == self.window.current_user and
-                    (self.window.hardware_service.can_open() if service else self.idle()))
+            return bool(user) and user == self.window.current_user and ready()
 
         if not eligible():
             self.screen.set_status("Log in and finish treatment, movement, reset or service first.")
@@ -471,7 +495,8 @@ class DeviceController(QObject):
             self._authorize(lambda user: self._queue(name, self.system.sync_clock,
                                                    self._system_done, user=user))
         elif name in ("restart_app", "reboot", "poweroff"):
-            self._authorize(lambda user: self._power(name, user))
+            ready = self.can_restart_app if name == "restart_app" else None
+            self._authorize(lambda user: self._power(name, user), ready=ready)
 
     def _set_idle_timeout(self, minutes: int) -> None:
         self._idle_minutes = minutes
@@ -636,7 +661,12 @@ class DeviceController(QObject):
 
     def _power(self, action: str, user: dict) -> None:
         labels = {"restart_app": "Restart App", "reboot": "Restart Device", "poweroff": "Shut Down"}
-        if not self._owned_idle(user):
+        ready = self.can_restart_app if action == "restart_app" else self.idle
+
+        def allowed() -> bool:
+            return bool(user) and user == self.window.current_user and ready()
+
+        if not allowed():
             return
         answer = QMessageBox.question(
             self.window, labels[action],
@@ -645,7 +675,7 @@ class DeviceController(QObject):
         )
         if answer != QMessageBox.Yes:
             return
-        if not self._owned_idle(user):
+        if not allowed():
             return
         if action == "restart_app":
             self.window._on_restart_app()
