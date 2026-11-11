@@ -103,6 +103,13 @@ def _validate_scale(value: float) -> None:
         )
 
 
+def validate_distance_factor(value: object, label: str) -> None:
+    """Reject a distance factor that is not an integer from 1 to 1,000,000."""
+    factor = _finite(value, f"{label} distance factor")
+    if not factor.is_integer() or not 1 <= factor <= 1000000:
+        raise ValueError(f"{label}: factor must be an integer from 1 to 1,000,000.")
+
+
 class HardwareServiceDraft:
     """Keep measurements out of the live configuration until reviewed and saved."""
 
@@ -157,9 +164,7 @@ class HardwareServiceDraft:
                 if axis == "axial" and not self._axial_calibrated:
                     if not {"0.0", "4.0"}.issubset(self.recorded["axial"]):
                         raise ValueError("Axial: capture measured 0 and 4 inch endpoints first.")
-            factor = _finite(self.factors[axis], f"{spec['label']} distance factor")
-            if not factor.is_integer() or not 1 <= factor <= 1000000:
-                raise ValueError(f"{spec['label']}: factor must be an integer from 1 to 1,000,000.")
+            validate_distance_factor(self.factors[axis], spec["label"])
         if self.scale != self.original_scale:
             _validate_scale(self.scale)
 
