@@ -49,6 +49,7 @@ class PatientEditor(QDialog):
         outer.addWidget(self._scroll, 1)
         self._title = QLabel()
         self._title.setFont(sans_font(size=24, weight=600))
+        self._title.setProperty("dsTitle", True)
         layout.addWidget(self._title)
         account = QHBoxLayout()
         self._account = QLabel("Cloud staff sign-in is required to save patients.")

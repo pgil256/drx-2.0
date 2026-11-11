@@ -74,6 +74,7 @@ class PatientPortal(QDialog):
         layout.setSpacing(16)
         title = QLabel("Add patient in clinician app")
         title.setFont(sans_font(size=24, weight=600))
+        title.setProperty("dsTitle", True)
         title.setAlignment(Qt.AlignCenter)
         layout.addWidget(title)
         self._instructions = QLabel(self.INSTRUCTIONS)

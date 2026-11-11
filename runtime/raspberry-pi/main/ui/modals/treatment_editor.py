@@ -31,6 +31,7 @@ class TreatmentEditorDialog(QDialog):
         self.setStyleSheet(
             f"#TreatmentEditorDialog {{ background: {resolve('--surface-card')}; }}"
             f"#TreatmentEditorDialog QLabel {{ color: {resolve('--text-body')}; }}"
+            f"#TreatmentEditorDialog QLabel[dsTitle=\"true\"] {{ color: {resolve('--text-strong')}; }}"
         )
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.resize(1000, 708)
@@ -42,6 +43,7 @@ class TreatmentEditorDialog(QDialog):
         heading = QHBoxLayout()
         title = QLabel("Edit treatment")
         title.setFont(sans_font(size=28, weight=600))
+        title.setProperty("dsTitle", True)
         heading.addWidget(title)
         heading.addStretch(1)
         self._protocol_label = QLabel()

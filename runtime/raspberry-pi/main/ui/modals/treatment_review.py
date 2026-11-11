@@ -27,6 +27,7 @@ class TreatmentReviewDialog(QDialog):
         layout.setSpacing(16)
         title = QLabel(f"{protocol} · {PROTOCOLS[protocol - 1]['title']}")
         title.setFont(sans_font(size=24, weight=600))
+        title.setProperty("dsTitle", True)
         title.setWordWrap(True)
         layout.addWidget(title)
         self._patient = QLabel(patient)

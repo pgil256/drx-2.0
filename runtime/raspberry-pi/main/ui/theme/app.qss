@@ -18,6 +18,9 @@ QDialog {
   color: var(--text-body);
 }
 QDialog QLabel { color: var(--text-body); }
+/* A dialog's title reads in the strong ink, like a card header, above its
+ * body-coloured copy. Set with label.setProperty("dsTitle", True). */
+QDialog QLabel[dsTitle="true"] { color: var(--text-strong); }
 QMessageBox, QInputDialog, QProgressDialog {
   background-color: var(--surface-card);
   padding: var(--space-6);
