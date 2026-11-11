@@ -153,6 +153,29 @@ def test_login_success_and_logout_flow(shell):
     assert shell.stack.currentIndex() == PAGES.index("home")
 
 
+def test_rail_session_button_logs_in_then_out_to_home(shell):
+    from ui.app_shell import PAGES
+
+    session = shell.nav_rail._session
+    shell.logout_requested.connect(shell.logout)  # the controller's role
+
+    # Signed out: the first rail item is Login and opens the login modal.
+    shell.set_user(None)
+    assert session.text() == "Login"
+    session.click()
+    assert not shell.login_modal.isHidden()
+
+    # Signed in: the same item becomes Logout and returns to Home.
+    shell.login_succeeded("Dr. Vasquez", title="Clinician")
+    shell.navigate("setup")
+    assert session.text() == "Logout"
+    session.click()
+    assert shell.stack.currentIndex() == PAGES.index("home")
+    assert session.text() == "Login"
+    assert shell.login_modal.isHidden()
+    assert "home" not in shell.nav_rail._buttons
+
+
 def test_avatar_opens_profile_and_logout_button_logs_out(shell):
     from ui.app_shell import PAGES
 
