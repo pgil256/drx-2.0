@@ -92,7 +92,10 @@ Settings and Service scroll vertically on the touchscreen.
   administrator or technician access and confirmation. They are available at any
   point, including during a treatment, reset, device service or fault: the
   shutdown stop cancels whatever owns the motors and stops them, and the
-  confirmation says so when the device is not idle. Profile's Restart App
+  confirmation says so when the device is not idle. A phone sign-in is asked
+  for the technician PIN without the cloud recheck the other Device actions
+  make, so an expired session or a lost network does not block them. Profile's
+  Restart App
   follows the same checks. OS power actions run only after the app's
   serial safety cleanup, workers, and cloud outbox close have finished.
 

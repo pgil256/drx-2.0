@@ -379,11 +379,19 @@ class DeviceController(QObject):
         self._next()
 
     def _authorize(self, callback: Callable, technician: bool = False,
-                   service: bool = False, ready: Optional[Callable] = None) -> None:
-        """``ready`` replaces the idle check for an action with its own gate."""
+                   service: bool = False, ready: Optional[Callable] = None,
+                   cloud_recheck: bool = True) -> None:
+        """``ready`` replaces the idle check for an action with its own gate.
+
+        ``cloud_recheck=False`` skips the phone sign-in's cloud recheck, which
+        is refused during a treatment and needs a live session and a network.
+        A phone sign-in is never an administrator, so the technician PIN
+        below is still asked.
+        """
         from controllers.machine_sign_in_controller import authorize
-        if not authorize(self.window, "service" if technician else "device",
-                         lambda: self._authorize(callback, technician, service, ready)):
+        if cloud_recheck and not authorize(
+                self.window, "service" if technician else "device",
+                lambda: self._authorize(callback, technician, service, ready)):
             return
         self.wake()
         user = dict(self.window.current_user or {})
@@ -427,9 +435,12 @@ class DeviceController(QObject):
         service_actions = ("view_report", "export_diagnostics", "backup_calibration",
                            "restore_calibration", "check_releases", "flash_software",
                            "flash_firmware", "purge_rejected_uploads")
+        power_actions = ("restart_app", "reboot", "poweroff")
         from controllers.machine_sign_in_controller import authorize
-        if not authorize(self.window, "service" if name in service_actions else "device",
-                         lambda: self.action(name, value)):
+        # Power actions skip the phone sign-in's cloud recheck: see _authorize.
+        if name not in power_actions and not authorize(
+                self.window, "service" if name in service_actions else "device",
+                lambda: self.action(name, value)):
             return
         if name in service_actions and not self.service_authorized():
             self.require_service(lambda _user: self.action(name, value))
@@ -484,8 +495,9 @@ class DeviceController(QObject):
         elif name == "sync_clock":
             self._authorize(lambda user: self._queue(name, self.system.sync_clock,
                                                    self._system_done, user=user))
-        elif name in ("restart_app", "reboot", "poweroff"):
-            self._authorize(lambda user: self._power(name, user), ready=self.can_power)
+        elif name in power_actions:
+            self._authorize(lambda user: self._power(name, user), ready=self.can_power,
+                            cloud_recheck=False)
 
     def _set_idle_timeout(self, minutes: int) -> None:
         self._idle_minutes = minutes
