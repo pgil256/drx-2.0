@@ -1288,3 +1288,70 @@ def test_setup_pressure_keeps_the_reading_on_the_protocols_page(window_run):
     assert w._on_setup_go("pressure")
     show_live_pressure(run)
     assert pressure_window(run) == MEASURED
+
+
+def leg_at(run: SimpleNamespace, inches: float) -> tuple:
+    """Give the open-loop leg axis a known reference and unlock the controls."""
+    w = run.window
+    w.leg.position = inches
+    w._service_leg_position_unknown = False
+    w.leg._display()
+    buttons = run.view.leg_length_buttons()
+    for button in buttons:
+        button.setEnabled(True)
+    return buttons
+
+
+def test_protocols_page_leg_length_buttons_send_one_slow_step_each(window_run):
+    run = window_run
+    w = run.window
+    reverse, forward = leg_at(run, 2.25)
+    assert run.view._leg_value.text() == "2.25 in"
+    assert w.shell.setup._pos["leg_length"]._value.text() == "2.25 in"
+    w.leg.move = MagicMock(return_value=True)
+    forward.click()
+    reverse.click()
+    assert [call[0][0] for call in w.leg.move.call_args_list] == ["F+", "F-"]
+
+
+def test_protocols_page_leg_length_buttons_lock_with_the_setup_controls(window_run):
+    run = window_run
+    w = run.window
+    buttons = leg_at(run, 2.25)
+    assert all(button in w.actuator_controls for button in buttons)
+    start(run)
+    assert w.protocol_state == "running"
+    assert not any(button.isEnabled() for button in buttons)
+    # A step requested anyway is refused by the leg controller itself.
+    run.arduino.send_tracked.reset_mock()
+    w._on_treatment_leg_step("fwd")
+    run.arduino.send_tracked.assert_not_called()
+    assert not w.leg.active
+
+
+def test_leg_length_step_in_flight_holds_start(window_run):
+    """A run never zeroes the load cell while the leg-length actuator moves."""
+    run = window_run
+    w = run.window
+    leg_at(run, 2.25)
+    w._on_treatment_leg_step("fwd")
+    assert w.leg.active and run.arduino.send_tracked.call_args[0][0] == "F+"
+    try:
+        run.view._start_btn.setEnabled(True)
+        run.view._start_btn.click()
+        assert not run.workers and w.protocol_state == "idle"
+    finally:
+        w.leg.cancel()
+
+
+@pytest.mark.parametrize("role", ["patient", "service_technician"])
+def test_leg_length_steps_are_withheld_by_role(window_run, role):
+    run = window_run
+    w = run.window
+    buttons = leg_at(run, 2.25)
+    w.leg.move = MagicMock(return_value=True)
+    run.view.set_access_role(role)
+    assert not any(button.isEnabled() for button in buttons)
+    w.current_user = {"username": "Someone", "status": role}
+    w._on_treatment_leg_step("fwd")
+    w.leg.move.assert_not_called()

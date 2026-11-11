@@ -321,7 +321,9 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
         """Wire the view, start timers and GPIO, then defer hardware and cloud start."""
         # Controls locked while the MCU is busy (jog/Go/Stop/Reset-Arduino) —
         # the same gating group the legacy `actuator_controls` list provided.
-        self.actuator_controls = self.shell.setup.control_buttons()
+        # The Protocols page's leg-length steps lock with them.
+        self.actuator_controls = (self.shell.setup.control_buttons()
+                                  + self.shell.treatment.leg_length_buttons())
 
         # Treatment Settings sliders start from the persisted defaults (§15.4).
         self.shell.treatment.set_settings(self.config.protocol_defaults())
@@ -407,6 +409,7 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
         s.treatment.pause_requested.connect(self._on_treatment_pause)
         s.treatment.estop_requested.connect(self._on_estop)
         s.treatment.setting_changed.connect(self._on_setting_changed)
+        s.treatment.leg_length_step_requested.connect(self._on_treatment_leg_step)
         self._pressure_state_timer = QTimer(self)
         self._pressure_state_timer.setInterval(250)
         self._pressure_state_timer.timeout.connect(self._refresh_measurement_display)
@@ -735,6 +738,24 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
         }.get(key)
         if actuator is not None:
             self.move_actuator(actuator, speed, direction)
+
+    def _on_treatment_leg_step(self, action):
+        """A leg-length step on the Protocols page, to take up slack before Start.
+
+        One slow step per tap through the same path as the Setup row, so the
+        leg controller's own guards apply: it refuses during a treatment, a
+        reset or another move, and a step in flight holds Start.
+        """
+        if action not in ("rev", "fwd"):
+            return
+        if not self.current_user:
+            self.shell.show_login()
+            return
+        if self.current_user.get("status") in ("patient", "service_technician"):
+            return
+        if not authorize(self, "setup", lambda: self._on_treatment_leg_step(action)):
+            return
+        self._leg_jog(action)
 
     def _leg_jog(self, action):
         handler = {

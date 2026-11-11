@@ -40,7 +40,10 @@ class LegLengthController(QObject):
         self._display("Zero required")
 
     def _display(self, reason: str = "From retracted zero") -> None:
-        self.window.shell.setup.set_leg_length_estimate(self.position, reason)
+        shell = self.window.shell
+        shell.setup.set_leg_length_estimate(self.position, reason)
+        # The Protocols page shows the same estimate beside its step buttons.
+        shell.treatment.set_leg_length_estimate(self.position, reason)
 
     def invalidate(self) -> None:
         """Forget the reference after untracked service movement."""

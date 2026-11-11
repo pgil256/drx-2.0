@@ -16,9 +16,10 @@ Signals:
     patient_change_requested / patient_edit_requested / cloud_error_requested
     start_requested / resume_requested / pause_requested / estop_requested
     setting_changed(str, float) — treatment settings and shared motor_speed
+    leg_length_step_requested(str) — one slow leg-length step, "rev" or "fwd"
 """
 
-from PyQt5.QtCore import Qt, pyqtSignal
+from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtWidgets import (
     QButtonGroup,
     QBoxLayout,
@@ -26,6 +27,7 @@ from PyQt5.QtWidgets import (
     QGridLayout,
     QHBoxLayout,
     QLabel,
+    QPushButton,
     QSizePolicy,
     QVBoxLayout,
     QWidget,
@@ -38,7 +40,7 @@ from config.constants import (
 from helpers.motor_speed import treatment_motor_speed
 from ui.measurements import signed_text
 from ui.modals.treatment_editor import TreatmentEditorDialog
-from ui.theme import pause_icon, play_icon
+from ui.theme import chevron_icon, pause_icon, play_icon
 from ui.widgets.common import eyebrow
 from ui.widgets.ds import (
     DSBadge,
@@ -88,6 +90,7 @@ class TreatmentScreen(QWidget):
     pause_requested = pyqtSignal()
     estop_requested = pyqtSignal()
     setting_changed = pyqtSignal(str, float)
+    leg_length_step_requested = pyqtSignal(str)  # "rev" or "fwd": one slow step
 
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -291,9 +294,68 @@ class TreatmentScreen(QWidget):
             self._summary_rows[key] = row
             self._summary_values[key] = value
             grid.addWidget(row, *positions[key])
+        strip.addWidget(self._leg_length_control(), 0, Qt.AlignVCenter)
         strip.addWidget(self._edit_treatment_button, 0, Qt.AlignVCenter)
         self._update_settings_summary()
         return card
+
+    def _leg_length_control(self):
+        """Leg-length steps, to take up slack right before Start without Setup.
+
+        One tap is one slow step, as on the Setup row. The controller locks
+        the two buttons with the other motion controls (treatment, reset, a
+        move in progress); this page only withholds them by role.
+        """
+        self._leg_controls = QWidget()
+        self._leg_controls.setAccessibleName("Leg length")
+        row = QHBoxLayout(self._leg_controls)
+        row.setContentsMargins(0, 0, 0, 0)
+        row.setSpacing(8)
+        text = QVBoxLayout()
+        text.setSpacing(2)
+        text.setAlignment(Qt.AlignVCenter)
+        caption = QLabel("Leg length")
+        caption.setFont(sans_font(size=16))
+        self._leg_value = QLabel("—")
+        self._leg_value.setFont(mono_font(size=22, weight=600))
+        self._leg_value.setMinimumWidth(96)
+        text.addWidget(caption)
+        text.addWidget(self._leg_value)
+        row.addLayout(text)
+        ink = resolve("--ink-800")
+        self._leg_buttons = []
+        for direction, action, name in (("left", "rev", "Reverse"), ("right", "fwd", "Forward")):
+            button = QPushButton()
+            button.setIcon(chevron_icon(direction, ink, 22))
+            button.setIconSize(QSize(22, 22))
+            button.setFixedSize(56, 56)
+            button.setAccessibleName(f"Leg length: {name}")
+            button.setToolTip(name)
+            # Sizes in the button's own rule: the theme's min-height would
+            # otherwise shrink a fixed-size button on every re-polish.
+            button.setStyleSheet(
+                "QPushButton { padding: 0; min-width: 56px; max-width: 56px;"
+                " min-height: 56px; max-height: 56px; }"
+            )
+            button.clicked.connect(
+                lambda _checked, a=action: self.leg_length_step_requested.emit(a))
+            row.addWidget(button)
+            self._leg_buttons.append(button)
+        self.set_leg_length_estimate(None, "Zero required")
+        return self._leg_controls
+
+    def leg_length_buttons(self):
+        """The motion buttons the controller locks with the Setup controls."""
+        return list(self._leg_buttons)
+
+    def set_leg_length_estimate(self, value, reason: str = "") -> None:
+        """Show the same command-derived estimate as the Setup row."""
+        import math
+        valid = isinstance(value, (int, float)) and math.isfinite(value)
+        self._leg_value.setText(f"{value:g} in" if valid else "—")
+        detail = reason or "Open loop"
+        self._leg_value.setToolTip(detail)
+        self._leg_value.setAccessibleDescription(detail)
 
     def _setting_edited(self, key: str, value: float) -> None:
         """Request a change; its visible value is never an acknowledgement."""
@@ -322,6 +384,8 @@ class TreatmentScreen(QWidget):
         editable = (not self._busy and not self._patient_pending
                     and self._access_role not in ("patient", "service_technician"))
         self._edit_treatment_button.setEnabled(editable)
+        self._leg_controls.setEnabled(
+            self._access_role not in ("patient", "service_technician"))
         for button in self._proto_buttons.values():
             button.setEnabled(editable and not self._running)
         if not editable and self._editor.isVisible():
