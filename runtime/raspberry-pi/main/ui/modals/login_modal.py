@@ -33,7 +33,7 @@ class LoginModal(Overlay):
         drop_shadow(card, blur=48, dy=8, alpha=51)  # --shadow-lg
 
         lay = QVBoxLayout(card)
-        lay.setContentsMargins(32, 20, 32, 20)
+        lay.setContentsMargins(32, 24, 32, 24)
         lay.setSpacing(0)
 
         # Close — floats at the top-right corner (DS position:absolute top:14 right:14),
@@ -60,7 +60,7 @@ class LoginModal(Overlay):
         logo.setStyleSheet("background: transparent;")
         pix = QPixmap(image_path("logos", "knee.png"))
         if not pix.isNull():
-            logo.setPixmap(pix.scaled(72, 72, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            logo.setPixmap(pix.scaled(56, 56, Qt.KeepAspectRatio, Qt.SmoothTransformation))
         lay.addWidget(logo, 0, Qt.AlignCenter)
         lay.addSpacing(6)
 
@@ -74,60 +74,81 @@ class LoginModal(Overlay):
         wordmark.setFont(sans_font(size="--text-lg", weight=700))
         wordmark.setStyleSheet("background: transparent;")
         lay.addWidget(wordmark, 0, Qt.AlignCenter)
-        lay.addSpacing(22)
+        lay.addSpacing(16)
 
+        # PIN mode: the keypad with its error line directly underneath.
+        self._pin = QWidget()
+        pin_layout = QVBoxLayout(self._pin)
+        pin_layout.setContentsMargins(0, 0, 0, 0)
+        pin_layout.setSpacing(8)
         self._keypad = DSKeypad(length=length, label="Enter User PIN")
         self._keypad.submitted.connect(self.submitted)
-        lay.addWidget(self._keypad, 0, Qt.AlignCenter)
+        pin_layout.addWidget(self._keypad, 0, Qt.AlignCenter)
+        self._error = QLabel("")
+        self._error.setMinimumHeight(22)
+        self._error.setAlignment(Qt.AlignCenter)
+        self._error.setFont(sans_font(size="--text-sm", weight=600))
+        self._error.setStyleSheet(f"color: {resolve('--red-500')}; background: transparent;")
+        pin_layout.addWidget(self._error, 0, Qt.AlignCenter)
+        lay.addWidget(self._pin)
 
+        muted = f"color: {resolve('--ink-500')}; background: transparent;"
         self._phone = QWidget()
         phone_layout = QVBoxLayout(self._phone)
         phone_layout.setContentsMargins(0, 0, 0, 0)
-        phone_layout.setSpacing(8)
+        phone_layout.setSpacing(0)
+        title = QLabel("Patient or clinician sign-in")
+        title.setAlignment(Qt.AlignCenter)
+        title.setFont(sans_font(size=18, weight=700))
+        phone_layout.addWidget(title)
+        phone_layout.addSpacing(4)
         instructions = QLabel(
-            "Patient or clinician sign-in\nScan with your phone, choose your role, "
-            "and confirm the matching code."
+            "Scan with your phone, choose your role, and confirm the matching code."
         )
         instructions.setWordWrap(True)
         instructions.setAlignment(Qt.AlignCenter)
         instructions.setFont(sans_font(size=16))
+        instructions.setStyleSheet(muted)
         phone_layout.addWidget(instructions)
+        phone_layout.addSpacing(12)
+        # The code block hides as a whole, so an expired or failed request
+        # leaves no empty rows between the instructions and the status line.
+        self._code = QWidget()
+        code_layout = QVBoxLayout(self._code)
+        code_layout.setContentsMargins(0, 0, 0, 12)
+        code_layout.setSpacing(4)
         self._qr = QLabel()
         self._qr.setFixedSize(320, 320)
         self._qr.setAccessibleName("Scan to approve sign-in on your phone")
-        phone_layout.addWidget(self._qr, 0, Qt.AlignCenter)
+        code_layout.addWidget(self._qr, 0, Qt.AlignCenter)
         self._display_code = QLabel()
         self._display_code.setTextFormat(Qt.PlainText)
         self._display_code.setAlignment(Qt.AlignCenter)
         self._display_code.setFont(sans_font(size=26, weight=700))
-        phone_layout.addWidget(self._display_code)
+        code_layout.addWidget(self._display_code)
         self._remaining = QLabel()
         self._remaining.setAlignment(Qt.AlignCenter)
-        phone_layout.addWidget(self._remaining)
+        self._remaining.setStyleSheet(muted)
+        code_layout.addWidget(self._remaining)
+        phone_layout.addWidget(self._code)
         self._phone_status = QLabel()
         self._phone_status.setTextFormat(Qt.PlainText)
         self._phone_status.setWordWrap(True)
         self._phone_status.setAlignment(Qt.AlignCenter)
         phone_layout.addWidget(self._phone_status)
+        phone_layout.addSpacing(16)
         self._retry = QPushButton("Get a new QR code")
         self._retry.setMinimumHeight(48)
         self._retry.clicked.connect(self.phone_requested)
         phone_layout.addWidget(self._retry)
         lay.addWidget(self._phone)
 
+        lay.addSpacing(8)
         self._switch = QPushButton("Use local staff PIN")
         self._switch.setMinimumHeight(48)
         self._switch.clicked.connect(self._switch_mode)
         lay.addWidget(self._switch)
         self._phone_mode = True
-
-        self._error = QLabel("")
-        self._error.setMinimumHeight(22)
-        self._error.setAlignment(Qt.AlignCenter)
-        self._error.setFont(sans_font(size="--text-sm", weight=600))
-        self._error.setStyleSheet(f"color: {resolve('--red-500')}; background: transparent;")
-        lay.addSpacing(14)
-        lay.addWidget(self._error, 0, Qt.AlignCenter)
 
         self.set_card(card)
 
@@ -143,8 +164,7 @@ class LoginModal(Overlay):
     def _set_phone_mode(self, enabled: bool) -> None:
         self._phone_mode = enabled
         self._phone.setVisible(enabled)
-        self._keypad.setVisible(not enabled)
-        self._error.setVisible(not enabled)
+        self._pin.setVisible(not enabled)
         self._switch.setText("Use local staff PIN" if enabled else "Sign in with your phone")
 
     def _switch_mode(self) -> None:
@@ -164,6 +184,7 @@ class LoginModal(Overlay):
         self._qr.hide()
         self._display_code.clear()
         self._remaining.clear()
+        self._code.hide()
 
     def phone_status(self, message: str, retry: bool = True, keep_qr: bool = False) -> None:
         if not keep_qr:
@@ -174,6 +195,7 @@ class LoginModal(Overlay):
     def show_phone_request(self, request: dict) -> None:
         self._qr.setPixmap(portal_qr_pixmap(request["verification_url"]))
         self._qr.show()
+        self._code.show()
         self._display_code.setText(request["display_code"])
         self._phone_status.setText("Waiting for approval on your phone…")
         self._retry.hide()
