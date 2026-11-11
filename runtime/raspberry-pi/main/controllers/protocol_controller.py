@@ -392,6 +392,14 @@ class ProtocolController:
             # progress or finish as soon as the thread pool starts it.
             self._set_phase_from_text("Preparing treatment")
             window.shell.treatment.set_progress(0, duration * 60)
+            # The treatment owns the actuators from dispatch until it ends, so
+            # lock the Setup motion controls. This comes after _preflight,
+            # which refuses a start while a Setup command is in progress.
+            window.disable_actuator_controls()
+            # Reset is in that group but stays available, as it was before
+            # the lock: it refuses while the worker runs, and it is the way
+            # out of every stop and fault, some of which never enable it.
+            window.shell.setup.set_reset_enabled(True)
             self._session = session
             self._session_worker = window.worker
             try:
@@ -402,6 +410,7 @@ class ProtocolController:
                 window.protocol_start_time = None
                 window.protocol_running = False
                 window.worker = None
+                window.enable_actuator_controls()
                 raise
             return True
 
@@ -522,6 +531,9 @@ class ProtocolController:
             self.set_state("stopping")
         elif success:
             self.set_state("idle")
+            # A normal end hands the Setup motion controls back. A stop or a
+            # fault leaves them to the recovery reset.
+            window.enable_actuator_controls()
         else:
             self.set_state("fault")
             window.initial_setup_complete = False

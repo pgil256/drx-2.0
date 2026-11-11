@@ -92,6 +92,7 @@ class Arduino(QObject):
     finished = pyqtSignal()
     done_emit = pyqtSignal()
     ready_to_go_emit = pyqtSignal()
+    unexpected_reboot = pyqtSignal()  # a boot banner nobody asked for
     status_emit = pyqtSignal(int, int, int, float)
     connection_lost = pyqtSignal()  # Signal for connection loss
     error_emit = pyqtSignal(str)  # Firmware ERROR:/BUSY command and device errors
@@ -139,7 +140,8 @@ class Arduino(QObject):
         # Keep the real queue, parser, tracking, and I/O thread for either transport.
         self._transport_factory = transport_factory
         self.ok_event = threading.Event()
-        self.ready_event = threading.Event()  # set on firmware "Ready to Go"
+        # Clear while a boot banner is expected: see _boot_banner_received
+        self.ready_event = threading.Event()
         self._reader_ready = threading.Event()
         self.connection_ready_event = threading.Event()
         self._tx_queue = deque()
@@ -232,6 +234,7 @@ class Arduino(QObject):
         with self._lock:
             self._fail_pending("DISCONNECTED", "Serial connection closed")
             self._invalidate_identity()
+            self.ready_event.clear()  # the next connection may begin with a banner
             if self.serial_com:
                 self.logger.info("Closing serial connection")
                 try:
@@ -586,6 +589,40 @@ class Arduino(QObject):
         self.firmware_capabilities = frozenset()
         self.baseline_valid = False
 
+    def _boot_banner_received(self) -> None:
+        """Handle "Ready to Go", telling an expected banner from a reboot.
+
+        The firmware prints the banner at the end of setup(), so every banner
+        means it has just started from its defaults: no tare, zero marks at 0,
+        the default scale factor and motor speeds, high-frequency status off.
+
+        A banner is expected in two cases, and each excuses exactly one banner:
+
+        * A ``Y`` was queued since the last banner. Only ResetWorker sends
+          ``Y``: at the start of a reset and once more for its replay. It then
+          sends again everything the reboot cleared.
+        * It is the first banner on this connection (none since construction
+          or disconnect()). Opening a USB serial port resets the Mega, and
+          nothing has been set up over this connection yet.
+
+        ``ready_event`` holds that state: clear while a banner is expected,
+        set once it has arrived. Any other banner is a reboot nobody asked for
+        (a watchdog or brown-out reset). ``unexpected_reboot`` reports it, and
+        SafetyMonitor.on_controller_restart decides what the host does.
+
+        The service wizard never sends ``Y`` and aborts on ``ready_to_go_emit``
+        itself. The in-app firmware flash runs after this link is closed, so
+        the reboot it causes is the next connection's first banner.
+        """
+        self._invalidate_identity()
+        with self._lock:
+            expected = not self.ready_event.is_set()
+            self.ready_event.set()
+        self.ready_to_go_emit.emit()
+        if not expected:
+            self.logger.error("Firmware restarted without a reset request (unexpected boot banner)")
+            self.unexpected_reboot.emit()
+
     def _requeue_front(self, wire: str, handle: CommandHandle) -> None:
         """Resend ahead of anything queued later, at the normal pacing."""
         handle.retries += 1
@@ -828,9 +865,7 @@ class Arduino(QObject):
                 self._invalidate_identity()
                 self.ready_event.clear()
             elif data == "Ready to Go":
-                self._invalidate_identity()
-                self.ready_event.set()
-                self.ready_to_go_emit.emit()
+                self._boot_banner_received()
             elif (
                 tokens[0] == "Test command received" or "Test command received" in data
             ):

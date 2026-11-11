@@ -12,6 +12,15 @@ it leaves. ``development/tests/unit/test_stop_controller.py`` runs every kind
 and checks it against this table, so the table cannot drift from the code.
 Where two paths of one kind behave differently today, the table records both
 (``fault`` and ``fault/command``) instead of merging them.
+
+One rule sits above the table: once the device's own stop button is active,
+no later stop of any kind sends X until the operator's Reset. The firmware
+releases the load by itself after the button, and an X ends that release.
+
+A second rule: once a fault is latched (``fault``, ``fault/command``,
+``physical``, or a failed recovery), an operator or on-screen stop still
+cancels the producers and stops the outputs, but it leaves the screen in the
+fault and schedules no release. Reset is the only way out of a latched fault.
 """
 
 import time
@@ -33,6 +42,21 @@ SHUTDOWN = "shutdown"   # the app is closing
 # A fault stop too, but it sends X once and cancels the worker only while a
 # treatment runs.
 COMMAND_FAULT = FAULT + "/command"
+
+# How long Reset is held after the device's stop button, unless the firmware
+# reports the end of its release first. The firmware bounds that release at
+# 15 s (RELEASE_TIMEOUT in motor.ino).
+FIRMWARE_RELEASE_WAIT_S = 20.0
+
+
+def firmware_release_pending(window) -> bool:
+    """True while the firmware's release after the stop button may still run.
+
+    Reset must wait for it: its Y ends the release, and the homing that
+    follows retracts the axial actuator last.
+    """
+    since = getattr(window, "_firmware_release_since", None)
+    return isinstance(since, float) and time.monotonic() - since < FIRMWARE_RELEASE_WAIT_S
 
 
 @dataclass(frozen=True)
@@ -68,7 +92,7 @@ POLICIES: Dict[str, StopPolicy] = {
         commands=(), hardware_line=False,
         release="the firmware's own release; queued commands are dropped",
         release_after_ms=None,
-        recovery="Reset in Setup",
+        recovery="Reset in Setup, once the firmware's release has ended",
         outcome="fault",
         flags={"physical_stop_active": True, "no_automatic_recovery": True,
                "initial_setup_complete": False},
@@ -153,6 +177,26 @@ class StopController:
         }
         handlers[kind](**options)
 
+    def _keeps_latched_fault(self) -> bool:
+        """True when a fault is latched; the screen is left in that fault.
+
+        The release phases of an operator or on-screen stop return at
+        _no_automatic_recovery, which only Reset clears. A "stopping" entered
+        after it was set therefore never ended: Start stayed busy, and
+        logout, exit and restart were refused as "treatment in progress"
+        until a Reset succeeded. Called after the stop's safety actions.
+        """
+        window = self.window
+        if getattr(window, "_no_automatic_recovery", False) is not True:
+            return False
+        window.logger.warning("Stop after a latched fault: Reset in Setup is the recovery")
+        if getattr(window, "protocol_state", "fault") != "fault":
+            try:
+                self.protocol.set_state("fault")
+            except Exception:
+                window.logger.exception("Could not restore the fault state after a stop")
+        return True
+
     # ----- moved methods follow -----
 
     def _operator_stop(self):
@@ -167,8 +211,10 @@ class StopController:
             window.worker.cancel()
         window.stop_actuators()
         self.protocol.finalize_session()
-        self.protocol.set_state("stopping")
         window.mid_protocol_warning_shown = False
+        if self._keeps_latched_fault():
+            return
+        self.protocol.set_state("stopping")
         # Use QTimer to avoid blocking UI
         QTimer.singleShot(500, self._stop_phase2)
 
@@ -300,6 +346,9 @@ class StopController:
         # and stop_actuators alarms the operator if the link is down.
         window.stop_actuators()
         self.protocol.finalize_session()
+        if self._keeps_latched_fault():
+            # The stop line stays asserted: Reset drives it high again.
+            return
         # UI state changes come after both independent stop mechanisms so a
         # broken widget can never delay either safety action. The raw stop
         # flag above is already sufficient to classify an immediate reply.
@@ -344,14 +393,19 @@ class StopController:
         window.protocol_stop_requested = True
         self.protocol.latch_session_outcome("fault" if fault else "stopped")
         arduino = window.arduino
-        if arduino is not None:
+        # After the device's stop button the firmware has stopped every motor
+        # and is releasing the load by itself; an X would end that release.
+        send_stop = (arduino is not None
+                     and getattr(window, "_physical_stop_active", False) is not True)
+        if send_stop:
             arduino.send(STOP_ALL)
         window.connection.cancel_reset()
         if window.worker:
             # The explicit stop here owns output cleanup; stop() must not issue P0.
             window.worker.cancel(firmware_stopped=True)
-        if arduino is not None:
+        if send_stop:
             arduino.send(STOP_ALL)
+        if arduino is not None:
             arduino.send(TELEMETRY_ON)
             arduino.baseline_valid = False
         window._release_leg_gpio()
@@ -364,17 +418,55 @@ class StopController:
             window.treatment_panel.set_fault(reason)
         self.protocol.finalize_session()
 
-    def _physical_stop(self) -> None:
-        """Latch the physical stop on the host while firmware releases traction."""
+    def _begin_firmware_release(self) -> None:
+        """Hold Reset until the firmware's release ends or its bound passes."""
+        since = time.monotonic()
+        self.window._firmware_release_since = since
+        QTimer.singleShot(
+            int(FIRMWARE_RELEASE_WAIT_S * 1000),
+            lambda: self._firmware_release_timed_out(since),
+        )
+
+    def _firmware_release_timed_out(self, since: float) -> None:
+        # A later press starts its own wait; this timer belongs to an earlier one.
+        if getattr(self.window, "_firmware_release_since", None) != since:
+            return
+        self.window.logger.warning(
+            "The firmware reported no release result within %.0f s", FIRMWARE_RELEASE_WAIT_S)
+        self.end_firmware_release()
+
+    def end_firmware_release(self) -> None:
+        """The firmware's release is over (RELEASED, incomplete, or no result
+        within the bound), so the operator's Reset may run."""
         window = self.window
+        if not isinstance(getattr(window, "_firmware_release_since", None), float):
+            return
+        window._firmware_release_since = None
+        if getattr(window, "_closing", False) is True:
+            return
+        if getattr(window, "_physical_stop_active", False) is True:
+            window.shell.setup.set_reset_enabled(not window.reset_in_progress)
+
+    def _physical_stop(self, release_started: bool = False) -> None:
+        """Latch the physical stop on the host while firmware releases traction.
+
+        ``release_started``: the firmware reported the press itself ("Stop
+        button pressed"), so its release is running and Reset waits for it.
+        """
+        window = self.window
+        if release_started:
+            self._begin_firmware_release()
         window._no_automatic_recovery = True
+        already_stopped = getattr(window, "_physical_stop_active", False) is True
+        # Latched before anything is cancelled: a cancelled leg move stops
+        # itself with an X unless it sees this, and an X ends the firmware's
+        # release.
+        window._physical_stop_active = True
         window.connection.cancel_reset()
         window.logger.error("Physical emergency stop activated")
-        already_stopped = getattr(window, "_physical_stop_active", False) is True
         protocol = self.protocol
         if protocol is not None:
             protocol.latch_session_outcome("fault")
-        window._physical_stop_active = True
         window.protocol_stop_requested = True
         window.initial_setup_complete = False
         if window.worker:
@@ -389,7 +481,8 @@ class StopController:
         window.protocol_timer.stop()
         window.set_protocol_state("fault")
         window.disable_actuator_controls()
-        window.shell.setup.set_reset_enabled(not window.reset_in_progress)
+        window.shell.setup.set_reset_enabled(
+            not window.reset_in_progress and not firmware_release_pending(window))
         window.treatment_panel.set_fault("PHYSICAL EMERGENCY STOP")
         if not already_stopped:
             window._show_safety_alert(

@@ -129,6 +129,12 @@ factor = abs(end_counts - start_counts) / measured_inches * 6
 `a_factor`, `b_factor` and `c_factor` use the legacy counts-per-six-inches
 distance-readout convention. They are not travel limits and do not by themselves
 recalibrate the firmware's legacy inch command. Angle motion uses measured marks.
+Each factor must be a whole number from 1 to 1,000,000. A `kneespa.cfg` that
+holds one outside that range (for example `a_factor = 0`) starts with the
+`DEVICE UNCALIBRATED` alert naming the option and its value, with jogging and
+treatments disabled. The value is left in the file. The wizard refuses to save
+anything until that axis has a calculated factor; saving one, restoring a
+calibration backup, or correcting the file and restarting clears the alert.
 Initially, axial position calibration is opt-in: saving a session that records
 both measured 0.0- and 4.0-inch endpoints enables
 `Options.axial_service_calibrated`. Supported calibrated axial distance moves
@@ -162,6 +168,12 @@ device. The proposed factor changes `Options.calibration`; the unloaded sample
 is evidence, not a permanently stored tare offset. After saving and resetting
 unloaded, independently verify zero, several reference forces, repeatability
 and drift. This page never starts a pressure-building or pulse sequence.
+
+The factor must be finite with a magnitude from 1,000 to 100,000,000. A
+`kneespa.cfg` whose `Options.calibration` is anything else, including `nan`
+and `inf`, starts with the `DEVICE UNCALIBRATED` alert naming the value, with
+pressure and treatments disabled. The value is left in the file until this step
+saves a measured factor or the file is corrected and the application restarted.
 
 ## Stops and additional bench checks
 

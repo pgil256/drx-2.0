@@ -2,6 +2,7 @@
 
 import copy
 from datetime import datetime, timezone
+import math
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -16,7 +17,31 @@ class CalibrationBackups:
     def __init__(self, state_dir: Path) -> None:
         self.directory = state_dir / "calibration-backups"
 
-    def create(self, config: object, operator: str) -> Path:
+    @staticmethod
+    def _require_loaded(config: object) -> None:
+        """Refuse to work from a configuration whose file failed to load.
+
+        Its values are generated defaults and its device id is temporary: a
+        backup would file fabricated calibration under an id no device keeps.
+        """
+        if getattr(config, "unreadable", False) is True:
+            raise ValueError(
+                "The configuration file failed to load, so calibration backups "
+                "are unavailable. Fix or restore the file, then restart."
+            )
+
+    def create(self, config: object, operator: str, pre_restore: bool = False) -> Path:
+        self._require_loaded(config)
+        scale = config.calibration
+        if not math.isfinite(scale):
+            if not pre_restore:
+                raise ValueError(
+                    f"The load-cell scale factor in the configuration ({scale}) is not a "
+                    "finite number, so this calibration cannot be backed up. Restore an "
+                    "earlier backup, or calibrate the load cell in Calibration.")
+            # JSON has no nan or inf. Record that there was no usable factor, so a
+            # restore can still replace it; load() refuses this file as a source.
+            scale = None
         payload = {
             "schema": 1, "device_id": config.ensure_device_id(),
             "created_at": datetime.now(timezone.utc).isoformat(), "operator": operator,
@@ -25,11 +50,38 @@ class CalibrationBackups:
             "factors": {
                 axis: getattr(config, spec["factor"]) for axis, spec in SERVICE_AXES.items()
             },
-            "scale": config.calibration,
+            "scale": scale,
             "axial_service_calibrated": bool(config.axial_service_calibrated),
         }
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        path = self.directory / f"calibration-{stamp}.json"
+        # A value mistyped in kneespa.cfg is only a stand-in default in memory.
+        # Recorded here, a restore would write that default over the text.
+        factors = {spec["factor"]: axis for axis, spec in SERVICE_AXES.items()}
+        mistyped = [name for name in (*factors, "calibration", "axial_service_calibrated")
+                    if config.is_mistyped(name)]
+        if mistyped and not pre_restore:
+            raise ValueError(
+                f"Mistyped in the configuration file: {', '.join(mistyped)}. This "
+                "calibration cannot be backed up. Correct the value in the file and "
+                "restart, or restore an earlier backup.")
+        for name in mistyped:
+            # Record that there was no value, so a restore can still replace the
+            # mistyped one; load() refuses this file as a source.
+            if name in factors:
+                payload["factors"][factors[name]] = None
+            else:
+                payload["scale" if name == "calibration" else name] = None
+        if mistyped:
+            payload["mistyped"] = mistyped
+        moment = datetime.now(timezone.utc)
+        while True:
+            stamp = moment.strftime("%Y%m%dT%H%M%S%fZ")
+            path = self.directory / f"calibration-{stamp}.json"
+            if not (path.exists() or path.is_symlink()):
+                break
+            # write_json() replaces a file of the same name, and a coarse clock
+            # (Windows) can give two backups the same time. Never replace one:
+            # the backup a restore takes first would overwrite its own source.
+            moment += datetime.resolution  # one microsecond later, so it sorts as newer
         write_json(path, payload)
         return path
 
@@ -38,6 +90,7 @@ class CalibrationBackups:
                 if p.is_file() and not p.is_symlink()][:200]
 
     def load(self, name: str, config: object) -> Dict[str, Any]:
+        self._require_loaded(config)
         if name not in self.list():
             raise ValueError("Select an existing calibration backup.")
         data = read_json(self.directory / name)
@@ -47,6 +100,10 @@ class CalibrationBackups:
             raise ValueError("Unsupported calibration backup format.")
         if data.get("device_id") != config.ensure_device_id():
             raise ValueError("This calibration backup belongs to a different device.")
+        if data.get("mistyped"):
+            raise ValueError(
+                "This backup cannot be restored. It was saved while a calibration value "
+                "was mistyped in the configuration file, and has no value for it.")
         if type(data.get("axial_service_calibrated")) is not bool:
             raise ValueError("The backup's calibration state is invalid.")
         if not isinstance(data.get("marks"), dict) or not isinstance(data.get("factors"), dict):
@@ -59,6 +116,10 @@ class CalibrationBackups:
             factor = data.get("factors", {}).get(axis)
             if type(factor) is not int or not 1 <= factor <= 1000000:
                 raise ValueError("Invalid calibration factor.")
+        if data.get("scale") is None:
+            raise ValueError(
+                "This backup has no usable load-cell scale factor and cannot be restored. "
+                "It was saved while the device's scale factor was not a finite number.")
         if type(data.get("scale")) not in (int, float):
             raise ValueError("Invalid load-cell calibration factor.")
         _validate_scale(data["scale"])
@@ -71,7 +132,7 @@ class CalibrationBackups:
         data = self.load(name, config)
         if reviewed is not None and data != reviewed:
             raise ValueError("The backup changed. Review it again before restoring.")
-        backup = self.create(config, operator)
+        backup = self.create(config, operator, pre_restore=True)
         candidate = copy.deepcopy(config.config)
         for axis, spec in SERVICE_AXES.items():
             candidate[spec["table"]] = {str(k): str(v) for k, v in data["marks"][axis].items()}

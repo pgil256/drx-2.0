@@ -5,6 +5,7 @@ import os
 import shutil
 import tempfile
 import uuid
+from datetime import datetime, timezone
 from typing import Dict, Mapping, Optional
 
 from helpers.motor_speed import motor_speed_values
@@ -15,6 +16,7 @@ from config.constants import (
     DEFAULT_CONFIG_PATH,
     DEFAULT_PROTOCOL_MINUTES,
     LEGACY_CONFIG_PATH,
+    SERVICE_AXES,
 )
 
 # A plain child of the application logger: helpers.logging creates the run's
@@ -29,6 +31,15 @@ logger = logging.getLogger(f"{APP_NAME}.config")
 MIN_PLAUSIBLE_SCALE_FACTOR = 1000.0
 
 
+class ConfigUnreadableError(OSError):
+    """A save was refused because the file on disk failed to load.
+
+    Saving would replace whatever calibration and identity the file still
+    holds with generated defaults. An OSError, so callers report it the way
+    they already report any other failed write.
+    """
+
+
 class Configuration:
     def __init__(self, config_path: Optional[str] = None):
         self.flexion_position = 0
@@ -41,6 +52,12 @@ class Configuration:
         # Legacy AMarks were not used for axial commands. Opt in only after
         # a technician measures the axial endpoints in the service wizard.
         self.axial_service_calibrated = False
+        # Values that are in the file but did not parse, as (section, option)
+        # -> the default used in memory instead. A save leaves their text in
+        # the file: writing the default over `b_factor = 372O` destroyed the
+        # only record of what the technician meant, and the default then
+        # loaded cleanly on every later start.
+        self._mistyped: Dict[tuple, object] = {}
         self.configFile = config_path or CONFIG_PATH
         self.config = configparser.ConfigParser(allow_no_value=True)
         self.CMarks = {}
@@ -54,6 +71,21 @@ class Configuration:
         self.marks_valid = False
         self.scale_calibrated = False
         self.calibration_errors = []
+        # True when the file exists but could not be loaded (a bad line from
+        # a hand edit, SD-card corruption). The values in memory are then
+        # generated defaults, so every write is refused: the next startup
+        # used to save them over the calibration and identity in the file.
+        # Cleared only by a load that succeeds.
+        self.unreadable = False
+        # Where the file that failed to load was copied for whoever repairs
+        # it, or None if it loaded or the copy could not be made.
+        self.unreadable_copy: Optional[str] = None
+        # Mark tables that were generated at load because the file's section
+        # was missing or would not parse. A save does not add them to the
+        # file: once saved, they loaded as a real calibration on the next
+        # start, or stayed as extra rows in a table whose typo was then
+        # fixed. Only a calibration that commits the whole table writes it.
+        self._generated_marks = set()
 
         # Treatment Settings defaults persisted by Setup's "Mark As Default"
         # (Phase 3.5 §15.4). Fallbacks: 40 lbs / 10° / 10° + a 2/sec pulse.
@@ -73,6 +105,7 @@ class Configuration:
 
         # Per-device id for support tickets (Phase 3.5 §15.5); generated once.
         self.device_id = ""
+        self._temporary_device_id = ""
         self.device_number = 1
 
     @property
@@ -86,11 +119,15 @@ class Configuration:
     def get_config(self, config_path: Optional[str] = None):
 
         self.config = configparser.ConfigParser(allow_no_value=True)
+        self._mistyped = {}
         if config_path:
             self.configFile = config_path
         self.calibration_errors = []
         self.marks_valid = False
         self.scale_calibrated = False
+        self.unreadable = False
+        self.unreadable_copy = None
+        self._generated_marks = set()
         # Load configuration
         self.axial_service_calibrated = False
         self._migrate_legacy_config()
@@ -107,7 +144,10 @@ class Configuration:
             return
 
         try:
-            self.config.read(self.configFile, encoding="utf-8")
+            # Not ConfigParser.read(): it skips a file it cannot open, which
+            # then looks like an empty one and gets defaults saved over it.
+            with open(self.configFile, encoding="utf-8") as source:
+                self.config.read_file(source)
 
             allSections = {
                 s: dict(self.config.items(s)) for s in self.config.sections()
@@ -122,13 +162,70 @@ class Configuration:
 
         except Exception as e:
             logger.exception('Fatal error, could not load config file from "%s"', self.configFile)
+            self.unreadable = True
+            self.unreadable_copy = self._keep_unreadable_copy()
             self._set_default_c_marks()
             self._set_default_a_marks()
             self._set_default_b_marks()
             self._flag_error(
                 f"Config file unreadable ({e}); generated default marks in use. "
-                "Device is UNCALIBRATED."
+                "Device is UNCALIBRATED. The file was left unchanged: fix or "
+                "restore it, then restart."
             )
+
+    def _keep_unreadable_copy(self) -> Optional[str]:
+        """Copy the file that failed to load beside itself; return the copy's path.
+
+        The application does not write to the file in this state, but the
+        copy keeps the evidence if a repair by hand goes wrong. It is
+        named <file>.unreadable-<UTC time>, created owner-only (0600) like
+        the configuration itself, and never replaces an earlier copy. The
+        same content is kept once, so a device restarting on the same bad
+        file does not fill its storage. A failure here is logged and must
+        not stop startup.
+        """
+        try:
+            with open(self.configFile, "rb") as source:
+                content = source.read()
+            directory = os.path.dirname(os.path.abspath(self.configFile))
+            prefix = os.path.basename(self.configFile) + ".unreadable-"
+            for name in sorted(os.listdir(directory)):
+                earlier = os.path.join(directory, name)
+                if name.startswith(prefix) and os.path.isfile(earlier):
+                    with open(earlier, "rb") as kept:
+                        if kept.read() == content:
+                            logger.warning(
+                                'The unreadable config file is already kept at "%s"', earlier
+                            )
+                            return earlier
+            stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+            flags = os.O_WRONLY | os.O_CREAT | os.O_EXCL | getattr(os, "O_BINARY", 0)
+            for attempt in range(100):
+                path = os.path.join(
+                    directory, prefix + stamp + (f"-{attempt}" if attempt else "")
+                )
+                try:
+                    fd = os.open(path, flags, 0o600)
+                    break
+                except FileExistsError:
+                    continue
+            else:
+                raise FileExistsError(f"no free name for a copy at {path}")
+            try:
+                with os.fdopen(fd, "wb") as target:
+                    target.write(content)
+                    target.flush()
+                    os.fsync(target.fileno())
+            except Exception:
+                os.unlink(path)  # a partial copy would pass for the evidence
+                raise
+            logger.warning('Kept a copy of the unreadable config file at "%s"', path)
+            return path
+        except Exception:
+            logger.exception(
+                'Could not keep a copy of the unreadable config file "%s"', self.configFile
+            )
+            return None
 
     def _load_marks(self, allSections):
         """Load actuator marks, falling back to safe defaults on malformed data.
@@ -141,9 +238,11 @@ class Configuration:
                 self.CMarks = {k: int(v) for k, v in allSections["CMarks"].items()}
             except (ValueError, TypeError) as e:
                 self._set_default_c_marks()
+                self._generated_marks.add("CMarks")
                 self._flag_error(f"CMarks malformed ({e}); defaults in use")
         else:
             self._set_default_c_marks()
+            self._generated_marks.add("CMarks")
             self._flag_error("CMarks section missing; defaults in use")
 
         if "AMarks" in allSections:
@@ -151,9 +250,11 @@ class Configuration:
                 self.AMarks = {k: int(v) for k, v in allSections["AMarks"].items()}
             except (ValueError, TypeError) as e:
                 self._set_default_a_marks()
+                self._generated_marks.add("AMarks")
                 self._flag_error(f"AMarks malformed ({e}); defaults in use")
         else:
             self._set_default_a_marks()
+            self._generated_marks.add("AMarks")
             self._flag_error("AMarks section missing; defaults in use")
 
         if "BMarks" in allSections:
@@ -161,9 +262,11 @@ class Configuration:
                 self.BMarks = {k: int(v) for k, v in allSections["BMarks"].items()}
             except (ValueError, TypeError) as e:
                 self._set_default_b_marks()
+                self._generated_marks.add("BMarks")
                 self._flag_error(f"BMarks malformed ({e}); defaults in use")
         else:
             self._set_default_b_marks()
+            self._generated_marks.add("BMarks")
             self._flag_error("BMarks section missing; defaults in use")
 
     def _load_options(self):
@@ -178,6 +281,7 @@ class Configuration:
             )
         except ValueError:
             self.axial_service_calibrated = False
+            self._mistyped[(section, "axial_service_calibrated")] = False
             self._flag_error("Invalid axial_service_calibrated flag; device is UNCALIBRATED")
 
         config_options = {
@@ -203,8 +307,60 @@ class Configuration:
             except (ValueError, TypeError) as e:
                 logger.warning("Error parsing %s: %s, using default", option_name, e)
                 value = option_settings["default"]
-                self.config.set(section, option_name, str(value))
+                self._flag_mistyped_option(option_name, raw_value, value)
+                # The live parser keeps the text as written, so the saves
+                # that copy it (hardware service, calibration restore) do too.
+                self._mistyped[(section, option_name)] = value
             setattr(self, option_name, value)
+
+    def _flag_mistyped_option(self, name: str, raw: object, default: object) -> None:
+        """Report an [Options] value that is present but did not parse.
+
+        A hand edit such as ``b_factor = 372O`` (letter O) used to load as
+        the default with only a log line, so the device ran on a factor
+        nobody measured and still looked calibrated.
+        """
+        if name == "calibration":
+            # Not worded as "UNCALIBRATED": _validate_calibration() takes
+            # that word to mean the mark tables cannot be trusted. Pressure
+            # is blocked by its check that the default 1.0 is implausible.
+            self._flag_error(
+                f"[Options] calibration = {raw!r} is not a number, so the "
+                "load-cell scale factor was not loaded. Correct the value in "
+                "the file and restart."
+            )
+        elif name in ("a_factor", "b_factor", "c_factor"):
+            self._flag_error(
+                f"[Options] {name} = {raw!r} is not a whole number; default "
+                f"{default} in use. Device is UNCALIBRATED: correct the value "
+                "in the file and restart."
+            )
+        # flexion_position is loaded and saved but used by nothing, so it
+        # gets the log line above and does not disable the device.
+
+    def _keeps_mistyped(self, section: str, option: str, value: object) -> bool:
+        """Whether a save must leave this option's text as it is in the file.
+
+        True while the value in memory is still the default that stood in for
+        text that did not parse. A value set on purpose since then is saved
+        as usual, and the option is no longer treated as mistyped.
+        """
+        key = (section, option)
+        if key not in self._mistyped:
+            return False
+        if value == self._mistyped[key]:
+            return True
+        del self._mistyped[key]
+        return False
+
+    def is_mistyped(self, option: str) -> bool:
+        """Whether an [Options] value in memory is only a stand-in default.
+
+        A calibration backup must not record that default as the device's
+        own value: restoring it would write the default over the text.
+        """
+        key = ("Options", option)
+        return key in self._mistyped and getattr(self, option) == self._mistyped[key]
 
     def _load_protocol_defaults(self):
         """Load persisted Treatment Settings defaults, keeping __init__ fallbacks
@@ -283,8 +439,15 @@ class Configuration:
             if number not in (1, 2, 3):
                 raise ValueError("must be 1, 2, or 3")
         except (ValueError, TypeError):
-            logger.warning("Invalid Device.number %r; using default 1", raw_number)
-            number = 1
+            # A label, not calibration: the device runs as number 1 and is
+            # not disabled. The text stays in the file so it can be corrected.
+            logger.warning(
+                "Invalid Device.number %r; running as device 1. The value was "
+                "left in the file: correct it there and restart.", raw_number,
+            )
+            self.device_number = 1
+            self._mistyped[("Device", "number")] = 1
+            return
         self.device_number = number
         self._set_section("Device", {"number": number})
 
@@ -351,14 +514,28 @@ class Configuration:
         self.config = candidate
         for name, value in attrs.items():
             setattr(self, name, value)
+            # The caller wrote a reviewed value for this option into the
+            # candidate, so its mistyped text is gone from the file.
+            self._mistyped.pop(("Options", name), None)
         if revalidate:
             self._validate_calibration()
 
     def ensure_device_id(self):
-        """Return the persisted per-device id, generating + saving one if absent."""
-        if not self.device_id:
-            self.device_id = uuid.uuid4().hex
-            self.update_config()
+        """Return the persisted per-device id, generating + saving one if absent.
+
+        While the file is unreadable its own id cannot be read and nothing
+        may be saved, so the caller gets an id for this run only. It is
+        marked "temporary-" wherever it is shown, is never stored in
+        device_id, and is not written to the file once that loads again.
+        """
+        if self.device_id:
+            return self.device_id
+        if self.unreadable:
+            if not self._temporary_device_id:
+                self._temporary_device_id = "temporary-" + uuid.uuid4().hex[:12]
+            return self._temporary_device_id
+        self.device_id = uuid.uuid4().hex
+        self.update_config()
         return self.device_id
 
     @staticmethod
@@ -386,9 +563,15 @@ class Configuration:
         # Re-evaluate service validation errors after a technician repairs a
         # table. Keep load/fallback errors: untouched defaults are not measured.
         service_error_prefix = "Axial service calibration: "
+        factor_error_prefix = "Distance factor "
+        # The scale factor is judged again below as well. Its message used to
+        # be added on every pass, and stayed after a service save fixed it.
+        scale_error_prefix = "Load-cell scale factor "
         self.calibration_errors = [
             error for error in self.calibration_errors
-            if not error.startswith(service_error_prefix)
+            if not error.startswith(
+                (service_error_prefix, factor_error_prefix, scale_error_prefix)
+            )
         ]
         marks_ok = True
         # CMarks is operator-calibrated device data. Once its keys and values
@@ -410,6 +593,25 @@ class Configuration:
             except (ValueError, TypeError) as error:
                 marks_ok = False
                 self._flag_error(f"{service_error_prefix}{error}")
+        # A factor of 0, a negative one or one above the service limit parses
+        # as an integer and used to load without a flag. Hold the file to the
+        # rule the hardware service and calibration backups enforce. The value
+        # stays in memory and so in the file; a reviewed service save or a
+        # calibration restore replaces it and clears the flag here.
+        from helpers.hardware_service import validate_distance_factor
+
+        for spec in SERVICE_AXES.values():
+            name = spec["factor"]
+            try:
+                validate_distance_factor(getattr(self, name), spec["label"])
+            except ValueError as error:
+                marks_ok = False
+                self._flag_error(
+                    f"{factor_error_prefix}{name} = {getattr(self, name)} is "
+                    f"not usable. {error} Device is UNCALIBRATED until the "
+                    "factor is measured in hardware service or corrected in "
+                    "kneespa.cfg."
+                )
         # Only meaningful if nothing already flagged a fallback
         self.marks_valid = marks_ok and not any(
             "defaults in use" in e or "UNCALIBRATED" in e
@@ -419,16 +621,38 @@ class Configuration:
         if abs(float(self.calibration)) < MIN_PLAUSIBLE_SCALE_FACTOR:
             self.scale_calibrated = False
             self._flag_error(
-                f"Load-cell scale factor {self.calibration} is implausible "
+                f"{scale_error_prefix}{self.calibration} is implausible "
                 "(factory default?); pressure readings would be raw counts"
             )
         else:
-            self.scale_calibrated = True
+            # `calibration = nan` or `inf` parses as a float and is not below
+            # the minimum, so it used to load as a calibrated load cell. The
+            # service and backup paths already refuse such a factor; apply
+            # the same rule here. Lazy import, as above, avoids the cycle.
+            from helpers.hardware_service import _validate_scale
+
+            try:
+                _validate_scale(self.calibration)
+            except ValueError as error:
+                self.scale_calibrated = False
+                self._flag_error(
+                    f"{scale_error_prefix}{self.calibration} is not usable. "
+                    f"{error} Pressure stays disabled until the load cell is "
+                    "calibrated in hardware service or the value is corrected "
+                    "in kneespa.cfg."
+                )
+            else:
+                self.scale_calibrated = True
 
     def _ensure_config_sections(
         self, parser: Optional[configparser.ConfigParser] = None,
     ) -> None:
-        """Ensure defaults are persisted for sections missing from the file."""
+        """Ensure the parser holds the sections a save writes.
+
+        A mark table that was generated at load is left out, so the file
+        keeps its missing or mistyped section instead of gaining generated
+        marks.
+        """
         parser = self.config if parser is None else parser
         if not parser.has_section("Options"):
             parser.add_section("Options")
@@ -437,11 +661,26 @@ class Configuration:
             "AMarks": self.AMarks,
             "BMarks": self.BMarks,
         }.items():
+            if section_name in self._generated_marks:
+                continue
             if not parser.has_section(section_name):
                 parser.add_section(section_name)
             for key, value in marks.items():
                 if not parser.has_option(section_name, key):
                     parser.set(section_name, key, str(value))
+
+    def refuse_if_unreadable(self) -> None:
+        """Raise ConfigUnreadableError if the file failed to load.
+
+        Every write does this. A caller that prepares anything on disk
+        before its save calls it first, so a refused save leaves nothing.
+        """
+        if self.unreadable:
+            raise ConfigUnreadableError(
+                f'"{self.configFile}" failed to load and was left unchanged; '
+                "nothing can be saved until it is fixed or restored and the "
+                "application restarted"
+            )
 
     def _atomic_write(self, candidate: Optional[configparser.ConfigParser] = None) -> None:
         """Write the config file atomically (temp file + fsync + rename).
@@ -455,8 +694,10 @@ class Configuration:
                 This method does not publish the candidate to live state.
 
         Raises:
+            ConfigUnreadableError: The file failed to load; nothing is written.
             Exception: Write errors propagate to the caller after temp-file cleanup.
         """
+        self.refuse_if_unreadable()
         parser = self.config if candidate is None else candidate
         directory = os.path.dirname(os.path.abspath(self.configFile)) or "."
         os.makedirs(directory, exist_ok=True)
@@ -508,7 +749,9 @@ class Configuration:
 
         # Set each option in the config
         for option in config_options:
-            if hasattr(self, option):
+            if hasattr(self, option) and not self._keeps_mistyped(
+                section, option, getattr(self, option),
+            ):
                 parser.set(section, option, str(getattr(self, option)))
 
         # Persist the Phase-3.5 sections alongside the legacy Options.
@@ -522,12 +765,19 @@ class Configuration:
             }, parser)
         elif parser.has_section("ProtocolDefaults"):
             parser.remove_section("ProtocolDefaults")
-        self._set_section("Device", {
-            "id": self.device_id, "number": self.device_number,
-        }, parser)
+        device: Dict[str, object] = {"id": self.device_id}
+        if not self._keeps_mistyped("Device", "number", self.device_number):
+            device["number"] = self.device_number
+        self._set_section("Device", device, parser)
 
     def update_config(self):
         """Update current values, retaining this caller's legacy error reporting."""
+        if self.unreadable:
+            logger.error(
+                'Config not written: "%s" failed to load and was left unchanged. '
+                "Fix or restore the file, then restart.", self.configFile,
+            )
+            return
         self._populate_config(self.config)
         logger.info("Config updated")
         try:

@@ -9,6 +9,7 @@ import pytest
 from PyQt5.QtCore import QEvent, Qt
 from PyQt5.QtWidgets import QApplication, QMainWindow, QMessageBox
 
+from config.config import Configuration
 from controllers import device_controller as module
 from helpers.service_auth import ServiceAccess
 from ui.screens.device import DeviceScreen
@@ -339,6 +340,24 @@ def test_verified_release_hands_install_to_shutdown_not_live_controller(controll
     updates.installer.install.assert_not_called()
 
 
+def test_prepared_release_review_shows_the_signature_warning(controller, monkeypatch):
+    """U2: in warn mode a missing or bad signature is shown, then the install continues."""
+    from controllers import release_controller
+    updates = release_flow(controller)
+    controller.window.close = Mock()
+    asked = []
+    monkeypatch.setattr(release_controller.QMessageBox, "question",
+                        lambda parent, title, text, *rest: asked.append(text) or QMessageBox.Yes)
+    job = {"release": {"version": "v2"}}
+    note = "Warning: the release has no signature (none published)."
+
+    updates._completed(updates.generation, "prepare", (job, note))
+
+    assert note in controller.screen.release_status.text()
+    assert asked and asked[0].startswith(note)
+    assert controller.window._release_install == (updates.installer, job)
+
+
 def unlock_service(controller):
     controller.window.hardware_service.access.provision("235689", "235689", True)
     controller.require_service(lambda _user: None)
@@ -385,3 +404,21 @@ def test_purge_with_nothing_rejected_asks_nothing(controller, monkeypatch):
 
     question.assert_not_called()
     assert controller.screen.status.text() == "No rejected uploads to purge."
+
+
+def test_backup_refused_for_a_non_finite_scale_factor_names_the_cause(
+        controller, qtbot, tmp_path):
+    unlock_service(controller)
+    config = Configuration(str(tmp_path / "kneespa.cfg"))
+    config._write_default_config()
+    config.get_config()
+    config.calibration = float("nan")
+    controller.window.config = config
+
+    controller.action("backup_calibration")
+    settled(controller, qtbot)
+
+    status = controller.screen.status.text()
+    assert "load-cell scale factor" in status and "(nan)" in status
+    assert "JSON" not in status
+    assert controller.backups.list() == []

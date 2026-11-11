@@ -2,7 +2,9 @@
 
 import copy
 import json
+import math
 from pathlib import Path
+import re
 import zipfile
 
 import pytest
@@ -53,6 +55,7 @@ def test_restore_saves_previous_values_and_preserves_unrelated_configuration(tmp
     lambda data: data.update(device_id="another-device"),
     lambda data: data.update(scale=float("inf")),
     lambda data: data.update(scale="-28369"),
+    lambda data: data.update(scale=None),
     lambda data: data["factors"].update(axial=True),
     lambda data: data["marks"].update(lateral={"-20": 600, "20": 600}),
     lambda data: data["marks"].update(axial={"0": 0, "4": 9000}),
@@ -95,6 +98,30 @@ def test_restore_write_failure_leaves_live_configuration_untouched(tmp_path, con
     assert len(backups.list()) == 2  # The pre-restore backup still exists.
 
 
+def test_a_backup_never_replaces_one_made_in_the_same_clock_tick(tmp_path, config, monkeypatch):
+    """A Windows clock advances in coarse ticks, so two backups can share a time."""
+    from datetime import datetime, timezone
+
+    class StoppedClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 11, 11, 0, 6, 11, 480365, tzinfo=timezone.utc)
+
+    monkeypatch.setattr("helpers.calibration_backup.datetime", StoppedClock)
+    backups = CalibrationBackups(tmp_path)
+    first = backups.create(config, "Technician")
+    saved = first.read_bytes()
+    config.b_factor = 2800
+    second = backups.create(config, "Technician")
+    assert second != first
+    assert first.read_bytes() == saved
+    assert backups.list() == [second.name, first.name]  # Newest first.
+    # The backup a restore takes first must not replace the one being restored.
+    before = backups.restore(first.name, config, "Administrator")
+    assert first.read_bytes() == saved
+    assert backups.list() == [before.name, second.name, first.name]
+
+
 def test_backup_changed_after_review_must_be_reviewed_again(tmp_path, config):
     backups = CalibrationBackups(tmp_path)
     selected = backups.create(config, "Technician")
@@ -106,6 +133,61 @@ def test_backup_changed_after_review_must_be_reviewed_again(tmp_path, config):
         backups.restore(selected.name, config, "Technician", reviewed=reviewed)
     assert config.b_factor == 1900
     assert backups.list() == [selected.name]
+
+
+def reloaded_with_scale(config, text):
+    """Load the fixture's file again after its scale factor line is edited by hand."""
+    path = Path(config.configFile)
+    original = path.read_text(encoding="utf-8")
+    edited = re.sub(r"(?m)^calibration = .*$", "calibration = " + text, original)
+    assert edited != original
+    path.write_text(edited, encoding="utf-8")
+    loaded = Configuration(config.configFile)
+    loaded.get_config()
+    return loaded
+
+
+@pytest.mark.parametrize("text", ["nan", "inf", "-inf"])
+def test_restore_repairs_a_scale_factor_that_is_not_a_finite_number(tmp_path, config, text):
+    backups = CalibrationBackups(tmp_path)
+    selected = backups.create(config, "Technician")
+    broken = reloaded_with_scale(config, text)
+    broken.b_factor = 2800
+    assert not math.isfinite(broken.calibration)
+    before = backups.restore(selected.name, broken, "Technician")
+    assert broken.calibration == -28369 and broken.scale_calibrated
+    assert broken.b_factor == 1900
+    loaded = Configuration(config.configFile)
+    loaded.get_config()
+    assert loaded.calibration == -28369 and loaded.scale_calibrated
+    previous = read_json(before)
+    assert previous["scale"] is None
+    assert previous["factors"]["horizontal"] == 2800
+    assert previous["marks"]["axial"] == read_json(selected)["marks"]["axial"]
+
+
+def test_backup_without_a_scale_factor_cannot_be_restored(tmp_path, config):
+    backups = CalibrationBackups(tmp_path)
+    selected = backups.create(config, "Technician")
+    broken = reloaded_with_scale(config, "nan")
+    before = backups.restore(selected.name, broken, "Technician")
+    original = Path(config.configFile).read_bytes()
+    with pytest.raises(ValueError, match="no usable load-cell scale factor"):
+        backups.restore(before.name, broken, "Technician")
+    assert Path(config.configFile).read_bytes() == original
+    assert sorted(backups.list()) == sorted([selected.name, before.name])
+
+
+@pytest.mark.parametrize("text", ["nan", "inf", "-inf"])
+def test_manual_backup_of_a_non_finite_scale_factor_is_refused_with_the_cause(
+        tmp_path, config, text):
+    backups = CalibrationBackups(tmp_path)
+    broken = reloaded_with_scale(config, text)
+    with pytest.raises(ValueError, match="load-cell scale factor") as refused:
+        backups.create(broken, "Technician")
+    assert f"({text})" in str(refused.value)
+    assert "JSON" not in str(refused.value)
+    assert backups.list() == []
 
 
 def test_diagnostics_export_only_fixed_categories_and_allowlisted_metadata(tmp_path):

@@ -505,6 +505,69 @@ class TestReadyToGo:
 
 
 @pytest.mark.unit
+class TestUnexpectedReboot:
+    """One banner is expected per connection and per Y; any other is a
+    reboot nobody asked for (see Arduino._boot_banner_received)."""
+
+    @pytest.fixture
+    def reboots(self, arduino):
+        arduino._running = True  # so send() can queue a Y
+        seen = []
+        arduino.unexpected_reboot.connect(lambda: seen.append("reboot"))
+        return seen
+
+    def test_first_banner_on_a_connection_is_expected(self, arduino, reboots):
+        arduino.handle_com("Ready to Go")
+        assert reboots == []
+
+    def test_second_banner_without_a_reset_is_unexpected(self, arduino, reboots, qtbot):
+        arduino.handle_com("Ready to Go")
+        with qtbot.waitSignal(arduino.ready_to_go_emit, timeout=1000):
+            arduino.handle_com("Ready to Go")  # still announced to its listeners
+        assert reboots == ["reboot"]
+        assert not arduino.baseline_valid and arduino.firmware_driver is None
+
+    def test_banner_after_y_is_expected(self, arduino, reboots):
+        arduino.handle_com("Ready to Go")
+        assert arduino.send("Y")
+        arduino.handle_com("Ready to Go")
+        assert reboots == []
+
+    def test_one_y_excuses_one_banner(self, arduino, reboots):
+        arduino.handle_com("Ready to Go")
+        assert arduino.send("Y")
+        arduino.handle_com("Ready to Go")
+        arduino.handle_com("Ready to Go")
+        assert reboots == ["reboot"]
+
+    def test_a_replayed_y_still_excuses_only_one_banner(self, arduino, reboots):
+        """The reset's replay sends a second Y when the first got no banner."""
+        arduino.handle_com("Ready to Go")
+        assert arduino.send("Y")
+        assert arduino.send("Y")
+        arduino.handle_com("Ready to Go")
+        assert reboots == []
+        arduino.handle_com("Ready to Go")
+        assert reboots == ["reboot"]
+
+    def test_reconnect_expects_one_banner_again(self, arduino, reboots):
+        """Opening a USB serial port resets the Mega, so each connection may
+        begin with a banner."""
+        arduino.handle_com("Ready to Go")
+        arduino.disconnect()
+        arduino.handle_com("Ready to Go")
+        assert reboots == []
+        arduino.handle_com("Ready to Go")
+        assert reboots == ["reboot"]
+
+    def test_every_unexpected_banner_is_reported(self, arduino, reboots):
+        arduino.handle_com("Ready to Go")
+        arduino.handle_com("Ready to Go")
+        arduino.handle_com("Ready to Go")
+        assert reboots == ["reboot", "reboot"]
+
+
+@pytest.mark.unit
 class TestGarbageInput:
     """Tests for malformed/garbage input."""
 

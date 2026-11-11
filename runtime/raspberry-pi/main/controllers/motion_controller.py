@@ -46,6 +46,8 @@ from helpers.conversions import (
 from helpers.hardware_service import axial_position
 from ui.presentation import present
 
+TREATMENT_ACTIVE_MESSAGE = "Stop treatment before moving the device from Setup."
+
 
 class SetupView:
     """The screen operations MotionController needs, and nothing else.
@@ -216,9 +218,42 @@ class MotionController:
             self.logger.error("CMarks: %s", self.config.CMarks)
             return False
 
+    # ----- the treatment interlock -----
+
+    def _treatment_active(self) -> bool:
+        """A treatment is starting, running or stopping, so it owns the actuators.
+
+        Either the lifecycle state or the running flag is enough; the two can
+        differ briefly while a start is dispatched.
+        """
+        return (bool(self._protocol_running())
+                or self.state.protocol_state in ("starting", "running", "stopping"))
+
+    def _refuse_during_treatment(self) -> bool:
+        """True, with the reason shown, while a treatment owns the actuators.
+
+        The firmware takes a plain P<n> during a ramp or hold as the new
+        pressure limit, and answers a position move with BUSY, which the
+        treatment worker treats as a fault. Checked here, where a command
+        would be sent, so it holds for every widget and signal. The stop
+        paths never ask.
+        """
+        if not self._treatment_active():
+            return False
+        self.logger.warning("Setup movement refused: a treatment is active")
+        self.view.show_error(TREATMENT_ACTIVE_MESSAGE)
+        return True
+
     def send_motion_command(self, command, context):
         """Queue a Setup motion without fabricating success in the UI."""
         if self.state.closing is True:
+            return False
+        # F0 is the leg-length stop: it is always sent.
+        if command != "F0" and self._refuse_during_treatment():
+            # As for a failed send: a caller may already have taken the
+            # controls. They stay locked while the treatment runs.
+            self.enable_actuator_controls()
+            self.view.hide_busy()
             return False
         if (self.state.calibration_active is True
                 or self.state.device_maintenance_active is True):
@@ -351,6 +386,8 @@ class MotionController:
 
     def setup_reset(self, key):
         """A Setup row's reset (home) button."""
+        if self._refuse_during_treatment():
+            return
         if key == "axial":
             self.reset_flexion_button_clicked(self.actuator_a)
         elif key == "lateral":
@@ -376,6 +413,8 @@ class MotionController:
 
         The caller has already authorized the operator.
         """
+        if self._refuse_during_treatment():
+            return False
         if key in ("axial", "horizontal", "lateral") and not self.config.marks_valid:
             self.view.warn_uncalibrated()
             return False
@@ -428,6 +467,8 @@ class MotionController:
 
     def apply_setup_pressure(self):
         """Setup pressure Go: clamp to [MIN_PRESSURE, PRESSURE_MAX] and send P."""
+        if self._refuse_during_treatment():
+            return False
         if not self.config.scale_calibrated:
             self.view.warn_uncalibrated()
             return False
@@ -473,6 +514,8 @@ class MotionController:
         The position math, clamps, and emitted serial commands are FROZEN (unit
         tested). Only the UI feedback is rerouted to the modern Setup screen.
         """
+        if self._refuse_during_treatment():
+            return False
         if self.state.actuator_command_in_progress:
             self.logger.info("Actuator command already in progress - ignoring input")
             return
@@ -675,6 +718,11 @@ class MotionController:
         # Firmware 'X' stops all actuators regardless of suffix. Guarded like
         # stop_actuators: a torn-down transport (arduino is None) must still
         # produce the STOP NOT DELIVERED alarm rather than an AttributeError.
+        if self.state.physical_stop_active is True:
+            # Nothing is sent after the device's stop button: an X would end
+            # the firmware's own release (see KneeSpa.stop_actuators).
+            self.logger.warning("Stop not sent: the device's stop button owns the release")
+            return
         try:
             arduino = self.arduino
             sent = bool(arduino and arduino.send("X"))

@@ -74,6 +74,22 @@ number = 1
 Valid numbers are **1, 2, and 3**, with **1** used when missing or invalid.
 Keep the existing `id` entry; it is the separate unique id used for support.
 
+A value mistyped in a hand edit is never replaced in the file by the default
+the application falls back to, so it can still be corrected:
+
+- A factor or the load-cell scale factor that is not a number (for example
+  `b_factor = 372O` with a letter O, or `calibration = -28369.O`) starts the
+  application with the `DEVICE UNCALIBRATED` alert, which names the option and
+  the text found. Treatments stay disabled; a mistyped factor also disables
+  jogging. Correct the line and restart the application. A hardware service
+  save or calibration restore that supplies the value also replaces it, and
+  the device is calibrated again after the restart. Back Up Calibration is
+  refused until then, so the fallback default is never saved as the device's
+  own value; restoring an earlier backup still works, and the backup it takes
+  first has no value for the mistyped option and cannot itself be restored.
+- An invalid device number does not disable the device. It runs as number 1
+  and the application log names the text found. Correct the line and restart.
+
 Every application process creates a matching pair of logs in the selected
 device's `raspberry-pi/logs/` directory:
 `python_YYYYMMDD-HHMMSS-microseconds_PID.log` and

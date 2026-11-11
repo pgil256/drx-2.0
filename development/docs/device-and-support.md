@@ -79,6 +79,11 @@ Settings and Service scroll vertically on the touchscreen.
   review, saves the current values first, and writes the replacement atomically.
   It leaves unrelated configuration intact and puts the device in recovery until
   an explicit unloaded reset. Verify calibration afterward before treatment.
+  When the load-cell scale factor in `kneespa.cfg` is not a finite number (`nan`
+  or `inf`), Back Up Calibration is refused with a message naming it, because that
+  backup could never be restored. A restore of an earlier backup still works: the
+  values saved first record the scale factor as `null`, and that saved file is
+  itself refused as a restore source.
 - **Date and time** shows local time, time zone, automatic-time state, and actual
   synchronization state. Operators with access can select an installed time zone
   and enable automatic synchronization; enabling NTP is not reported as already
@@ -153,6 +158,10 @@ not greatest version), and downloads the reviewed UUID from the same origin's
 Downloads are capped at 256 MiB and five minutes, with per-read timeouts; size,
 checksum header, and actual SHA-256 must match the selected metadata. Partial
 files are deleted. A prepared download is explicitly distinguished from installation.
+Each download is then checked against its detached signature with `gpgv`. In the
+default `warn` mode a missing or bad signature is shown on the release screen and
+the install continues; `enforce` refuses it. See
+[Release signing](release-signing.md) for the cloud side and the key.
 
 Flash Software / Flash Firmware reviews the version, notes and target, downloads,
 validates and stages under device `updates/`, then asks to install on an unloaded

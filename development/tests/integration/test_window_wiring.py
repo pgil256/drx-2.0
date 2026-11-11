@@ -724,6 +724,101 @@ def test_fault_survives_completion_and_stale_callbacks_after_close(
     assert not run.window.protocol_timer.isActive()
 
 
+@pytest.mark.parametrize("ending", [
+    "completed", "failed", "controller fault", "command rejected", "physical stop",
+    "stop after command rejected",
+])
+def test_treatment_owns_setup_motion_until_it_ends(window_run: SimpleNamespace,
+                                                   qtbot: QtBot, ending: str) -> None:
+    """Setup motion is locked and refused for the whole treatment; Stop is not.
+
+    Only a normal completion hands the motion controls back. A fault keeps
+    them locked. Reset is the way out of a fault, so it is never locked.
+    """
+    run = window_run
+    w = run.window
+    setup = w.shell.setup
+    motion = [button for row in setup._rows.values() for button in row.motion_buttons]
+    stops = [button for row in setup._rows.values() for button in row.safety_buttons]
+    reset = setup._reset_btn
+    assert all(button.isEnabled() for button in motion + [reset])
+    worker = start(run)
+    assert w.protocol_state == "running"
+    assert not any(button.isEnabled() for button in motion)
+    assert all(button.isEnabled() for button in stops + [setup._estop_btn, reset])
+    run.arduino.send.reset_mock()
+    setup.go_requested.emit("pressure")
+    setup.go_requested.emit("lateral")
+    setup.jog_requested.emit("axial", "fwd")
+    setup.jog_requested.emit("horizontal", "reset")
+    run.arduino.send.assert_not_called()
+    setup.stop_requested.emit("axial")
+    run.arduino.send.assert_called_once_with("X")
+    if ending == "controller fault":
+        w.safety.on_controller_fault({"reason": "PRESSURE_SENSOR_TIMEOUT"})
+    elif ending.endswith("command rejected"):
+        w.safety.on_firmware_error("Invalid P value")
+        if ending.startswith("stop"):
+            # STOP before the cancelled worker reports. The rejection's fault
+            # stays latched, and nothing on this path touches Reset.
+            run.view.estop_requested.emit()
+    elif ending == "physical stop":
+        w.safety.on_physical_stop()
+    worker.signals.finished.emit(ending == "completed")
+    if ending == "completed":
+        assert w.protocol_state == "idle"
+        qtbot.waitUntil(lambda: all(button.isEnabled() for button in motion + [reset]),
+                        timeout=2000)
+        assert not w.actuator_command_in_progress
+        return
+    assert w.protocol_state == "fault"
+    qtbot.wait(300)  # longer than the 200 ms enable debounce
+    assert not any(button.isEnabled() for button in motion)
+    assert reset.isEnabled()
+
+
+@pytest.mark.parametrize("ending", [
+    "failed", "controller fault", "controller restart", "command rejected", "physical stop",
+])
+@pytest.mark.parametrize("then", ["nothing", "screen stop", "banner stop"])
+def test_a_faulted_treatment_can_be_left(window_run: SimpleNamespace,
+                                         ending: str, then: str) -> None:
+    """After a fault, Exit, Restart and Logout work, Stop tapped again or not.
+
+    Reset is the recovery, and it cannot succeed while the controller is
+    faulted or unplugged. The operator must still be able to restart the app.
+    """
+    run = window_run
+    w = run.window
+    worker = start(run)
+    if ending == "controller fault":
+        w.safety.on_controller_fault({"reason": "PRESSURE_SENSOR_TIMEOUT"})
+    elif ending == "controller restart":
+        w.safety.on_controller_restart()
+    elif ending == "command rejected":
+        w.safety.on_firmware_error("Invalid P value")
+    elif ending == "physical stop":
+        w.safety.on_physical_stop()
+    else:
+        worker.signals.finished.emit(False)
+    assert w.protocol_state == "fault"
+    if then == "screen stop":
+        run.view.estop_requested.emit()
+    elif then == "banner stop":
+        w.panel_stop_requested()
+    worker.signals.finished.emit(False)
+    w.last_measured_pressure = 0.0
+    for _ in range(10):  # the stop's later phases, each scheduled by the one before
+        scheduled, run.pending[:] = list(run.pending), []
+        for _, callback in scheduled:
+            callback()
+    run.notices.reset_mock()
+
+    assert w.protocol_state == "fault"
+    assert w._block_active_treatment_exit() is False
+    run.notices.assert_not_called()
+
+
 def test_upload_uses_live_end_settings_and_frozen_patient(window_run: SimpleNamespace) -> None:
     run = window_run
     run.cloud.enabled = True
@@ -788,6 +883,32 @@ def test_firmware_stall_timeout_faults_the_running_treatment(window_run):
     assert not run.view._start_btn.isEnabled()
     assert w.treatment_panel.phase_label.text() == "SAFETY STOP: Motor stall timeout 14"
     w._show_safety_alert.assert_called_once_with("CONTROLLER FAULT: Motor stall timeout 14")
+
+
+def test_controller_restart_faults_the_running_treatment(window_run):
+    """The Mega rebooted mid-treatment: its tare is gone, so the readout is not live."""
+    run = window_run
+    w = run.window
+    worker = start(run)
+    w.status_emit(700, 1900, 1450, 42.0)
+    w.on_baseline_changed(True)
+    w.on_sensor_diagnostics({"valid": True, "age_ms": 0})
+    assert run.view._pressure_caption == "Pressure live"
+    run.arduino.send.reset_mock()
+
+    w.safety.on_controller_restart()
+    w.status_emit(700, 1900, 1450, 137.5)  # the un-tared, default-factor value
+
+    assert w.protocol_state == "fault" and w._no_automatic_recovery
+    assert not w.initial_setup_complete
+    worker.cancel.assert_called_once_with(firmware_stopped=True)
+    worker.stop.assert_not_called()
+    assert [c[0][0] for c in run.arduino.send.call_args_list] == ["X", "X", "HF1"]
+    assert run.view._pressure_caption == "Controller fault — last reading stale"
+    assert not run.view._start_btn.isEnabled()
+    w._show_safety_alert.assert_called_once()
+    alert = w._show_safety_alert.call_args[0][0]
+    assert alert.startswith("CONTROLLER FAULT: ") and "Reset" in alert
 
 
 @pytest.mark.parametrize("action", ["Dismiss", "Stop"])

@@ -11,6 +11,7 @@ from PyQt5.QtCore import Qt
 
 from helpers.firmware_protocol import HOME_RELEASE_CAPABILITY, HX711_PROTOCOL_DRIVER
 from helpers.logging import setup_logger
+from helpers.stop_commands import PHYSICAL_STOP_MESSAGES
 
 
 class OperationCancelled(RuntimeError):
@@ -58,6 +59,10 @@ class ControllerOperations:
         self.release_evidence: Optional[dict] = None
         self.new_offset: Optional[int] = None
         self.actual: Optional[float] = None
+        # Set once the device's stop button has been reported. The owner must
+        # then send no X: the firmware is releasing the load by itself, and an
+        # X ends that release.
+        self.physical_stop = False
         self._connections = (
             (arduino.motion_done, self._motion),
             (arduino.home_release_result, self._release),
@@ -167,6 +172,11 @@ class ControllerOperations:
         self._fault({"reason": "DISCONNECTED"})
 
     def _error_reply(self, reason: str) -> None:
+        if reason in PHYSICAL_STOP_MESSAGES:
+            # Before the failure below, so the worker that sees the failure
+            # already knows its cause. The window learns of the button on the
+            # GUI thread, which can be later than the worker's next poll.
+            self.physical_stop = True
         if reason == "BUSY" and self._expected is None:
             return  # Pulse start can legitimately be deferred by the worker.
         self._fault({"reason": reason})
@@ -235,6 +245,12 @@ class ControllerOperations:
                     + (" with HOME_RELEASE_V1 before treatment" if home_release else ""))
             time.sleep(0.02)
 
+    def home_axial(self, config: object) -> None:
+        """Retract the axial actuator and wait for it to report inside its home band."""
+        home = float(config.AMarks.get("0.0", config.AMarks.get("0")))
+        self.perform("I120", ("motion", "I", home, max(0, home - 25),
+                               min(4095, home + 25)), 60.0)
+
     def baseline(self, config: object, retract: bool = False,
                  final_release: bool = False) -> None:
         """Zero supported resting weight only after the owning workflow stops motion."""
@@ -248,13 +264,12 @@ class ControllerOperations:
                 self._check()
                 if not self.send("X"):
                     raise BaselineError("Cannot stop pressure control before axial home")
-                home = float(config.AMarks.get("0.0", config.AMarks.get("0")))
                 if final_release:
+                    home = float(config.AMarks.get("0.0", config.AMarks.get("0")))
                     self.perform("R|" + token, ("release", token, home, factor),
                                  self.RELEASE_TIMEOUT)
                 else:
-                    self.perform("I120", ("motion", "I", home, max(0, home - 25),
-                                           min(4095, home + 25)), 60.0)
+                    self.home_axial(config)
             for attempt in range(2):
                 try:
                     command = "L1|HOME|" + token if final_release else "L1|BASELINE"
