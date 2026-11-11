@@ -759,8 +759,8 @@ def test_treatment_owns_setup_motion_until_it_ends(window_run: SimpleNamespace,
     elif ending.endswith("command rejected"):
         w.safety.on_firmware_error("Invalid P value")
         if ending.startswith("stop"):
-            # STOP before the cancelled worker reports: the completion then
-            # takes the stopped branch, which never touches Reset.
+            # STOP before the cancelled worker reports. The rejection's fault
+            # stays latched, and nothing on this path touches Reset.
             run.view.estop_requested.emit()
     elif ending == "physical stop":
         w.safety.on_physical_stop()
@@ -771,7 +771,7 @@ def test_treatment_owns_setup_motion_until_it_ends(window_run: SimpleNamespace,
                         timeout=2000)
         assert not w.actuator_command_in_progress
         return
-    assert w.protocol_state == ("stopping" if ending.startswith("stop") else "fault")
+    assert w.protocol_state == "fault"
     qtbot.wait(300)  # longer than the 200 ms enable debounce
     assert not any(button.isEnabled() for button in motion)
     assert reset.isEnabled()
@@ -780,8 +780,10 @@ def test_treatment_owns_setup_motion_until_it_ends(window_run: SimpleNamespace,
 @pytest.mark.parametrize("ending", [
     "failed", "controller fault", "controller restart", "command rejected", "physical stop",
 ])
-def test_a_faulted_treatment_can_be_left(window_run: SimpleNamespace, ending: str) -> None:
-    """After a fault, Exit, Restart and Logout work.
+@pytest.mark.parametrize("then", ["nothing", "screen stop", "banner stop"])
+def test_a_faulted_treatment_can_be_left(window_run: SimpleNamespace,
+                                         ending: str, then: str) -> None:
+    """After a fault, Exit, Restart and Logout work, Stop tapped again or not.
 
     Reset is the recovery, and it cannot succeed while the controller is
     faulted or unplugged. The operator must still be able to restart the app.
@@ -799,7 +801,17 @@ def test_a_faulted_treatment_can_be_left(window_run: SimpleNamespace, ending: st
         w.safety.on_physical_stop()
     else:
         worker.signals.finished.emit(False)
+    assert w.protocol_state == "fault"
+    if then == "screen stop":
+        run.view.estop_requested.emit()
+    elif then == "banner stop":
+        w.panel_stop_requested()
     worker.signals.finished.emit(False)
+    w.last_measured_pressure = 0.0
+    for _ in range(10):  # the stop's later phases, each scheduled by the one before
+        scheduled, run.pending[:] = list(run.pending), []
+        for _, callback in scheduled:
+            callback()
     run.notices.reset_mock()
 
     assert w.protocol_state == "fault"
