@@ -108,7 +108,9 @@ class SupportScreen(HelpScreen):
         super().__init__(parent, section_titles=(
             "Protocols", "Controls", "Troubleshooting", "Contact Support",
         ))
+        # Renaming the object orphans HelpScreen's `#HelpScreen` background rule.
         self.setObjectName("SupportScreen")
+        self.setStyleSheet(f"#SupportScreen {{ background: {resolve('--surface-page')}; }}")
         self._sending = False
         self._keyboard = None
         self._keyboard_targets = {}

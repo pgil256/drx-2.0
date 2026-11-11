@@ -35,6 +35,8 @@ class DeviceScreen(QWidget):
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("DeviceScreen")
+        # A plain QWidget subclass ignores a QSS background without this.
+        self.setAttribute(Qt.WA_StyledBackground, True)
         self.setStyleSheet(f"#DeviceScreen {{ background: {resolve('--surface-page')}; }}")
         self.actions: Dict[str, DSButton] = {}
         self.values: Dict[str, QLabel] = {}

@@ -93,6 +93,26 @@ def test_shell_builds_with_six_screens(shell):
     assert isinstance(shell.profile, ProfileScreen)
 
 
+def test_every_page_paints_the_page_wash(shell, qtbot):
+    """No page may fall back to Qt's default window grey behind its cards."""
+    from ui.theme import resolve
+
+    qtbot.addWidget(shell)
+    shell.show()
+    qtbot.waitExposed(shell)
+    shell.set_user("Dr. Vasquez")
+    wash = resolve("--surface-page")
+    for key in ("home", "setup", "protocols", "support", "device", "profile"):
+        shell.navigate(key)
+        page = shell.stack.currentWidget()
+        qtbot.wait(20)
+        # The outermost pixel is page margin on every screen, never a card.
+        assert page.grab().toImage().pixelColor(2, 2).name() == wash, key
+        origin = page.mapTo(shell, page.rect().topLeft())
+        shot = shell.grab().toImage()
+        assert shot.pixelColor(origin.x() + 2, origin.y() + 2).name() == wash, key
+
+
 def test_gated_pages_bounce_to_login_when_logged_out(shell):
     from ui.app_shell import PAGES
 
