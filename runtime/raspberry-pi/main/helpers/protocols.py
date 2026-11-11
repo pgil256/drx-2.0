@@ -111,6 +111,11 @@ class Protocols(QtCore.QRunnable):
         self._pulse_revision = 0
         self._applied_pulse_revision = 0
         self._active_lateral_side = None
+        # Set when the centre after the final release begins, and never
+        # cleared: this worker sends no other K afterwards. A K rejection is
+        # then only logged, here and by the window (SafetyMonitor), whose
+        # queued handler can run after the move has already ended.
+        self.final_centre_begun = False
         # Firmware pulsing believed active (a J was sent and no JS since).
         # GUI-thread paths (pause, pulse slider -> 0) consult this before
         # sending JS: on pre-FAILSAFE-6 firmware JS zeroes whichever SMC was
@@ -183,6 +188,11 @@ class Protocols(QtCore.QRunnable):
         self.cancel(firmware_stopped=True)
 
     def _on_command_rejected(self, result: dict) -> None:
+        if self.final_centre_begun and str(result["command"]).startswith("K"):
+            # The load is already released and zeroed. The move's own
+            # rejection handler fails just that move.
+            self.logger.warning("Final centre rejected: %s", result["reason"])
+            return
         self._failure_reason = "{}: {}".format(result["command"], result["reason"])
         self._terminal_failure.set()
         self.cancel()
@@ -685,12 +695,31 @@ class Protocols(QtCore.QRunnable):
             return self._fail("could not send final JS")
         return True
 
-    def _release(self, center_first: bool) -> bool:
-        """Return to neutral: center laterally if needed, then release."""
-        if center_first:
-            if not self.set_to_c_distance(0):
-                return self._fail("could not return to center")
-            time.sleep(1)  # settle at center before releasing traction
+    def _centre_after_release(self) -> None:
+        """Centre the lateral actuator once, unloaded; a miss is only logged.
+
+        The release and the zero are already confirmed, so the run stays a
+        success, and the next start centres again before it tares. A stop or
+        a controller fault still cancels the worker and ends the run.
+        """
+        self.signals.progress.emit("Centering lateral actuator")
+        failure_before = self._failure_reason
+        self.final_centre_begun = True
+        centred = self.set_to_c_distance(0)
+        if centred or self._stop_requested.is_set():
+            return
+        self.logger.warning("Final lateral centering not confirmed: %s",
+                            self._failure_reason or "no confirmation")
+        self._failure_reason = failure_before
+        self._send_command("X")  # an unconfirmed move must not keep driving
+
+    def _release(self, center_after: bool) -> bool:
+        """Return to neutral: release and zero, then center laterally if needed.
+
+        Release first. Under axial load the lateral actuator can stall, and
+        waiting on it keeps the leg loaded (ks-fb, 11 November 2026: 25 s at
+        58 lb before the release began).
+        """
         if not self.set_to_pressure(0):
             return self._fail("could not release pressure")
         self.logger.info("Protocol %s complete", self.protocol)
@@ -710,6 +739,8 @@ class Protocols(QtCore.QRunnable):
         except Exception as exc:
             self.logger.exception("Unexpected error while retracting and zeroing")
             return self._fail(str(exc))
+        if center_after:
+            self._centre_after_release()
         self.signals.progress.emit("Protocol complete")
         return True
 
@@ -736,7 +767,7 @@ class Protocols(QtCore.QRunnable):
         if not self._pulse_or_hold_phase():
             return
 
-        self._release(center_first=moved_lateral)
+        self._release(center_after=moved_lateral)
         self._active_lateral_side = None
 
     def protocol_1(self):
@@ -848,7 +879,7 @@ class Protocols(QtCore.QRunnable):
         if pulse_stop_failed:
             self._fail("could not stop final pulsing")
             return
-        self._release(center_first=True)
+        self._release(center_after=True)
 
     def _configure_motor_speeds(self) -> bool:
         """Require firmware acceptance before dispatching treatment motion."""

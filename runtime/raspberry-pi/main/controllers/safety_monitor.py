@@ -359,6 +359,16 @@ class SafetyMonitor:
         """Reject the active operation promptly without an automatic homing retry."""
         window = self.window
         reason = "{}: {}".format(result["command"], result["reason"])
+        worker = getattr(window, "worker", None)
+        if (str(result["command"]).startswith("K")
+                and getattr(window, "protocol_running", False) is True
+                and getattr(worker, "final_centre_begun", False) is True):
+            # The centre after a treatment's release is best effort: the load
+            # is already off and zeroed, and the next start centres again.
+            # The finished worker stays on the window, so the running flag
+            # (cleared when its completion is handled) bounds this exemption.
+            window.logger.warning("Final lateral centre rejected: %s", reason)
+            return
         if window.protocol_stop_requested or window._closing:
             window.logger.warning("Command rejected during cleanup: %s", reason)
             return
