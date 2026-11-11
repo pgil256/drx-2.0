@@ -777,6 +777,36 @@ def test_treatment_owns_setup_motion_until_it_ends(window_run: SimpleNamespace,
     assert reset.isEnabled()
 
 
+@pytest.mark.parametrize("ending", [
+    "failed", "controller fault", "controller restart", "command rejected", "physical stop",
+])
+def test_a_faulted_treatment_can_be_left(window_run: SimpleNamespace, ending: str) -> None:
+    """After a fault, Exit, Restart and Logout work.
+
+    Reset is the recovery, and it cannot succeed while the controller is
+    faulted or unplugged. The operator must still be able to restart the app.
+    """
+    run = window_run
+    w = run.window
+    worker = start(run)
+    if ending == "controller fault":
+        w.safety.on_controller_fault({"reason": "PRESSURE_SENSOR_TIMEOUT"})
+    elif ending == "controller restart":
+        w.safety.on_controller_restart()
+    elif ending == "command rejected":
+        w.safety.on_firmware_error("Invalid P value")
+    elif ending == "physical stop":
+        w.safety.on_physical_stop()
+    else:
+        worker.signals.finished.emit(False)
+    worker.signals.finished.emit(False)
+    run.notices.reset_mock()
+
+    assert w.protocol_state == "fault"
+    assert w._block_active_treatment_exit() is False
+    run.notices.assert_not_called()
+
+
 def test_upload_uses_live_end_settings_and_frozen_patient(window_run: SimpleNamespace) -> None:
     run = window_run
     run.cloud.enabled = True
