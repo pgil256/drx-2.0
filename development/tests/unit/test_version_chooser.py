@@ -69,9 +69,17 @@ class Board:
     """Fake toolchain and avrdude: a build encodes the sketch text; verify compares bytes."""
 
     def __init__(self, content: bytes = b"", answers: bool = True, writes: bool = True,
-                 builds: bool = True) -> None:
+                 builds: bool = True, breaks: str = "") -> None:
         self.content, self.answers, self.writes, self.builds = content, answers, writes, builds
+        # Operations ("v", "r", "w") whose next run starts, then loses the USB conversation.
+        self.breaks = list(breaks)
         self.operations: List[str] = []
+
+    @staticmethod
+    def say(log: Path, status: int, text: str) -> int:
+        with log.open("a") as stream:
+            stream.write(text + "\n")
+        return status
 
     def __call__(self, command: List[str], timeout: int, log: Path,
                  environment: Optional[Dict[str, str]] = None) -> int:
@@ -98,13 +106,22 @@ class Board:
         action, path = operation[6], Path(operation[8:-2])
         self.operations.append(action)
         if not self.answers:
-            return 1
+            return self.say(log, 1, "avrdude: stk500v2_getsync(): timeout communicating "
+                                    "with programmer")
+        self.say(log, 0, "avrdude: AVR device initialized and ready to accept instructions")
+        broken = action in self.breaks
+        if broken:
+            self.breaks.remove(action)
+            self.say(log, 0, "avrdude: stk500v2_ReceiveMessage(): timeout")
         if action == "v":
-            return 0 if path.read_bytes() == self.content else 1
-        if action == "r":
-            path.write_text("full flash backup\n")
+            if broken or path.read_bytes() != self.content:
+                return self.say(log, 1, "avrdude: verification error, first mismatch at byte "
+                                        "0x4774")
             return 0
-        if not self.writes:
+        if action == "r":
+            path.write_text("shifted data\n" if broken else "full flash backup\n")
+            return 0  # avrdude recovers from a timeout and still reports success.
+        if broken or not self.writes:
             return 1
         self.content = path.read_bytes()
         return 0
@@ -122,6 +139,8 @@ def devices(settings: "chooser.Settings", monkeypatch: pytest.MonkeyPatch) -> Si
     monkeypatch.setattr(chooser, "find_port", lambda configured: "/dev/ttyACM0")
     monkeypatch.setattr(chooser, "find_avrdude", lambda found: ("avrdude", "avrdude.conf"))
     monkeypatch.setattr(chooser, "port_in_use", lambda ports: False)
+    monkeypatch.setattr(chooser, "find_program", lambda program, directory: program)
+    monkeypatch.setattr(chooser, "RETRY_PAUSE", 0)
     images = {version: expected_image(settings, version) for version in chooser.VERSIONS}
     return SimpleNamespace(settings=settings, images=images)
 
@@ -303,7 +322,78 @@ def test_silent_board_is_never_written(devices: SimpleNamespace) -> None:
     board = Board(devices.images["new"], answers=False)
     with pytest.raises(chooser.ChooserError, match="did not answer"):
         chooser.Session(devices.settings, board).run("legacy", lambda _: None)
+    assert board.operations == ["build", "v"]  # A board that never answers is asked once.
+
+
+def test_broken_check_is_repeated_not_taken_for_other_firmware(
+        devices: SimpleNamespace) -> None:
+    """The Pi's clock step at boot ends avrdude's read with a timeout and garbage."""
+    board = Board(devices.images["new"], breaks="v")
+    assert chooser.Session(devices.settings, board).run("new", lambda _: None) == "verified"
+    assert board.operations == ["build", "v", "v"]
+    assert board.content == devices.images["new"]
+
+
+def test_unreliable_link_is_never_written(devices: SimpleNamespace) -> None:
+    board = Board(devices.images["new"], breaks="v" * chooser.VERIFY_ATTEMPTS)
+    with pytest.raises(chooser.ChooserError, match="did not answer reliably"):
+        chooser.Session(devices.settings, board).run("new", lambda _: None)
+    assert board.operations == ["build"] + ["v"] * chooser.VERIFY_ATTEMPTS
+
+
+def test_broken_backup_and_write_are_repeated(devices: SimpleNamespace) -> None:
+    board = Board(devices.images["new"], breaks="rw")
+    session = chooser.Session(devices.settings, board)
+    assert session.run("legacy", lambda _: None) == "written"
+    assert board.operations == ["build", "v", "r", "r", "w", "w", "v"]
+    assert (session.record / "previous.hex").read_text() == "full flash backup\n"
+    assert board.content == devices.images["legacy"]
+
+
+def test_backup_that_keeps_breaking_stops_before_writing(devices: SimpleNamespace) -> None:
+    board = Board(devices.images["new"], breaks="r" * chooser.BACKUP_ATTEMPTS)
+    with pytest.raises(chooser.ChooserError, match="Nothing was written"):
+        chooser.Session(devices.settings, board).run("legacy", lambda _: None)
     assert "w" not in board.operations
+
+
+def test_stages_are_reported_in_order(devices: SimpleNamespace) -> None:
+    session = chooser.Session(devices.settings, Board(devices.images["new"]))
+    stages: List[str] = []
+    session.run("legacy", lambda _: stages.append(session.stage))
+    assert stages == ["build", "check", "backup", "write"]
+    assert set(stages) < set(chooser.STAGES)
+
+
+def test_full_disk_is_explained_and_does_not_block_the_start(
+        devices: SimpleNamespace, monkeypatch: pytest.MonkeyPatch,
+        capsys: pytest.CaptureFixture) -> None:
+    def full(*arguments: object, **options: object) -> None:
+        raise OSError(28, "No space left on device")
+
+    session = chooser.Session(devices.settings, Board(devices.images["new"]))
+    monkeypatch.setattr(devices.settings, "save_choice", full)
+    assert session.finish("new")[0][-1].endswith("launch_kneespa.sh")
+    assert "Could not remember the choice" in capsys.readouterr().err
+    monkeypatch.setattr(chooser.tempfile, "mkdtemp", full)
+    with pytest.raises(chooser.ChooserError, match="No space left on device"):
+        session.run("new", lambda _: None)
+
+
+def test_missing_start_command_is_reported(settings: "chooser.Settings") -> None:
+    import sys
+
+    settings.commands["legacy"] = [sys.executable, "app.py"]
+    assert settings.launch_command("legacy")[0][0] == sys.executable
+    settings.commands["legacy"] = [str(Path(settings.directories["legacy"], "missing-app"))]
+    with pytest.raises(chooser.ChooserError, match="start command was not found"):
+        settings.launch_command("legacy")
+
+
+def test_log_path_is_split_from_the_message() -> None:
+    assert chooser.split_log("Writing failed. Log: /a b/avrdude.log") == (
+        "Writing failed.", "/a b/avrdude.log")
+    assert chooser.split_log("No log here.") == ("No log here.", "")
 
 
 def test_failed_write_stops_the_launch(devices: SimpleNamespace) -> None:
@@ -330,22 +420,36 @@ def test_unfinished_app_firmware_update_blocks_legacy_only(devices: SimpleNamesp
     assert board.operations == []
 
 
-def buttons(window: object) -> list:
-    layout = window.buttons
-    return [layout.itemAt(index).widget() for index in range(layout.count())]
+def names(window: object) -> List[str]:
+    return [button.accessibleName() or button.text() for button in window.buttons()]
 
 
 def test_touch_flow_flashes_then_starts(qtbot: object, devices: SimpleNamespace) -> None:
     board = Board(devices.images["new"])
     window = chooser.make_window(devices.settings, chooser.Session(devices.settings, board))
     qtbot.addWidget(window)
-    assert [button.text() for button in buttons(window)] == ["Legacy KneeSpa", "KneeSpa 2.0"]
-    buttons(window)[0].click()
+    assert names(window) == ["Legacy KneeSpa", "KneeSpa 2.0"]
+    window.buttons()[0].click()
+    assert window.title.text() == "Starting Legacy KneeSpa" and window.exit.isHidden()
     qtbot.waitUntil(lambda: window.result is not None, timeout=5000)
     assert board.operations == ["build", "v", "r", "w", "v"]
     assert board.content == devices.images["legacy"]
     assert window.result[0] == ["python3", "old app.py"]
-    assert window.title.text() == "Starting" and buttons(window) == []
+    assert [window.steps[stage].state for stage in chooser.STAGES] == [
+        "done", "done", "done", "done", "active"]
+    assert window.buttons() == []
+
+
+def test_matching_firmware_skips_the_write_steps(qtbot: object,
+                                                 devices: SimpleNamespace) -> None:
+    board = Board(devices.images["new"])
+    window = chooser.make_window(devices.settings, chooser.Session(devices.settings, board))
+    qtbot.addWidget(window)
+    window.buttons()[1].click()
+    qtbot.waitUntil(lambda: window.result is not None, timeout=5000)
+    assert [window.steps[stage].state for stage in chooser.STAGES] == [
+        "done", "done", "skipped", "skipped", "active"]
+    assert window.steps["write"].status.text() == "Not needed"
 
 
 def test_countdown_starts_last_choice_until_touched(qtbot: object,
@@ -356,19 +460,63 @@ def test_countdown_starts_last_choice_until_touched(qtbot: object,
     window = chooser.make_window(devices.settings, chooser.Session(devices.settings,
                                                                    Board(b"")))
     qtbot.addWidget(window)
-    assert window.timer.isActive() and "Starting KneeSpa 2.0 in 15 s" in window.message.text()
+    window.show()
+    assert window.timer.isActive() and "KneeSpa 2.0 starts in 15 s" in window.note.text()
+    assert window.count.isVisible() and window.count.value() == 15
     qtbot.mouseClick(window, Qt.LeftButton)
-    assert not window.timer.isActive()
+    assert not window.timer.isActive() and window.count.isHidden()
+    assert window.note.text() == chooser.STOPPED_NOTE
 
 
-def test_errors_offer_a_retry(qtbot: object, devices: SimpleNamespace) -> None:
+def test_countdown_end_starts_the_last_choice(qtbot: object, devices: SimpleNamespace) -> None:
+    devices.settings.save_choice("new")
+    board = Board(devices.images["new"])
+    window = chooser.make_window(devices.settings, chooser.Session(devices.settings, board))
+    qtbot.addWidget(window)
+    window.remaining = 0
+    window.tick()
+    qtbot.waitUntil(lambda: window.result is not None, timeout=5000)
+    assert window.version == "new" and board.operations == ["build", "v"]
+
+
+def test_errors_offer_a_retry_and_back_does_not_count_down(qtbot: object,
+                                                           devices: SimpleNamespace) -> None:
+    devices.settings.save_choice("new")
     devices.settings.commands["legacy"] = []
     window = chooser.make_window(devices.settings, chooser.Session(devices.settings,
                                                                    Board(b"")))
     qtbot.addWidget(window)
-    buttons(window)[0].click()
-    qtbot.waitUntil(lambda: window.title.text() == "Cannot start", timeout=5000)
-    assert [button.text() for button in buttons(window)] == ["Back", "Try again"]
+    window.buttons()[0].click()
+    qtbot.waitUntil(lambda: window.title.text() == "Cannot start Legacy KneeSpa", timeout=5000)
+    assert names(window) == ["Back", "Try again"]
+    assert "command" in window.problem.text() and window.log.isHidden()
+    assert not window.exit.isHidden()
+    window.buttons()[0].click()
+    # Someone is at the screen; nothing may start by itself after a failure.
+    assert names(window) == ["Legacy KneeSpa", "KneeSpa 2.0"]
+    assert not window.timer.isActive() and window.note.text() == ""
+
+
+def test_error_shows_the_log_path_apart(qtbot: object, devices: SimpleNamespace) -> None:
+    board = Board(devices.images["new"], writes=False)
+    session = chooser.Session(devices.settings, board)
+    window = chooser.make_window(devices.settings, session)
+    qtbot.addWidget(window)
+    window.buttons()[0].click()
+    qtbot.waitUntil(lambda: window.title.text().startswith("Cannot start"), timeout=5000)
+    assert window.problem.text().endswith("Flash KneeSpa Firmware shortcut.")
+    shown = window.log.text().replace("\u200b", "")
+    assert Path(shown) == session.record / "avrdude.log" and not window.log.isHidden()
+
+
+def test_exit_leaves_without_starting_anything(qtbot: object,
+                                               devices: SimpleNamespace) -> None:
+    board = Board(devices.images["new"])
+    window = chooser.make_window(devices.settings, chooser.Session(devices.settings, board))
+    qtbot.addWidget(window)
+    window.show()
+    window.exit.click()
+    assert window.isHidden() and window.result is None and board.operations == []
 
 
 @pytest.mark.skipif(os.name != "posix", reason="flock and the installer need POSIX")
