@@ -96,6 +96,32 @@ class TestCanExit:
         state.physical_stop_active = True
         assert state.can_exit() is True
 
+    def test_the_controls_lock_of_a_latched_fault_does_not_block_leaving(self):
+        """A treatment takes the Setup controls and a fault keeps them locked
+        for the recovery reset. Nothing is moving, and the reset may never
+        succeed, so the lock must not hold the operator in the app."""
+        state = DeviceState()
+        state.actuator_command_in_progress = True
+        state.protocol_state = "fault"
+        assert state.busy_reason() is None
+        assert state.can_exit() is True
+
+    @pytest.mark.parametrize("state_name", ["idle", "starting", "running", "stopping"])
+    def test_a_command_in_progress_blocks_leaving_outside_a_fault(self, state_name):
+        state = DeviceState()
+        state.actuator_command_in_progress = True
+        state.protocol_state = state_name
+        assert state.busy_reason() == "movement"
+
+    @pytest.mark.parametrize("field", [
+        "device_maintenance_active", "calibration_active", "reset_in_progress",
+    ])
+    def test_service_and_reset_block_leaving_during_a_fault(self, field):
+        state = DeviceState()
+        state.protocol_state = "fault"
+        setattr(state, field, True)
+        assert state.can_exit() is False
+
 
 class Owner(DeviceStateAttributes):
     pass

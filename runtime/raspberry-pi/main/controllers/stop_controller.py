@@ -16,6 +16,11 @@ Where two paths of one kind behave differently today, the table records both
 One rule sits above the table: once the device's own stop button is active,
 no later stop of any kind sends X until the operator's Reset. The firmware
 releases the load by itself after the button, and an X ends that release.
+
+A second rule: once a fault is latched (``fault``, ``fault/command``,
+``physical``, or a failed recovery), an operator or on-screen stop still
+cancels the producers and stops the outputs, but it leaves the screen in the
+fault and schedules no release. Reset is the only way out of a latched fault.
 """
 
 import time
@@ -172,6 +177,26 @@ class StopController:
         }
         handlers[kind](**options)
 
+    def _keeps_latched_fault(self) -> bool:
+        """True when a fault is latched; the screen is left in that fault.
+
+        The release phases of an operator or on-screen stop return at
+        _no_automatic_recovery, which only Reset clears. A "stopping" entered
+        after it was set therefore never ended: Start stayed busy, and
+        logout, exit and restart were refused as "treatment in progress"
+        until a Reset succeeded. Called after the stop's safety actions.
+        """
+        window = self.window
+        if getattr(window, "_no_automatic_recovery", False) is not True:
+            return False
+        window.logger.warning("Stop after a latched fault: Reset in Setup is the recovery")
+        if getattr(window, "protocol_state", "fault") != "fault":
+            try:
+                self.protocol.set_state("fault")
+            except Exception:
+                window.logger.exception("Could not restore the fault state after a stop")
+        return True
+
     # ----- moved methods follow -----
 
     def _operator_stop(self):
@@ -186,8 +211,10 @@ class StopController:
             window.worker.cancel()
         window.stop_actuators()
         self.protocol.finalize_session()
-        self.protocol.set_state("stopping")
         window.mid_protocol_warning_shown = False
+        if self._keeps_latched_fault():
+            return
+        self.protocol.set_state("stopping")
         # Use QTimer to avoid blocking UI
         QTimer.singleShot(500, self._stop_phase2)
 
@@ -319,6 +346,9 @@ class StopController:
         # and stop_actuators alarms the operator if the link is down.
         window.stop_actuators()
         self.protocol.finalize_session()
+        if self._keeps_latched_fault():
+            # The stop line stays asserted: Reset drives it high again.
+            return
         # UI state changes come after both independent stop mechanisms so a
         # broken widget can never delay either safety action. The raw stop
         # flag above is already sufficient to classify an immediate reply.

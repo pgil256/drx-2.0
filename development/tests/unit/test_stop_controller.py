@@ -164,6 +164,32 @@ def test_no_later_stop_sends_x_after_the_physical_stop(stopping, kind):
     assert window._physical_stop_active is True
 
 
+@pytest.mark.parametrize("latch", [FAULT, COMMAND_FAULT, PHYSICAL])
+@pytest.mark.parametrize("kind", [OPERATOR, ESTOP])
+def test_a_stop_after_a_latched_fault_leaves_the_fault(stopping, latch, kind):
+    """The release phases never run for a latched fault, so "stopping" would
+    never end, and that state refuses logout, exit and restart."""
+    window, events, gpio, timer = stopping
+    stops_for(window).stop(latch, **OPTIONS[latch])
+    assert window.protocol_state == "fault"
+    events.clear()
+    timer.reset_mock()
+    window.worker.cancel.reset_mock()
+
+    stops_for(window).stop(kind, **OPTIONS[kind])
+
+    assert window.protocol_state == "fault"
+    assert window.protocol_running is False
+    assert window.protocol.block_active_treatment_exit() is False
+    timer.singleShot.assert_not_called()
+    # It is still a stop: the producer is cancelled and the outputs are stopped.
+    window.worker.cancel.assert_called_once_with()
+    if kind == ESTOP:
+        assert events[0] == ("gpio", EMERGENCYSTOP, gpio.LOW)
+    if latch != PHYSICAL:
+        assert ("send", "X") in events
+
+
 def test_reset_is_held_while_the_firmware_releases(stopping):
     """Reset sends Y, which ends the release, and homes the axial actuator last."""
     window, _, _, timer = stopping

@@ -26,12 +26,21 @@ class DeviceState:
         self.initial_setup_complete = False
 
     def busy_reason(self) -> Optional[str]:
-        """The work that must finish before leaving the screen, or None."""
+        """The work that must finish before leaving the screen, or None.
+
+        ``actuator_command_in_progress`` is also the Setup controls lock. A
+        treatment takes it at the start, and a stop or fault keeps it for the
+        recovery reset, which is the only thing that clears it. In the fault
+        state the command it stood for has been stopped or has ended, so the
+        lock is not movement there. Counting it held logout, exit and restart
+        until a reset succeeded, which a faulted or unplugged controller never
+        allows. Leaving still runs the shutdown stop.
+        """
         if self.device_maintenance_active is True or self.calibration_active is True:
             return "device service"
         if self.reset_in_progress is True:
             return "reset"
-        if self.actuator_command_in_progress is True:
+        if self.actuator_command_in_progress is True and self.protocol_state != "fault":
             return "movement"
         return None
 
