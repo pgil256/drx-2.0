@@ -167,6 +167,7 @@ class SupportScreen(HelpScreen):
         form.setSpacing(10)
         phone = QLabel("Phone support: 1-833-KNEE-SPA")
         phone.setFont(sans_font(size="--text-md", weight=600))
+        phone.setStyleSheet(f"color: {resolve('--text-strong')};")
         form.addWidget(phone)
         note = QLabel(
             "Describe the problem and how we can reach you. Device ID, software and firmware "

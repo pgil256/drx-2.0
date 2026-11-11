@@ -44,7 +44,7 @@ class _ProtocolHelpPanel(QFrame):
         self.setStyleSheet(
             f"#ProtoHelp {{ background: {resolve('--surface-card')};"
             f" border: 1px solid {resolve('--gray-300')};"
-            f" border-radius: {resolve('--radius-md')}; }}"
+            f" border-radius: {resolve('--radius-lg')}; }}"  # the DSCard radius
             f" #ProtoHelp QLabel {{ background: transparent; }}"
         )
         lay = QVBoxLayout(self)
@@ -168,16 +168,21 @@ class HelpScreen(QWidget):
                 divider.setFixedHeight(1)
                 divider.setStyleSheet(f"background: {resolve('--gray-300')};")
                 rows.addWidget(divider)
+            # The heading takes the strong ink and stays on its own copy; rows
+            # keep their natural height so spare space collects under the list
+            # instead of opening a gap inside the shortest entry.
             text = QVBoxLayout()
             text.setSpacing(3)
             title = QLabel(key)
             title.setFont(sans_font(size="--text-md", weight=600))
+            title.setStyleSheet(f"color: {resolve('--text-strong')};")
             body = QLabel(desc)
             body.setWordWrap(True)
             body.setFont(sans_font(size="--text-md"))
             text.addWidget(title)
             text.addWidget(body)
-            rows.addLayout(text, 1)
+            rows.addLayout(text)
+        rows.addStretch(1)
         card.add_widget(host)
         return card
 
@@ -196,20 +201,28 @@ class HelpScreen(QWidget):
                 f"#SafetyLimit {{ background: {resolve('--blue-050')}; border-radius: 8px; }}"
                 "#SafetyLimit QLabel { background: transparent; }"
             )
+            # Caption and reading sit together, centred in the tile, as a
+            # muted label over a strong value (a degree sign takes no space).
             text = QVBoxLayout(tile)
-            text.setContentsMargins(12, 12, 12, 12)
+            text.setContentsMargins(16, 12, 16, 12)
+            text.setSpacing(2)
             caption = QLabel(label)
             caption.setFont(sans_font(size="--text-sm"))
-            reading = QLabel(f"{value} {unit}")
+            caption.setStyleSheet(f"color: {resolve('--text-muted')};")
+            reading = QLabel(f"{value}{unit}" if unit == "°" else f"{value} {unit}")
             reading.setFont(sans_font(size="--text-lg", weight=600))
+            reading.setStyleSheet(f"color: {resolve('--text-strong')};")
+            text.addStretch(1)
             text.addWidget(caption)
             text.addWidget(reading)
+            text.addStretch(1)
             limits.addWidget(tile, i // 2, i % 2)
         limits.setColumnStretch(0, 1)
         limits.setColumnStretch(1, 1)
         column.addLayout(limits, 1)
         heading = QLabel("Stopping and recovery")
         heading.setFont(sans_font(size="--text-md", weight=600))
+        heading.setStyleSheet(f"color: {resolve('--text-strong')};")
         column.addWidget(heading)
         note = QLabel(
             f"<b style='color:{resolve('--red-500')}'>Stop + reset</b> "
