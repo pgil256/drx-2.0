@@ -47,18 +47,34 @@ class DSBadge(QFrame):
         lay.addWidget(self._dot)
         lay.addWidget(self._label)
 
+        self._sized = False
         self._tone = tone
         self.set_tone(tone)
 
     def set_tone(self, tone):
         self._tone = tone if tone in TONES else "neutral"
+        self._restyle()
+
+    def _restyle(self):
+        # Qt draws square corners when a border-radius exceeds half the box, so
+        # the design's 999px pill has to be spelled as half the actual height.
+        # Until the layout has sized the badge, height() is QWidget's default.
+        height = self.height() if self._sized else self.sizeHint().height()
+        radius = height // 2
         bg_t, fg_t = TONES[self._tone]
         bg, fg = resolve(bg_t), resolve(fg_t)
-        self.setStyleSheet(
-            f"DSBadge {{ background: {bg}; border-radius: 999px; }}"
+        sheet = (
+            f"DSBadge {{ background: {bg}; border-radius: {radius}px; }}"
             f" QLabel {{ color: {fg}; background: transparent; }}"
         )
+        if sheet != self.styleSheet():
+            self.setStyleSheet(sheet)
         self._dot.setStyleSheet(f"background: {fg}; border-radius: {self._dot_radius}px;")
+
+    def resizeEvent(self, event):
+        super().resizeEvent(event)
+        self._sized = True
+        self._restyle()
 
     def set_text(self, text):
         self._label.setText(text)

@@ -202,6 +202,24 @@ def test_keypad_keys_keep_their_touch_height(app, qtbot, compact, expected):
     assert heights == {expected}
 
 
+def test_badge_is_a_pill(app, qtbot):
+    """Qt ignores a border-radius larger than half the box, leaving square corners."""
+    import re
+
+    from ui.widgets.ds import DSBadge
+
+    for size in ("sm", "md"):
+        badge = DSBadge("Ready", tone="success", dot=True, size=size)
+        qtbot.addWidget(badge)
+        badge.show()
+        qtbot.waitExposed(badge)
+        radius = int(re.search(r"border-radius:\s*(\d+)px", badge.styleSheet()).group(1))
+        assert radius * 2 <= badge.height(), "Qt drops a radius over half the height"
+        assert radius >= badge.height() // 2 - 1, "badge ends are not fully rounded"
+        badge.set_tone("danger")
+        assert f"border-radius: {radius}px" in badge.styleSheet()
+
+
 def test_protocol_and_nav_toggle(app):
     from ui.widgets.ds import DSNavRailButton, DSProtocolButton
 
