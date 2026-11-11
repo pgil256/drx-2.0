@@ -25,10 +25,17 @@ class ServicePinDialog(QDialog):
         self.setWindowFlag(Qt.WindowContextHelpButtonHint, False)
         self.setFont(sans_font(size="--text-base"))
         layout = QVBoxLayout(self)
-        self.message = QLabel()
+        # A fixed two-line box: a word-wrapped label reports its one-line
+        # height to the dialog, which then came up too short and squeezed the
+        # keypad; and the prompt changes length while the dialog is open
+        # (retry, lockout, confirm), which must not move the keys. Every
+        # prompt below fits two lines at this width (test_ds_components).
+        self.message = QLabel(self)
+        self.message.setFont(self.font())  # measure the lines in the font they render in
         self.message.setWordWrap(True)
-        self.message.setMaximumWidth(400)
-        layout.addWidget(self.message)
+        self.message.setAlignment(Qt.AlignHCenter | Qt.AlignTop)
+        self.message.setFixedSize(360, 2 * self.message.fontMetrics().lineSpacing() + 2)
+        layout.addWidget(self.message, 0, Qt.AlignHCenter)
         self.keypad = DSKeypad(length=6, label="Service PIN", compact=True)
         self.keypad.submitted.connect(self.submit)
         layout.addWidget(self.keypad, 0, Qt.AlignCenter)
