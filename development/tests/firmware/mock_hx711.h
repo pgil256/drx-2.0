@@ -4,6 +4,8 @@
 
 #ifdef UNIT_TEST
 
+#include <math.h>
+
 class HX711 {
 public:
     enum Result { NOT_READY, SAMPLE, INVALID };
@@ -45,9 +47,11 @@ public:
     void setUnits(float units) { _units = units; }
 
     // Make read()-based sampling (updatePressure) yield `units` given the
-    // current scale factor and offset
+    // current scale factor and offset. Rounded in double: a 32-bit (x87)
+    // build keeps the float sum in an 80-bit register, and truncating
+    // that landed one count low (36.61 lb read back as 36.62).
     void setRawForUnits(float units) {
-        _raw = (long)(units * _scale + _offset);
+        _raw = lround((double)units * _scale + _offset);
     }
 };
 using Hx711Sampler = HX711;
