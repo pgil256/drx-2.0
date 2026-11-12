@@ -48,34 +48,36 @@ def _label(text: str, size: int = 16, bold: bool = False) -> QLabel:
     return label
 
 
+_READOUT_WIDTH = 108
+
+
 class _PosRow(QWidget):
     """A sensor reading that can never be populated by target changes."""
 
-    def __init__(self, unit: str, estimated: bool = False, parent=None) -> None:
+    def __init__(self, unit: str, parent=None) -> None:
         super().__init__(parent)
         self.unit = unit
-        self.estimated = estimated
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         layout.setAlignment(Qt.AlignVCenter)
-        self._caption = _label("Estimated" if estimated else "Measured", 16)
+        self._caption = _label("Measured", 16)
         self._value = _label("—", 22, True)
         self._value.setFont(mono_font(size=22, weight=600))
         for label in (self._caption, self._value):
             label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             label.setMinimumHeight(label.minimumSizeHint().height())
             layout.addWidget(label)
-        self.setFixedWidth(108)
-        self.set_value(None, "Zero required" if estimated else "Waiting")
+        self.setFixedWidth(_READOUT_WIDTH)
+        self.set_value(None, "Waiting")
 
     def set_value(self, value: Optional[float], reason: str = "") -> None:
-        """Show a finite sensor/estimate value, or an explicit unavailable state."""
+        """Show a finite sensor value, or an explicit unavailable state."""
         valid = isinstance(value, (int, float)) and math.isfinite(value)
         text = f"{value:g}{self.unit}" if valid else "—"
         self._value.setText(text)
         reason = _READING_REASONS.get(reason, reason)
-        detail = reason or ("Open loop" if self.estimated else "From sensor")
+        detail = reason or "From sensor"
         self.setToolTip(detail)
         self._value.setAccessibleDescription(detail)
 
@@ -159,8 +161,18 @@ class _ActuatorRow(QWidget):
         target.setFixedWidth(96)
         layout.addWidget(target)
 
-        self.readout = _PosRow(cfg["unit"], self._key == "leg_length")
-        layout.addWidget(self.readout)
+        # Nothing measures the leg-length actuator: the firmware runs it for a
+        # fixed time. Its old "Estimated" column counted presses and staff read
+        # it as a measurement, so that row gets a blank column of the same width
+        # to keep Go and Stop lined up with the other rows.
+        self.readout: Optional[_PosRow] = None
+        if self._key == "leg_length":
+            blank = QWidget()
+            blank.setFixedWidth(_READOUT_WIDTH)
+            layout.addWidget(blank)
+        else:
+            self.readout = _PosRow(cfg["unit"])
+            layout.addWidget(self.readout)
         go = DSButton("Go", size="sm")
         go.setFixedSize(56, 56)
         go.setStyleSheet("QPushButton { padding: 0; }")
@@ -216,7 +228,8 @@ class SetupScreen(QWidget):
         for index, cfg in enumerate(ROWS):
             row = _ActuatorRow(cfg)
             self._rows[cfg["key"]] = row
-            self._pos[cfg["key"]] = row.readout
+            if row.readout is not None:
+                self._pos[cfg["key"]] = row.readout
             row.jog.connect(self.jog_requested)
             row.go.connect(self.go_requested)
             row.stop.connect(self.stop_requested)
@@ -262,17 +275,12 @@ class SetupScreen(QWidget):
 
     def set_measured_position(self, key: str, value: Optional[float], reason: str = "") -> None:
         """Telemetry cannot overwrite a selected target or fabricate leg feedback."""
-        if key in self._pos and key != "leg_length":
+        if key in self._pos:
             self._pos[key].set_value(value, reason)
-
-    def set_leg_length_estimate(self, value: Optional[float], reason: str = "") -> None:
-        """Show command-derived travel from retracted zero, including quarter inches."""
-        self._pos["leg_length"].set_value(value, reason)
 
     def invalidate_measurements(self, reason: str) -> None:
         for key in self._pos:
-            if key != "leg_length":
-                self.set_measured_position(key, None, reason)
+            self.set_measured_position(key, None, reason)
 
     def set_reset_enabled(self, enabled: bool) -> None:
         self._reset_btn.setEnabled(enabled)

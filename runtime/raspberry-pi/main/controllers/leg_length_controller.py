@@ -1,4 +1,9 @@
-"""Boot homing and command-based position estimates for the open-loop FIT axis."""
+"""Boot homing and command-based position estimates for the open-loop FIT axis.
+
+The estimate is internal only. Nothing measures this actuator, so the Setup
+screen shows no leg-length position; the estimate only bounds jogs and Go
+targets to the 0-6 inch travel and requires a retract to zero first.
+"""
 
 import math
 import time
@@ -18,7 +23,7 @@ MOVES = {"F+": (0.25, 0.5), "F-": (-0.25, 0.5), "FF": (3.0, 6.0), "FR": (-3.0, 6
 
 
 class LegLengthController(QObject):
-    """Publish estimates only after timed movement and its completion reply.
+    """Update the estimate only after timed movement and its completion reply.
 
     There is no encoder or home switch. A full-travel retract establishes the
     mechanical reference; cancelled or unacknowledged moves require rehoming.
@@ -37,16 +42,11 @@ class LegLengthController(QObject):
         self.timer = QTimer(self)
         self.timer.setInterval(20)
         self.timer.timeout.connect(self._poll)
-        self._display("Zero required")
-
-    def _display(self, reason: str = "From retracted zero") -> None:
-        self.window.shell.setup.set_leg_length_estimate(self.position, reason)
 
     def invalidate(self) -> None:
         """Forget the reference after untracked service movement."""
         self.position = None
         self.window._service_leg_position_unknown = True
-        self._display("Zero required")
 
     def move(self, command: str) -> bool:
         """Execute a jog within the travel range relative to retracted zero."""
@@ -121,7 +121,6 @@ class LegLengthController(QObject):
         w.loading_spinner.show()
         if homing:
             self.invalidate()
-        self._display("Retracting to zero…" if homing else "Moving…")
         if not self._queue():
             self._finish(False, "Leg movement was not sent.")
             return False
@@ -219,7 +218,6 @@ class LegLengthController(QObject):
             self.window._service_leg_position_unknown = False
             if self.homing:
                 self.boot_home_pending = False
-            self._display()
         else:
             # Invalidate even a queued command: it may have reached the wire
             # just before cancellation. X discards pending motion before stopping.

@@ -76,9 +76,41 @@ def test_jogs_accumulate_only_on_completion(leg):
         assert not controller.move("F+")
         complete(leg)
         assert controller.position == expected
-        window.shell.setup.set_leg_length_estimate.assert_called_with(
-            expected, "From retracted zero",
-        )
+
+
+def test_estimate_is_never_sent_to_the_setup_screen(leg):
+    """Nothing measures the leg, so its press-count estimate stays internal."""
+    controller, window, _, _ = leg
+    setup = window.shell.setup
+    setup.reset_mock()
+    home(leg)
+    assert controller.move("FF")
+    complete(leg)
+    assert controller.position == 3.0
+    controller.invalidate()
+    assert setup.method_calls == []
+
+
+def test_estimate_still_bounds_jogs_and_targets(leg):
+    controller, window, _, handles = leg
+    window._show_timed_error = MagicMock()
+    assert not controller.move("F+")
+    window._show_timed_error.assert_called_with(
+        "Use the leg-length Return control to establish zero.")
+    home(leg)
+    sent = len(handles)
+    assert not controller.move("F-")
+    window._show_timed_error.assert_called_with("Leg length is limited to 0–6 inches.")
+    assert not controller.move_to(6.25)
+    assert not controller.move_to(0.3)
+    window._show_timed_error.assert_called_with("Choose a leg-length target in 0.25-inch steps.")
+    assert len(handles) == sent
+    for _ in range(2):
+        assert controller.move("FF")
+        complete(leg)
+    assert controller.position == 6.0
+    assert not controller.move("F+")
+    window._show_timed_error.assert_called_with("Leg length is limited to 0–6 inches.")
 
 
 def test_gpio_waits_for_write_and_stops_without_reply(leg, monkeypatch):

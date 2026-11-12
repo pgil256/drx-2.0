@@ -425,5 +425,5 @@ class UxStopVerification(UxVerification):
         yield self.wait("leg Stop clears direction outputs", lambda:
                         self.state["gpio"].get("27") == 0
                         and self.state["gpio"].get("22") == 0)
-        assert shell.setup._pos["leg_length"]._caption.text() == "Estimated"
-        self.note("leg Stop preserves explicit open-loop labeling")
+        assert shell.setup._rows["leg_length"].readout is None
+        self.note("leg Stop leaves the leg row without a position readout")

@@ -371,7 +371,13 @@ def test_setup_stop_controls_are_never_in_motion_lock_group(shell):
         assert all(button in locked for button in row.motion_buttons)
 
 
-def test_leg_length_has_target_controls_separate_from_its_estimate(shell):
+def _row_label_texts(row):
+    from PyQt5.QtWidgets import QLabel
+
+    return [label.text() for label in row.findChildren(QLabel)]
+
+
+def test_leg_length_has_target_controls_and_no_position_readout(shell):
     row = shell.setup._rows["leg_length"]
     assert any(button.text() == "Go" for button in row.motion_buttons)
     assert not row.slider.isHidden()
@@ -382,21 +388,42 @@ def test_leg_length_has_target_controls_separate_from_its_estimate(shell):
     moved.assert_not_called()
     row.motion_buttons[-1].click()
     moved.assert_called_once_with("leg_length")
-    assert row.readout._caption.text() == "Estimated"
-    assert row.readout._value.text() == "—"
+    # Nothing measures the leg-length actuator, so the row has no
+    # Measured/Estimated column, only its target.
+    assert row.readout is None
+    assert "leg_length" not in shell.setup._pos
+    texts = _row_label_texts(row)
+    assert "Estimated" not in texts and "Measured" not in texts
+    assert "Measured" in _row_label_texts(shell.setup._rows["axial"])
 
 
-def test_leg_estimate_keeps_quarter_inches_and_requires_explicit_zero(shell):
+def test_leg_length_row_columns_line_up_with_measured_rows(app, qtbot):
+    from ui.screens.setup import SetupScreen
+
+    setup = SetupScreen()
+    qtbot.addWidget(setup)
+    setup.resize(1280, 800)
+    setup.show()
+    app.processEvents()
+    leg = setup._rows["leg_length"]
+    axial = setup._rows["axial"]
+    assert leg.width() == axial.width()
+    # Go and Stop keep the same x position as on the rows with a reading.
+    assert leg.motion_buttons[-1].geometry() == axial.motion_buttons[-1].geometry()
+    assert leg.safety_buttons[0].geometry() == axial.safety_buttons[0].geometry()
+
+
+def test_leg_length_row_never_shows_a_position(shell):
     setup = shell.setup
-    setup.set_leg_length_estimate(0.25, "From retracted zero")
-    assert setup._pos["leg_length"]._value.text() == "0.25 in"
-    setup.set_position("leg_length", 0)
-    assert setup._pos["leg_length"]._value.text() == "0.25 in"
+    row = setup._rows["leg_length"]
+    before = _row_label_texts(row)
+    assert not hasattr(setup, "set_leg_length_estimate")
     setup.set_measured_position("leg_length", 6)
-    assert setup._pos["leg_length"]._value.text() == "0.25 in"
-    setup.set_leg_length_estimate(None, "Zero required")
-    assert setup._pos["leg_length"]._value.text() == "—"
-    assert setup._pos["leg_length"]._value.accessibleDescription() == "Zero required"
+    setup.invalidate_measurements("Controller offline")
+    assert _row_label_texts(row) == before
+    setup.set_position("leg_length", 1.5)
+    assert row.value() == 1.5
+    assert not any(text.startswith("6") for text in _row_label_texts(row))
 
 
 # ----- support -----

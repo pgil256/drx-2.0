@@ -254,7 +254,6 @@ def window_run(themed_app: QApplication, tmp_path: Path,
         # This fixture starts after hardware initialization, including FIT home.
         manager.window.leg.boot_home_pending = False
         manager.window.leg.position = 0.0
-        manager.window.shell.setup.set_leg_length_estimate(0.0, "From retracted zero")
         return True
 
     monkeypatch.setattr(connection_manager.ConnectionManager, "setup_arduino", connect)

@@ -155,8 +155,8 @@ class GuiVerification:
             # instead of treating command completion as measured target accuracy.
             pose = self.state["pose"]["fit_inches"]
             assert 0 <= pose <= 6 and (pose - before_pose) * direction > 0.1
-            assert leg.readout._caption.text() == "Estimated"
-            self.results.append({"check": "FIT target remains explicitly estimated",
+            assert leg.readout is None and "leg_length" not in shell.setup._pos
+            self.results.append({"check": "FIT shows no position, only its target",
                                  "estimate_inches": target, "physical_inches": pose,
                                  "error_inches": pose - target})
         self.save("setup-leg-target")
