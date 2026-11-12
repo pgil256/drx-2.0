@@ -191,7 +191,7 @@ def test_a_stop_after_a_latched_fault_leaves_the_fault(stopping, latch, kind):
 
 
 def test_reset_is_held_while_the_firmware_releases(stopping):
-    """Reset sends Y, which ends the release, and homes the axial actuator last."""
+    """Reset sends Y, which ends the release before its own retraction starts."""
     window, _, _, timer = stopping
 
     stops_for(window).stop(PHYSICAL, release_started=True)

@@ -69,7 +69,9 @@ from ui.modals.rehome_prompt import RehomePrompt
 from ui.modals.upload_error import UploadErrorDialog
 from config.config import Configuration
 from helpers.csv import CSVHelper
-from helpers.measurement_state import MeasurementState, diagnostics_max_age_s
+from helpers.measurement_state import (
+    MeasurementState, diagnostics_max_age_s, is_push, signed_reading,
+)
 from helpers.app_restart import restart_app
 from helpers.device_system import DeviceSystem
 from helpers.cloud_client import CloudClient
@@ -171,6 +173,7 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
         self._no_automatic_recovery = False
         self._measurement = MeasurementState()
         self._measurement_fault = None
+        self._load_released = False  # see set_load_released
         self.protocol_start_time = None
         self.protocol_duration = 0
         self._paused_at = None             # wall-clock pause anchor for the UI timer
@@ -318,7 +321,9 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
         """Wire the view, start timers and GPIO, then defer hardware and cloud start."""
         # Controls locked while the MCU is busy (jog/Go/Stop/Reset-Arduino) —
         # the same gating group the legacy `actuator_controls` list provided.
-        self.actuator_controls = self.shell.setup.control_buttons()
+        # The Protocols page's leg-length steps lock with them.
+        self.actuator_controls = (self.shell.setup.control_buttons()
+                                  + self.shell.treatment.leg_length_buttons())
 
         # Treatment Settings sliders start from the persisted defaults (§15.4).
         self.shell.treatment.set_settings(self.config.protocol_defaults())
@@ -404,6 +409,7 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
         s.treatment.pause_requested.connect(self._on_treatment_pause)
         s.treatment.estop_requested.connect(self._on_estop)
         s.treatment.setting_changed.connect(self._on_setting_changed)
+        s.treatment.leg_length_step_requested.connect(self._on_treatment_leg_step)
         self._pressure_state_timer = QTimer(self)
         self._pressure_state_timer.setInterval(250)
         self._pressure_state_timer.timeout.connect(self._refresh_measurement_display)
@@ -733,6 +739,24 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
         if actuator is not None:
             self.move_actuator(actuator, speed, direction)
 
+    def _on_treatment_leg_step(self, action):
+        """A leg-length step on the Protocols page, to take up slack before Start.
+
+        One slow step per tap through the same path as the Setup row, so the
+        leg controller's own guards apply: it refuses during a treatment, a
+        reset or another move, and a step in flight holds Start.
+        """
+        if action not in ("rev", "fwd"):
+            return
+        if not self.current_user:
+            self.shell.show_login()
+            return
+        if self.current_user.get("status") in ("patient", "service_technician"):
+            return
+        if not authorize(self, "setup", lambda: self._on_treatment_leg_step(action)):
+            return
+        self._leg_jog(action)
+
     def _leg_jog(self, action):
         handler = {
             "rev_fast": self.reverse_fast_button_clicked,
@@ -747,7 +771,12 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
         """Setup Go, once the operator is authorized: see MotionController.setup_go."""
         if not authorize(self, "setup", lambda: self._on_setup_go(key)):
             return False
-        return self.motion.setup_go(key)
+        sent = self.motion.setup_go(key)
+        if sent and key == "pressure":
+            # A load applied from Setup is not a confirmed release: keep the
+            # Protocols page reading on screen until a reset or a clean run.
+            self.set_load_released(False)
+        return sent
 
     def _on_setup_stop(self, key):
         """A Setup row's Stop: see MotionController.setup_stop."""
@@ -1193,7 +1222,11 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
         except (TypeError, ValueError):
             pass
         def update_live_view() -> None:
-            self.shell.treatment.set_pressure(pressure)
+            # The display takes its direction from the signed sample; the
+            # safety checks below and the stop sequence keep the magnitude.
+            shown = signed_reading(
+                pressure, getattr(getattr(self, "_measurement", None), "diagnostics", None))
+            self.shell.treatment.set_pressure(shown)
             connected = bool(self.arduino and self.arduino.connected)
             calibrated = connected and self.config.marks_valid
             lateral_angle = (calibrated_reading(steps, self.config.CMarks)
@@ -1202,7 +1235,7 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
             # Measured feedback must never overwrite an unsubmitted Setup target.
             caption = self._measurement.caption(connected)
             self.shell.setup.set_measured_position(
-                "pressure", pressure if caption == "Pressure live" else None, caption,
+                "pressure", shown if caption == "Pressure live" else None, caption,
             )
             for key, raw, marks in (
                 ("axial", position_a, self.config.AMarks),
@@ -1225,9 +1258,49 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
         present(self.logger, "live status", update_live_view)
         return self.safety.on_status(position_a, position_b, steps, pressure)
 
+    def set_load_released(self, released: bool) -> None:
+        """Record whether the leg is confirmed released.
+
+        True once a reset or a cleanly finished treatment has retracted and
+        zeroed. False from Start, a stop, a fault or a Setup pressure command
+        until then: a run that stopped without releasing can still hold a
+        load, and its reading must stay on screen until the reset completes.
+        """
+        self._load_released = bool(released)
+        self.refresh_awaiting_start()
+
+    def refresh_awaiting_start(self) -> None:
+        """Idle with the release confirmed: the Protocols page shows no number."""
+        awaiting = self._load_released and not self.protocol_running
+        present(self.logger, "pressure waiting text",
+                lambda: self.shell.treatment.set_awaiting_start(awaiting))
+
+    def signed_pressure(self, pressure):
+        """A status frame's magnitude with the direction of the latest signed sample.
+
+        Display only: see helpers.measurement_state.signed_reading.
+        """
+        return signed_reading(pressure, getattr(self._measurement, "diagnostics", None))
+
     def on_sensor_diagnostics(self, diagnostics: dict) -> None:
+        was_push = is_push(self._measurement.diagnostics)
         self._measurement.receive(diagnostics)
+        if is_push(diagnostics) != was_push:
+            # The signed sample follows its status frame, so the direction can
+            # change after the magnitude was drawn. Redraw that magnitude.
+            present(self.logger, "pressure direction", self._redraw_pressure)
         self._refresh_pressure_state()
+
+    def _redraw_pressure(self) -> None:
+        pressure = self.last_measured_pressure
+        if pressure is None:
+            return
+        shown = self.signed_pressure(pressure)
+        self.shell.treatment.set_pressure(shown)
+        self.treatment_panel.update_pressure(shown)
+        connected = bool(self.arduino and self.arduino.connected)
+        if self._measurement.caption(connected) == "Pressure live":
+            self.shell.setup.set_measured_position("pressure", shown, "Pressure live")
 
     def on_calibration_result(self, result: dict) -> None:
         if result.get("operation") == "tare":

@@ -199,26 +199,39 @@ def cleanup_indices(link):
     return release, tare
 
 
-def test_unconfirmed_final_centering_still_releases_zeroes_and_retries(protocol_clock):
-    def final_centre(link, worker, attempt, replies):
-        return [] if attempt == 1 else replies  # loaded move never reports; unloaded one lands
-    link, worker, attempts = run_lateral_treatment(final_centre)
+def test_verified_release_and_zero_run_before_the_final_centre(protocol_clock):
+    """Release first (ks-fb, 11 November 2026): the centre waits until the leg is unloaded."""
+    link, worker, attempts = run_lateral_treatment(
+        lambda link, worker, attempt, replies: replies)
     release, tare = cleanup_indices(link)
-    assert len(attempts) == 2
-    assert attempts[0] < release < tare < attempts[1] == len(link.commands) - 1
+    assert len(attempts) == 1
+    assert release < tare < attempts[0] == len(link.commands) - 1
     assert worker.outcome == "completed" and worker.treatment_completed
     assert worker.cleanup_warning == "" and not worker._failure_reason
     assert link.baseline_valid
 
 
-def test_rejected_final_centering_never_blocks_release_or_completion(protocol_clock):
+def test_unconfirmed_final_centre_after_the_release_is_only_logged(protocol_clock):
+    def final_centre(link, worker, attempt, replies):
+        return []  # the move never reports
+    link, worker, attempts = run_lateral_treatment(final_centre)
+    release, tare = cleanup_indices(link)
+    assert len(attempts) == 1 and release < tare < attempts[0]
+    # One try, then X so an unconfirmed move cannot keep driving.
+    assert link.commands[attempts[0]:] == [link.commands[attempts[0]], "X"]
+    assert worker.outcome == "completed" and worker.treatment_completed
+    assert worker.cleanup_warning == "" and not worker._failure_reason
+    assert link.baseline_valid
+
+
+def test_rejected_final_centre_never_blocks_completion(protocol_clock):
     def final_centre(link, worker, attempt, replies):
         return ["COMMAND_REJECTED|K|POSITION_OUT_OF_TOLERANCE"]
     link, worker, attempts = run_lateral_treatment(final_centre)
     release, tare = cleanup_indices(link)
-    assert attempts[0] < release < tare < attempts[1]
-    # The second miss stops the lateral motor and is only logged.
-    assert link.commands[attempts[1]:] == [link.commands[attempts[1]], "X"]
+    assert len(attempts) == 1 and release < tare < attempts[0]
+    # The miss stops the lateral motor and is only logged.
+    assert link.commands[attempts[0]:] == [link.commands[attempts[0]], "X"]
     assert worker.outcome == "completed"
     assert worker.cleanup_warning == "" and not worker._failure_reason
     assert link.baseline_valid
@@ -244,15 +257,18 @@ def test_lateral_rejection_during_treatment_stays_terminal(protocol_clock):
 
 
 @pytest.mark.parametrize("interruption", ["stop", "fault"])
-def test_stop_or_fault_during_final_centering_still_blocks_release(protocol_clock, interruption):
+def test_stop_or_fault_during_final_centre_ends_cleanup_as_failed(protocol_clock, interruption):
+    """The leg is already released and zeroed, but the stop or fault still ends the run."""
     def final_centre(link, worker, attempt, replies):
         if interruption == "stop":
             worker.cancel()
             return []
         return ["FAULT|POSITION_FEEDBACK_INVALID|0|36.61"]
     link, worker, attempts = run_lateral_treatment(final_centre)
-    assert len(attempts) == 1
-    assert not any(c.startswith(("R|", "L1|HOME|")) for c in link.commands)
+    release, tare = cleanup_indices(link)
+    assert len(attempts) == 1 and release < tare < attempts[0]
+    # Nothing follows the centre here: the stop path owns the cleanup.
+    assert attempts[0] == len(link.commands) - 1
     assert worker.outcome == "completed_cleanup_failed"
     assert worker.cleanup_warning.startswith("Treatment completed, but cleanup needs attention:")
     assert not link.baseline_valid

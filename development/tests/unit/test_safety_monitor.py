@@ -527,3 +527,32 @@ class TestFirmwareEvents:
         sm, w = monitor
         sm.on_zeros_echo(160, 1900)
         assert w.timed_errors == []
+
+
+@pytest.mark.unit
+class TestFinalCentreRejection:
+    """A K rejected while centring after the release is only logged."""
+
+    def _rejected(self, window, running, begun):
+        window._closing = False
+        window.protocol = MagicMock()
+        window.protocol_running = running
+        window.worker.final_centre_begun = begun
+        SafetyMonitor(window).on_command_rejected(
+            {"command": "K", "reason": "Position read failed"})
+        return window
+
+    def test_rejection_during_final_centre_is_logged_only(self):
+        w = self._rejected(StubWindow(), running=True, begun=True)
+        w.protocol.stop_without_recovery.assert_not_called()
+        assert w.timed_errors == []
+
+    def test_rejection_earlier_in_the_run_still_stops_it(self):
+        w = self._rejected(StubWindow(), running=True, begun=False)
+        w.protocol.stop_without_recovery.assert_called_once()
+        assert w.timed_errors
+
+    def test_finished_worker_does_not_excuse_a_later_setup_move(self):
+        # The window keeps the finished worker; only a running treatment counts.
+        w = self._rejected(StubWindow(), running=False, begun=True)
+        w.protocol.stop_without_recovery.assert_called_once()

@@ -10,6 +10,7 @@ from config.constants import (
     ACTUATORS, DEFAULT_HORIZONTAL_POSITION, HORIZONTAL_COMMAND_LIMITS, LEG_LENGTH_MAX,
     LEG_LENGTH_MIN, PRESSURE_MAX,
 )
+from ui.measurements import signed_text
 from ui.theme import chevron_icon, rotate_icon
 from ui.widgets.common import hline
 from ui.widgets.ds import DSButton, DSCard, DSSlider
@@ -51,10 +52,14 @@ def _label(text: str, size: int = 16, bold: bool = False) -> QLabel:
 class _PosRow(QWidget):
     """A sensor reading that can never be populated by target changes."""
 
-    def __init__(self, unit: str, estimated: bool = False, parent=None) -> None:
+    def __init__(self, unit: str, estimated: bool = False, parent=None,
+                 true_minus: bool = False) -> None:
         super().__init__(parent)
         self.unit = unit
         self.estimated = estimated
+        # Pressure shows a push on the footplate with the same minus sign as
+        # the Protocols page. The angle rows keep their existing format.
+        self.true_minus = true_minus
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
@@ -72,7 +77,12 @@ class _PosRow(QWidget):
     def set_value(self, value: Optional[float], reason: str = "") -> None:
         """Show a finite sensor/estimate value, or an explicit unavailable state."""
         valid = isinstance(value, (int, float)) and math.isfinite(value)
-        text = f"{value:g}{self.unit}" if valid else "—"
+        if not valid:
+            text = "—"
+        elif self.true_minus:
+            text = signed_text(value, "g") + self.unit
+        else:
+            text = f"{value:g}{self.unit}"
         self._value.setText(text)
         reason = _READING_REASONS.get(reason, reason)
         detail = reason or ("Open loop" if self.estimated else "From sensor")
@@ -159,7 +169,8 @@ class _ActuatorRow(QWidget):
         target.setFixedWidth(96)
         layout.addWidget(target)
 
-        self.readout = _PosRow(cfg["unit"], self._key == "leg_length")
+        self.readout = _PosRow(cfg["unit"], self._key == "leg_length",
+                               true_minus=self._key == "pressure")
         layout.addWidget(self.readout)
         go = DSButton("Go", size="sm")
         go.setFixedSize(56, 56)

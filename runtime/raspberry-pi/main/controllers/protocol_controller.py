@@ -69,6 +69,12 @@ class ProtocolController:
             # A fault is not treatment-ready. Recovery reset is the only path
             # back to idle.
             self.set_busy(True)
+        if state in ("stopping", "fault"):
+            # A stop or a fault can leave the load on: the reading stays on
+            # screen until a reset confirms the release.
+            self._set_load_released(False)
+        else:
+            self._set_load_released(None)  # the running flag changed: redraw
         if state in ("starting", "running", "stopping"):
             present(window.logger, "nonessential overlays",
                     lambda: window.shell.close_nonessential_overlays())
@@ -84,6 +90,22 @@ class ProtocolController:
             except Exception:
                 # A display failure must not interrupt the lifecycle's safety work.
                 window.logger.exception("Could not refresh device presentation")
+
+    def _set_load_released(self, released: Optional[bool]) -> None:
+        """Tell the window whether the release is confirmed (None: only redraw).
+
+        Display only, so a window without the pressure display is skipped and
+        a failure never interrupts the lifecycle's safety work.
+        """
+        window = self.window
+        name = "refresh_awaiting_start" if released is None else "set_load_released"
+        update = getattr(window, name, None)
+        if not callable(update):
+            return
+        try:
+            update() if released is None else update(released)
+        except Exception:
+            window.logger.exception("Could not update the pressure waiting text")
 
     def _set_run_state(self, running: bool) -> None:
         """Present an unpaused lifecycle transition without delaying safety work."""
@@ -387,6 +409,9 @@ class ProtocolController:
             window._patient_lookup_id += 1
             window.mid_protocol_warning_shown = False
 
+            # From dispatch the run may load the leg. Only its clean finish
+            # or a reset confirms the release again.
+            self._set_load_released(False)
             self.set_state("starting")
 
             # Always-visible treatment banner: live values arrive via
@@ -535,6 +560,8 @@ class ProtocolController:
             # was queued just before STOP.
             self.set_state("stopping")
         elif success:
+            # The worker verified the retraction and the final zero.
+            self._set_load_released(True)
             self.set_state("idle")
             # A normal end hands the Setup motion controls back. A stop or a
             # fault leaves them to the recovery reset.

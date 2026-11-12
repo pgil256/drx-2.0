@@ -4,6 +4,7 @@ from controllers.safety_monitor import SafetyMonitor
 from fixtures.controllers import make_window
 from fixtures.nb2 import NB2Controller
 from fixtures.protocols import make_protocol
+from helpers.conversions import lateral_degrees_to_position
 from helpers.measurement_state import MeasurementState
 
 pytestmark = pytest.mark.unit
@@ -29,14 +30,73 @@ def test_full_protocol_orders_preparation_and_final_baseline(protocol_clock, v2,
     assert 2 < centre < prepared[0].index("L1|BASELINE")
     assert not any(c.startswith("P") for c in prepared[0])
     assert finished[0][0] and worker.completed.is_set() and link.baseline_valid
-    assert link.commands[-3] == "X"
-    assert link.commands[-2].startswith("R|")
-    assert link.commands[-1] == "L1|HOME|" + link.commands[-2][2:]
+    # Verified release and zero first; protocols that moved the lateral
+    # actuator centre it once afterwards, unloaded.
+    release_at = next(i for i, c in enumerate(link.commands) if c.startswith("R|"))
+    token = link.commands[release_at][2:]
+    release = ["X", "R|" + token, "L1|HOME|" + token]
+    centre_command = "K{}".format(lateral_degrees_to_position(worker.config.CMarks, 0)[0])
+    if protocol == "1":
+        assert link.commands[-3:] == release
+    else:
+        assert link.commands[-4:] == release + [centre_command]
+        # Every lateral move of the treatment itself precedes the release.
+        assert release_at > max(
+            i for i, c in enumerate(link.commands[:-1]) if c.startswith("K"))
     pressure = [c for c in link.commands if c.startswith("P")]
     assert pressure == ["P20|50", "P30|50", "P40|50", "P50|50"]
     assert worker.treatment_completed and worker.outcome == "completed"
     if pulse:
         assert "J250" in link.commands and "JS" in link.commands
+
+
+@pytest.mark.parametrize("protocol", ["2", "3", "4"])
+@pytest.mark.parametrize("miss", ["timeout", "rejected"])
+def test_missed_final_centre_is_only_logged(protocol_clock, protocol, miss):
+    """The load is released and zeroed before the centre, so a miss changes nothing."""
+    link = NB2Controller()
+    worker = make_protocol(ser=link, protocol=protocol, duration=1)
+    link.factor = worker.config.calibration
+    link.a_zero = int(worker.config.AMarks.get("0.0", worker.config.AMarks.get("0")))
+    failures, finished, progress = [], [], []
+    worker.signals.operation_failed.connect(failures.append)
+    worker.signals.finished.connect(finished.append)
+    worker.signals.progress.connect(progress.append)
+    released = []
+    def hook(command, replies):
+        if command.startswith("L1|"):  # the start tare, then the final one
+            released.append(len(link.commands))
+        if command.startswith("K") and len(released) == 2:
+            return [] if miss == "timeout" else ["COMMAND_REJECTED|K|Position read failed"]
+        return replies
+    link.hook = hook
+    worker.run()
+    assert finished == [True] and not failures and worker.completed.is_set()
+    assert link.baseline_valid
+    # One try, then X so an unconfirmed move cannot keep driving.
+    assert [c[:1] for c in link.commands[released[1]:]] == ["K", "X"]
+    assert progress[-2:] == ["Centering lateral actuator", "Protocol complete"]
+
+
+def test_stop_during_final_centre_ends_the_run_as_stopped(protocol_clock):
+    link = NB2Controller()
+    worker = make_protocol(ser=link, protocol="2", duration=1)
+    link.factor = worker.config.calibration
+    link.a_zero = int(worker.config.AMarks.get("0.0", worker.config.AMarks.get("0")))
+    failures, finished, released = [], [], []
+    worker.signals.operation_failed.connect(failures.append)
+    worker.signals.finished.connect(finished.append)
+    def hook(command, replies):
+        if command.startswith("L1|"):  # the start tare, then the final one
+            released.append(command)
+        if command.startswith("K") and len(released) == 2:
+            worker.cancel()
+            return []
+        return replies
+    link.hook = hook
+    worker.run()
+    assert finished == [False] and not failures
+    assert link.commands[-1].startswith("K")  # the stop path owns the cleanup
 
 
 @pytest.mark.parametrize("stage", ["start_home", "center", "baseline", "pressure", "final_home",

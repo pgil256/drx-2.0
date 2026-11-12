@@ -6,14 +6,16 @@ is `2026-11-06-DRX2-home-release`. Older three-field identities remain readable,
 but cannot authorize treatment. Disconnection, reset initiation, `Reset|`, and
 `Ready to Go` invalidate the identity and pressure authorization.
 
-After the timed phase, protocols 1–4 stop pulsing and protocols 2–4 try to
-centre the lateral actuator. That centre is best effort: if it is not
-confirmed, the miss is logged and the release and zero still run, then the
-centre is tried once more unloaded. A second miss sends `X` and is only logged;
-the next treatment start re-centres anyway. An operator stop or controller
-fault during centering still cancels the release. The app invalidates its
+After the timed phase, protocols 1–4 stop pulsing. The app invalidates its
 baseline authorization, sends `X`,
 then `R|<12 lowercase hex characters>`. Final cleanup does not send `P0`.
+The release and zero run before any final centre: under axial load the lateral
+actuator can stall, and waiting on it keeps the leg loaded (ks-fb, 11 November
+2026: 25 s at 58 lb before the release began). Protocols 2–4 then centre the
+lateral actuator once, unloaded. That centre is best effort: a miss sends `X`
+and is only logged, and the next treatment start re-centres anyway. An
+operator stop or controller fault during that centre still ends the run as
+`completed_cleanup_failed`.
 Pre-treatment zeroing remains `L1|BASELINE`; treatment pressure adjustments keep
 their existing `P` semantics.
 
