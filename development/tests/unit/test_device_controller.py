@@ -132,15 +132,79 @@ def test_clinician_cannot_reboot_without_technician_access(controller):
     assert not hasattr(controller.window, "_system_power_action")
 
 
-def test_power_rechecks_state_after_confirmation(controller, monkeypatch):
+BUSY_STATES = {
+    "treatment starting": {"protocol_state": "starting", "protocol_running": True},
+    "treatment running": {"protocol_state": "running", "protocol_running": True},
+    "treatment stopping": {"protocol_state": "stopping"},
+    "fault": {"protocol_state": "fault", "actuator_command_in_progress": True,
+              "_physical_stop_active": True},
+    "reset": {"reset_in_progress": True},
+    "movement": {"actuator_command_in_progress": True},
+    "service": {"_calibration_active": True},
+    "maintenance": {"_device_maintenance_active": True},
+}
+
+
+@pytest.mark.parametrize("action", ["restart_app", "reboot", "poweroff"])
+@pytest.mark.parametrize("state", list(BUSY_STATES))
+def test_power_actions_work_at_any_point(controller, monkeypatch, action, state):
+    """Restart App, Restart Device and Shut Down never wait for the device.
+
+    Closing the window runs the shutdown stop, which cancels the treatment,
+    reset or service and stops the motors.
+    """
+    asked = []
+
+    def confirm(_parent, _title, text, *args):
+        asked.append(text)
+        return QMessageBox.Yes
+
+    monkeypatch.setattr(module.QMessageBox, "question", confirm)
+    controller.window.close = Mock()
+    for name, value in BUSY_STATES[state].items():
+        setattr(controller.window, name, value)
+    controller.action(action)
+    assert "will be stopped" in asked[0]
+    if action == "restart_app":
+        controller.window._on_restart_app.assert_called_once()
+    else:
+        assert controller.window._system_power_action == action
+        controller.window.close.assert_called_once()
+
+
+def test_power_confirmation_does_not_mention_a_stop_when_idle(controller, monkeypatch):
+    asked = []
+
+    def confirm(_parent, _title, text, *args):
+        asked.append(text)
+        return QMessageBox.No
+
+    monkeypatch.setattr(module.QMessageBox, "question", confirm)
+    controller.action("reboot")
+    assert "will be stopped" not in asked[0]
+    assert not hasattr(controller.window, "_system_power_action")
+
+
+@pytest.mark.parametrize("change", ["user", "closing"])
+def test_power_rechecks_user_and_closing_after_confirmation(controller, monkeypatch, change):
     def confirm(*args):
-        controller.window.reset_in_progress = True
+        if change == "user":
+            controller.window.current_user = {"username": "Someone else", "status": "admin"}
+        else:
+            controller.window._closing = True
         return QMessageBox.Yes
 
     monkeypatch.setattr(module.QMessageBox, "question", confirm)
     controller.action("reboot")
     controller.system.linux.assert_not_called()
     assert not hasattr(controller.window, "_system_power_action")
+
+
+def test_a_fault_still_blocks_device_changes(controller):
+    controller.window.protocol_state = "fault"
+    called = Mock()
+    controller._authorize(called)
+    called.assert_not_called()
 
 
 def test_restore_rechecks_state_after_review(controller, monkeypatch, qtbot):

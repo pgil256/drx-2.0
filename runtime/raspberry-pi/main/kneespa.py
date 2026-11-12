@@ -844,7 +844,12 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
         self.close()
 
     def _on_restart_app(self) -> None:
-        if self._closing or self.restart_requested or self._block_active_treatment_exit():
+        """Restart App, already confirmed by DeviceController._power.
+
+        Available at any point, unlike logout and Exit App: closing runs the
+        shutdown stop, which ends a treatment, reset or service in progress.
+        """
+        if self._closing or self.restart_requested:
             return
         self.restart_requested = True
         self.logger.info("Application restart requested")

@@ -942,6 +942,21 @@ def test_restart_button_requests_cleanup_once(window_run, monkeypatch):
     assert [c[0][0] for c in run.arduino.send.call_args_list] == ["X", "P0", "HF0"]
 
 
+def test_restart_button_stops_a_running_treatment(window_run, monkeypatch):
+    """Restart App is available mid-treatment and runs the shutdown stop."""
+    run = window_run
+    worker = start(run)
+    assert run.window.protocol_state == "running"
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.Yes)
+    run.arduino.send.reset_mock()
+    run.notices.reset_mock()
+    run.window.shell.profile._restart.click()
+    assert run.window.restart_requested and run.window._closing
+    worker.cancel.assert_called_once_with(firmware_stopped=False)
+    assert [c[0][0] for c in run.arduino.send.call_args_list] == ["X", "P0", "HF0"]
+    run.notices.assert_not_called()
+
+
 def test_pressure_caption_and_decimal_render_in_existing_panel(window_run, tmp_path):
     run = window_run
     run.window.on_sensor_diagnostics({"valid": True, "age_ms": 0})
