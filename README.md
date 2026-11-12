@@ -227,7 +227,11 @@ timestamped reports under `~/KneeSpa-display-diagnostics/`.
 ## Safety and warning behavior
 
 The physical STOP input, on-screen EMERGENCY STOP, and explicit firmware
-`X` command are the motion-interrupting paths. Other device conditions
+`X` command are the motion-interrupting paths. `X` and `JS` act as soon as
+their line arrives, even behind a command waiting out the firmware's 200 ms
+command interval, and that older command is dropped with `Superseded by stop`
+so it cannot restart motion; a second command arriving while one waits is
+dropped with `BUSY`. Other device conditions
 (heartbeat, sensor, travel, pressure timeout, and motor stall) emit advisory
 `WARNING:` notices without stopping or resetting operation. Treatment pressure
 commands remain capped at 80 lbs; measured pressure warns above 100 lbs.
