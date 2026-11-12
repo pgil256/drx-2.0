@@ -399,6 +399,35 @@ def test_setup_jog_waits_for_feedback_without_fabricating_a_position(shell):
     assert row.value() == 1.5
 
 
+def test_setup_pressure_arrows_edit_only_the_target(shell, qtbot):
+    s = shell.setup
+    row = s._rows["pressure"]
+    buttons = {button.accessibleName(): button for button in row.motion_buttons}
+    jogs = []
+    s.jog_requested.connect(lambda k, a: jogs.append((k, a)))
+    go, stop = MagicMock(), MagicMock()
+    s.go_requested.connect(go)
+    s.stop_requested.connect(stop)
+    s.set_measured_position("pressure", 12, "Pressure live")
+
+    targets = []
+    with qtbot.capture_exceptions() as raised:
+        for name in ("Fast forward", "Forward", "Reverse", "Fast reverse"):
+            buttons["Pressure: " + name].click()
+            targets.append(row.value())
+
+    assert [str(error) for _type, error, _tb in raised] == []
+    assert targets == [20, 25, 20, 0]
+    # kneespa drops pressure jogs (test_pressure_jog_sends_no_command): only Go sends P.
+    assert jogs == [
+        ("pressure", "fwd_fast"), ("pressure", "fwd"), ("pressure", "rev"),
+        ("pressure", "rev_fast"),
+    ]
+    go.assert_not_called()
+    stop.assert_not_called()
+    assert s._pos["pressure"]._value.text() == "12 lbs"
+
+
 def test_setup_action_signals(shell):
     s = shell.setup
     seen = {"mark": 0, "reset": 0, "estop": 0}

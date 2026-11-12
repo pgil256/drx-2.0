@@ -210,7 +210,6 @@ class _ActuatorRow(QWidget):
         # a target only; its return button is the existing P0 release action.
         if self._key == "pressure" and delta is not None:
             self.slider.set_value(self.slider.value() + delta)
-            self._on_target(self.slider.value())
         self.jog.emit(self._key, action)
 
     def value(self) -> float:
