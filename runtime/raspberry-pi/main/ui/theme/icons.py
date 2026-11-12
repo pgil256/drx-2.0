@@ -215,7 +215,7 @@ def _poly(p, pts):
 def nav_icon(name, color="#ffffff", size=26):
     """A 24-space Lucide-style line icon as a recolorable QIcon.
 
-    Names: home · setup · protocols · help · support · device · play.
+    Names: home · setup · protocols · help · support · device · play · login · logout.
     """
     pm = _pixmap(size)
     p = QPainter(pm)
@@ -280,6 +280,16 @@ def nav_icon(name, color="#ffffff", size=26):
         p.setBrush(QColor(color))
         p.setPen(Qt.NoPen)
         p.drawPolygon(QPolygonF([QPointF(10, 8.4), QPointF(16.2, 12), QPointF(10, 15.6)]))
+    elif name == "login":
+        # An arrow entering a doorway on the right.
+        _poly(p, [(15, 3), (19, 3), (21, 5), (21, 19), (19, 21), (15, 21)])
+        _poly(p, [(10, 7), (15, 12), (10, 17)])
+        _line(p, 3, 12, 15, 12)
+    elif name == "logout":
+        # An arrow leaving a doorway on the left.
+        _poly(p, [(9, 3), (5, 3), (3, 5), (3, 19), (5, 21), (9, 21)])
+        _poly(p, [(16, 7), (21, 12), (16, 17)])
+        _line(p, 9, 12, 21, 12)
 
     p.end()
     return QIcon(pm)

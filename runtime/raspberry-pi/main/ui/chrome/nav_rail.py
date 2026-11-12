@@ -1,13 +1,17 @@
 """NavRail — persistent 108px white left rail with a hairline edge.
 
-Five exclusive nav items (Home · Setup · Treatment · Support · Device), with the
-Video launcher above Support and Device. The active item paints action blue on a
-soft blue fill with a 4px left edge, the rail counterpart of the dashboard's
-selected nav pill. The rail only reports the intent; ``app_shell`` applies login
-gating and the actual page switch.
+The first item is the session button, as in the previous app: "Login" while
+nobody is signed in, "Logout" once someone is. Below it sit four exclusive nav
+items (Setup · Treatment · Support · Device), with the Video launcher above
+Support and Device. Home has no rail item; the top-bar logo goes there. The
+active item paints action blue on a soft blue fill with a 4px left edge, the
+rail counterpart of the dashboard's selected nav pill. The rail only reports the
+intent; ``app_shell`` applies login gating and the actual page switch.
 
 Signals:
-    navigate(str)     — a nav item ('home'|'setup'|'protocols'|'support'|'device')
+    navigate(str)     — a nav item ('setup'|'protocols'|'support'|'device')
+    login_requested   — the session button, signed out
+    logout_requested  — the session button, signed in
     video_requested   — the Video launcher
 """
 
@@ -19,7 +23,6 @@ from ui.widgets.ds._common import px, resolve, sans_font
 from ui.widgets.ds.nav_rail_button import DSNavRailButton
 
 NAV_ITEMS = [
-    ("home", "Home", "home"),
     ("setup", "Setup", "setup"),
     ("protocols", "Treatment", "protocols"),
     ("support", "Support", "support"),
@@ -33,6 +36,8 @@ def _icon_factory(name):
 
 class NavRail(QFrame):
     navigate = pyqtSignal(str)
+    login_requested = pyqtSignal()
+    logout_requested = pyqtSignal()
     video_requested = pyqtSignal()
 
     def __init__(self, parent=None):
@@ -50,6 +55,14 @@ class NavRail(QFrame):
         lay.setContentsMargins(0, 0, 0, 0)
         lay.setSpacing(0)
 
+        # An action, not a page: it never takes the active highlight.
+        self._signed_in = False
+        self._session = DSNavRailButton(
+            "Login", icon_factory=self._session_icon, fill_height=True)
+        self._session.setCheckable(False)
+        self._session.clicked.connect(self._on_session)
+        lay.addWidget(self._session)
+
         self._group = QButtonGroup(self)
         self._group.setExclusive(True)
         self._buttons = {}
@@ -63,7 +76,17 @@ class NavRail(QFrame):
         self._video = self._make_video_button(rail)
         lay.insertWidget(3, self._video)
 
-        self._buttons["home"].setChecked(True)
+    def _session_icon(self, color, size):
+        return nav_icon("logout" if self._signed_in else "login", color, size)
+
+    def _on_session(self):
+        (self.logout_requested if self._signed_in else self.login_requested).emit()
+
+    def set_signed_in(self, signed_in: bool) -> None:
+        """Turn the session button into Logout while someone is signed in."""
+        self._signed_in = bool(signed_in)
+        self._session.setText("Logout" if self._signed_in else "Login")
+        self._session._render()
 
     def _make_video_button(self, rail):
         btn = QToolButton(self)
@@ -89,7 +112,7 @@ class NavRail(QFrame):
     def set_active(self, key):
         """Sync the checked nav item to the current page (no signal emitted).
 
-        A key with no rail item (e.g. "profile") clears the highlight."""
+        A key with no rail item ("home", "profile") clears the highlight."""
         btn = self._buttons.get(key)
         if btn is None:
             self._group.setExclusive(False)

@@ -44,7 +44,7 @@ ALL_ACTUATORS = ("axial", "lateral", "horizontal", "leg-length")
 # Coordinates are centers in the fixed device viewport. They are scaled to the
 # actual screen/client size at runtime, so the 1360x768 Pi panel works too.
 POINTS: Dict[str, Tuple[int, int]] = {
-    "home_login": (742, 718),
+    "home_login": (54, 137),  # the rail's Login item
     "nav_setup": (60, 279),
     "nav_protocols": (60, 391),
     "nav_video": (60, 728),
@@ -559,7 +559,7 @@ class E2ERunner:
         process_id = self.process.pid if self.process is not None else None
         self.driver.activate_app(process_id)
         marker = self.monitor.mark()
-        self.driver.click(POINTS["home_login"], "Home Login")
+        self.driver.click(POINTS["home_login"], "Rail Login")
         time.sleep(max(self.args.action_delay, 0.8))
         self.capture("login-modal")
         for index, digit in enumerate(self.args.pin, start=1):

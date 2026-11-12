@@ -9,7 +9,7 @@ the real ``SecureAuthHelper`` without this shell knowing any of it.
 
 Signals:
     login_attempted(str)        — a PIN was entered in the login modal
-    logout_requested            — Log Out was tapped on the Profile screen
+    logout_requested            — Logout was tapped in the nav rail or on Profile
     exit_requested              — Exit App was tapped on the Profile screen
 """
 
@@ -27,8 +27,8 @@ from ui.screens import (
     TreatmentScreen,
 )
 
-# Page key -> stack index. "profile" has no rail item; the top-bar avatar
-# navigates there while logged in.
+# Page key -> stack index. "home" and "profile" have no rail item; the top-bar
+# logo goes Home and the avatar opens Profile while logged in.
 PAGES = ["home", "setup", "protocols", "support", "device", "profile"]
 GATED = {"setup", "protocols", "device", "profile"}  # require a logged-in user
 
@@ -92,9 +92,9 @@ class AppShell(QWidget):
         self.profile.exit_requested.connect(self.exit_requested)
 
         self.nav_rail.navigate.connect(self._on_nav)
+        self.nav_rail.login_requested.connect(self.show_login)
+        self.nav_rail.logout_requested.connect(self.logout_requested)
         self.nav_rail.video_requested.connect(self.show_video)
-
-        self.home.login_requested.connect(self.show_login)
 
         self.login_modal.submitted.connect(self.login_attempted)
 
@@ -167,7 +167,7 @@ class AppShell(QWidget):
             self.set_access_role(None)
         self.top_bar.set_user(username, title)
         self.profile.set_user(username, title, is_admin)
-        self.home.set_logged_in(bool(username))
+        self.nav_rail.set_signed_in(bool(username))
         self.device.hardware_button.setEnabled(bool(username))
         self.device.calibration_button.setEnabled(bool(username))
         self.device.lock_service()
