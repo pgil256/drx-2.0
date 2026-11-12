@@ -70,7 +70,7 @@ from ui.modals.upload_error import UploadErrorDialog
 from config.config import Configuration
 from helpers.csv import CSVHelper
 from helpers.measurement_state import (
-    DIAGNOSTICS_MAX_AGE_S, MeasurementState, is_push, signed_reading,
+    MeasurementState, diagnostics_max_age_s, is_push, signed_reading,
 )
 from helpers.app_restart import restart_app
 from helpers.device_system import DeviceSystem
@@ -561,7 +561,7 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
         if self.current_user.get("machine_sign_in"):
             if self.current_user.get("status") == "patient":
                 self._on_logout()
-                self.shell.show_login()
+                self.shell.show_login(phone=True)
                 return
             if not authorize(self, "patients.view", self._show_patient_modal):
                 return
@@ -1314,13 +1314,14 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
 
     def _refresh_pressure_state(self) -> None:
         self._measurement.fault = self._measurement_fault
+        self._measurement.protocol_running = bool(getattr(self, "protocol_running", False))
         connected = self.arduino is not None and self.arduino.connected
         caption = self._measurement.caption(connected)
         received = getattr(self, "_status_received_at", None)
         if caption == "Pressure live":
             if received is None:
                 caption = "Waiting for pressure"
-            elif time.monotonic() - received > DIAGNOSTICS_MAX_AGE_S:
+            elif time.monotonic() - received > diagnostics_max_age_s(self._measurement.protocol_running):
                 caption = "Pressure stale"
         self.shell.treatment.set_pressure_state(caption)
         if caption != "Pressure live":
@@ -1334,7 +1335,8 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
         self._refresh_device_presentation()
         received = getattr(self, "_status_received_at", None)
         if (not (self.arduino and self.arduino.connected) or received is None
-                or time.monotonic() - received > DIAGNOSTICS_MAX_AGE_S):
+                or time.monotonic() - received
+                > diagnostics_max_age_s(getattr(self, "protocol_running", False))):
             self.shell.setup.invalidate_measurements("Waiting" if received is None else "Stale")
             self.shell.treatment.set_angle(None)
 

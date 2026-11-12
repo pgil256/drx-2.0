@@ -4,7 +4,9 @@ import math
 import time
 from typing import Optional
 
+# A running protocol streams status at 1 Hz; idle firmware reports every 5 s.
 DIAGNOSTICS_MAX_AGE_S = 2.5
+IDLE_DIAGNOSTICS_MAX_AGE_S = 7.5
 # The firmware reports a load under 0.5 lb as zero, in either direction.
 PRESSURE_DEADBAND_LB = 0.5
 
@@ -32,12 +34,17 @@ def signed_reading(pressure, diagnostics: Optional[dict]):
     return pressure
 
 
+def diagnostics_max_age_s(protocol_running: bool) -> float:
+    return DIAGNOSTICS_MAX_AGE_S if protocol_running else IDLE_DIAGNOSTICS_MAX_AGE_S
+
+
 class MeasurementState:
     def __init__(self) -> None:
         self.diagnostics: Optional[dict] = None
         self.received_at: Optional[float] = None
         self.fault: Optional[str] = None
         self.baseline_valid = False
+        self.protocol_running = False
 
     def receive(self, diagnostics: dict) -> None:
         self.diagnostics = diagnostics
@@ -53,7 +60,8 @@ class MeasurementState:
         if not self.diagnostics["valid"]:
             return "Pressure unavailable"
         if (self.diagnostics["age_ms"] > 500 or self.received_at is None
-                or time.monotonic() - self.received_at > DIAGNOSTICS_MAX_AGE_S):
+                or time.monotonic() - self.received_at
+                > diagnostics_max_age_s(self.protocol_running)):
             return "Pressure stale"
         if not self.baseline_valid:
             return "Pressure zero required"

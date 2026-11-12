@@ -51,6 +51,8 @@ public:
     }
 
     uint8_t write(uint8_t data) {
+        if (shortMotorWrite && _txLen > 0 &&
+            (_txBuffer[0] == 0x85 || _txBuffer[0] == 0x86)) return 0;
         if (_txLen < MAX_WIRE_DATA) {
             _txBuffer[_txLen++] = data;
         }
@@ -60,6 +62,10 @@ public:
     // Tests set this to make the next N endTransmission() calls report a
     // bus error (4 = other error), simulating a NACK / timed-out SMC write
     int failTransmissions = 0;
+    int motorWriteResult = 0;
+    int responseBytes = 2;
+    bool responseTimeout = false;
+    bool shortMotorWrite = false;
 
     // Fail only the next N SMC speed writes (0x85 forward / 0x86 reverse),
     // optionally only to one address (-1 = any). Position reads and the
@@ -86,6 +92,8 @@ public:
             failSpeedWrites--;
             return 4;
         }
+        if (_txLen == 3 && (_txBuffer[0] == 0x85 || _txBuffer[0] == 0x86))
+            return motorWriteResult;
         return 0;
     }
 
@@ -98,8 +106,9 @@ public:
 
         _rxBuffer[0] = pos & 0xFF;
         _rxBuffer[1] = (pos >> 8) & 0xFF;
-        _rxLen = 2;
-        return 2;
+        _rxLen = responseBytes;
+        timeoutFlag = responseTimeout;
+        return responseBytes;
     }
 
     int available() { return _rxLen - _rxIndex; }
@@ -112,6 +121,9 @@ public:
     void reset() {
         commandCount = 0;
         failTransmissions = 0;
+        motorWriteResult = 0;
+        responseBytes = 2;
+        responseTimeout = shortMotorWrite = false;
         failSpeedWrites = 0;
         failSpeedAddress = -1;
         _txLen = 0;

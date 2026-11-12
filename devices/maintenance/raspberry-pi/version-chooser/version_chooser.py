@@ -4,7 +4,8 @@ The chooser is independent of runtime/ so it still starts when either app is
 broken. Selecting a version builds that version's firmware from its source
 tree (the last build is reused while the source is unchanged), writes it to
 the Mega unless the board already verifies identical, verifies it, and only
-then starts the app.
+then starts the app. A USB conversation that breaks part-way is repeated; it
+never counts as "different firmware" (see LINK_TROUBLE).
 """
 
 import argparse
@@ -33,6 +34,17 @@ BUILD_TIMEOUT = 900
 VERIFY_TIMEOUT = 90
 WRITE_TIMEOUT = 240
 READ_TIMEOUT = 240
+# avrdude prints these when the USB conversation itself broke. Its stk500v2
+# receive loop times out on the wall clock, and a Pi has no clock battery: the
+# first network time sync after boot steps the clock by days, which ends any
+# read in progress with "timeout" and garbage data. A conversation that started
+# and then broke is repeated instead of being taken for different firmware.
+LINK_TROUBLE = ("timeout", "not in sync", "not responding", "protocol error",
+                "can't open device", "ser_open", "ser_recv", "ser_send")
+VERIFY_ATTEMPTS = 3
+BACKUP_ATTEMPTS = 2
+WRITE_ATTEMPTS = 2
+RETRY_PAUSE = 2.0
 
 
 class ChooserError(Exception):
@@ -125,6 +137,9 @@ class Settings:
         if directory and not Path(directory).is_dir():
             raise ChooserError("The {} directory does not exist: {}".format(
                 self.labels[version], directory))
+        if not find_program(command[0], directory):
+            raise ChooserError("The {} start command was not found: {}".format(
+                self.labels[version], command[0]))
         return command, directory
 
     def firmware_source(self, version: str) -> Tuple[Optional[Path], Optional[Path]]:
@@ -144,6 +159,13 @@ class Settings:
             raise ChooserError("The {} firmware folder does not exist: {}".format(
                 self.labels[version], source))
         return None, path
+
+
+def find_program(program: str, directory: str) -> str:
+    """Resolve a start command as exec will: on PATH, or relative to its directory."""
+    if os.sep in program and not os.path.isabs(program):
+        program = os.path.join(directory or os.getcwd(), program)
+    return shutil.which(program) or ""
 
 
 def sha256(path: Path) -> str:
@@ -394,6 +416,20 @@ def find_avrdude(settings: Settings) -> Tuple[str, str]:
                        "or set avrdude in versions.cfg.")
 
 
+def link_trouble(output: str) -> bool:
+    text = output.lower()
+    return any(marker in text for marker in LINK_TROUBLE)
+
+
+def read_from(path: Path, start: int) -> str:
+    try:
+        with path.open("rb") as stream:
+            stream.seek(start)
+            return stream.read().decode("utf-8", "replace")
+    except OSError:
+        return ""
+
+
 class Mega:
     """avrdude over the Mega's USB bootloader, as in devices/flash_firmware.sh."""
 
@@ -403,22 +439,51 @@ class Mega:
                      "-P", port, "-b", "115200", "-D"]
         self.log, self.runner = log, runner
 
+    def run(self, operation: str, timeout: int, attempts: int,
+            trust_success: bool = True) -> Tuple[int, str]:
+        """Run one avrdude operation and return (status, its output).
+
+        It is repeated while the board answered and the conversation then broke
+        (see LINK_TROUBLE). A board that never answers is not asked again.
+        """
+        status, output = 1, ""
+        for attempt in range(attempts):
+            if attempt:
+                time.sleep(RETRY_PAUSE)
+            start = self.log.stat().st_size if self.log.exists() else 0
+            status = self.runner(self.base + ["-U", operation], timeout, self.log)
+            output = read_from(self.log, start)
+            broke = link_trouble(output) and "device initialized" in output.lower()
+            if not broke or (status == 0 and trust_success):
+                break
+        return status, output
+
     def matches(self, image: Path) -> bool:
-        """A failed verify means a different image or no answer; backup() tells which."""
-        return self.runner(self.base + ["-U", "flash:v:{}:i".format(image)],
-                           VERIFY_TIMEOUT, self.log) == 0
+        """Whether the board holds exactly this image; an unclear answer is an error."""
+        status, output = self.run("flash:v:{}:i".format(image), VERIFY_TIMEOUT, VERIFY_ATTEMPTS)
+        if status == 0:
+            return True
+        if link_trouble(output):
+            raise ChooserError("The Mega did not answer reliably over USB. Check its USB "
+                               "cable and power, then try again. Log: {}".format(self.log))
+        if "verification error" in output.lower():
+            return False
+        raise ChooserError("The firmware on the Mega could not be checked. "
+                           "Log: {}".format(self.log))
 
     def backup(self, path: Path) -> None:
-        status = self.runner(self.base + ["-U", "flash:r:{}:i".format(path)],
-                             READ_TIMEOUT, self.log)
-        if status or not path.is_file() or not path.stat().st_size:
+        # A read that recovered from a broken conversation can hold shifted
+        # data, so success with link trouble is not trusted.
+        status, output = self.run("flash:r:{}:i".format(path), READ_TIMEOUT, BACKUP_ATTEMPTS,
+                                  trust_success=False)
+        if status or link_trouble(output) or not path.is_file() or not path.stat().st_size:
             raise ChooserError("The Mega did not answer over USB. Check its USB cable and "
                                "power, then try again. Nothing was written.")
 
     def write(self, image: Path) -> None:
         # avrdude verifies after writing unless -V is passed; it never is here.
-        if self.runner(self.base + ["-U", "flash:w:{}:i".format(image)],
-                       WRITE_TIMEOUT, self.log):
+        status, _ = self.run("flash:w:{}:i".format(image), WRITE_TIMEOUT, WRITE_ATTEMPTS)
+        if status:
             raise ChooserError("Writing the firmware failed. Do not use the device. "
                                "Try again; if it keeps failing, flash it from the Flash "
                                "KneeSpa Firmware shortcut. Log: {}".format(self.log))
@@ -449,6 +514,7 @@ class Session:
         self.settings, self.runner = settings, runner
         self.lock: Optional[object] = None
         self.record: Optional[Path] = None
+        self.stage = ""  # One of STAGES; the UI shows it beside each progress message.
 
     def acquire(self) -> None:
         """Share the KneeSpa launcher's and firmware flasher's lock until exec."""
@@ -471,9 +537,21 @@ class Session:
         if port_in_use(["/dev/serial0"]):
             raise ChooserError("Another program is using /dev/serial0. Close KneeSpa first.")
 
+    def step(self, stage: str, message: str, progress: Progress) -> None:
+        self.stage = stage
+        progress(message)
+
     def run(self, version: str, progress: Progress) -> str:
         """Build, flash and verify the version's firmware; return what was done."""
+        try:
+            return self.prepare(version, progress)
+        except OSError as error:
+            raise ChooserError("The Pi could not prepare the firmware ({}). Check its free "
+                               "disk space.".format(error.strerror or error)) from None
+
+    def prepare(self, version: str, progress: Progress) -> str:
         label = self.settings.labels[version]
+        self.stage = "build"
         self.acquire()
         self.settings.launch_command(version)
         if (self.settings.state / "updates" / "firmware-recovery.json").exists():
@@ -493,31 +571,40 @@ class Session:
         stamp = time.strftime("%Y%m%d-%H%M%S")
         self.record = Path(tempfile.mkdtemp(prefix=stamp + "-choose-" + version + "-",
                                             dir=str(firmware)))
-        progress("Building the {} firmware…".format(label))
+        self.step("build", "Building the {} firmware…".format(label), progress)
         image, built = build_firmware(self.settings, version, self.runner,
                                       self.record / "build.log")
         mega = Mega(avrdude, config, port, self.record / "avrdude.log", self.runner)
-        progress("Checking the firmware on the Mega…")
+        self.step("check", "Checking the firmware on the Mega…", progress)
         if mega.matches(image):
             if not built:
                 # Keep records only for starts that changed something.
                 shutil.rmtree(str(self.record), ignore_errors=True)
                 self.record = None
             return "verified"
-        progress("Backing up the firmware on the Mega…")
+        self.step("backup", "Backing up the firmware on the Mega…", progress)
         mega.backup(self.record / "previous.hex")
-        progress("Writing and verifying the {} firmware. Do not turn off the device or "
-                 "unplug the Mega.".format(label))
+        self.step("write", "Writing and verifying the {} firmware. Do not turn off the "
+                  "device or unplug the Mega.".format(label), progress)
         mega.write(image)
-        if not mega.matches(image):
+        try:
+            verified = mega.matches(image)
+        except ChooserError:
+            verified = False
+        if not verified:
             raise ChooserError("The firmware did not verify after writing. Do not use the "
                                "device. Log: {}".format(mega.log))
         shutil.copyfile(str(image), str(self.record / "current.hex"))
         return "written"
 
     def finish(self, version: str) -> Tuple[List[str], str]:
-        self.settings.save_choice(version)
-        return self.settings.launch_command(version)
+        result = self.settings.launch_command(version)
+        try:
+            self.settings.save_choice(version)
+        except OSError as error:
+            # Only the countdown's default is lost; a full disk must not block the start.
+            print("Could not remember the choice: {}".format(error), file=sys.stderr)
+        return result
 
 
 def launch(command: List[str], directory: str) -> None:
@@ -528,17 +615,106 @@ def launch(command: List[str], directory: str) -> None:
     os.execvp(command[0], command)
 
 
+STAGES = ("build", "check", "backup", "write", "start")
+STEP_NAMES = {"build": "Build the firmware", "check": "Check the Mega",
+              "backup": "Back up the Mega", "write": "Write the firmware", "start": "Start"}
+CHOICES_NOTE = "The Mega's firmware is checked, and changed if needed, before the app starts."
+PROGRESS_NOTE = ("Starting the same version again takes a few seconds. "
+                 "Changing versions takes about a minute.")
+STOPPED_NOTE = "Countdown stopped. Choose a version to start."
+
+# The app's bundled fonts and logo are used when present; the chooser never
+# imports runtime/, so it still starts when either app is broken.
+APP_UI = ("runtime", "raspberry-pi", "main", "ui")
+# Values of the shared KneeSpa design system (design/tokens.json, the --ks-*
+# names in runtime's tokens_shared.py), copied for the same reason.
+KS = {
+    "surface": "#ffffff", "surface2": "#f3f6f9", "line": "#e2e7ec", "line_strong": "#7f8e9c",
+    "ink": "#152029", "ink2": "#3a4855", "muted": "#5f6e7d",
+    "action": "#0b6bb0", "action_hover": "#08578f", "action_soft": "#e6f2fb",
+    "ok": "#1a7a4a", "warn": "#8a5a00", "warn_soft": "#fdf2d6",
+    "danger": "#c0302e", "neutral_soft": "#edf1f4",
+    "sans": '"IBM Plex Sans", "Segoe UI", "DejaVu Sans", sans-serif',
+    "mono": '"IBM Plex Mono", "DejaVu Sans Mono", Consolas, monospace',
+}
+# Kiosk sizes: 16 px smallest text, 48/64/88 px touch targets.
+STYLE = """
+QWidget { color: $ink; font-family: $sans; font-size: 20px; }
+QWidget#root, QMessageBox { background: $surface2; }
+QFrame#bar { background: $surface; border: none; border-bottom: 1px solid $line; }
+QLabel#wordmark { font-size: 22px; font-weight: 600; }
+QLabel#title { font-size: 28px; font-weight: 600; }
+QLabel#message { color: $ink2; }
+QPushButton { background: $surface; color: $action; border: 1px solid $line_strong;
+    border-radius: 8px; padding: 0 28px; min-height: 64px; font-size: 22px; font-weight: 500; }
+QPushButton:pressed { background: $action_soft; border-color: $action; }
+QPushButton#primary { background: $action; color: #ffffff; border-color: $action; }
+QPushButton#primary:pressed { background: $action_hover; border-color: $action_hover; }
+QPushButton#quiet { color: $ink2; border-color: $line; min-height: 48px; padding: 0 20px;
+    font-size: 16px; }
+QPushButton#card { border-radius: 12px; padding: 0; }
+QPushButton#card[primary="true"] { border: 2px solid $action; }
+QPushButton#card:pressed { background: $action_soft; border: 2px solid $action; }
+QLabel#cardName { font-size: 36px; font-weight: 600; }
+QLabel#cardDetail { font-family: $mono; font-size: 16px; color: $muted; }
+QLabel#badge { background: $action_soft; color: $action; border-radius: 4px; padding: 4px 10px;
+    font-size: 16px; font-weight: 600; }
+QLabel#go { color: $action; border: 1px solid $action; border-radius: 8px; padding: 12px 32px;
+    font-size: 22px; font-weight: 500; }
+QLabel#go[primary="true"] { background: $action; color: #ffffff; }
+QProgressBar#countdown { background: $line; border: none; border-radius: 3px; }
+QProgressBar#countdown::chunk { background: $action; border-radius: 3px; }
+QLabel#note { color: $ink2; min-height: 28px; }
+QFrame#panel { background: $surface; border: 1px solid $line; border-radius: 12px; }
+QLabel#stepName { font-size: 22px; }
+QLabel#stepName[state="pending"], QLabel#stepName[state="skipped"] { color: $muted; }
+QLabel#stepName[state="active"] { font-weight: 600; }
+QLabel#stepStatus { font-size: 16px; color: $muted; }
+QLabel#caution { background: $warn_soft; color: $warn; border-radius: 8px; padding: 16px 24px;
+    font-weight: 600; }
+QFrame#problem { background: $surface; border: 1px solid $line; border-left: 6px solid $danger;
+    border-radius: 8px; }
+QLabel#problemText { font-size: 22px; }
+QLabel#logTitle { font-size: 16px; font-weight: 600; color: $muted; }
+QLabel#log { background: $neutral_soft; color: $ink2; border-radius: 4px; padding: 12px 16px;
+    font-family: $mono; font-size: 16px; }
+"""
+
+
+def style_sheet() -> str:
+    from string import Template
+
+    return Template(STYLE).substitute(KS)
+
+
+def load_fonts(app_dir: Path) -> None:
+    """Register the app's IBM Plex files with Qt; without them system fonts are used."""
+    from PyQt5.QtGui import QFontDatabase
+
+    for path in sorted(app_dir.joinpath(*APP_UI, "theme", "fonts").glob("IBMPlex*.ttf")):
+        QFontDatabase.addApplicationFont(str(path))
+
+
+def split_log(message: str) -> Tuple[str, str]:
+    """Separate a trailing "Log: <path>" so the screen can set the path apart."""
+    text, mark, path = message.rpartition(" Log: ")
+    return (text, path) if mark else (message, "")
+
+
 def make_window(settings: Settings, session: Optional[Session] = None) -> object:
     """Build the chooser window; its result is the launch command, or None."""
-    from PyQt5.QtCore import QThread, QTimer, Qt, pyqtSignal
-    from PyQt5.QtWidgets import (QApplication, QHBoxLayout, QLabel, QPushButton, QVBoxLayout,
-                                 QWidget)
+    from PyQt5.QtCore import QEvent, QPointF, QRectF, QThread, QTimer, Qt, pyqtSignal
+    from PyQt5.QtGui import QColor, QFontMetrics, QPainter, QPen, QPixmap, QPolygonF
+    from PyQt5.QtWidgets import (QApplication, QFrame, QHBoxLayout, QLabel, QProgressBar,
+                                 QPushButton, QSizePolicy, QStackedWidget, QVBoxLayout, QWidget)
+
+    load_fonts(settings.app_dir)
 
     class Task(QThread):
-        progress = pyqtSignal(str)
+        progress = pyqtSignal(str, str)
         done = pyqtSignal(object, str)
 
-        def __init__(self, work: Callable[[Progress], object]) -> None:
+        def __init__(self, work: Callable[[Callable[[str, str], None]], object]) -> None:
             super().__init__()
             self.work = work
 
@@ -550,27 +726,135 @@ def make_window(settings: Settings, session: Optional[Session] = None) -> object
             except Exception as error:  # noqa: BLE001 - shown on screen, not a silent exit
                 self.done.emit(None, "Unexpected error: {!r}".format(error))
 
+    def text(name: str, value: str = "", wrap: bool = False) -> QLabel:
+        label = QLabel(value)
+        label.setObjectName(name)
+        label.setWordWrap(wrap)
+        return label
+
+    def restyle(widget: QWidget, name: str, value: object) -> None:
+        """Set a property the style sheet selects on, and apply the matching rules."""
+        widget.setProperty(name, value)
+        widget.style().unpolish(widget)
+        widget.style().polish(widget)
+
+    def keep_space(widget: QWidget) -> None:
+        policy = widget.sizePolicy()
+        policy.setRetainSizeWhenHidden(True)
+        widget.setSizePolicy(policy)
+
+    class Elided(QLabel):
+        """One line of text, shortened in the middle when it does not fit."""
+
+        def __init__(self, name: str, value: str) -> None:
+            super().__init__(value)
+            self.setObjectName(name)
+            self.full = value
+            self.setSizePolicy(QSizePolicy.Ignored, QSizePolicy.Fixed)
+
+        def resizeEvent(self, event: object) -> None:
+            self.setText(QFontMetrics(self.font()).elidedText(self.full, Qt.ElideMiddle,
+                                                              self.width()))
+
+    class Card(QPushButton):
+        """One version: the whole card is the touch target."""
+
+        def __init__(self, version: str, last: bool) -> None:
+            super().__init__()
+            self.setObjectName("card")
+            self.setAccessibleName(settings.labels[version])
+            self.setProperty("primary", last)
+            self.setSizePolicy(QSizePolicy.Expanding, QSizePolicy.Expanding)
+            badge = text("badge", "Last used")
+            keep_space(badge)
+            badge.setVisible(last)
+            name = text("cardName", settings.labels[version])
+            place = Elided("cardDetail", settings.directories[version]
+                           or " ".join(settings.commands[version]))
+            go = text("go", "Start")
+            go.setProperty("primary", last)
+            top, bottom = QHBoxLayout(), QHBoxLayout()
+            top.addWidget(badge)
+            top.addStretch(1)
+            bottom.addWidget(go)
+            bottom.addStretch(1)
+            column = QVBoxLayout(self)
+            column.setContentsMargins(32, 28, 32, 32)
+            column.setSpacing(8)
+            column.addLayout(top)
+            column.addStretch(1)
+            column.addWidget(name)
+            column.addWidget(place)
+            column.addStretch(2)
+            column.addLayout(bottom)
+            for child in (badge, name, place, go):
+                child.setAttribute(Qt.WA_TransparentForMouseEvents)
+
+    class Mark(QWidget):
+        """A step's state as a shape as well as a colour: ring, arc, tick or dash."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.setFixedSize(32, 32)
+            self.state, self.angle = "pending", 0
+
+        def paintEvent(self, event: object) -> None:
+            painter = QPainter(self)
+            painter.setRenderHint(QPainter.Antialiasing)
+            circle = QRectF(5, 5, 22, 22)
+            if self.state == "done":
+                painter.setPen(Qt.NoPen)
+                painter.setBrush(QColor(KS["ok"]))
+                painter.drawEllipse(QRectF(3, 3, 26, 26))
+                painter.setPen(QPen(QColor("#ffffff"), 3, Qt.SolidLine, Qt.RoundCap,
+                                    Qt.RoundJoin))
+                painter.setBrush(Qt.NoBrush)
+                painter.drawPolyline(QPolygonF([QPointF(10, 16.5), QPointF(14.5, 21),
+                                                QPointF(22, 11.5)]))
+            elif self.state == "active":
+                painter.setPen(QPen(QColor(KS["line"]), 4))
+                painter.drawEllipse(circle)
+                painter.setPen(QPen(QColor(KS["action"]), 4, Qt.SolidLine, Qt.RoundCap))
+                painter.drawArc(circle, -self.angle * 16, 100 * 16)
+            elif self.state == "skipped":
+                painter.setPen(QPen(QColor(KS["line_strong"]), 3, Qt.SolidLine, Qt.RoundCap))
+                painter.drawLine(QPointF(11, 16), QPointF(21, 16))
+            else:
+                painter.setPen(QPen(QColor(KS["line_strong"]), 2))
+                painter.drawEllipse(circle)
+            painter.end()
+
+    class Step(QWidget):
+        def __init__(self, name: str) -> None:
+            super().__init__()
+            self.mark, self.name, self.status = Mark(), text("stepName", name), text("stepStatus")
+            self.started = 0.0
+            self.setFixedHeight(60)
+            row = QHBoxLayout(self)
+            row.setContentsMargins(24, 0, 24, 0)
+            row.setSpacing(16)
+            row.addWidget(self.mark)
+            row.addWidget(self.name, 1)
+            row.addWidget(self.status)
+
+        @property
+        def state(self) -> str:
+            return self.mark.state
+
+        def set(self, state: str, status: str = "") -> None:
+            self.mark.state = state
+            self.mark.update()
+            restyle(self.name, "state", state)
+            self.status.setText(status)
+            self.started = time.monotonic()
+
     class Window(QWidget):
         def __init__(self) -> None:
             super().__init__()
+            self.setObjectName("root")
+            self.setAttribute(Qt.WA_StyledBackground, True)
             self.setWindowTitle("Choose KneeSpa version")
-            self.setStyleSheet(
-                "QWidget { background: #10233a; color: white; font-size: 24px; }"
-                "QPushButton { background: #2f6fb0; border-radius: 12px; padding: 24px;"
-                " font-size: 30px; min-height: 110px; }"
-                "QPushButton:pressed { background: #1d4e80; }")
-            self.title = QLabel()
-            self.title.setStyleSheet("font-size: 36px; font-weight: bold;")
-            self.message = QLabel()
-            self.message.setWordWrap(True)
-            self.buttons = QHBoxLayout()
-            layout = QVBoxLayout(self)
-            layout.setContentsMargins(48, 40, 48, 40)
-            layout.addWidget(self.title, 0, Qt.AlignHCenter)
-            layout.addStretch(1)
-            layout.addWidget(self.message)
-            layout.addStretch(1)
-            layout.addLayout(self.buttons)
+            self.setStyleSheet(style_sheet())
             self.session = session or Session(settings)
             self.version = ""
             self.task: Optional[Task] = None
@@ -578,67 +862,257 @@ def make_window(settings: Settings, session: Optional[Session] = None) -> object
             self.remaining = 0
             self.timer = QTimer(self)
             self.timer.timeout.connect(self.tick)
+            self.spin = QTimer(self)
+            self.spin.setInterval(50)
+            self.spin.timeout.connect(self.animate)
+            # Closing the only window ends the event loop; run_ui then starts the app.
+            self.handover = QTimer(self)
+            self.handover.setSingleShot(True)
+            self.handover.timeout.connect(self.close)
+
+            bar = QFrame()
+            bar.setObjectName("bar")
+            bar.setFixedHeight(72)
+            logo = QLabel()
+            image = QPixmap(str(settings.app_dir.joinpath(*APP_UI, "media", "images", "logos",
+                                                          "knee.png")))
+            if not image.isNull():
+                logo.setPixmap(image.scaled(44, 44, Qt.KeepAspectRatio, Qt.SmoothTransformation))
+            self.exit = QPushButton("Exit to desktop")
+            self.exit.setObjectName("quiet")
+            self.exit.clicked.connect(self.leave)
+            row = QHBoxLayout(bar)
+            row.setContentsMargins(24, 0, 24, 0)
+            row.setSpacing(12)
+            row.addWidget(logo)
+            row.addWidget(text("wordmark", "KneeSpa"))
+            row.addStretch(1)
+            row.addWidget(self.exit)
+
+            self.title, self.message = text("title"), text("message", wrap=True)
+            self.pages = QStackedWidget()
+            self.choice_page, self.progress_page, self.error_page = (
+                self.build_choices(), self.build_progress(), self.build_error())
+            for page in (self.choice_page, self.progress_page, self.error_page):
+                self.pages.addWidget(page)
+            body = QVBoxLayout()
+            body.setContentsMargins(48, 28, 48, 36)
+            body.setSpacing(8)
+            body.addWidget(self.title)
+            body.addWidget(self.message)
+            body.addSpacing(16)
+            body.addWidget(self.pages, 1)
+            outer = QVBoxLayout(self)
+            outer.setContentsMargins(0, 0, 0, 0)
+            outer.setSpacing(0)
+            outer.addWidget(bar)
+            outer.addLayout(body, 1)
             self.choices()
 
-        def page(self, title: str, message: str,
-                 buttons: List[Tuple[str, Callable[[], None]]]) -> None:
-            self.timer.stop()
+        def build_choices(self) -> QWidget:
+            page, last = QWidget(), settings.last_choice()
+            cards = QHBoxLayout()
+            cards.setSpacing(24)
+            for version in VERSIONS:
+                card = Card(version, version == last)
+                card.clicked.connect(lambda _=False, v=version: self.choose(v))
+                cards.addWidget(card)
+            self.count = QProgressBar()
+            self.count.setObjectName("countdown")
+            self.count.setTextVisible(False)
+            self.count.setFixedHeight(6)
+            keep_space(self.count)
+            self.note = text("note")
+            column = QVBoxLayout(page)
+            column.setContentsMargins(0, 0, 0, 0)
+            column.setSpacing(16)
+            column.addLayout(cards, 1)
+            column.addWidget(self.count)
+            column.addWidget(self.note)
+            return page
+
+        def build_progress(self) -> QWidget:
+            page, panel = QWidget(), QFrame()
+            panel.setObjectName("panel")
+            panel.setMaximumWidth(860)
+            rows = QVBoxLayout(panel)
+            rows.setContentsMargins(0, 8, 0, 8)
+            rows.setSpacing(0)
+            self.steps = {stage: Step(STEP_NAMES[stage]) for stage in STAGES}
+            for stage in STAGES:
+                rows.addWidget(self.steps[stage])
+            self.caution = text("caution", "Do not turn off the device or unplug the Mega.")
+            self.caution.setMaximumWidth(860)
+            keep_space(self.caution)
+            column = QVBoxLayout(page)
+            column.setContentsMargins(0, 0, 0, 0)
+            column.setSpacing(16)
+            column.addWidget(panel)
+            column.addWidget(self.caution)
+            column.addStretch(1)
+            return page
+
+        def build_error(self) -> QWidget:
+            page, problem = QWidget(), QFrame()
+            problem.setObjectName("problem")
+            self.problem = text("problemText", wrap=True)
+            self.log_title, self.log = text("logTitle", "Log file"), text("log", wrap=True)
+            inner = QVBoxLayout(problem)
+            inner.setContentsMargins(28, 24, 28, 24)
+            inner.setSpacing(12)
+            for widget in (self.problem, self.log_title, self.log):
+                inner.addWidget(widget)
+            back, again = QPushButton("Back"), QPushButton("Try again")
+            again.setObjectName("primary")
+            back.clicked.connect(lambda _=False: self.choices(countdown=False))
+            again.clicked.connect(lambda _=False: self.choose(self.version))
+            row = QHBoxLayout()
+            row.setSpacing(16)
+            row.addStretch(1)
+            for button in (back, again):
+                button.setMinimumSize(260, 88)
+                row.addWidget(button)
+            column = QVBoxLayout(page)
+            column.setContentsMargins(0, 0, 0, 0)
+            column.addWidget(problem)
+            column.addStretch(1)
+            column.addLayout(row)
+            return page
+
+        def show_page(self, page: QWidget, title: str, message: str) -> None:
             self.title.setText(title)
             self.message.setText(message)
-            while self.buttons.count():
-                widget = self.buttons.takeAt(0).widget()
-                if widget is not None:
-                    widget.deleteLater()
-            for label, action in buttons:
-                button = QPushButton(label)
-                button.clicked.connect(action)
-                self.buttons.addWidget(button)
+            self.pages.setCurrentWidget(page)
 
-        def choices(self) -> None:
-            self.page("Choose KneeSpa version", "", [
-                (settings.labels[version], lambda _=False, v=version: self.choose(v))
-                for version in VERSIONS])
+        def buttons(self) -> List[QPushButton]:
+            """The actions offered now, for the screen's tests."""
+            return self.pages.currentWidget().findChildren(QPushButton)
+
+        def choices(self, countdown: bool = True) -> None:
+            """Offer both versions; only the first showing counts down to the last one."""
+            self.spin.stop()
+            self.exit.show()
+            self.show_page(self.choice_page, "Choose a version", CHOICES_NOTE)
             last = settings.last_choice()
-            if last and settings.timeout:
+            if countdown and last and settings.timeout:
                 self.version, self.remaining = last, settings.timeout
+                self.count.setRange(0, settings.timeout)
+                self.count.show()
                 self.tick()
                 self.timer.start(1000)
+                # Any touch or key stops the countdown, wherever on the screen it lands.
+                QApplication.instance().installEventFilter(self)
+            else:
+                self.stop_countdown("")
 
         def tick(self) -> None:
             if self.remaining <= 0:
                 self.choose(self.version)
                 return
-            self.message.setText("Starting {} in {} s. Touch the screen to wait.".format(
+            self.count.setValue(self.remaining)
+            self.note.setText("{} starts in {} s. Touch anywhere to cancel.".format(
                 settings.labels[self.version], self.remaining))
             self.remaining -= 1
 
-        def mousePressEvent(self, event: object) -> None:
-            if self.timer.isActive():
-                self.timer.stop()
-                self.message.setText("")
+        def stop_countdown(self, note: str) -> None:
+            self.timer.stop()
+            QApplication.instance().removeEventFilter(self)
+            self.count.hide()
+            self.note.setText(note)
+
+        def eventFilter(self, watched: object, event: object) -> bool:
+            if self.timer.isActive() and event.type() in (
+                    QEvent.MouseButtonPress, QEvent.TouchBegin, QEvent.KeyPress) and \
+                    isinstance(watched, QWidget) and (
+                        watched is self or self.isAncestorOf(watched)):
+                self.stop_countdown(STOPPED_NOTE)
+            return False
 
         def choose(self, version: str) -> None:
+            if self.task is not None and self.task.isRunning():
+                return
+            self.stop_countdown("")
             self.version = version
-            self.page("Preparing {}".format(settings.labels[version]), "", [])
-            self.task = Task(lambda progress: self.session.run(version, progress))
-            self.task.progress.connect(self.message.setText)
-            self.task.done.connect(lambda result, error: self.failed(error) if error
-                                   else self.start())
+            label = settings.labels[version]
+            for step in self.steps.values():
+                step.set("pending")
+            self.steps["start"].name.setText("Start {}".format(label))
+            self.caution.hide()
+            self.exit.hide()
+            self.show_page(self.progress_page, "Starting {}".format(label), PROGRESS_NOTE)
+            self.advance("build")
+            self.spin.start()
+            self.task = Task(lambda report: self.session.run(
+                version, lambda message: report(self.session.stage, message)))
+            self.task.progress.connect(lambda stage, message: self.advance(stage))
+            self.task.done.connect(self.finished)
             self.task.start()
 
-        def start(self) -> None:
+        def advance(self, stage: str) -> None:
+            """Mark the stage as running and every earlier one as done."""
+            if stage not in self.steps:
+                return
+            for name in STAGES:
+                step = self.steps[name]
+                if name == stage:
+                    if step.state != "active":
+                        step.set("active", "0 s")
+                    break
+                if step.state in ("pending", "active"):
+                    step.set("done", "Done")
+            self.caution.setVisible(stage == "write")
+
+        def animate(self) -> None:
+            for step in self.steps.values():
+                if step.state == "active":
+                    step.mark.angle = (step.mark.angle + 18) % 360
+                    step.mark.update()
+                    status = "{} s".format(int(time.monotonic() - step.started))
+                    if step.status.text() != status:
+                        step.status.setText(status)
+
+        def finished(self, outcome: object, error: str) -> None:
+            self.task.wait()
+            if error:
+                self.failed(error)
+                return
             try:
                 self.result = self.session.finish(self.version)
-            except ChooserError as error:
-                self.failed(str(error))
+            except ChooserError as problem:
+                self.failed(str(problem))
                 return
-            self.page("Starting", "Starting {}…".format(settings.labels[self.version]), [])
-            QTimer.singleShot(300, QApplication.instance().quit)
+            self.advance("start")
+            skipped = {"verified": ("backup", "write"),
+                       "recovering": ("build", "check", "backup", "write")}.get(outcome, ())
+            for name in skipped:
+                self.steps[name].set("skipped", "Not needed")
+            if outcome == "recovering":
+                self.message.setText("{} finishes its own firmware update when it starts."
+                                     .format(settings.labels[self.version]))
+            self.handover.start(600)
 
         def failed(self, error: str) -> None:
-            self.page("Cannot start", error, [
-                ("Back", self.choices),
-                ("Try again", lambda _=False: self.choose(self.version))])
+            self.spin.stop()
+            self.exit.show()
+            body, log = split_log(error)
+            self.problem.setText(body)
+            # Zero-width spaces let a long path wrap at its slashes.
+            self.log.setText(log.replace("/", "/​"))
+            self.log.setVisible(bool(log))
+            self.log_title.setVisible(bool(log))
+            self.show_page(self.error_page, "Cannot start {}".format(
+                settings.labels.get(self.version, "KneeSpa")), "Neither app was started.")
+
+        def leave(self) -> None:
+            self.result = None
+            self.close()
+
+        def closeEvent(self, event: object) -> None:
+            # Closing mid-flash would orphan avrdude and hide its result.
+            if self.task is not None and self.task.isRunning():
+                event.ignore()
+            else:
+                event.accept()
 
     return Window()
 
@@ -647,13 +1121,18 @@ def run_ui(settings: Settings) -> int:
     from PyQt5.QtWidgets import QApplication
 
     application = QApplication(sys.argv[:1])
+    application.setStyle("Fusion")
     window = make_window(settings)
     window.showFullScreen()
     application.exec_()
     if window.result is None:
         return 1
     print("Starting {}: {}".format(window.version, " ".join(window.result[0])))
-    launch(*window.result)
+    try:
+        launch(*window.result)
+    except OSError as error:
+        print("ERROR: could not start {}: {}".format(window.version, error), file=sys.stderr)
+        return 1
     return 0
 
 
@@ -733,6 +1212,9 @@ def show_error(message: str) -> None:
     except ImportError:
         return
     application = QApplication(sys.argv[:1])
+    application.setStyle("Fusion")
+    load_fonts(default_app_dir())
+    application.setStyleSheet(style_sheet())
     QMessageBox.critical(None, "KneeSpa version chooser", message)
     del application
 

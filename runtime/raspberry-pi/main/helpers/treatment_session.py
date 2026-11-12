@@ -28,6 +28,9 @@ class TreatmentSession:
     finalized: bool = False
     completion_handled: bool = False
     record: Optional[Dict[str, Any]] = None
+    treatment_completed: bool = False
+    cleanup_warning: str = ""
+    underlying_error: str = ""
 
     def pause(self) -> None:
         """Freeze active time without changing the wall-clock start."""
@@ -67,6 +70,9 @@ class TreatmentSession:
             "patient_id": self.patient_id,
             "protocol_number": self.protocol_number,
             "outcome": self.outcome,
+            "treatment_completed": self.treatment_completed or self.outcome == "completed",
+            "cleanup_warning": self.cleanup_warning,
+            "underlying_error": self.underlying_error,
             "planned_duration_s": self.planned_duration_s,
             "actual_duration_s": self.actual_duration_s,
             "settings_at_end": deepcopy(settings),

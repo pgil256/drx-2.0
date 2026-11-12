@@ -30,19 +30,22 @@ def test_full_protocol_orders_preparation_and_final_baseline(protocol_clock, v2,
     assert 2 < centre < prepared[0].index("L1|BASELINE")
     assert not any(c.startswith("P") for c in prepared[0])
     assert finished[0][0] and worker.completed.is_set() and link.baseline_valid
-    # Release and zero first; protocols that moved the lateral actuator centre
-    # it once afterwards, unloaded.
-    release = ["P0|0", "X", "I120", "L1|BASELINE"]
+    # Verified release and zero first; protocols that moved the lateral
+    # actuator centre it once afterwards, unloaded.
+    release_at = next(i for i, c in enumerate(link.commands) if c.startswith("R|"))
+    token = link.commands[release_at][2:]
+    release = ["X", "R|" + token, "L1|HOME|" + token]
     centre_command = "K{}".format(lateral_degrees_to_position(worker.config.CMarks, 0)[0])
     if protocol == "1":
-        assert link.commands[-4:] == release
+        assert link.commands[-3:] == release
     else:
-        assert link.commands[-5:] == release + [centre_command]
+        assert link.commands[-4:] == release + [centre_command]
         # Every lateral move of the treatment itself precedes the release.
-        assert link.commands.index("P0|0") > max(
+        assert release_at > max(
             i for i, c in enumerate(link.commands[:-1]) if c.startswith("K"))
     pressure = [c for c in link.commands if c.startswith("P")]
-    assert pressure == ["P20|50", "P30|50", "P40|50", "P50|50", "P0|0"]
+    assert pressure == ["P20|50", "P30|50", "P40|50", "P50|50"]
+    assert worker.treatment_completed and worker.outcome == "completed"
     if pulse:
         assert "J250" in link.commands and "JS" in link.commands
 
@@ -61,7 +64,7 @@ def test_missed_final_centre_is_only_logged(protocol_clock, protocol, miss):
     worker.signals.progress.connect(progress.append)
     released = []
     def hook(command, replies):
-        if command == "L1|BASELINE":
+        if command.startswith("L1|"):  # the start tare, then the final one
             released.append(len(link.commands))
         if command.startswith("K") and len(released) == 2:
             return [] if miss == "timeout" else ["COMMAND_REJECTED|K|Position read failed"]
@@ -84,7 +87,7 @@ def test_stop_during_final_centre_ends_the_run_as_stopped(protocol_clock):
     worker.signals.operation_failed.connect(failures.append)
     worker.signals.finished.connect(finished.append)
     def hook(command, replies):
-        if command == "L1|BASELINE":
+        if command.startswith("L1|"):  # the start tare, then the final one
             released.append(command)
         if command.startswith("K") and len(released) == 2:
             worker.cancel()
@@ -118,12 +121,17 @@ def test_failed_stage_never_reports_success_or_replays(protocol_clock, stage):
                 or (stage == "center" and command.startswith("K"))
                 or (stage == "baseline" and baseline_count == 1 and command.startswith("L1"))
                 or (stage == "pressure" and command.startswith("P"))
-                or (stage == "final_home" and home_count == 2 and command == "I120")
-                or (stage == "final_baseline" and baseline_count == 2 and command.startswith("L1")))
+                or (stage == "final_home" and command.startswith("R|"))
+                or (stage == "final_baseline" and command.startswith("L1|HOME|")))
         return [] if fail else replies
     link.hook = hook
     worker.run()
-    assert finished == [False] and failures and worker.completed.is_set()
+    assert finished == [False] and worker.completed.is_set()
+    if stage.startswith("final_"):
+        assert worker.treatment_completed and worker.outcome == "completed_cleanup_failed"
+        assert worker.cleanup_warning
+    else:
+        assert failures
     assert not link.baseline_valid
     assert link.commands[-1] == "X"
     assert "Y" not in link.commands
@@ -277,7 +285,13 @@ def test_measurement_status_never_fabricates_live_zero(monkeypatch):
     assert state.caption(True) == "Pressure zero required"
     state.baseline_valid = True
     assert state.caption(True) == "Pressure live"
+    # Idle status arrives every 5 s, so a 3 s gap is normal until a protocol streams at 1 Hz.
     state.received_at -= 3
+    assert state.caption(True) == "Pressure live"
+    state.protocol_running = True
+    assert state.caption(True) == "Pressure stale"
+    state.protocol_running = False
+    state.received_at -= 5
     assert state.caption(True) == "Pressure stale"
     state.fault = "PRESSURE_LIMIT"
     assert "fault" in state.caption(True)

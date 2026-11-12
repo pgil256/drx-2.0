@@ -10,6 +10,7 @@ class NB2Controller(Arduino):
         self._running = self.connected = True
         self.serial_com = MagicMock(is_open=True)
         self.firmware_driver = "DRX-HX711-NB2"
+        self.firmware_capabilities = frozenset({"HOME_RELEASE_V1"})
         self.commands = []
         self.hook = None
         self.a_zero, self.b_zero = 0, 1900
@@ -34,9 +35,9 @@ class NB2Controller(Arduino):
 
     def replies(self, command):
         if command == "Y":
-            return ["Ready to Go", "FIRMWARE|test|DRX-HX711-NB2"]
+            return ["Ready to Go", "FIRMWARE|test|DRX-HX711-NB2|HOME_RELEASE_V1"]
         if command == "T":
-            return ["OK", "FIRMWARE|test|DRX-HX711-NB2"]
+            return ["OK", "FIRMWARE|test|DRX-HX711-NB2|HOME_RELEASE_V1"]
         if command.startswith("L5|"):
             _, a, b = command.split("|")
             self.a_zero, self.b_zero = int(a), int(b)
@@ -44,7 +45,10 @@ class NB2Controller(Arduino):
         if command.startswith("L0"):
             self.factor = float(command[2:])
             return [f"CALIBRATION|SET|{self.factor}", "DONE"]
-        if command == "L1|BASELINE":
+        if command.startswith("R|"):
+            return [f"HOME_RELEASE|{command[2:]}|{self.a_zero}|{self.a_zero}|36.61|"
+                    f"-1050203|{self.factor}"]
+        if command == "L1|BASELINE" or command.startswith("L1|HOME|"):
             return ["CALIBRATION|TARE|STARTED",
                     f"CALIBRATION|TARE|OK|123|{self.factor}", "DONE"]
         if command.startswith("P"):

@@ -47,6 +47,11 @@ LEGACY_ADVISORY_MESSAGES = {
 # the advisory "Motor stalled" above, this is a fault.
 STALL_TIMEOUT_PREFIX = "Motor stall timeout"
 
+# Latched when a release reaches axial home while the load cell still reads
+# above target + 2 lb. After an operator Stop this is the end of the release,
+# not a new fault: see SafetyMonitor._end_stop_release_at_home.
+RELEASE_AT_HOME_FAULT = "AXIAL_HOME_BEFORE_PRESSURE_TARGET"
+
 # Operator wording for latched firmware fault reasons whose code alone does
 # not say what to do. Other reasons are shown as sent.
 FAULT_MESSAGES = {
@@ -331,11 +336,46 @@ class SafetyMonitor:
         if self.window._closing:
             return
         reason = result["reason"]
+        if reason == RELEASE_AT_HOME_FAULT and self._in_stop_release():
+            self._end_stop_release_at_home()
+            return
         self.window.logger.error("Controller fault: %s", reason)
         self.window._measurement_fault = reason
         message = FAULT_MESSAGES.get(reason, reason)
         self.window.protocol.stop_without_recovery(message, fault=True)
         self.window._show_safety_alert("CONTROLLER FAULT: " + message)
+
+    def _in_stop_release(self) -> bool:
+        """True while the P0 release after an operator or on-screen Stop runs.
+
+        Not after a fault stop (no automatic recovery) or the device's own
+        stop button, whose release the firmware runs itself.
+        """
+        window = self.window
+        return (
+            getattr(window, "protocol_state", "") == "stopping"
+            and getattr(window, "protocol_stop_requested", False) is True
+            and getattr(window, "_no_automatic_recovery", False) is not True
+            and getattr(window, "_physical_stop_active", False) is not True
+        )
+
+    def _end_stop_release_at_home(self) -> None:
+        """The Stop's P0 brought the axial actuator home with load still read.
+
+        The firmware latches AXIAL_HOME_BEFORE_PRESSURE_TARGET and stops every
+        axis, but the release has gone as far as it can. The re-home prompt
+        the Stop leads to anyway is the recovery (its reset clears the latch),
+        so this shows that prompt instead of a CONTROLLER FAULT alert.
+        """
+        window = self.window
+        window.logger.warning(
+            "Stop release reached axial home with load still read (%s); "
+            "asking the operator to re-home", RELEASE_AT_HOME_FAULT,
+        )
+        # The firmware stops sampling the load cell once the fault latches,
+        # so the pressure shown is no longer live until the reset.
+        window._measurement_fault = RELEASE_AT_HOME_FAULT
+        stops_for(window)._require_operator_rehome(False)
 
     def on_controller_restart(self) -> None:
         """The Mega restarted on its own (``Arduino.unexpected_reboot``).

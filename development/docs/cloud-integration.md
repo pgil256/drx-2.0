@@ -37,7 +37,9 @@ launcher continues using its local demo cloud.
 
 ## Operator and patient identification
 
-The sign-in screen displays a short-lived QR code and matching display code.
+The sign-in screen opens on the local staff PIN keypad. **Sign in with your phone**
+displays a short-lived QR code and matching display code. Changing patients or an
+expired phone session opens directly on the QR code.
 Scan it, sign in on the phone (including MFA when required), choose **Patient**
 or **Clinician**, and explicitly approve the matching machine. The complete
 cloud `verification_url`, including its private fragment, is rendered locally.
@@ -71,7 +73,7 @@ Idle sessions are rechecked every 15 seconds, and new privileged actions require
 a fresh check. Expiry or cloud loss does not stop an existing treatment or gate
 its stop, release or emergency controls. No approval is exchanged during treatment.
 
-**Use local staff PIN** retains the existing local authentication and lockouts.
+The staff PIN keypad retains the existing local authentication and lockouts.
 After staff login, select a patient on the Treatment screen and enter their four-digit cloud PIN,
 including any leading zeros. Patient lookup calls `/api/v1/device/patients/lookup`.
 The Treatment screen displays the confirmed patient name, external reference,

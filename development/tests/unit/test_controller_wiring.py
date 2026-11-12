@@ -390,6 +390,17 @@ class TestSetupGo:
         stub.setup_go("horizontal")
         stub.arduino.send.assert_called_once_with("I131140")
 
+    def test_horizontal_go_clamps_to_zero_degrees(self):
+        stub = make_setup_motion()
+        stub.view.row_value.return_value = 5
+        stub.config.BMarks = {
+            "-25": 0, "-20": 380, "-15": 760, "-10": 1140,
+            "-5": 1520, "0": 1900, "5": 2280,
+        }
+        stub.setup_go("horizontal")
+        stub.arduino.send.assert_called_once_with("I131900")
+        assert stub.horizontal_flexion_position == 0
+
     # A failed Go leaves nothing moving, so no DONE will re-enable the
     # controls; left disabled they also blocked logout and exit.
     def test_invalid_axial_calibration_reenables_controls(self):
