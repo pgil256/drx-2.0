@@ -38,6 +38,7 @@ class TextKeyboard(QDialog):
         layout.setSpacing(8)
         heading = QLabel(title)
         heading.setFont(sans_font(size="--text-lg", weight=600))
+        heading.setProperty("dsTitle", True)
         layout.addWidget(heading)
         self.editor = QPlainTextEdit() if multiline else QLineEdit()
         self.editor.setAccessibleName(title)

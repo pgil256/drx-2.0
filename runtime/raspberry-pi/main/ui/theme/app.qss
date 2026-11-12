@@ -18,6 +18,9 @@ QDialog {
   color: var(--text-body);
 }
 QDialog QLabel { color: var(--text-body); }
+/* A dialog's title reads in the strong ink, like a card header, above its
+ * body-coloured copy. Set with label.setProperty("dsTitle", True). */
+QDialog QLabel[dsTitle="true"] { color: var(--text-strong); }
 QMessageBox, QInputDialog, QProgressDialog {
   background-color: var(--surface-card);
   padding: var(--space-6);
@@ -209,6 +212,22 @@ QLineEdit {
 }
 QLineEdit:focus { border-color: var(--border-focus); }
 QLineEdit:disabled { background: var(--gray-100); color: var(--gray-600); }
+
+/* Multi-line inputs on a page share the text-input frame (the Support
+ * ticket description). The padding lines its text up with a QLineEdit's:
+ * the document adds a 4px margin of its own. Dialogs keep the quieter
+ * `QDialog QPlainTextEdit` frame above for their report and notes boxes. */
+QPlainTextEdit, QTextEdit {
+  background: var(--white); color: var(--ink-900);
+  border: var(--border-thick) solid var(--border-control);
+  border-radius: var(--radius-xs);
+  padding: 6px 10px;
+  font-size: var(--text-base);
+  selection-background-color: var(--color-primary);
+  selection-color: var(--white);
+}
+QPlainTextEdit:focus, QTextEdit:focus { border-color: var(--border-focus); }
+QPlainTextEdit:disabled, QTextEdit:disabled { background: var(--gray-100); color: var(--gray-600); }
 
 /* Spin boxes share the text-input frame; the step buttons are full-height,
  * side-by-side touch targets rather than two tiny stacked arrows. */

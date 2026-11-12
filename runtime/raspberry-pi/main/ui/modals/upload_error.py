@@ -25,6 +25,7 @@ class UploadErrorDialog(QDialog):
         layout.setSpacing(16)
         title = QLabel("Treatment upload failed")
         title.setFont(sans_font(size=24, weight=600))
+        title.setProperty("dsTitle", True)
         layout.addWidget(title)
         self._message = QLabel()
         self._message.setTextFormat(Qt.PlainText)

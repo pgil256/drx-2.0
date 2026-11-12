@@ -70,18 +70,22 @@ class _TouchSlider(QSlider):
 
 def _arrow_btn_css(text=True):
     # Text glyphs (− +) sit 4px high for optical centering; icons are centred.
+    # The glyph size is set here because the theme's `QPushButton { font-size }`
+    # overrides setFont() and would shrink − and + to label size. The outline
+    # is the 1px every other button has (the Setup jog buttons sit beside it).
     padding = "0 0 4px 0" if text else "0"
     return (
         "QPushButton {"
         f" background: #ffffff;"
         f" color: {resolve('--ink-800')};"
-        f" border: 2px solid {resolve('--border-control')};"
+        f" border: 1px solid {resolve('--border-control')};"
         f" border-radius: {resolve('--radius-md')};"
+        f" font-size: 28px; font-weight: 500;"
         f" padding: {padding}; }}"
         f" QPushButton:hover {{ background: {resolve('--blue-050')};"
         f" border-color: {resolve('--color-primary')}; }}"
         f" QPushButton:pressed {{ background: {resolve('--blue-100')}; }}"
-        f" QPushButton[keyboardFocus=\"true\"]:focus {{ border: 3px solid {resolve('--ink-900')}; }}"
+        f" QPushButton[keyboardFocus=\"true\"]:focus {{ border: 2px solid {resolve('--ink-900')}; }}"
         f" QPushButton:disabled {{ background: {resolve('--gray-200')};"
         f" color: {resolve('--gray-600')}; border-color: {resolve('--gray-400')}; }}"
     )

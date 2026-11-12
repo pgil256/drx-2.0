@@ -118,9 +118,18 @@ class DSKeypad(QWidget):
                 hover=resolve("--blue-050"),
             )
         font_size = 18 if text == "Clear" else (24 if self._compact else 30)
-        css += f"QPushButton {{ padding: 0 2px; font-size: {font_size}px; }}"
+        # The height is repeated here as a content-box minimum (outer height
+        # less the 2px border on each side): the theme's `QPushButton
+        # { min-height: 24px }` is re-applied on every polish and would
+        # otherwise lower setFixedHeight()'s minimum and let the card squash
+        # the keys below the 48px touch target.
         css += (
-            f"QPushButton[keyboardFocus=\"true\"]:focus {{ border: 3px solid {resolve('--ink-900')}; }}"
+            f"QPushButton {{ padding: 0 2px; font-size: {font_size}px;"
+            f" min-height: {self._key_h - 4}px; }}"
+        )
+        css += (
+            f"QPushButton[keyboardFocus=\"true\"]:focus {{ border: 3px solid {resolve('--ink-900')};"
+            f" min-height: {self._key_h - 6}px; }}"
             f"QPushButton:pressed {{ background: {resolve('--blue-100')}; }}"
             f"QPushButton:disabled {{ background: {resolve('--gray-300')};"
             f" color: {resolve('--gray-600')}; border-color: {resolve('--gray-400')}; }}"

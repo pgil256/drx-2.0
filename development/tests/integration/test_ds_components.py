@@ -187,6 +187,78 @@ def test_keypad_entry_submit_clear_back(app):
     assert changes  # got change events throughout
 
 
+@pytest.mark.parametrize("compact, expected", [(False, 76), (True, 56)])
+def test_keypad_keys_keep_their_touch_height(app, qtbot, compact, expected):
+    """The theme's QPushButton min-height must not let a layout squash the keys."""
+    from PyQt5.QtWidgets import QPushButton
+
+    from ui.widgets.ds import DSKeypad
+
+    kp = DSKeypad(length=4, compact=compact)
+    qtbot.addWidget(kp)
+    kp.show()
+    qtbot.waitExposed(kp)
+    heights = {b.height() for b in kp.findChildren(QPushButton)}
+    assert heights == {expected}
+
+
+def test_service_pin_dialog_fits_its_keypad(app, qtbot):
+    """Every key stays whole and in place whichever prompt the dialog shows."""
+    from types import SimpleNamespace
+
+    from PyQt5.QtWidgets import QPushButton
+
+    from ui.modals.service_pin_dialog import ServicePinDialog
+    from ui.widgets.ds import DSKeypad
+
+    dialog = ServicePinDialog(SimpleNamespace(configured=True), False)
+    qtbot.addWidget(dialog)
+    dialog.show()
+    qtbot.waitExposed(dialog)
+    qtbot.wait(50)  # the dialog theme applies its margins on show, then re-lays out
+    keypad = dialog.findChild(DSKeypad)
+
+    def key_boxes():
+        boxes = []
+        for key in keypad.findChildren(QPushButton):
+            top_left = key.mapTo(dialog, key.rect().topLeft())
+            assert key.height() == 56
+            assert keypad.rect().contains(key.geometry()), key.text()
+            assert dialog.rect().contains(top_left) and (
+                top_left.y() + key.height() <= dialog.height()), key.text()
+            boxes.append((key.text(), top_left.x(), top_left.y()))
+        return boxes
+
+    before = key_boxes()
+    for prompt in (
+        "Could not set the PIN. Check both entries and device access.",
+        "Create a six-digit service PIN. You will enter it twice.",
+        "Too many attempts. Try again in 300 seconds.",
+    ):
+        dialog.message.setText(prompt)
+        qtbot.wait(20)
+        assert key_boxes() == before, "a longer prompt moved the keys"
+        assert dialog.message.heightForWidth(dialog.message.width()) <= dialog.message.height()
+
+
+def test_badge_is_a_pill(app, qtbot):
+    """Qt ignores a border-radius larger than half the box, leaving square corners."""
+    import re
+
+    from ui.widgets.ds import DSBadge
+
+    for size in ("sm", "md"):
+        badge = DSBadge("Ready", tone="success", dot=True, size=size)
+        qtbot.addWidget(badge)
+        badge.show()
+        qtbot.waitExposed(badge)
+        radius = int(re.search(r"border-radius:\s*(\d+)px", badge.styleSheet()).group(1))
+        assert radius * 2 <= badge.height(), "Qt drops a radius over half the height"
+        assert radius >= badge.height() // 2 - 1, "badge ends are not fully rounded"
+        badge.set_tone("danger")
+        assert f"border-radius: {radius}px" in badge.styleSheet()
+
+
 def test_protocol_and_nav_toggle(app):
     from ui.widgets.ds import DSNavRailButton, DSProtocolButton
 

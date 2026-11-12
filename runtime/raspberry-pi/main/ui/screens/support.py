@@ -108,7 +108,9 @@ class SupportScreen(HelpScreen):
         super().__init__(parent, section_titles=(
             "Protocols", "Controls", "Troubleshooting", "Contact Support",
         ))
+        # Renaming the object orphans HelpScreen's `#HelpScreen` background rule.
         self.setObjectName("SupportScreen")
+        self.setStyleSheet(f"#SupportScreen {{ background: {resolve('--surface-page')}; }}")
         self._sending = False
         self._keyboard = None
         self._keyboard_targets = {}
@@ -165,6 +167,7 @@ class SupportScreen(HelpScreen):
         form.setSpacing(10)
         phone = QLabel("Phone support: 1-833-KNEE-SPA")
         phone.setFont(sans_font(size="--text-md", weight=600))
+        phone.setStyleSheet(f"color: {resolve('--text-strong')};")
         form.addWidget(phone)
         note = QLabel(
             "Describe the problem and how we can reach you. Device ID, software and firmware "

@@ -153,7 +153,10 @@ class _ActuatorRow(QWidget):
             layout.addStretch(1)
         stop = DSButton("Stop", variant="secondary", size="sm")
         stop.setAccessibleName("Stop leg" if self._key == "leg_length" else "Stop axes")
-        stop.setMinimumHeight(56)
+        # 56px like Go and the jogs, as a content-box minimum in the button's
+        # own rule (38 + 8px padding and 1px border each side): the theme's
+        # min-height is re-applied on polish and undoes setMinimumHeight().
+        stop.setStyleSheet("QPushButton { min-height: 38px; }")
         stop.clicked.connect(lambda: self.stop.emit(self._key))
         layout.addWidget(stop)
         self.safety_buttons.append(stop)
