@@ -31,6 +31,7 @@ void delay(unsigned long ms) { _millis_value += ms; }  // advance mock clock (fi
 #include "../../../../runtime/arduino/motor/motor.ino"
 
 void setUp(void) {
+    zerosValid = czeroValid = true;  // as after a reset, which sends L5 first
     Serial.reset();
     Serial1.reset();
     Wire.reset();

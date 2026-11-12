@@ -39,9 +39,9 @@ class NB2Controller(Arduino):
         if command == "T":
             return ["OK", "FIRMWARE|test|DRX-HX711-NB2|HOME_RELEASE_V1"]
         if command.startswith("L5|"):
-            _, a, b = command.split("|")
+            _, a, b, *c = command.split("|")
             self.a_zero, self.b_zero = int(a), int(b)
-            return [f"ZEROS|{a}|{b}", "DONE"]
+            return ["|".join(["ZEROS", a, b] + c), "DONE"]
         if command.startswith("L0"):
             self.factor = float(command[2:])
             return [f"CALIBRATION|SET|{self.factor}", "DONE"]
