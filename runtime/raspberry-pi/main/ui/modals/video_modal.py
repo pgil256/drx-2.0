@@ -216,8 +216,8 @@ class VideoModal(Overlay):
         if self._treatment_source is not None:
             try:
                 snapshot = self._treatment_source()
-            except Exception as exc:
-                logger.error("VideoModal: treatment snapshot failed: %r", exc)
+            except Exception:  # noqa: BLE001 - logged below; the strip must keep refreshing
+                logger.exception("VideoModal: treatment snapshot failed")
         active = bool(snapshot and snapshot.get("active"))
         if active:
             self._treatment_phase.set_text(str(snapshot.get("phase", "")))
