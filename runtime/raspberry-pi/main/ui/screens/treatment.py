@@ -302,7 +302,8 @@ class TreatmentScreen(QWidget):
     def _leg_length_control(self):
         """Leg-length steps, to take up slack right before Start without Setup.
 
-        One tap is one slow step, as on the Setup row. The controller locks
+        One tap is one timed step, as on the Setup row. Nothing measures the
+        leg-length actuator, so no position is shown. The controller locks
         the two buttons with the other motion controls (treatment, reset, a
         move in progress); this page only withholds them by role.
         """
@@ -311,17 +312,9 @@ class TreatmentScreen(QWidget):
         row = QHBoxLayout(self._leg_controls)
         row.setContentsMargins(0, 0, 0, 0)
         row.setSpacing(8)
-        text = QVBoxLayout()
-        text.setSpacing(2)
-        text.setAlignment(Qt.AlignVCenter)
         caption = QLabel("Leg length")
         caption.setFont(sans_font(size=16))
-        self._leg_value = QLabel("—")
-        self._leg_value.setFont(mono_font(size=22, weight=600))
-        self._leg_value.setMinimumWidth(96)
-        text.addWidget(caption)
-        text.addWidget(self._leg_value)
-        row.addLayout(text)
+        row.addWidget(caption, 0, Qt.AlignVCenter)
         ink = resolve("--ink-800")
         self._leg_buttons = []
         for direction, action, name in (("left", "rev", "Reverse"), ("right", "fwd", "Forward")):
@@ -341,21 +334,11 @@ class TreatmentScreen(QWidget):
                 lambda _checked, a=action: self.leg_length_step_requested.emit(a))
             row.addWidget(button)
             self._leg_buttons.append(button)
-        self.set_leg_length_estimate(None, "Zero required")
         return self._leg_controls
 
     def leg_length_buttons(self):
         """The motion buttons the controller locks with the Setup controls."""
         return list(self._leg_buttons)
-
-    def set_leg_length_estimate(self, value, reason: str = "") -> None:
-        """Show the same command-derived estimate as the Setup row."""
-        import math
-        valid = isinstance(value, (int, float)) and math.isfinite(value)
-        self._leg_value.setText(f"{value:g} in" if valid else "—")
-        detail = reason or "Open loop"
-        self._leg_value.setToolTip(detail)
-        self._leg_value.setAccessibleDescription(detail)
 
     def _setting_edited(self, key: str, value: float) -> None:
         """Request a change; its visible value is never an acknowledgement."""

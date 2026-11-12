@@ -538,11 +538,6 @@ class HardwareServiceController:
             return
         self.handle = handle
         self.moved = True
-        if axis == "leg":
-            self.window._service_leg_position_unknown = True
-            leg = getattr(self.window, "leg", None)
-            if leg is not None:
-                leg.invalidate()
         self.move_started = time.monotonic()
         self.move_axis, self.target = axis, target
         self.move_origin = self.position(axis) if axis != "leg" else None
@@ -808,10 +803,9 @@ class HardwareServiceController:
         self.dialog = None
         needs_reset = self.moved or self.saved or self.aborted
         if needs_reset and not getattr(self.window, "_closing", False):
-            message = "Remove reference loads and reset Arduino from Setup before normal movement."
-            if getattr(self.window, "_service_leg_position_unknown", False):
-                message += " Then use the leg-length Reset control to restore its position."
-            self.window._show_timed_error(message)
+            self.window._show_timed_error(
+                "Remove reference loads and reset Arduino from Setup before normal movement."
+            )
 
     def shutdown(self) -> None:
         if self.dialog is not None:

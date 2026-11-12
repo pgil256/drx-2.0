@@ -148,8 +148,8 @@ direction, smooth motion and stopping. The wizard coordinates the existing Pi
 and Arduino drive paths. There is no position feedback for this actuator in
 the current interface: elapsed drive time cannot prove travel distance or
 calibrate position. Record that limitation along with the physical observations.
-After any leg service movement, reset Arduino and then use the leg-length row's
-**Reset** control to restore its position estimate before normal leg jogs.
+The Setup screen keeps no leg-length position either, so leg service movement
+needs no follow-up beyond the Arduino reset that every service session ends with.
 
 **Load cell.** With the device stationary and unloaded, capture the raw unloaded
 sample. Apply a known reference force with suitable bench equipment: the step

@@ -1,4 +1,8 @@
-"""FIT homing, command accounting, and interruption regressions without hardware."""
+"""Timed leg-length (FIT) moves and interruption regressions without hardware.
+
+Nothing measures the leg-length actuator, so the controller keeps no position,
+shows none and applies no software travel limit (drx-demo, 12 November 2026).
+"""
 
 from unittest.mock import MagicMock
 
@@ -7,7 +11,6 @@ import pytest
 from controllers import leg_length_controller as module
 from controllers.connection_manager import ConnectionManager
 from helpers.arduino import Arduino, CommandHandle
-from kneespa import KneeSpa
 from fixtures.motion import make_motion
 from fixtures.controllers import make_window
 
@@ -49,43 +52,67 @@ def complete(leg):
     controller._poll()
 
 
-def home(leg):
+def test_jogs_need_no_zero_or_position(leg):
+    """The first jog after startup runs: there is no zero to establish."""
     controller, window, _, handles = leg
-    assert controller.home()
+    for command in ("F+", "FF", "F-", "FR"):
+        assert controller.move(command)
+        assert controller.active
+        assert not controller.move("F+")  # one move at a time
+        complete(leg)
+        assert not controller.active
+    assert [handle.command for handle in handles] == ["F+", "FF", "F-", "FR"]
+    assert not hasattr(controller, "position")
+    window._show_timed_error.assert_not_called()
+
+
+def test_no_software_travel_limit(leg):
+    """drx-demo used to refuse a third fast extend at a made-up 6 in."""
+    controller, _, _, handles = leg
+    for _ in range(4):
+        assert controller.move("FF")
+        complete(leg)
+    for _ in range(4):
+        assert controller.move("FR")
+        complete(leg)
+    assert [handle.command for handle in handles] == ["FF"] * 4 + ["FR"] * 4
+
+
+def test_return_retracts_with_two_back_to_back_fr_moves(leg):
+    controller, window, _, handles = leg
+    assert controller.retract()
+    window.disable_actuator_controls.assert_called()
+    window.loading_spinner.show.assert_called()
     complete(leg)
-    assert controller.position is None
     assert controller.active
     assert [handle.command for handle in handles] == ["FR", "FR"]
+    window.enable_actuator_controls.assert_not_called()
     complete(leg)
-    assert controller.position == 0
     assert not controller.active
-    assert not controller.boot_home_pending
+    assert [handle.command for handle in handles] == ["FR", "FR"]
+    window.loading_spinner.hide.assert_called()
+    window.enable_actuator_controls.assert_called()
 
 
-def test_full_retract_required_before_zero(leg):
-    home(leg)
-
-
-def test_jogs_accumulate_only_on_completion(leg):
+def test_nothing_is_sent_to_the_setup_screen(leg):
     controller, window, _, _ = leg
-    home(leg)
-    for command, expected in [("F+", 0.25), ("FF", 3.25), ("F-", 3.0), ("FR", 0.0)]:
-        previous = controller.position
-        assert controller.move(command)
-        assert controller.position == previous
-        assert not controller.move("F+")
-        complete(leg)
-        assert controller.position == expected
-        window.shell.setup.set_leg_length_estimate.assert_called_with(
-            expected, "From retracted zero",
-        )
+    setup = window.shell.setup
+    setup.reset_mock()
+    assert controller.move("FF")
+    complete(leg)
+    assert controller.retract()
+    complete(leg)
+    complete(leg)
+    assert controller.move("F+")
+    controller.cancel()
+    assert setup.method_calls == []
 
 
 def test_gpio_waits_for_write_and_stops_without_reply(leg, monkeypatch):
-    controller, _, now, handles = leg
+    controller, window, now, handles = leg
     drive = MagicMock()
     monkeypatch.setattr(controller, "_drive", drive)
-    controller.home()
+    controller.retract()
     controller._poll()
     drive.assert_not_called()
     handles[-1].written.set()
@@ -94,18 +121,18 @@ def test_gpio_waits_for_write_and_stops_without_reply(leg, monkeypatch):
     now[0] += 6.1
     controller._poll()
     drive.assert_called_with(None)
-    assert controller.position is None
+    assert controller.active
     now[0] += 3.1
     controller._poll()
     assert not controller.active
-    assert controller.boot_home_pending
+    window._show_timed_error.assert_called_with("Leg movement timed out.")
+    assert len(handles) == 1
 
 
 @pytest.mark.parametrize("interruption", ["cancel", "disconnect", "reject", "fault", "physical"])
-def test_interrupted_home_never_sets_zero_or_runs_second_stroke(leg, interruption):
+def test_interrupted_return_stops_and_runs_no_second_stroke(leg, interruption):
     controller, window, now, handles = leg
-    callback = MagicMock()
-    assert controller.home(callback)
+    assert controller.retract()
     handles[-1].written.set()
     controller._poll()
     now[0] += 1
@@ -121,31 +148,28 @@ def test_interrupted_home_never_sets_zero_or_runs_second_stroke(leg, interruptio
         window._physical_stop_active = True
         controller._poll()
         window.arduino.send.assert_not_called()
+    if interruption != "physical":
+        window.arduino.send.assert_called_once_with("X")
     complete(leg)  # Late completion cannot resurrect the cancelled operation.
-    callback.assert_called_once_with(False)
-    assert controller.position is None
-    assert controller.boot_home_pending
+    assert not controller.active
     assert len(handles) == 1
-    assert not controller.move("F+")
+    window.enable_actuator_controls.assert_called()
 
 
 @pytest.mark.parametrize("message", ["Stop button pressed", "Stop button engaged"])
 def test_stop_button_error_ends_the_move_without_a_stop_command(leg, message):
     """An X after the device's stop button would end the firmware's release."""
     controller, window, _, _ = leg
-    home(leg)
     assert controller.move("F+")
 
     window.arduino.error_emit.emit(message)
 
     assert not controller.active
-    assert controller.position is None
     window.arduino.send.assert_not_called()
 
 
 def test_other_errors_still_stop_an_interrupted_move(leg):
     controller, window, _, _ = leg
-    home(leg)
     assert controller.move("F+")
 
     window.arduino.error_emit.emit("Motor stall timeout 13")
@@ -154,25 +178,23 @@ def test_other_errors_still_stop_an_interrupted_move(leg):
     window.arduino.send.assert_called_once_with("X")
 
 
-def test_cancelled_jog_requires_rehome(leg):
-    controller, _, _, _ = leg
-    home(leg)
+def test_cancelled_jog_does_not_block_the_next_one(leg):
+    controller, _, _, handles = leg
     assert controller.move("F+")
     controller.cancel()
-    assert controller.position is None
-    assert not controller.move("F+")
+    assert controller.move("F+")
+    assert [handle.command for handle in handles] == ["F+", "F+"]
 
 
-def test_unrelated_done_cannot_finish_home(leg):
+def test_unrelated_done_cannot_finish_return(leg):
     controller, window, now, handles = leg
-    controller.home()
+    controller.retract()
     handles[-1].written.set()
     controller._poll()
     window.arduino.done_emit.emit()
     now[0] += 6.1
     controller._poll()
     assert controller.active
-    assert controller.position is None
     assert len(handles) == 1
     if window.arduino.protocol_v2:
         window.arduino.done_emit.emit()  # Another command's sequenced DONE.
@@ -184,7 +206,7 @@ def test_completed_command_cannot_restart_gpio_after_gui_delay(leg, monkeypatch)
     controller, window, _, handles = leg
     drive = MagicMock()
     monkeypatch.setattr(controller, "_drive", drive)
-    controller.home()
+    controller.retract()
     handle = handles[-1]
     handle.written.set()
     if window.arduino.protocol_v2:
@@ -194,123 +216,41 @@ def test_completed_command_cannot_restart_gpio_after_gui_delay(leg, monkeypatch)
         window.arduino.done_emit.emit()
     controller._poll()
     assert not controller.active
-    assert controller.position is None
     assert all(call[0] == (None,) for call in drive.call_args_list)
 
 
 @pytest.mark.parametrize("flag", ["reset_in_progress", "protocol_running",
-                                   "actuator_command_in_progress", "_calibration_active"])
+                                   "actuator_command_in_progress", "_calibration_active",
+                                   "_physical_stop_active", "_no_automatic_recovery"])
 def test_leg_commands_cannot_overlap_other_owners(leg, flag):
     controller, window, _, handles = leg
     setattr(window, flag, True)
-    assert not controller.home()
+    assert not controller.retract()
+    assert not controller.move("F+")
     assert handles == []
 
 
-def test_boot_readiness_waits_for_leg_and_later_reset_preserves_it(leg):
+@pytest.mark.parametrize("first_boot", [True, False])
+def test_resets_never_move_the_leg(leg, first_boot):
+    """Startup no longer retracts the leg: there is no reference to set."""
     controller, window, _, handles = leg
     manager = ConnectionManager(window)
     window.connection = manager
     worker = MagicMock()
     manager.reset_worker = worker
     window.reset_in_progress = True
-    window.initial_setup_complete = False
+    window.initial_setup_complete = not first_boot
     manager._on_reset_finished(True, worker)
-    assert window.reset_in_progress and not window.initial_setup_complete
-    complete(leg)
-    assert not window.initial_setup_complete
-    complete(leg)
     assert window.initial_setup_complete and not window.reset_in_progress
-    assert controller.move("F+")
-    complete(leg)
-    before = len(handles)
-    manager._on_reset_finished(True)
-    window._reflect_setup = MagicMock()
-    KneeSpa.reset_setup_readings(window)
-    assert controller.position == 0.25
-    assert len(handles) == before
-    assert all(call[0][0] != "leg_length" for call in window._reflect_setup.call_args_list)
-
-
-def test_boot_failure_blocks_readiness_and_explicit_retry_can_home(leg):
-    controller, window, _, _ = leg
-    manager = ConnectionManager(window)
-    window.reset_in_progress = True
-    window.initial_setup_complete = False
-    manager._on_reset_finished(True)
-    controller.cancel()
-    assert not window.initial_setup_complete
-    assert window.protocol_state == "fault"
-    window.reset_in_progress = True
-    manager._on_reset_finished(True)
-    complete(leg)
-    complete(leg)
-    assert window.initial_setup_complete
+    assert handles == []
+    assert not controller.active
 
 
 def test_general_done_does_not_unlock_leg_motion(leg):
     controller, _, _, _ = leg
-    assert controller.home()
-    motion = make_motion(leg=controller)  # the Setup gate sees the homing leg
+    assert controller.retract()
+    motion = make_motion(leg=controller)  # the Setup gate sees the moving leg
     motion.state.actuator_command_in_progress = True
     motion.enable_actuator_controls()
     assert motion.state.actuator_command_in_progress
     assert motion.controls_enable_timer is None
-
-
-def test_slider_target_uses_completed_quarter_inch_commands(leg):
-    controller, window, _, handles = leg
-    home(leg)
-    assert controller.move_to(1.25)
-    for step in range(5):
-        assert controller.position == 0
-        assert controller.active
-        complete(leg)
-    assert controller.position == 1.25
-    assert [handle.command for handle in handles[2:]] == ["F+"] * 5
-    assert controller.move_to(0.5)
-    for _ in range(3):
-        complete(leg)
-    assert controller.position == 0.5
-    assert [handle.command for handle in handles[-3:]] == ["F-"] * 3
-    before = len(handles)
-    assert controller.move_to(0.5)
-    assert len(handles) == before
-
-
-@pytest.mark.parametrize("target", [-0.25, 6.25, float("nan"), float("inf"), 0.1])
-def test_invalid_slider_target_cannot_send_motion(leg, target):
-    controller, _, _, handles = leg
-    home(leg)
-    before = len(handles)
-    assert not controller.move_to(target)
-    assert len(handles) == before
-    assert controller.position == 0
-
-
-def test_slider_target_requires_zero_and_cannot_continue_after_stop(leg):
-    controller, _, _, handles = leg
-    assert not controller.move_to(1)
-    assert handles == []
-    home(leg)
-    assert controller.move_to(1)
-    complete(leg)
-    assert controller.active
-    controller.cancel()
-    before = len(handles)
-    complete(leg)  # An interrupted stroke's late reply cannot queue another.
-    assert len(handles) == before
-    assert controller.position is None
-    assert not controller.move_to(1)
-
-
-@pytest.mark.parametrize("flag", ["reset_in_progress", "protocol_running",
-                                   "actuator_command_in_progress", "_calibration_active",
-                                   "_physical_stop_active", "_no_automatic_recovery"])
-def test_slider_target_preserves_motion_guards(leg, flag):
-    controller, window, _, handles = leg
-    home(leg)
-    before = len(handles)
-    setattr(window, flag, True)
-    assert not controller.move_to(1)
-    assert len(handles) == before

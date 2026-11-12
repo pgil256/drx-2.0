@@ -251,10 +251,6 @@ def window_run(themed_app: QApplication, tmp_path: Path,
                 auto_reset: bool = True) -> bool:
         manager.window.arduino = arduino
         manager.window.initial_setup_complete = True
-        # This fixture starts after hardware initialization, including FIT home.
-        manager.window.leg.boot_home_pending = False
-        manager.window.leg.position = 0.0
-        manager.window.shell.setup.set_leg_length_estimate(0.0, "From retracted zero")
         return True
 
     monkeypatch.setattr(connection_manager.ConnectionManager, "setup_arduino", connect)
@@ -1337,12 +1333,8 @@ def test_setup_pressure_keeps_the_reading_on_the_protocols_page(window_run):
     assert pressure_window(run) == MEASURED
 
 
-def leg_at(run: SimpleNamespace, inches: float) -> tuple:
-    """Give the open-loop leg axis a known reference and unlock the controls."""
-    w = run.window
-    w.leg.position = inches
-    w._service_leg_position_unknown = False
-    w.leg._display()
+def leg_buttons(run: SimpleNamespace) -> tuple:
+    """Unlock the Protocols page's leg-length buttons; no reference is needed."""
     buttons = run.view.leg_length_buttons()
     for button in buttons:
         button.setEnabled(True)
@@ -1352,9 +1344,10 @@ def leg_at(run: SimpleNamespace, inches: float) -> tuple:
 def test_protocols_page_leg_length_buttons_send_one_slow_step_each(window_run):
     run = window_run
     w = run.window
-    reverse, forward = leg_at(run, 2.25)
-    assert run.view._leg_value.text() == "2.25 in"
-    assert w.shell.setup._pos["leg_length"]._value.text() == "2.25 in"
+    reverse, forward = leg_buttons(run)
+    # Nothing measures the leg-length actuator, so no position is shown.
+    assert not hasattr(run.view, "_leg_value")
+    assert not hasattr(run.view, "set_leg_length_estimate")
     w.leg.move = MagicMock(return_value=True)
     forward.click()
     reverse.click()
@@ -1364,7 +1357,7 @@ def test_protocols_page_leg_length_buttons_send_one_slow_step_each(window_run):
 def test_protocols_page_leg_length_buttons_lock_with_the_setup_controls(window_run):
     run = window_run
     w = run.window
-    buttons = leg_at(run, 2.25)
+    buttons = leg_buttons(run)
     assert all(button in w.actuator_controls for button in buttons)
     start(run)
     assert w.protocol_state == "running"
@@ -1380,7 +1373,7 @@ def test_leg_length_step_in_flight_holds_start(window_run):
     """A run never zeroes the load cell while the leg-length actuator moves."""
     run = window_run
     w = run.window
-    leg_at(run, 2.25)
+    leg_buttons(run)
     w._on_treatment_leg_step("fwd")
     assert w.leg.active and run.arduino.send_tracked.call_args[0][0] == "F+"
     try:
@@ -1395,7 +1388,7 @@ def test_leg_length_step_in_flight_holds_start(window_run):
 def test_leg_length_steps_are_withheld_by_role(window_run, role):
     run = window_run
     w = run.window
-    buttons = leg_at(run, 2.25)
+    buttons = leg_buttons(run)
     w.leg.move = MagicMock(return_value=True)
     run.view.set_access_role(role)
     assert not any(button.isEnabled() for button in buttons)

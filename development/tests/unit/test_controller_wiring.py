@@ -300,10 +300,10 @@ class TestSetupReset:
         stub.setup_reset("lateral")
         stub.reset_flexion_button_clicked.assert_called_once_with("14")
 
-    def test_leg_reset(self):
+    def test_leg_reset_is_a_full_retract(self):
         stub = make_setup_motion()
         stub.setup_reset("leg_length")
-        stub.leg.home.assert_called_once()
+        stub.leg.retract.assert_called_once()
 
     def test_pressure_reset_sends_real_release(self):
         stub = make_setup_motion()
@@ -370,13 +370,13 @@ class TestSetupGo:
         stub.setup_go("pressure")
         stub.apply_setup_pressure.assert_called_once()
 
-    def test_leg_go_uses_tracked_leg_controller(self):
+    def test_leg_has_no_go(self):
+        """Nothing measures leg length, so there is no target to move to."""
         stub = make_setup_motion()
         stub.view.row_value.return_value = 1.25
-        stub.leg.move_to.return_value = True
-        result = stub.setup_go("leg_length")
-        assert result is True
-        stub.leg.move_to.assert_called_once_with(1.25)
+        assert stub.setup_go("leg_length") is False
+        assert stub.leg.method_calls == []
+        stub.arduino.send.assert_not_called()
         stub.disable_actuator_controls.assert_not_called()
         stub.view.show_busy.assert_not_called()
 

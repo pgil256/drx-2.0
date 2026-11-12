@@ -346,18 +346,9 @@ class ConnectionManager:
         if getattr(window, "_no_automatic_recovery", False) is True:
             success = False
 
-        # First initialization also establishes the open-loop leg reference.
-        # Keep startup locked until the full retract completes; subsequent
-        # Arduino resets preserve the patient's leg-length setting.
-        leg = getattr(window, "leg", None)
-        if success and leg is not None and leg.boot_home_pending:
-            def finish_leg_home(homed: bool) -> None:
-                self._on_reset_finished(homed, worker)
-
-            if not leg.home(finish_leg_home) and self.reset_worker is worker:
-                self._on_reset_finished(False, worker)
-            return
-
+        # No reset, including the first one at startup, moves the leg-length
+        # actuator: nothing measures it, so there is no reference to set and
+        # the patient's leg-length setting stays where staff left it.
         self.reset_worker = None
 
         # Clear the reset in progress flag

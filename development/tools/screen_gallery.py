@@ -81,8 +81,7 @@ def render_all(outdir, width=W, height=H):
     shell.treatment.set_pressure(0)
     shell.treatment.set_pressure_state("Pressure live")
     shell.treatment.set_angle(0)
-    # Idle after a reset: no number until Start, and the leg-length estimate.
-    shell.treatment.set_leg_length_estimate(2.25, "From retracted zero")
+    # Idle after a reset: no number until Start.
     shell.treatment.set_awaiting_start(True)
     _grab(shell, app, os.path.join(outdir, "05-treatment.png"))
     shell.treatment.set_awaiting_start(False)

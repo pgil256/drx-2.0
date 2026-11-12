@@ -1143,10 +1143,8 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
 
     # ----- leg-length (FIT) jog handlers (open-loop F-commands + GPIO) -----
     def _move_leg(self, command):
-        """Delegate timing and estimate updates to the FIT command owner."""
-        if getattr(self, "_service_leg_position_unknown", False) is True:
-            self._show_timed_error("Use the leg-length Return control to establish zero.")
-            return False
+        """Run one timed leg move. Nothing measures leg length, so no position
+        or travel limit gates it; staff watch the leg."""
         return self.leg.move(command)
 
     def forward_button_clicked(self):
@@ -1181,8 +1179,8 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
         QTimer.singleShot(600, self._release_leg_gpio)
 
     def reset_extra_button_clicked(self):
-        """Home the open-loop FIT axis, updating zero only after completion."""
-        return self.leg.home()
+        """The leg-length Return control: retract fully (two FR moves)."""
+        return self.leg.retract()
 
     def ensure_arduino_connection(self):
         return self.connection.ensure_arduino_connection()

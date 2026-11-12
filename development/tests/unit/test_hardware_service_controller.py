@@ -403,7 +403,8 @@ def test_close_after_completed_move_requires_reset_even_without_edits(service):
     assert w._no_automatic_recovery
 
 
-def test_normal_motion_cannot_overlap_service_and_leg_requires_rehome(service):
+def test_normal_motion_cannot_overlap_service(service):
+    from controllers.leg_length_controller import LegLengthController
     from kneespa import KneeSpa
 
     c, w, _, feed = service
@@ -411,9 +412,11 @@ def test_normal_motion_cannot_overlap_service_and_leg_requires_rehome(service):
     # Setup motion shares the window's DeviceState, as on KneeSpa.
     motion = make_motion(state=w.device_state, arduino=w.arduino)
     assert not motion.send_motion_command("I12550", "test")
+    w.leg = LegLengthController(w)
     c.move_leg("+")
-    assert w._service_leg_position_unknown
     assert not KneeSpa._move_leg(w, "F+")
+    # Nothing measures the leg, so service movement leaves no position to restore.
+    assert not hasattr(w, "_service_leg_position_unknown")
 
 
 def test_diagnostic_snapshot_does_not_automatically_pass_operator_check(service):

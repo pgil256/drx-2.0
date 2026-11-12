@@ -139,27 +139,30 @@ class GuiVerification:
                         self.state["pose"]["fit_inches"] > 2.9
                         and self.state["gpio"].get("27") == 0
                         and self.state["gpio"].get("22") == 0)
-        for target in (1.25, 1.75):
-            yield self.wait("FIT target control ready", lambda:
-                            leg.motion_buttons[-1].isEnabled() and not w.leg.active)
+        # FIT has no position sensor, so the row has no target, Go or reading.
+        # Verify each timed jog's physical direction instead.
+        for index, direction in ((1, -1), (2, 1)):
+            yield self.wait("FIT jog ready", lambda index=index:
+                            leg.motion_buttons[index].isEnabled() and not w.leg.active)
             before_pose = self.state["pose"]["fit_inches"]
-            direction = 1 if target > w.leg.position else -1
-            leg.slider.set_value(target)
-            self.click(leg.motion_buttons[-1])
-            yield self.wait(f"FIT Go completes estimated {target:g} inches", lambda target=target:
-                            not w.leg.active and w.leg.position == target
+            self.click(leg.motion_buttons[index])
+            yield self.wait("FIT jog completes and releases GPIO", lambda:
+                            not w.leg.active
                             and self.state["gpio"].get("27") == 0
                             and self.state["gpio"].get("22") == 0)
-            # FIT has no position sensor: serial/GPIO timing affects actual travel.
-            # Verify physical direction and bounds, and record the estimation error
-            # instead of treating command completion as measured target accuracy.
             pose = self.state["pose"]["fit_inches"]
             assert 0 <= pose <= 6 and (pose - before_pose) * direction > 0.1
-            assert leg.readout._caption.text() == "Estimated"
-            self.results.append({"check": "FIT target remains explicitly estimated",
-                                 "estimate_inches": target, "physical_inches": pose,
-                                 "error_inches": pose - target})
-        self.save("setup-leg-target")
+        assert leg.slider is None and leg.readout is None
+        yield self.wait("FIT Return ready", lambda:
+                        leg.motion_buttons[4].isEnabled() and not w.leg.active)
+        self.click(leg.motion_buttons[4])
+        yield self.wait("FIT Return retracts fully and releases GPIO", lambda:
+                        not w.leg.active and self.state["pose"]["fit_inches"] < 0.05
+                        and self.state["gpio"].get("27") == 0
+                        and self.state["gpio"].get("22") == 0)
+        self.results.append({"check": "FIT shows no position; jogs and Return move it",
+                             "physical_inches": self.state["pose"]["fit_inches"]})
+        self.save("setup-leg-jogs")
         yield self.wait("reset control ready", lambda: shell.setup._reset_btn.isEnabled())
         self.click(shell.setup._reset_btn)
         yield self.wait("reset after positioning", lambda: w.reset_in_progress)
