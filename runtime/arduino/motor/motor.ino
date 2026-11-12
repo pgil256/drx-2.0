@@ -1147,6 +1147,14 @@ bool checkNegativeLoad() {
   return false;
 }
 
+// A tared load cell must keep reporting whenever the axial actuator is
+// driven: during P (pressureGuardActive) and during an I12/A12 position move,
+// which used to run with the cell unplugged unnoticed. The autonomous
+// traction release is not a position move, so a dead sensor never stops it.
+bool loadCellRequired() {
+  return pressureGuardActive || (pressureCalibrated && bRunning && runningDevice == 12);
+}
+
 void servicePressure() {
   // A latched fault stops pressure service, except while a release runs:
   // the release needs fresh samples to see the load clear. Nothing else
@@ -1161,7 +1169,7 @@ void servicePressure() {
   if (checkingHomeTare) return;
   unsigned long now = millis();
   // A fresh read must not erase a preceding sensor-service gap.
-  if (pressureGuardActive && pressurePollStarted &&
+  if (loadCellRequired() && pressurePollStarted &&
       now - lastPressurePoll > PRESSURE_SAMPLE_TIMEOUT) {
     tripPressureFault("PRESSURE_SENSOR_TIMEOUT");
     return;
@@ -1227,7 +1235,7 @@ void servicePressure() {
                     (jerkDirection < 0 && pressure <= PULSE_RELEASE_FLOOR)))
       setPulseSpeed(0); // Stop at the sampled bound, before telemetry or phase timing.
   }
-  if (pressureGuardActive &&
+  if (loadCellRequired() &&
       (!pressureSampleValid || now - lastPressureSample > PRESSURE_SAMPLE_TIMEOUT)) {
     tripPressureFault("PRESSURE_SENSOR_TIMEOUT");
   } else if (measurePressure && now - pressureMoveStarted >= PRESSURE_MOVE_DEADLINE) {
