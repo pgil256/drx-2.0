@@ -13,9 +13,17 @@ Before the menu opens, the start script runs `runtime/restore_update.sh` (when
 present) with the shared launcher lock. It restores KneeSpa 2.0's folder if a
 software install was interrupted between its two renames.
 
-If anything fails, neither app starts; the screen shows the error with **Back**
-and **Try again**. The last-used version starts by itself after a countdown
-(15 s by default); touching the screen stops the countdown.
+While it works, the screen lists the steps (build, check, back up, write,
+start), marks the running one and counts its seconds. If anything fails, neither
+app starts; the screen shows the error, the log file's path, and **Back** and
+**Try again**. The last-used version starts by itself after a countdown (15 s by
+default) the first time the menu shows; touching the screen anywhere stops the
+countdown, and it does not restart after **Back**. **Exit to desktop** closes the
+menu without starting an app (for the maintenance shortcuts).
+
+The screen uses the KneeSpa design system's colours and sizes. It reads the IBM
+Plex fonts and the logo from `runtime/` when they are there and falls back to
+system fonts; it imports nothing from `runtime/`.
 
 ## Requirements
 
@@ -76,6 +84,15 @@ and **Try again**. The last-used version starts by itself after a countdown
   USB port resets the Mega, so every start includes a reset before the app
   connects. When the board differs, the whole flash is read into a backup
   before the write; the write is verified, then verified again.
+- **Broken USB conversations:** avrdude 6.3 measures its serial timeout on the
+  wall clock. The Pi has no clock battery, so its first network time sync after
+  boot steps the clock forward by days, about when the countdown ends; a read
+  in progress then reports `stk500v2_ReceiveMessage(): timeout` and returns
+  wrong data. When the board answered and the conversation then broke, the
+  chooser repeats the operation (check 3 times, backup and write twice, 2 s
+  apart). Only a clean `verification error` counts as different firmware. A
+  check that keeps breaking stops with an error and writes nothing; a board
+  that never answers is asked once.
 - **Unfinished KneeSpa 2.0 firmware update:** if
   `devices/local/raspberry-pi/updates/firmware-recovery.json` exists, the
   chooser does not touch the Mega. It starts KneeSpa 2.0, which finishes its own
