@@ -98,6 +98,11 @@ class AppShell(QWidget):
 
         self.login_modal.submitted.connect(self.login_attempted)
 
+        # Video may stay open during a treatment: its strip mirrors the
+        # Treatment monitor and its STOP takes the Treatment screen's path.
+        self.video_modal.set_treatment_source(self.treatment.monitor_snapshot)
+        self.video_modal.stop_requested.connect(self.treatment.estop_requested)
+
     def _on_nav(self, key):
         if self._access_role == "patient" and key in ("setup", "device"):
             return
@@ -177,24 +182,33 @@ class AppShell(QWidget):
         self.treatment.set_access_role(role)
 
     def close_nonessential_overlays(self) -> None:
-        """Clear already-open overlays when treatment takes control of the screen."""
-        for modal in (self.login_modal, self.patient_modal, self.video_modal):
+        """Clear already-open overlays when treatment takes control of the screen.
+
+        Video is exempt: during a treatment it shows its own STOP strip.
+        """
+        for modal in (self.login_modal, self.patient_modal):
             if modal.isVisible():
                 modal.close_overlay()
 
-    def show_login(self, destination=None):
+    def show_login(self, destination=None, phone=False):
+        """Open sign-in on the staff PIN keypad (``phone=True``: QR approval)."""
         if self._overlay_guard is not None and self._overlay_guard():
             return
         if not self._navigation_confirmed("home"):
             return
         self._login_destination = destination if destination in GATED else "protocols"
         self._go("home")
-        self.login_modal.open_over(self)
+        self.login_modal.open_over(self, phone=phone)
 
     def show_video(self):
-        if self._overlay_guard is not None and self._overlay_guard():
-            return
+        # Not subject to the overlay guard: during a treatment the video card
+        # carries the treatment strip with STOP, so it never hides the stop.
         self.video_modal.open_over(self)
+
+    def close_video(self) -> None:
+        """Dismiss the player so a fault is not left playing over its prompts."""
+        if self.video_modal.isVisible():
+            self.video_modal.close_overlay()
 
     def login_succeeded(self, username, goto=None, title="Clinician",
                         is_admin=False):

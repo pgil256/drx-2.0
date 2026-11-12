@@ -1,4 +1,10 @@
-"""Phone-approved patient/staff sign-in with an explicit local staff PIN option.
+"""Staff PIN sign-in, with phone (QR code) approval as the option below it.
+
+The staff PIN keypad is the default. "Sign in with your phone" switches the card
+to phone approval and only then asks the controller for a code; switching back
+or closing cancels that request. Flows that re-authenticate an existing phone
+session (a patient changing, an expired phone session) open straight into phone
+mode with ``phone=True``.
 
 The view renders the complete approval URL locally and emits user intent only;
 the controller owns cloud requests, polling, cancellation and session validation.
@@ -144,27 +150,32 @@ class LoginModal(Overlay):
         lay.addWidget(self._phone)
 
         lay.addSpacing(8)
-        self._switch = QPushButton("Use local staff PIN")
+        self._switch = QPushButton()
         self._switch.setMinimumHeight(48)
         self._switch.clicked.connect(self._switch_mode)
         lay.addWidget(self._switch)
-        self._phone_mode = True
 
+        self._set_phone_mode(False)
         self.set_card(card)
 
     def show_error(self, message):
         self._error.setText(message)
         self._keypad.set_value("")
 
-    def reset(self):
+    def reset(self, phone: bool = False):
         self._error.setText("")
         self._keypad.set_value("")
-        self._set_phone_mode(True)
+        self._set_phone_mode(phone)
+
+    def phone_mode(self) -> bool:
+        return self._phone_mode
 
     def _set_phone_mode(self, enabled: bool) -> None:
         self._phone_mode = enabled
         self._phone.setVisible(enabled)
         self._pin.setVisible(not enabled)
+        # Callers ask the keypad itself whether PIN entry is showing.
+        self._keypad.setVisible(not enabled)
         self._switch.setText("Use local staff PIN" if enabled else "Sign in with your phone")
 
     def _switch_mode(self) -> None:
@@ -203,7 +214,9 @@ class LoginModal(Overlay):
     def set_phone_remaining(self, seconds: int) -> None:
         self._remaining.setText(f"Code expires in {seconds // 60}:{seconds % 60:02d}")
 
-    def open_over(self, parent=None):
-        self.reset()
+    def open_over(self, parent=None, phone: bool = False):
+        """Open on the staff PIN keypad, or straight into phone approval."""
+        self.reset(phone)
         super().open_over(parent)
-        self.phone_requested.emit()
+        if phone:
+            self.phone_requested.emit()
