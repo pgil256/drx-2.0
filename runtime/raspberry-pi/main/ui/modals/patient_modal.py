@@ -21,7 +21,8 @@ class PatientModal(Overlay):
         card.setObjectName("PatientCard")
         card.setAttribute(Qt.WA_StyledBackground, True)
         card.setFixedWidth(420)
-        card.setStyleSheet("#PatientCard { background: white; border-radius: 16px; }")
+        card.setStyleSheet(
+            f"#PatientCard {{ background: white; border-radius: {resolve('--radius-lg')}; }}")
         layout = QVBoxLayout(card)
         layout.setContentsMargins(30, 24, 30, 24)
         layout.setSpacing(16)
