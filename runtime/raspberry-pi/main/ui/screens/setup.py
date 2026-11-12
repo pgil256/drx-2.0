@@ -7,7 +7,8 @@ from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from config.constants import (
-    ACTUATORS, DEFAULT_HORIZONTAL_POSITION, LEG_LENGTH_MAX, LEG_LENGTH_MIN, PRESSURE_MAX,
+    ACTUATORS, DEFAULT_HORIZONTAL_POSITION, HORIZONTAL_COMMAND_LIMITS, LEG_LENGTH_MAX,
+    LEG_LENGTH_MIN, PRESSURE_MAX,
 )
 from ui.theme import chevron_icon, rotate_icon
 from ui.widgets.common import hline
@@ -21,8 +22,8 @@ ROWS = [
     {"key": "lateral", "name": "Lateral", "unit": "°", "step": 2.5, "value": 0,
      "min": ACTUATORS["LATERAL"]["LIMITS"][0], "max": ACTUATORS["LATERAL"]["LIMITS"][1]},
     {"key": "horizontal", "name": "Horizontal", "unit": "°", "step": 2.5,
-     "value": DEFAULT_HORIZONTAL_POSITION, "min": ACTUATORS["HORIZONTAL"]["LIMITS"][0],
-     "max": ACTUATORS["HORIZONTAL"]["LIMITS"][1]},
+     "value": DEFAULT_HORIZONTAL_POSITION, "min": HORIZONTAL_COMMAND_LIMITS[0],
+     "max": HORIZONTAL_COMMAND_LIMITS[1]},
     {"key": "leg_length", "name": "Leg length", "unit": " in", "step": 0.25,
      "value": 0, "min": LEG_LENGTH_MIN, "max": LEG_LENGTH_MAX},
     {"key": "pressure", "name": "Pressure", "unit": " lbs", "step": 5, "value": 0,
