@@ -216,7 +216,7 @@ class VideoModal(Overlay):
         if self._treatment_source is not None:
             try:
                 snapshot = self._treatment_source()
-            except Exception as exc:
+            except Exception as exc:  # noqa: BLE001 - polled at 4 Hz; a traceback per tick would flood the log
                 logger.error("VideoModal: treatment snapshot failed: %r", exc)
         active = bool(snapshot and snapshot.get("active"))
         if active:
