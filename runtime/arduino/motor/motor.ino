@@ -102,6 +102,17 @@ int pulseSpeed = TREATMENT_SPEED_MAX;
 // 3 * 20000 overflows the Mega's 16-bit int.
 #define POSITION_STALL_TIMEOUT_MS (3UL * POSITION_STALL_MS)
 #define POSITION_PROGRESS_COUNTS 4   // encoder progress that resets stall timer
+// Position-move deadline (from drx-demo A3, 2026-11-06). The stall warning
+// above is advisory; this bound is not. An I, K or A move that has not
+// arrived within |target - start| x 3 / expected counts per second + 5 s is
+// stopped on its own axis and ended with ERR|<seq>|POSITION_MOVE_TIMEOUT
+// (legacy: "ERROR: POSITION_MOVE_TIMEOUT"). Nothing latches: the next
+// command is accepted as usual. The expected speeds are for the slowest
+// motor setting (800): C measured ~72 counts/s on the bench (2026-09-10);
+// A and B are drx-demo's logged speeds scaled by the same ratio.
+// PROVISIONAL: measure A and B at speed 800 before relying on them.
+#define POSITION_DEADLINE_FACTOR    3
+#define POSITION_DEADLINE_MARGIN_MS 5000UL
 #define ACTIVE_STATUS_INTERVAL 1000  // ms: status cadence during motion (non-HF)
 
 // Status protection
@@ -266,6 +277,8 @@ uint16_t desiredPosition = 3;
 bool highFrequencyStatus = false;
 int loopLastPosition = -1;
 unsigned long loopStallStart = 0;
+unsigned long positionMoveStarted = 0;
+unsigned long positionMoveDeadline = 0;  // ms after positionMoveStarted; 0 = none armed
 elapsedMillis timeSinceLastStatus = 0; // Timer for high-frequency updates
 const unsigned long HIGH_FREQ_INTERVAL = 1000; // ms for frequent updates (adjust as needed)
 
@@ -771,6 +784,35 @@ void emitCmdError(const char *reason) {
     Serial1.print("ERROR: ");
     Serial1.println(reason);
   }
+}
+
+// A command error for an earlier command, such as a move that ends later in
+// loop(): "ERR|<seq>|<reason>" for v2, "ERROR: <reason>" otherwise.
+void emitSeqError(long seq, const char *reason) {
+  if (seq >= 0) {
+    Serial1.print("ERR|");
+    Serial1.print(seq);
+    Serial1.print("|");
+    Serial1.println(reason);
+  } else {
+    Serial1.print("ERROR: ");
+    Serial1.println(reason);
+  }
+}
+
+unsigned long positionCountsPerSecond(uint8_t device) {
+  if (device == 12) return 40;
+  if (device == 14) return 70;
+  return 50;
+}
+
+// Every I, K and A move arms its deadline as it starts.
+void armPositionDeadline(uint8_t device, uint16_t target, uint16_t actual) {
+  unsigned long distance = target > actual ? (unsigned long)(target - actual)
+                                           : (unsigned long)(actual - target);
+  positionMoveStarted = millis();
+  positionMoveDeadline = distance * 1000UL * POSITION_DEADLINE_FACTOR /
+                         positionCountsPerSecond(device) + POSITION_DEADLINE_MARGIN_MS;
 }
 
 // While the physical STOP is held nothing may START moving: a motion command
@@ -1751,6 +1793,7 @@ void processCommand(const String &cmd) {
       loopLastPosition = localPosition;
       loopStallStart = millis();
       positionStallWarningIssued = false;
+      armPositionDeadline(smcDeviceNumber, localDesiredPosition, localPosition);
       runningDevice = smcDeviceNumber;
       bRunning = true;
       break;
@@ -1817,6 +1860,7 @@ void processCommand(const String &cmd) {
       loopLastPosition = localPosition;
       loopStallStart = millis();
       positionStallWarningIssued = false;
+      armPositionDeadline(smcDeviceNumber, localDesiredPosition, localPosition);
       runningDevice = smcDeviceNumber;
       bRunning = true;
       break;
@@ -1914,6 +1958,7 @@ void processCommand(const String &cmd) {
       loopLastPosition = localPosition;
       loopStallStart = millis();
       positionStallWarningIssued = false;
+      armPositionDeadline(smcDeviceNumber, localDesiredPosition, localPosition);
       runningDevice = smcDeviceNumber;
       bRunning = true;
       break;
@@ -2412,6 +2457,7 @@ void loop() {
     smcDeviceNumber = runningDevice;
     uint16_t currentPos = readPosition();
     bool stallTimedOut = false;
+    bool moveTimedOut = false;
 
     if (positionReadValid) {
       // Debug output, rate-limited: this used to print every loop pass
@@ -2473,6 +2519,25 @@ void loop() {
           emitSafetyWarning("Motor stalled");
           positionStallWarningIssued = true;
         }
+        // The deadline is checked only while short of the target, so an
+        // arrival on the same pass always wins. A stall timeout on this pass
+        // has already stopped everything and sent its own error.
+        if (!stallTimedOut && positionMoveDeadline &&
+            millis() - positionMoveStarted > positionMoveDeadline &&
+            stopDeviceOrReport(runningDevice)) {  // a NACKed stop retries next pass
+          Dbg.print("POSITION_MOVE_TIMEOUT "); Dbg.print((int)runningDevice);
+          Dbg.print(" "); Dbg.print(desiredPosition);
+          Dbg.print(" "); Dbg.print(currentPos);
+          Dbg.print(" "); Dbg.println(positionMoveDeadline);
+          bRunning = false;
+          forward = 0;
+          loopLastPosition = -1;
+          loopStallStart = 0;
+          positionMoveDeadline = 0;
+          moveTimedOut = true;
+          emitSeqError(activeCmdSeq, "POSITION_MOVE_TIMEOUT");
+          activeCmdSeq = -1;
+        }
       }
     }
     if (!positionReadValid) { tripPressureFault("POSITION_FEEDBACK_INVALID"); }
@@ -2480,9 +2545,10 @@ void loop() {
     // iteration rather than acting on garbage (0 was both the error
     // value and a legal position)
 
-    // Cleanup after run complete. A stall timeout is not a completion:
-    // it must never report MOTION_DONE for the move it stopped.
-    if (!bRunning && !pressureFault && !stallTimedOut) {
+    // Cleanup after run complete. A stall timeout or a missed deadline is
+    // not a completion: each already sent its own error, and neither may
+    // report MOTION_DONE for the move it stopped.
+    if (!bRunning && !pressureFault && !stallTimedOut && !moveTimedOut) {
       position = currentPos;
       reportPositionDone(positionCommandKind, desiredPosition, currentPos, activeCmdSeq);
       sendStatus();
