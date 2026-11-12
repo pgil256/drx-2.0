@@ -71,6 +71,11 @@ class ProtocolController:
         if state in ("starting", "running", "stopping"):
             present(window.logger, "nonessential overlays",
                     lambda: window.shell.close_nonessential_overlays())
+        elif state == "fault":
+            # Video outlives a stop for its STOP strip, but a fault needs the
+            # Treatment page and its recovery prompts, not a playing clip.
+            present(window.logger, "fault video close",
+                    lambda: window.shell.close_video())
         refresh = getattr(window, "_refresh_device_presentation", None)
         if callable(refresh):
             try:
