@@ -328,45 +328,37 @@ class TestMoveActuatorLateral:
 
 
 @pytest.mark.unit
-class TestLegLengthBounds:
+class TestLegLengthJogs:
+    """Nothing measures leg length: no position or software limit gates a jog."""
+
     @staticmethod
-    def _stub(position):
+    def _stub():
         stub = MagicMock()
         stub.arduino.send.return_value = True
         from controllers.leg_length_controller import LegLengthController
         stub.leg = LegLengthController(stub)
-        stub.leg.position = position
         return stub
 
-    def test_forward_at_max_sends_nothing(self):
-        stub = self._stub(6.0)
-        with patch.object(kneespa.GPIO, "output") as gpio_output:
-            assert KneeSpa.forward_button_clicked(stub) is False
-        gpio_output.assert_not_called()
-        stub.arduino.send.assert_not_called()
+    @pytest.mark.parametrize("handler, command", [
+        ("forward_button_clicked", "F+"), ("reverse_button_clicked", "F-"),
+        ("forward_fast_button_clicked", "FF"), ("reverse_fast_button_clicked", "FR"),
+    ])
+    def test_each_jog_sends_its_timed_command(self, qtbot, handler, command):
+        stub = self._stub()
+        try:
+            assert getattr(KneeSpa, handler)(stub) is True
+            stub.arduino.send_tracked.assert_called_once_with(command)
+            stub.loading_spinner.show.assert_called_once()
+        finally:
+            stub.leg.cancel()
 
-    def test_reverse_at_min_sends_nothing(self):
-        stub = self._stub(0.0)
-        with patch.object(kneespa.GPIO, "output") as gpio_output:
-            assert KneeSpa.reverse_button_clicked(stub) is False
-        gpio_output.assert_not_called()
-        stub.arduino.send.assert_not_called()
-
-    def test_fast_forward_at_max_restores_without_spinner(self):
-        stub = self._stub(6.0)
-        assert KneeSpa.forward_fast_button_clicked(stub) is False
-        stub.loading_spinner.show.assert_not_called()
-
-    def test_failed_leg_send_invalidates_estimate(self):
-        """The command may have reached the wire, so the estimate is dropped
-        (Zero required) rather than kept or advanced to the target."""
-        stub = self._stub(2.0)
-        stub.arduino.send.return_value = False
+    def test_failed_leg_send_leaves_the_drive_pins_low(self):
+        stub = self._stub()
         stub.arduino.send_tracked.return_value = None
         with patch.object(kneespa.GPIO, "output") as gpio_output:
             assert KneeSpa.forward_button_clicked(stub) is False
-        assert stub.leg.position is None
         assert all(call[0][1] == kneespa.GPIO.LOW for call in gpio_output.call_args_list)
+        stub.enable_actuator_controls.assert_called()
 
     def test_position_rounded_to_increment(self):
         """The new position is snapped to the nearest 2.5-degree increment."""
@@ -538,7 +530,7 @@ class TestSetupMotionRefusedDuringTreatment:
         motion = make_motion_in_treatment()
         assert not motion.setup_go(key)
         motion.arduino.send.assert_not_called()
-        motion.leg.move_to.assert_not_called()
+        motion.leg.move.assert_not_called()
         motion.view.show_position.assert_not_called()
 
     @pytest.mark.parametrize("key", SETUP_ROWS)
@@ -546,7 +538,7 @@ class TestSetupMotionRefusedDuringTreatment:
         motion = make_motion_in_treatment()
         motion.setup_reset(key)
         motion.arduino.send.assert_not_called()
-        motion.leg.home.assert_not_called()
+        motion.leg.retract.assert_not_called()
         motion.view.show_position.assert_not_called()
 
     @pytest.mark.parametrize("actuator", [ACTUATOR_A, ACTUATOR_B, ACTUATOR_C])

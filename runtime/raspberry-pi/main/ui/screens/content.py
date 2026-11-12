@@ -93,8 +93,8 @@ HELP_FAILURES = [
      "does not automatically home the device. Contact support if the cause is unclear."),
     ("An actuator won’t move",
      "Check the selected target, measurement, limits and device status. Choosing a target "
-             "does not move the axis until Go. Leg length has no position sensor; use its "
-     "Return control to retract it to zero before moving it. "
+             "does not move the axis until Go. Leg length has no sensor, target or limits: "
+     "each arrow press runs it for a fixed time, so watch the leg. "
      "Reset and home moves the device; follow the recovery procedure before using it."),
     ("Invalid PIN at login",
      "Re-enter the operator PIN. If it keeps failing, confirm your PIN with your "

@@ -251,9 +251,6 @@ def window_run(themed_app: QApplication, tmp_path: Path,
                 auto_reset: bool = True) -> bool:
         manager.window.arduino = arduino
         manager.window.initial_setup_complete = True
-        # This fixture starts after hardware initialization, including FIT home.
-        manager.window.leg.boot_home_pending = False
-        manager.window.leg.position = 0.0
         return True
 
     monkeypatch.setattr(connection_manager.ConnectionManager, "setup_arduino", connect)

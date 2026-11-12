@@ -7,8 +7,7 @@ from PyQt5.QtCore import QSize, Qt, pyqtSignal
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from config.constants import (
-    ACTUATORS, DEFAULT_HORIZONTAL_POSITION, HORIZONTAL_COMMAND_LIMITS, LEG_LENGTH_MAX,
-    LEG_LENGTH_MIN, PRESSURE_MAX,
+    ACTUATORS, DEFAULT_HORIZONTAL_POSITION, HORIZONTAL_COMMAND_LIMITS, PRESSURE_MAX,
 )
 from ui.theme import chevron_icon, rotate_icon
 from ui.widgets.common import hline
@@ -24,8 +23,9 @@ ROWS = [
     {"key": "horizontal", "name": "Horizontal", "unit": "°", "step": 2.5,
      "value": DEFAULT_HORIZONTAL_POSITION, "min": HORIZONTAL_COMMAND_LIMITS[0],
      "max": HORIZONTAL_COMMAND_LIMITS[1]},
-    {"key": "leg_length", "name": "Leg length", "unit": " in", "step": 0.25,
-     "value": 0, "min": LEG_LENGTH_MIN, "max": LEG_LENGTH_MAX},
+    # Nothing measures the leg-length actuator, so its row has no range,
+    # target, Go or reading: only the jogs, Return and Stop.
+    {"key": "leg_length", "name": "Leg length"},
     {"key": "pressure", "name": "Pressure", "unit": " lbs", "step": 5, "value": 0,
      "min": 0, "max": PRESSURE_MAX},
 ]
@@ -48,9 +48,6 @@ def _label(text: str, size: int = 16, bold: bool = False) -> QLabel:
     return label
 
 
-_READOUT_WIDTH = 108
-
-
 class _PosRow(QWidget):
     """A sensor reading that can never be populated by target changes."""
 
@@ -68,7 +65,7 @@ class _PosRow(QWidget):
             label.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
             label.setMinimumHeight(label.minimumSizeHint().height())
             layout.addWidget(label)
-        self.setFixedWidth(_READOUT_WIDTH)
+        self.setFixedWidth(108)
         self.set_value(None, "Waiting")
 
     def set_value(self, value: Optional[float], reason: str = "") -> None:
@@ -90,7 +87,8 @@ class _ActuatorRow(QWidget):
     def __init__(self, cfg: Dict, parent=None) -> None:
         super().__init__(parent)
         self._key = cfg["key"]
-        self._step = cfg["step"]
+        self._step = cfg.get("step", 0.0)
+        measured = "min" in cfg
         layout = QHBoxLayout(self)
         layout.setContentsMargins(0, 6, 0, 6)
         layout.setSpacing(12)
@@ -102,7 +100,8 @@ class _ActuatorRow(QWidget):
         labels.setSpacing(2)
         labels.setAlignment(Qt.AlignVCenter)
         labels.addWidget(_label(cfg["name"], 19, True))
-        labels.addWidget(_label(f"{cfg['min']:g} to {cfg['max']:g}{cfg['unit']}", 16))
+        if measured:
+            labels.addWidget(_label(f"{cfg['min']:g} to {cfg['max']:g}{cfg['unit']}", 16))
         layout.addWidget(names)
 
         self.motion_buttons: List[QWidget] = []
@@ -133,6 +132,24 @@ class _ActuatorRow(QWidget):
             self.motion_buttons.append(button)
         layout.addLayout(jogs)
 
+        self.slider: Optional[DSSlider] = None
+        self.readout: Optional[_PosRow] = None
+        if measured:
+            self._add_target_and_reading(cfg, layout)
+        else:
+            # The firmware runs the leg-length actuator for a fixed time per
+            # press and nothing measures it. A target, Go or reading would be
+            # a made-up number (staff read the old "Estimated" column as a
+            # measurement), so staff set leg length by watching the leg.
+            layout.addStretch(1)
+        stop = DSButton("Stop", variant="secondary", size="sm")
+        stop.setAccessibleName("Stop leg" if self._key == "leg_length" else "Stop axes")
+        stop.setMinimumHeight(56)
+        stop.clicked.connect(lambda: self.stop.emit(self._key))
+        layout.addWidget(stop)
+        self.safety_buttons.append(stop)
+
+    def _add_target_and_reading(self, cfg: Dict, layout: QHBoxLayout) -> None:
         self.slider = DSSlider(
             value=cfg["value"], minimum=cfg["min"], maximum=cfg["max"], step=cfg["step"],
             unit=cfg["unit"], with_steps=True,
@@ -161,35 +178,20 @@ class _ActuatorRow(QWidget):
         target.setFixedWidth(96)
         layout.addWidget(target)
 
-        # Nothing measures the leg-length actuator: the firmware runs it for a
-        # fixed time. Its old "Estimated" column counted presses and staff read
-        # it as a measurement, so that row gets a blank column of the same width
-        # to keep Go and Stop lined up with the other rows.
-        self.readout: Optional[_PosRow] = None
-        if self._key == "leg_length":
-            blank = QWidget()
-            blank.setFixedWidth(_READOUT_WIDTH)
-            layout.addWidget(blank)
-        else:
-            self.readout = _PosRow(cfg["unit"])
-            layout.addWidget(self.readout)
+        self.readout = _PosRow(cfg["unit"])
+        layout.addWidget(self.readout)
         go = DSButton("Go", size="sm")
         go.setFixedSize(56, 56)
         go.setStyleSheet("QPushButton { padding: 0; }")
         go.setAccessibleName("Move " + cfg["name"] + " to target")
         go.clicked.connect(lambda: self.go.emit(self._key))
-        stop = DSButton("Stop", variant="secondary", size="sm")
-        stop.setAccessibleName("Stop leg" if self._key == "leg_length" else "Stop axes")
-        stop.setMinimumHeight(56)
-        stop.clicked.connect(lambda: self.stop.emit(self._key))
         layout.addWidget(go)
-        layout.addWidget(stop)
-        self.safety_buttons.append(stop)
         self.motion_buttons.append(go)
 
     def set_value(self, value: float) -> None:
         """Reflect a commanded target without changing any sensor reading."""
-        self.slider.set_value(value)
+        if self.slider is not None:
+            self.slider.set_value(value)
 
     def _on_jog(self, action: str, delta: Optional[float]) -> None:
         # Controller feedback owns commanded positions. Pressure arrows edit
@@ -200,7 +202,7 @@ class _ActuatorRow(QWidget):
         self.jog.emit(self._key, action)
 
     def value(self) -> float:
-        return self.slider.value()
+        return self.slider.value() if self.slider is not None else 0.0
 
 
 class SetupScreen(QWidget):

@@ -395,8 +395,8 @@ class MotionController:
         elif key == "horizontal":
             self.reset_flexion_button_clicked(self.actuator_b)
         elif key == "leg_length":
-            # Home the open-loop FIT axis, updating zero only after completion.
-            self.leg.home()
+            # The Return control: a full timed retract. It sets no position.
+            self.leg.retract()
         elif key == "pressure":
             self.view.show_busy()
             self.disable_actuator_controls()
@@ -413,6 +413,9 @@ class MotionController:
 
         The caller has already authorized the operator.
         """
+        if key == "leg_length":
+            # Nothing measures leg length, so its row has no target or Go.
+            return False
         if self._refuse_during_treatment():
             return False
         if key in ("axial", "horizontal", "lateral") and not self.config.marks_valid:
@@ -421,8 +424,6 @@ class MotionController:
         if key == "pressure" and not self.config.scale_calibrated:
             self.view.warn_uncalibrated()
             return False
-        if key == "leg_length":
-            return self.leg.move_to(self.view.row_value("leg_length"))
 
         self.view.show_busy()
         self.disable_actuator_controls()

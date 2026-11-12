@@ -377,27 +377,32 @@ def _row_label_texts(row):
     return [label.text() for label in row.findChildren(QLabel)]
 
 
-def test_leg_length_has_target_controls_and_no_position_readout(shell):
+def test_leg_length_row_has_only_jogs_return_and_stop(shell):
+    """Nothing measures leg length, so its row has no range, target, Go or
+    reading (drx-demo made the same change on 12 November 2026)."""
     row = shell.setup._rows["leg_length"]
-    assert any(button.text() == "Go" for button in row.motion_buttons)
-    assert not row.slider.isHidden()
-    moved = MagicMock()
-    row.go.connect(moved)
-    row.slider._right_btn.click()
-    assert row.value() == 0.25
-    moved.assert_not_called()
-    row.motion_buttons[-1].click()
-    moved.assert_called_once_with("leg_length")
-    # Nothing measures the leg-length actuator, so the row has no
-    # Measured/Estimated column, only its target.
-    assert row.readout is None
+    assert row.slider is None and row.readout is None
     assert "leg_length" not in shell.setup._pos
-    texts = _row_label_texts(row)
-    assert "Estimated" not in texts and "Measured" not in texts
+    assert not any(getattr(button, "text", lambda: "")() == "Go"
+                   for button in row.motion_buttons)
+    assert len(row.motion_buttons) == 5  # four jogs and Return
+    assert _row_label_texts(row) == ["Leg length"]
     assert "Measured" in _row_label_texts(shell.setup._rows["axial"])
+    jogged, stopped, went = MagicMock(), MagicMock(), MagicMock()
+    row.jog.connect(jogged)
+    row.stop.connect(stopped)
+    row.go.connect(went)
+    for button in row.motion_buttons:
+        button.click()
+    row.safety_buttons[0].click()
+    assert [call[0] for call in jogged.call_args_list] == [
+        ("leg_length", action) for action in ("rev_fast", "rev", "fwd", "fwd_fast", "reset")
+    ]
+    stopped.assert_called_once_with("leg_length")
+    went.assert_not_called()
 
 
-def test_leg_length_row_columns_line_up_with_measured_rows(app, qtbot):
+def test_leg_length_row_lines_up_with_measured_rows(app, qtbot):
     from ui.screens.setup import SetupScreen
 
     setup = SetupScreen()
@@ -408,22 +413,20 @@ def test_leg_length_row_columns_line_up_with_measured_rows(app, qtbot):
     leg = setup._rows["leg_length"]
     axial = setup._rows["axial"]
     assert leg.width() == axial.width()
-    # Go and Stop keep the same x position as on the rows with a reading.
-    assert leg.motion_buttons[-1].geometry() == axial.motion_buttons[-1].geometry()
+    # The jogs, Return and Stop sit where they do on the other rows.
+    for index in range(5):
+        assert leg.motion_buttons[index].geometry() == axial.motion_buttons[index].geometry()
     assert leg.safety_buttons[0].geometry() == axial.safety_buttons[0].geometry()
 
 
 def test_leg_length_row_never_shows_a_position(shell):
     setup = shell.setup
     row = setup._rows["leg_length"]
-    before = _row_label_texts(row)
     assert not hasattr(setup, "set_leg_length_estimate")
     setup.set_measured_position("leg_length", 6)
     setup.invalidate_measurements("Controller offline")
-    assert _row_label_texts(row) == before
     setup.set_position("leg_length", 1.5)
-    assert row.value() == 1.5
-    assert not any(text.startswith("6") for text in _row_label_texts(row))
+    assert _row_label_texts(row) == ["Leg length"]
 
 
 # ----- support -----
