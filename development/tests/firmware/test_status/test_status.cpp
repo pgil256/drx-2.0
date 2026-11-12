@@ -37,6 +37,9 @@ void setUp(void) {
     tareActive = false; bRunning = measurePressure = releasingPressure = false;
     scale._ready = true; scale._scale = 1; scale._offset = 0; scale._raw = 0;
     _millis_value = 0;
+    _pin_levels[STOP_PIN] = HIGH;
+    pendingStopMask = 0;
+    for (int i = 0; i < 3; ++i) acceptedMotorSpeeds[i] = 0;
 }
 
 void tearDown(void) {}

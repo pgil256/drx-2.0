@@ -63,10 +63,14 @@ class ResetWorker(QRunnable):
         if any(not 0 <= value <= 4095 for value in (a_zero, b_zero, pos_c, pos_b)):
             raise OperationRejected("Configured reset position exceeds controller feedback range")
         operations.perform(f"L5|{a_zero}|{b_zero}", ("zeros", a_zero, b_zero), 10.0)
+        # Retract the axial actuator first. Reset is what an operator presses
+        # when a run goes wrong, and a lateral actuator that stalls under axial
+        # load must not keep the leg loaded while it times out (ks-fb,
+        # 11 November 2026: 30 s at 58 lb before the retraction began).
         for command, kind, target, tolerance, timeout in (
+            ("I120", "I", a_zero, 25, 60.0),
             (f"K{pos_c}", "K", pos_c, 100, 30.0),
             (f"I13{pos_b}", "I", pos_b, 25, 30.0),
-            ("I120", "I", a_zero, 25, 60.0),
         ):
             operations.perform(command, ("motion", kind, target, max(0, target - tolerance),
                                          min(4095, target + tolerance)), timeout)

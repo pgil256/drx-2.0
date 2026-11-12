@@ -78,7 +78,7 @@ class TestResetGating:
         assert not w.reset_in_progress
 
     def test_reset_waits_for_the_firmware_release_after_the_stop_button(self, manager):
-        """Reset's Y ends the firmware's release, and homing unloads axial last."""
+        """Reset's Y ends the firmware's release before its own retraction starts."""
         cm, w = manager
         w._no_automatic_recovery = True
         w._physical_stop_active = True

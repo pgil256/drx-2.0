@@ -52,8 +52,8 @@ FIRMWARE_RELEASE_WAIT_S = 20.0
 def firmware_release_pending(window) -> bool:
     """True while the firmware's release after the stop button may still run.
 
-    Reset must wait for it: its Y ends the release, and the homing that
-    follows retracts the axial actuator last.
+    Reset must wait for it: its Y ends the release, and the reset's own
+    retraction only starts once the controller has rebooted.
     """
     since = getattr(window, "_firmware_release_since", None)
     return isinstance(since, float) and time.monotonic() - since < FIRMWARE_RELEASE_WAIT_S

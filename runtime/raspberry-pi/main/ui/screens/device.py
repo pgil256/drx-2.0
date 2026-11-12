@@ -150,7 +150,7 @@ class DeviceScreen(QWidget):
     def _overview(self) -> None:
         layout = self._page()
         power = self._card("App and device power")
-        power.add_widget(self._label("Finish treatment and device service before restarting."))
+        power.add_widget(self._label("Restarting or shutting down stops any treatment or movement first."))
         self._row(
             power,
             self._action("Restart App", "restart_app"),

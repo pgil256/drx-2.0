@@ -186,6 +186,46 @@ def test_expiry_during_treatment_keeps_identity_and_safety_controls(sign_in, qtb
     w.protocol.set_state("idle")
 
 
+@pytest.mark.parametrize("session", ["live", "expired"])
+def test_power_actions_reach_the_pin_during_treatment(sign_in, qtbot, session):
+    """Restart App is available at any point for a phone sign-in too.
+
+    The cloud recheck is refused during a treatment and needs a live session
+    and a network. Power actions skip it: the technician PIN that follows is
+    the gate, and it is asked for every phone sign-in.
+    """
+    w, controller, data = sign_in
+    data["context"].update(role="clinician", patient_id=None,
+                           permissions=["patients.view", "patients.edit"])
+    approve(sign_in, qtbot)
+    w.protocol.set_state("running")
+    if session == "expired":
+        controller.client.expires_at = time.time() - 1
+        controller._tick()
+    calls = list(data["calls"])
+    w.device_controller.action("restart_app")
+    dialog = w.device_controller._auth_dialog
+    try:
+        assert dialog is not None, w.device_controller.screen.status.text()
+        assert data["calls"] == calls
+        assert not w.restart_requested
+    finally:
+        if dialog is not None:
+            dialog.reject()
+        w.protocol.set_state("idle")
+
+
+def test_other_device_actions_keep_the_cloud_recheck_during_treatment(sign_in, qtbot):
+    w, _controller, data = sign_in
+    data["context"].update(role="clinician", patient_id=None,
+                           permissions=["patients.view", "patients.edit"])
+    approve(sign_in, qtbot)
+    w.protocol.set_state("running")
+    w.device_controller.action("sync_clock")
+    assert w.device_controller._auth_dialog is None
+    w.protocol.set_state("idle")
+
+
 def test_logout_cancels_abandoned_code_and_queued_create(sign_in, qtbot):
     w, controller, data = sign_in
     show_qr(sign_in, qtbot)

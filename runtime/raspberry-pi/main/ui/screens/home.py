@@ -1,18 +1,15 @@
-"""A simple welcome screen with the KneeSpa logo and login."""
+"""A simple welcome screen with the KneeSpa logo; login lives in the nav rail."""
 
 from typing import Optional
 
-from PyQt5.QtCore import QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QSize, Qt
 from PyQt5.QtGui import QPixmap
 from PyQt5.QtWidgets import QLabel, QVBoxLayout, QWidget
 
-from ui.widgets.ds import DSButton
 from ui.widgets.ds._common import image_path, resolve
 
 
 class HomeScreen(QWidget):
-    login_requested = pyqtSignal()
-
     def __init__(self, parent: Optional[QWidget] = None) -> None:
         super().__init__(parent)
         self.setObjectName("HomeScreen")
@@ -36,12 +33,4 @@ class HomeScreen(QWidget):
             )
         layout.addWidget(self._logo, 0, Qt.AlignCenter)
 
-        self._login_btn = DSButton("Login", variant="primary", size="md")
-        self._login_btn.setFixedWidth(240)
-        self._login_btn.clicked.connect(self.login_requested)
-        layout.addWidget(self._login_btn, 0, Qt.AlignCenter)
         layout.addStretch(1)
-
-    def set_logged_in(self, logged_in: bool) -> None:
-        """Show login only when there is no active clinician session."""
-        self._login_btn.setVisible(not logged_in)

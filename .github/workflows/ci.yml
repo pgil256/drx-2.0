@@ -25,10 +25,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -83,7 +83,7 @@ jobs:
       # treats as hidden.
       - name: Upload coverage XML
         if: ${{ !cancelled() }}
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: coverage-xml-${{ github.sha }}
           path: .cache/coverage/coverage.xml
@@ -98,10 +98,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -119,10 +119,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -145,7 +145,7 @@ jobs:
         working-directory: development/simulator/viewer
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Node 24
         uses: actions/setup-node@v4
@@ -169,7 +169,7 @@ jobs:
     container: python:3.7-slim-bookworm
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install system libraries for PyQt5 (headless)
         run: |
@@ -210,7 +210,7 @@ jobs:
     container: python:3.7-slim-bookworm
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Install system libraries for PyQt5 (headless)
         run: |
@@ -266,7 +266,7 @@ jobs:
           python3 -c "from PyQt5.QtCore import PYQT_VERSION_STR, QT_VERSION_STR; print('PyQt5', PYQT_VERSION_STR, 'Qt', QT_VERSION_STR)"
 
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       # Buster's pip 18 cannot install manylinux2014 wheels; pip 24.0 is the
       # last release for Python 3.7. PyQt5 stays the apt package, so the pip
@@ -297,7 +297,7 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Build and run firmware test suites
         run: bash development/tests/firmware/run_native_tests.sh
@@ -322,10 +322,10 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
 
       - name: Set up Python 3.12
-        uses: actions/setup-python@v5
+        uses: actions/setup-python@v7
         with:
           python-version: "3.12"
 
@@ -336,7 +336,7 @@ jobs:
           pip install platformio==6.1.19
 
       - name: Cache PlatformIO packages
-        uses: actions/cache@v4
+        uses: actions/cache@v6
         with:
           path: ~/.platformio
           key: pio-${{ runner.os }}-${{ hashFiles('runtime/arduino/motor/platformio.ini') }}
@@ -360,7 +360,7 @@ jobs:
 
       # .pio/ is a hidden directory, which upload-artifact skips by default.
       - name: Upload firmware image
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: firmware-mega-${{ github.sha }}
           path: |

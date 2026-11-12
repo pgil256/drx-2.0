@@ -91,6 +91,17 @@ class DeviceController(QObject):
             )
         )
 
+    def can_power(self) -> bool:
+        """Restart App, Restart Device and Shut Down are available at any point.
+
+        They are the way out of a treatment, reset, service session or fault
+        that will not end by itself, so they do not wait for an idle device.
+        Closing the window runs the shutdown stop (StopController, kind
+        "shutdown"), which cancels whatever owns the motors and stops them.
+        Only a shutdown already under way refuses them.
+        """
+        return getattr(self.window, "_closing", False) is not True
+
     def _owned_idle(self, user: dict) -> bool:
         return bool(user) and user == self.window.current_user and self.idle()
 
@@ -368,16 +379,27 @@ class DeviceController(QObject):
         self._next()
 
     def _authorize(self, callback: Callable, technician: bool = False,
-                   service: bool = False) -> None:
+                   service: bool = False, ready: Optional[Callable] = None,
+                   cloud_recheck: bool = True) -> None:
+        """``ready`` replaces the idle check for an action with its own gate.
+
+        ``cloud_recheck=False`` skips the phone sign-in's cloud recheck, which
+        is refused during a treatment and needs a live session and a network.
+        A phone sign-in is never an administrator, so the technician PIN
+        below is still asked.
+        """
         from controllers.machine_sign_in_controller import authorize
-        if not authorize(self.window, "service" if technician else "device",
-                         lambda: self._authorize(callback, technician, service)):
+        if cloud_recheck and not authorize(
+                self.window, "service" if technician else "device",
+                lambda: self._authorize(callback, technician, service, ready)):
             return
         self.wake()
         user = dict(self.window.current_user or {})
+        if ready is None:
+            ready = self.window.hardware_service.can_open if service else self.idle
+
         def eligible() -> bool:
-            return (bool(user) and user == self.window.current_user and
-                    (self.window.hardware_service.can_open() if service else self.idle()))
+            return bool(user) and user == self.window.current_user and ready()
 
         if not eligible():
             self.screen.set_status("Log in and finish treatment, movement, reset or service first.")
@@ -413,9 +435,12 @@ class DeviceController(QObject):
         service_actions = ("view_report", "export_diagnostics", "backup_calibration",
                            "restore_calibration", "check_releases", "flash_software",
                            "flash_firmware", "purge_rejected_uploads")
+        power_actions = ("restart_app", "reboot", "poweroff")
         from controllers.machine_sign_in_controller import authorize
-        if not authorize(self.window, "service" if name in service_actions else "device",
-                         lambda: self.action(name, value)):
+        # Power actions skip the phone sign-in's cloud recheck: see _authorize.
+        if name not in power_actions and not authorize(
+                self.window, "service" if name in service_actions else "device",
+                lambda: self.action(name, value)):
             return
         if name in service_actions and not self.service_authorized():
             self.require_service(lambda _user: self.action(name, value))
@@ -470,8 +495,9 @@ class DeviceController(QObject):
         elif name == "sync_clock":
             self._authorize(lambda user: self._queue(name, self.system.sync_clock,
                                                    self._system_done, user=user))
-        elif name in ("restart_app", "reboot", "poweroff"):
-            self._authorize(lambda user: self._power(name, user))
+        elif name in power_actions:
+            self._authorize(lambda user: self._power(name, user), ready=self.can_power,
+                            cloud_recheck=False)
 
     def _set_idle_timeout(self, minutes: int) -> None:
         self._idle_minutes = minutes
@@ -636,16 +662,22 @@ class DeviceController(QObject):
 
     def _power(self, action: str, user: dict) -> None:
         labels = {"restart_app": "Restart App", "reboot": "Restart Device", "poweroff": "Shut Down"}
-        if not self._owned_idle(user):
+
+        def allowed() -> bool:
+            return bool(user) and user == self.window.current_user and self.can_power()
+
+        if not allowed():
             return
+        warning = "" if self.idle() else (
+            " The treatment, movement or service in progress will be stopped.")
         answer = QMessageBox.question(
             self.window, labels[action],
-            f"{labels[action]} now? Device controls will close first.",
+            f"{labels[action]} now? Device controls will close first.{warning}",
             QMessageBox.Yes | QMessageBox.No, QMessageBox.No,
         )
         if answer != QMessageBox.Yes:
             return
-        if not self._owned_idle(user):
+        if not allowed():
             return
         if action == "restart_app":
             self.window._on_restart_app()

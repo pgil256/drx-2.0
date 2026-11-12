@@ -938,6 +938,21 @@ def test_restart_button_requests_cleanup_once(window_run, monkeypatch):
     assert [c[0][0] for c in run.arduino.send.call_args_list] == ["X", "P0", "HF0"]
 
 
+def test_restart_button_stops_a_running_treatment(window_run, monkeypatch):
+    """Restart App is available mid-treatment and runs the shutdown stop."""
+    run = window_run
+    worker = start(run)
+    assert run.window.protocol_state == "running"
+    monkeypatch.setattr(QMessageBox, "question", lambda *args: QMessageBox.Yes)
+    run.arduino.send.reset_mock()
+    run.notices.reset_mock()
+    run.window.shell.profile._restart.click()
+    assert run.window.restart_requested and run.window._closing
+    worker.cancel.assert_called_once_with(firmware_stopped=False)
+    assert [c[0][0] for c in run.arduino.send.call_args_list] == ["X", "P0", "HF0"]
+    run.notices.assert_not_called()
+
+
 def test_pressure_caption_and_decimal_render_in_existing_panel(window_run, tmp_path):
     run = window_run
     run.window.on_sensor_diagnostics({"valid": True, "age_ms": 0})
@@ -1177,3 +1192,206 @@ def test_logout_discards_staff_session_and_late_patient_result(patient_flow):
     assert flow.run.window.cloud_patient is None
     assert flow.editor.isHidden()
     assert flow.run.window.current_user is None
+
+
+def test_push_on_the_footplate_reads_negative_on_every_pressure_display(window_run):
+    run = window_run
+    w = run.window
+    w.on_baseline_changed(True)
+    w.on_sensor_diagnostics({"valid": True, "age_ms": 0, "signed_lb": -24.5})
+    w.status_emit(0, 0, 1200, 24.5)
+    w._refresh_measurement_display()
+    assert run.view._pressure_stat._value == "−24.5"
+    assert w.shell.setup._pos["pressure"]._value.text() == "−24.5 lbs"
+    assert w.treatment_panel.pressure_label.text() == "−24.5 lbs"
+    # Display only: the stop sequence and the safety checks keep the magnitude.
+    assert w.last_measured_pressure == 24.5
+
+    # The signed sample follows its status frame. A change of direction
+    # redraws the magnitude already on screen.
+    w.on_sensor_diagnostics({"valid": True, "age_ms": 0, "signed_lb": 24.5})
+    assert run.view._pressure_stat._value == "24.5"
+    assert w.shell.setup._pos["pressure"]._value.text() == "24.5 lbs"
+    assert w.treatment_panel.pressure_label.text() == "24.5 lbs"
+
+
+def test_reading_inside_the_deadband_shows_an_unsigned_zero(window_run):
+    run = window_run
+    w = run.window
+    w.on_baseline_changed(True)
+    w.on_sensor_diagnostics({"valid": True, "age_ms": 0, "signed_lb": -0.6})
+    w.status_emit(0, 0, 1200, 0.0)
+    w._refresh_measurement_display()
+    assert run.view._pressure_stat._value == "0.0"
+    assert w.shell.setup._pos["pressure"]._value.text() == "0 lbs"
+
+
+def test_pressure_warning_goes_by_size_whatever_the_direction(window_run):
+    run = window_run
+    w = run.window
+    w.on_baseline_changed(True)
+    w.on_sensor_diagnostics({"valid": True, "age_ms": 0, "signed_lb": -110.0})
+    w.status_emit(700, 1900, 1450, 110.0)
+    assert "Pressure warning threshold exceeded" in w.treatment_panel.phase_label.text()
+    assert w.treatment_panel.pressure_label.text() == "−110.0 lbs"
+
+
+def show_live_pressure(run: SimpleNamespace, pounds: float = 12.0) -> None:
+    w = run.window
+    w.on_baseline_changed(True)
+    w.on_sensor_diagnostics({"valid": True, "age_ms": 0, "signed_lb": pounds})
+    w.status_emit(0, 0, 1200, abs(pounds))
+    w._refresh_measurement_display()
+
+
+def pressure_window(run: SimpleNamespace) -> tuple:
+    stat = run.view._pressure_stat
+    return stat._caption.text(), stat._value
+
+
+WAITING = ("WAITING FOR PROTOCOL START", "—")
+MEASURED = ("MEASURED PRESSURE", "12.0")
+
+
+def test_idle_window_waits_for_start_only_once_the_release_is_confirmed(window_run):
+    run = window_run
+    w = run.window
+    show_live_pressure(run)
+    assert pressure_window(run) == MEASURED  # nothing has confirmed a release yet
+    w.connection._on_reset_finished(True)
+    show_live_pressure(run)
+    assert pressure_window(run) == WAITING
+    # Setup keeps its own measured reading: that is where pressure is set by hand.
+    assert w.shell.setup._pos["pressure"]._value.text() == "12 lbs"
+
+    worker = start(run)  # the number appears with Start and stays through the release
+    assert w.protocol_state == "running" and pressure_window(run) == MEASURED
+    worker.signals.finished.emit(True)  # retracted and zeroed by the worker
+    assert w.protocol_state == "idle" and pressure_window(run) == WAITING
+
+
+@pytest.mark.parametrize("ending", ["operator stop", "no-progress stop", "failed run"])
+def test_reading_stays_after_a_stop_or_failure_until_the_reset_completes(
+        window_run, monkeypatch, ending):
+    """A run that ended without a verified release can still hold a load."""
+    run = window_run
+    w = run.window
+    w.connection._on_reset_finished(True)
+    worker = start(run)
+    show_live_pressure(run)
+    if ending == "operator stop":
+        run.view.estop_requested.emit()
+    elif ending == "no-progress stop":
+        w.protocol.stop_without_recovery("Pressure-progress Stop")
+    worker.signals.finished.emit(False)
+    show_live_pressure(run)
+    if ending == "no-progress stop":
+        # That stop also drops the zero, and its caption keeps priority.
+        assert pressure_window(run) == ("PRESSURE ZERO REQUIRED", "—")
+    else:
+        assert pressure_window(run) == MEASURED
+
+    reset = MagicMock(signals=ResetWorkerSignals())
+    monkeypatch.setattr(connection_manager, "ResetWorker", lambda *args: reset)
+    run.pool.start.side_effect = None
+    w.reset_arduino()
+    assert w.reset_in_progress
+    show_live_pressure(run)
+    assert pressure_window(run) == MEASURED  # still unconfirmed while the reset runs
+    reset.signals.finished.emit(True)
+    show_live_pressure(run)
+    assert w.protocol_state == "idle" and pressure_window(run) == WAITING
+
+
+def test_fault_zero_required_and_offline_captions_outrank_the_waiting_text(window_run):
+    run = window_run
+    w = run.window
+    w.connection._on_reset_finished(True)
+    show_live_pressure(run)
+    assert pressure_window(run) == WAITING
+    w.on_baseline_changed(False)
+    assert pressure_window(run) == ("PRESSURE ZERO REQUIRED", "—")
+    w.on_baseline_changed(True)
+    w._measurement_fault = "PRESSURE_LIMIT"
+    w._refresh_pressure_state()
+    assert "FAULT" in pressure_window(run)[0]
+    w._measurement_fault = None
+    w.arduino.connected = False
+    w._refresh_pressure_state()
+    assert pressure_window(run) == ("WAITING FOR CONTROLLER", "—")
+
+
+def test_setup_pressure_keeps_the_reading_on_the_protocols_page(window_run):
+    run = window_run
+    w = run.window
+    w.connection._on_reset_finished(True)
+    show_live_pressure(run)
+    assert pressure_window(run) == WAITING
+    w.shell.setup._rows["pressure"].slider.set_value(10)
+    assert w._on_setup_go("pressure")
+    show_live_pressure(run)
+    assert pressure_window(run) == MEASURED
+
+
+def leg_buttons(run: SimpleNamespace) -> tuple:
+    """Unlock the Protocols page's leg-length buttons; no reference is needed."""
+    buttons = run.view.leg_length_buttons()
+    for button in buttons:
+        button.setEnabled(True)
+    return buttons
+
+
+def test_protocols_page_leg_length_buttons_send_one_slow_step_each(window_run):
+    run = window_run
+    w = run.window
+    reverse, forward = leg_buttons(run)
+    # Nothing measures the leg-length actuator, so no position is shown.
+    assert not hasattr(run.view, "_leg_value")
+    assert not hasattr(run.view, "set_leg_length_estimate")
+    w.leg.move = MagicMock(return_value=True)
+    forward.click()
+    reverse.click()
+    assert [call[0][0] for call in w.leg.move.call_args_list] == ["F+", "F-"]
+
+
+def test_protocols_page_leg_length_buttons_lock_with_the_setup_controls(window_run):
+    run = window_run
+    w = run.window
+    buttons = leg_buttons(run)
+    assert all(button in w.actuator_controls for button in buttons)
+    start(run)
+    assert w.protocol_state == "running"
+    assert not any(button.isEnabled() for button in buttons)
+    # A step requested anyway is refused by the leg controller itself.
+    run.arduino.send_tracked.reset_mock()
+    w._on_treatment_leg_step("fwd")
+    run.arduino.send_tracked.assert_not_called()
+    assert not w.leg.active
+
+
+def test_leg_length_step_in_flight_holds_start(window_run):
+    """A run never zeroes the load cell while the leg-length actuator moves."""
+    run = window_run
+    w = run.window
+    leg_buttons(run)
+    w._on_treatment_leg_step("fwd")
+    assert w.leg.active and run.arduino.send_tracked.call_args[0][0] == "F+"
+    try:
+        run.view._start_btn.setEnabled(True)
+        run.view._start_btn.click()
+        assert not run.workers and w.protocol_state == "idle"
+    finally:
+        w.leg.cancel()
+
+
+@pytest.mark.parametrize("role", ["patient", "service_technician"])
+def test_leg_length_steps_are_withheld_by_role(window_run, role):
+    run = window_run
+    w = run.window
+    buttons = leg_buttons(run)
+    w.leg.move = MagicMock(return_value=True)
+    run.view.set_access_role(role)
+    assert not any(button.isEnabled() for button in buttons)
+    w.current_user = {"username": "Someone", "status": role}
+    w._on_treatment_leg_step("fwd")
+    w.leg.move.assert_not_called()

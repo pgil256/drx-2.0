@@ -1,6 +1,7 @@
 """Explicit window facades for controller tests; no hardware window is constructed."""
 
 import logging
+import threading
 from types import SimpleNamespace
 from unittest.mock import MagicMock
 
@@ -41,10 +42,16 @@ def make_worker_double() -> MagicMock:
     worker = MagicMock(spec_set=[
         "pause", "resume", "stop", "cancel", "request_live_angle", "request_live_pressure",
         "request_live_pulse_rate", "duration", "is_running", "is_paused", "signals",
+        "treatment_completed", "completed", "_failure_reason", "cleanup_warning", "outcome",
     ])
     worker.duration = 60
     worker.is_running = False
     worker.is_paused = False
+    worker.treatment_completed = False
+    worker.completed = threading.Event()
+    worker._failure_reason = ""
+    worker.cleanup_warning = ""
+    worker.outcome = None
     worker.signals = SimpleNamespace(**{
         name: MagicMock(spec_set=["connect", "disconnect", "emit"])
         for name in ("finished", "progress", "prepared",
@@ -131,7 +138,7 @@ def make_stub() -> SimpleNamespace:
     # authorizes and delegates.
     window.motion = MagicMock(spec=MotionController)
     for name in (
-        "close", "_seed_modern_run_inputs", "_reflect_setup", "_leg_jog",
+        "close", "_seed_modern_run_inputs", "_reflect_setup", "_leg_jog", "set_load_released",
         "move_actuator", "_show_patient_modal", "_on_patient_edit", "_on_mark_default",
     ):
         setattr(window, name, MagicMock())
