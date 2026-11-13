@@ -21,6 +21,13 @@ default) the first time the menu shows; touching the screen anywhere stops the
 countdown, and it does not restart after **Back**. **Exit to desktop** closes the
 menu without starting an app (for the maintenance shortcuts).
 
+The app starts as the chooser's child, and the chooser's window stays in front
+until the app's own window is up, so the desktop is not seen in between. It
+leaves 0.6 s after the window manager lists a new window (asked with `xprop`),
+at once when the screen is touched, and after 20 s in any case. An app that
+exits with an error before its window shows gets the error screen with **Try
+again** instead of a silent return to the desktop.
+
 The screen uses the KneeSpa design system's colours and sizes. It reads the IBM
 Plex fonts and the logo from `runtime/` when they are there and falls back to
 system fonts; it imports nothing from `runtime/`.
@@ -101,6 +108,15 @@ system fonts; it imports nothing from `runtime/`.
   program holds `/dev/serial0` or the Mega's USB port, and while the KneeSpa
   launcher or firmware flasher holds `devices/local/raspberry-pi/logs/desktop-launch.lock`.
   It holds that lock itself until it hands over to the app.
+- **Log size:** the legacy app prints into `version-chooser.log` for as long as
+  it runs (about 1.6 MB an hour), and KneeSpa 2.0 into `desktop-launch.log`.
+  After the hand-over the chooser process restarts itself as
+  `version_chooser.py keep-log <app pid>` (about 10 MB of memory). Once a
+  minute it looks at the files the app's output goes to and cuts one that has
+  passed 8 MB back to its first lines and its newest 1 MB, with a line saying
+  so. It does this from outside, only for files opened in append mode (both
+  start scripts open theirs that way), so the app never waits on it and loses
+  at most the lines written during the cut. It exits with the app's status.
 - **Records:** `devices/local/raspberry-pi/logs/version-chooser.log` (plus one
   `.previous`). Builds live under `version-chooser/build/<version>/` with their
   `build.log`. Starts that built or wrote firmware keep their logs, the backup

@@ -71,7 +71,9 @@ LOG_FILE="$LOG_DIR/desktop-launch.log"
 if [[ -f "$LOG_FILE" ]]; then
     mv -f -- "$LOG_FILE" "$LOG_FILE.previous" || fail "Cannot rotate the startup log."
 fi
-exec >"$LOG_FILE" 2>&1 || fail "Cannot write the startup log: $LOG_FILE"
+# Append mode, so the version chooser can cut this file back while the app runs
+# (the file was just rotated away, so it still starts empty).
+exec >>"$LOG_FILE" 2>&1 || fail "Cannot write the startup log: $LOG_FILE"
 printf 'KneeSpa desktop launch: %s\nPython: %s\nApp: %s\n' \
     "$(date --iso-8601=seconds)" "$PYTHON" "$APP_DIR"
 
