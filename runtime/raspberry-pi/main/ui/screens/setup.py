@@ -3,7 +3,7 @@
 import math
 from typing import Dict, List, Optional
 
-from PyQt5.QtCore import QSize, Qt, pyqtSignal
+from PyQt5.QtCore import QEvent, QSize, Qt, pyqtSignal
 from PyQt5.QtWidgets import QHBoxLayout, QLabel, QPushButton, QVBoxLayout, QWidget
 
 from config.constants import (
@@ -151,7 +151,7 @@ class _ActuatorRow(QWidget):
             # a made-up number (staff read the old "Estimated" column as a
             # measurement), so staff set leg length by watching the leg.
             layout.addStretch(1)
-        stop = DSButton("Stop", variant="secondary", size="sm")
+        stop = DSButton("STOP", variant="secondary", size="sm")
         stop.setAccessibleName("Stop leg" if self._key == "leg_length" else "Stop axes")
         # 56px like Go and the jogs, as a content-box minimum in the button's
         # own rule (38 + 8px padding and 1px border each side): the theme's
@@ -222,6 +222,7 @@ class SetupScreen(QWidget):
     stop_requested = pyqtSignal(str)
     mark_default_requested = pyqtSignal()
     reset_arduino_requested = pyqtSignal()
+    reset_enabled_changed = pyqtSignal(bool)
     emergency_stop_requested = pyqtSignal()
 
     def __init__(self, parent=None) -> None:
@@ -257,15 +258,19 @@ class SetupScreen(QWidget):
             "Save treatment defaults", variant="primary", size="lg", full_width=True,
         )
         self._reset_btn = DSButton(
-            "Reset and home device", variant="secondary", size="lg", full_width=True,
+            "RESET", variant="secondary", size="lg", full_width=True,
         )
+        self._reset_btn.setAccessibleName("Reset and home device")
         self._reset_btn.setStyleSheet(
             "QPushButton:disabled {"
             f" background-color: {resolve('--gray-100')};"
             f" color: {resolve('--gray-600')};"
             f" border: 2px solid {resolve('--gray-400')}; }}"
         )
-        self._estop_btn = DSButton("Stop", variant="danger", size="lg", full_width=True)
+        # The motion lock and set_reset_enabled both enable and disable this
+        # button, so its own state change is what the Treatment RESET follows.
+        self._reset_btn.installEventFilter(self)
+        self._estop_btn = DSButton("STOP", variant="danger", size="lg", full_width=True)
         self._mark_btn.clicked.connect(self.mark_default_requested)
         self._reset_btn.clicked.connect(self.reset_arduino_requested)
         self._estop_btn.clicked.connect(self.emergency_stop_requested)
@@ -297,6 +302,15 @@ class SetupScreen(QWidget):
 
     def set_reset_enabled(self, enabled: bool) -> None:
         self._reset_btn.setEnabled(enabled)
+
+    def reset_enabled(self) -> bool:
+        """Whether a reset may be requested, whatever this screen's own state."""
+        return self._reset_btn.isEnabledTo(self)
+
+    def eventFilter(self, obj, event):
+        if obj is self._reset_btn and event.type() == QEvent.EnabledChange:
+            self.reset_enabled_changed.emit(self.reset_enabled())
+        return super().eventFilter(obj, event)
 
     def control_buttons(self) -> List[QWidget]:
         """Motion locks exclude Stop; target editing does not send movement."""

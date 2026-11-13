@@ -308,7 +308,37 @@ def test_treatment_duration_slider_locks_during_run(shell):
 
 
 def test_treatment_stop_button_uses_concise_label(shell):
-    assert shell.treatment._estop_btn.text() == "Stop"
+    assert shell.treatment._estop_btn.text() == "STOP"
+
+
+def test_treatment_and_setup_both_offer_reset(shell):
+    t, s = shell.treatment, shell.setup
+    assert t._reset_btn.text() == s._reset_btn.text() == "RESET"
+    assert t._reset_btn.variant() == "secondary"
+    seen = []
+    t.reset_requested.connect(lambda: seen.append("reset"))
+    t._reset_btn.click()
+    assert seen == ["reset"]
+
+
+def test_treatment_reset_is_enabled_exactly_when_setup_reset_is(shell):
+    t, s = shell.treatment, shell.setup
+    assert t._reset_btn.isEnabled() and s._reset_btn.isEnabled()
+    s.set_reset_enabled(False)
+    assert not t._reset_btn.isEnabled()
+    s.set_reset_enabled(True)
+    assert t._reset_btn.isEnabled()
+    # The motion lock disables Setup's button directly, not through the setter.
+    for button in s.control_buttons():
+        button.setEnabled(False)
+    assert not t._reset_btn.isEnabled()
+    for button in s.control_buttons():
+        button.setEnabled(True)
+    assert t._reset_btn.isEnabled()
+    # Disabling the Setup page itself does not withdraw the reset.
+    s.setEnabled(False)
+    assert t._reset_btn.isEnabled()
+    s.setEnabled(True)
 
 
 def test_treatment_and_setup_action_rows_use_motion_colours(shell):

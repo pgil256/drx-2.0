@@ -408,6 +408,8 @@ class KneeSpa(DeviceStateAttributes, MotionAttributes, QMainWindow):
         s.treatment.resume_requested.connect(self._on_treatment_resume)
         s.treatment.pause_requested.connect(self._on_treatment_pause)
         s.treatment.estop_requested.connect(self._on_estop)
+        # The same request as Setup's RESET, sign-in check included.
+        s.treatment.reset_requested.connect(self._on_setup_reset_arduino)
         s.treatment.setting_changed.connect(self._on_setting_changed)
         s.treatment.leg_length_step_requested.connect(self._on_treatment_leg_step)
         self._pressure_state_timer = QTimer(self)

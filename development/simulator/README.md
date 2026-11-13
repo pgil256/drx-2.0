@@ -24,7 +24,7 @@ build, and exported model prepared.
    **Sensor feedback** section. The model follows simulated physical position,
    so a frozen encoder can disagree with the displayed mechanism.
 5. Use the viewer's fault controls to exercise failure handling. After a latched
-   fault, clear its cause and use **Reset and home device** in Setup.
+   fault, clear its cause and use **RESET** in Setup.
 6. Close the GUI to end the session. **Restart App** keeps the same backend,
    recording, and device profile and runs normal initialization again.
 
