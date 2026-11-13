@@ -160,6 +160,28 @@ def test_horizontal_target_stops_at_zero_degrees(shell):
     assert shell.setup.row_value("horizontal") == 0
 
 
+@pytest.mark.parametrize("load_cleared", [True, False])
+def test_rehome_notice_is_inline_on_treatment_and_setup(shell, qtbot, load_cleared):
+    """S2 without a dialog: the screens ask, and only a tap on RESET re-homes."""
+    view, setup = shell.treatment, shell.setup
+    assert "has not re-homed" not in view._readiness.text() and setup._rehome_notice.isHidden()
+    shell.set_device_status(
+        "Recovery required", "Review the fault before resetting the device.", False)
+    shell.set_rehome_notice(True, load_cleared)
+    assert not view._readiness.isHidden() and not setup._rehome_notice.isHidden()
+    # Each screen names its own RESET; the Protocols one sits beside STOP.
+    for text in (view._readiness.text(), setup._rehome_notice.text()):
+        assert "has not re-homed" in text and "tap RESET" in text
+        assert ("did not drop fully" in text) is (not load_cleared)
+        assert ("traction was released" in text) is load_cleared
+    assert view._reset_btn.isEnabled()
+    with qtbot.waitSignal(view.reset_requested, timeout=1000):
+        view._reset_btn.click()
+    shell.set_rehome_notice(False)
+    assert "has not re-homed" not in view._readiness.text() and setup._rehome_notice.isHidden()
+    assert "Review the fault" in view._readiness.text()
+
+
 def test_slider_responds_across_its_touch_height_without_moving_device(shell, qtbot):
     shell.navigate("setup")
     control = shell.setup._rows["pressure"].slider

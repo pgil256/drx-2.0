@@ -161,6 +161,11 @@ class AppShell(QWidget):
         self.top_bar.set_device_status(label)
         self.treatment.set_device_status(label, detail, can_start)
 
+    def set_rehome_notice(self, visible: bool, load_cleared: bool = True) -> None:
+        """Show or clear the ask to re-home on the screens that can answer it."""
+        self.treatment.set_rehome_notice(visible, load_cleared)
+        self.setup.set_rehome_notice(visible, load_cleared)
+
     def set_user(self, username, title="Clinician", is_admin=False):
         """Set the active clinician (or None when logged out) and refresh gating."""
         if username != self._username:

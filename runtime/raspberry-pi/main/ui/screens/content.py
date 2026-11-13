@@ -37,6 +37,21 @@ PHASES = {
     "stopped": ("Protocol Stopped", "danger"),
 }
 
+
+def rehome_notice(load_cleared: bool, action: str) -> str:
+    """What the screens say while a stopped device waits for its re-home.
+
+    ``action`` names the button on that screen which homes the device.
+    """
+    if load_cleared:
+        lead = "Stopped and traction was released."
+        check = "Make sure the patient is clear of the device"
+    else:
+        lead = "Stopped, but pressure did not drop fully during the release."
+        check = "Check the patient"
+    return f"{lead} The device has not re-homed. {check}, then tap {action}."
+
+
 # Help → "Preset Protocols" (bundle.jsx HELP_PROTOCOLS).
 HELP_PROTOCOLS = [
     {"n": 1, "title": "Axial Decompression",
