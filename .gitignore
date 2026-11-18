@@ -90,7 +90,9 @@ package-lock.json
 # as *.example; see README "User provisioning")
 main/config/kneespa.cfg
 config/kneespa.cfg
-main/data/user_pins.csv
+user_pins.csv
+patient_pins.csv
+kneespa.cfg
 main/data/auth_state.json
 cloud.env
 
