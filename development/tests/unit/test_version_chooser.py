@@ -5,6 +5,8 @@ import importlib.util
 import os
 from pathlib import Path
 import subprocess
+import sys
+import time
 from types import SimpleNamespace
 from typing import Dict, List, Optional
 
@@ -127,6 +129,16 @@ class Board:
         return 0
 
 
+class App:
+    """A started app as the chooser sees it: running until `code` is set."""
+
+    def __init__(self, code: Optional[int] = None) -> None:
+        self.code, self.pid = code, 4242
+
+    def poll(self) -> Optional[int]:
+        return self.code
+
+
 def expected_image(settings: "chooser.Settings", version: str) -> bytes:
     """What the fake build produces for the version's current source."""
     return hex_text(Path(settings.sources[version], "motor.ino").read_bytes()).encode("ascii")
@@ -141,8 +153,18 @@ def devices(settings: "chooser.Settings", monkeypatch: pytest.MonkeyPatch) -> Si
     monkeypatch.setattr(chooser, "port_in_use", lambda ports: False)
     monkeypatch.setattr(chooser, "find_program", lambda program, directory: program)
     monkeypatch.setattr(chooser, "RETRY_PAUSE", 0)
+    # No test starts a real app or asks a real window manager.
+    started: List[List[str]] = []
+    app = App()
+
+    def spawn(self: object, command: List[str], directory: str) -> App:
+        started.append(command)
+        return app
+
+    monkeypatch.setattr(chooser.Session, "spawn", spawn)
+    monkeypatch.setattr(chooser, "client_windows", lambda: None)
     images = {version: expected_image(settings, version) for version in chooser.VERSIONS}
-    return SimpleNamespace(settings=settings, images=images)
+    return SimpleNamespace(settings=settings, images=images, started=started, app=app)
 
 
 def records(settings: "chooser.Settings") -> List[Path]:
@@ -435,9 +457,105 @@ def test_touch_flow_flashes_then_starts(qtbot: object, devices: SimpleNamespace)
     assert board.operations == ["build", "v", "r", "w", "v"]
     assert board.content == devices.images["legacy"]
     assert window.result[0] == ["python3", "old app.py"]
+    assert devices.started == [["python3", "old app.py"]]
     assert [window.steps[stage].state for stage in chooser.STAGES] == [
         "done", "done", "done", "done", "active"]
     assert window.buttons() == []
+
+
+def started_window(qtbot: object, devices: SimpleNamespace) -> object:
+    """A shown window that has just started KneeSpa 2.0 and waits for its window."""
+    window = chooser.make_window(devices.settings, chooser.Session(
+        devices.settings, Board(devices.images["new"])))
+    qtbot.addWidget(window)
+    window.show()
+    window.buttons()[1].click()
+    qtbot.waitUntil(lambda: window.result is not None, timeout=5000)
+    assert window.handover.isActive() and window.isVisible()
+    return window
+
+
+def test_window_stays_until_the_app_shows_its_own(qtbot: object, devices: SimpleNamespace,
+                                                  monkeypatch: pytest.MonkeyPatch) -> None:
+    windows = {1, 2}
+    monkeypatch.setattr(chooser, "client_windows", lambda: set(windows))
+    monkeypatch.setattr(chooser, "HANDOVER_GRACE", 0.05)
+    monkeypatch.setattr(chooser, "HANDOVER_POLL_MS", 10)
+    window = started_window(qtbot, devices)
+    qtbot.wait(150)
+    assert window.isVisible()  # The app has no window yet: the desktop stays covered.
+    windows.add(3)
+    qtbot.waitUntil(lambda: not window.isVisible(), timeout=5000)
+    assert window.result is not None and not window.handover.isActive()
+
+
+def test_window_leaves_after_the_timeout_or_a_touch(qtbot: object, devices: SimpleNamespace,
+                                                    monkeypatch: pytest.MonkeyPatch) -> None:
+    from PyQt5.QtCore import Qt
+
+    monkeypatch.setattr(chooser, "HANDOVER_POLL_MS", 10)
+    window = started_window(qtbot, devices)
+    qtbot.mouseClick(window, Qt.LeftButton)
+    assert not window.isVisible() and window.result is not None
+    monkeypatch.setattr(chooser, "HANDOVER_TIMEOUT", 0.1)
+    window = started_window(qtbot, devices)
+    qtbot.waitUntil(lambda: not window.isVisible(), timeout=5000)
+    assert window.result is not None
+
+
+def test_app_that_dies_at_once_is_reported(qtbot: object, devices: SimpleNamespace,
+                                           monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(chooser, "HANDOVER_POLL_MS", 10)
+    devices.app.code = 3
+    window = chooser.make_window(devices.settings, chooser.Session(
+        devices.settings, Board(devices.images["new"])))
+    qtbot.addWidget(window)
+    window.show()
+    window.buttons()[1].click()
+    qtbot.waitUntil(lambda: window.title.text() == "Cannot start KneeSpa 2.0", timeout=5000)
+    assert "exit code 3" in window.problem.text() and window.result is None
+    assert window.isVisible() and names(window) == ["Back", "Try again"]
+
+
+def test_app_that_cannot_be_started_is_reported(qtbot: object, devices: SimpleNamespace,
+                                                monkeypatch: pytest.MonkeyPatch) -> None:
+    def missing(self: object, command: List[str], directory: str) -> None:
+        raise OSError(2, "No such file or directory")
+
+    monkeypatch.setattr(chooser.Session, "spawn", missing)
+    window = chooser.make_window(devices.settings, chooser.Session(
+        devices.settings, Board(devices.images["new"])))
+    qtbot.addWidget(window)
+    window.buttons()[1].click()
+    qtbot.waitUntil(lambda: window.title.text() == "Cannot start KneeSpa 2.0", timeout=5000)
+    assert "No such file or directory" in window.problem.text() and window.result is None
+
+
+def test_window_list_is_parsed_or_reported_unavailable(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setenv("DISPLAY", ":0")
+    monkeypatch.setattr(chooser.shutil, "which", lambda name: "/usr/bin/" + name)
+    answer = SimpleNamespace(returncode=0, stdout="_NET_CLIENT_LIST(WINDOW): window id # "
+                                                  "0x1800006, 0x1a00003\n")
+    monkeypatch.setattr(chooser.subprocess, "run", lambda *arguments, **options: answer)
+    assert chooser.client_windows() == {0x1800006, 0x1a00003}
+    answer.returncode = 1
+    assert chooser.client_windows() is None
+    monkeypatch.setattr(chooser.shutil, "which", lambda name: None)
+    assert chooser.client_windows() is None
+
+
+def test_long_log_is_cut_to_its_first_lines_and_newest_part(tmp_path: Path) -> None:
+    log = tmp_path / "version-chooser.log"
+    lines = ["KneeSpa version chooser: start\n"] + [
+        "line {:05d}\n".format(number) for number in range(4000)]
+    log.write_bytes("".join(lines).encode("ascii"))
+    assert not chooser.trim_log(str(log), limit=10 ** 6, keep=1000)  # Small enough: untouched.
+    assert chooser.trim_log(str(log), limit=20000, keep=1000)
+    kept = log.read_text(encoding="ascii").splitlines()
+    assert kept[0] == "KneeSpa version chooser: start" and kept[-1] == "line 03999"
+    assert log.stat().st_size < 20000 and sum("log cut from" in line for line in kept) == 1
+    assert all(line.startswith(("KneeSpa", "line ", "[")) for line in kept)  # Whole lines only.
+    assert not chooser.trim_log(str(tmp_path / "missing.log"))
 
 
 def test_matching_firmware_skips_the_write_steps(qtbot: object,
@@ -531,6 +649,78 @@ def test_lock_is_shared_with_the_desktop_launcher(settings: "chooser.Settings",
         fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
         with pytest.raises(chooser.ChooserError, match="already running"):
             chooser.Session(settings).acquire()
+
+
+@pytest.mark.skipif(os.name != "posix", reason="flock and the installer need POSIX")
+def test_starting_the_app_releases_the_lock_first(settings: "chooser.Settings",
+                                                  monkeypatch: pytest.MonkeyPatch,
+                                                  tmp_path: Path) -> None:
+    import fcntl
+
+    monkeypatch.setattr(chooser, "service_active", lambda: False)
+    monkeypatch.setattr(chooser, "port_in_use", lambda ports: False)
+    session = chooser.Session(settings)
+    session.acquire()
+    # Like KneeSpa 2.0's launcher, the app takes the same lock or refuses to start.
+    script = ("import fcntl, sys; handle = open(sys.argv[1], 'w'); "
+              "fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB); "
+              "open(sys.argv[2], 'w').write('locked')")
+    lock = settings.state / "logs" / "desktop-launch.lock"
+    app = session.spawn([sys.executable, "-c", script, str(lock), "proof"], str(tmp_path))
+    assert app.wait(timeout=20) == 0 and (tmp_path / "proof").read_text() == "locked"
+    assert session.lock is None
+    with lock.open("w") as handle:
+        fcntl.flock(handle, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+
+@pytest.mark.skipif(os.name != "posix", reason="reads /proc and waits for a child")
+def test_keeper_bounds_a_running_apps_log_and_returns_its_status(tmp_path: Path) -> None:
+    log = tmp_path / "app.log"
+    script = ("import sys, time\n"
+              "for number in range(3000):\n"
+              "    print('app line {:05d}'.format(number), flush=True)\n"
+              "    time.sleep(0.0005)\n"
+              "print('app last line', flush=True)\n"
+              "sys.exit(7)\n")
+    with log.open("ab") as stream:  # Append mode, as the start script opens it.
+        stream.write(b"header line\n")
+        stream.flush()
+        app = subprocess.Popen([sys.executable, "-c", script], stdout=stream,
+                               stderr=subprocess.STDOUT)
+    assert chooser.appends(app.pid, 1) and not chooser.appends(app.pid, 0)
+    sizes: List[int] = []
+    original = chooser.trim_log
+
+    def watched(path: str, limit: int, keep: int) -> bool:
+        cut = original(path, limit, keep)
+        sizes.append(log.stat().st_size)
+        return cut
+
+    chooser.trim_log = watched
+    try:
+        assert chooser.keep_log(app.pid, check=0.02, limit=8000, keep=2000, pause=0.01) == 7
+    finally:
+        chooser.trim_log = original
+    text = log.read_text(encoding="ascii")
+    assert text.startswith("header line\n") and text.endswith("app last line\n")
+    assert "log cut from" in text and "\x00" not in text  # No hole: the app kept appending.
+    assert max(sizes) < 8000 + 45000  # Never far past the limit between two checks.
+
+
+def test_keeper_ignores_output_that_is_not_an_appended_file(tmp_path: Path) -> None:
+    assert not chooser.appends(os.getpid(), 987)
+    if os.name == "posix":
+        with (tmp_path / "plain.log").open("wb") as stream:  # Not append mode: never cut.
+            app = subprocess.Popen([sys.executable, "-c", "import time; time.sleep(5)"],
+                                   stdout=stream)
+        try:
+            deadline = time.monotonic() + 5
+            while not os.path.exists("/proc/{}/fd/1".format(app.pid)):
+                assert time.monotonic() < deadline
+            assert not chooser.appends(app.pid, 1)
+        finally:
+            app.kill()
+            app.wait()
 
 
 @pytest.mark.skipif(os.name != "posix", reason="flock and the installer need POSIX")

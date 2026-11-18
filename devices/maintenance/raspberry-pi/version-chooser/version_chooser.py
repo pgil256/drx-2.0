@@ -6,6 +6,10 @@ tree (the last build is reused while the source is unchanged), writes it to
 the Mega unless the board already verifies identical, verifies it, and only
 then starts the app. A USB conversation that breaks part-way is repeated; it
 never counts as "different firmware" (see LINK_TROUBLE).
+
+The app starts as a child. The chooser's window stays until the app's own
+window is up, then the process shrinks to a keeper that waits for the app and
+cuts the app's console log back when it passes LOG_LIMIT.
 """
 
 import argparse
@@ -17,6 +21,7 @@ from pathlib import Path
 import re
 import shlex
 import shutil
+import stat
 import subprocess
 import sys
 import tempfile
@@ -45,6 +50,18 @@ VERIFY_ATTEMPTS = 3
 BACKUP_ATTEMPTS = 2
 WRITE_ATTEMPTS = 2
 RETRY_PAUSE = 2.0
+# The chooser's window stays up until the app shows its own, so the desktop is
+# never seen in between. It leaves HANDOVER_GRACE after a new window appears,
+# at once when the screen is touched, and after HANDOVER_TIMEOUT regardless.
+HANDOVER_POLL_MS = 250
+HANDOVER_GRACE = 0.6
+HANDOVER_TIMEOUT = 20.0
+# An app that runs for weeks prints into one log file. Past LOG_LIMIT the file
+# is cut back to its first lines and its newest LOG_KEEP bytes.
+LOG_LIMIT = 8 * 1024 * 1024
+LOG_KEEP = 1024 * 1024
+LOG_HEAD = 4096
+LOG_CHECK = 60.0
 
 
 class ChooserError(Exception):
@@ -606,13 +623,105 @@ class Session:
             print("Could not remember the choice: {}".format(error), file=sys.stderr)
         return result
 
+    def release(self) -> None:
+        """Free the shared lock; KneeSpa 2.0's own launcher takes it next."""
+        if self.lock is not None:
+            self.lock.close()
+            self.lock = None
 
-def launch(command: List[str], directory: str) -> None:
-    """Replace this process; the lock descriptor is not inherited, so it is released."""
-    if directory:
-        os.chdir(directory)
-    sys.stdout.flush()
-    os.execvp(command[0], command)
+    def spawn(self, command: List[str], directory: str) -> "subprocess.Popen":
+        """Start the app as a child that writes to the same log as the chooser."""
+        self.release()
+        sys.stdout.flush()
+        return subprocess.Popen(command, cwd=directory or None, stdin=subprocess.DEVNULL)
+
+
+def client_windows() -> Optional[set]:
+    """Ids of the windows the window manager shows, or None when it cannot be asked."""
+    xprop = shutil.which("xprop")
+    if not xprop or not os.environ.get("DISPLAY"):
+        return None
+    try:
+        result = subprocess.run([xprop, "-root", "_NET_CLIENT_LIST"], stdin=subprocess.DEVNULL,
+                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL, timeout=2,
+                                universal_newlines=True)
+    except (OSError, subprocess.SubprocessError):
+        return None
+    if result.returncode:
+        return None
+    return {int(number, 16) for number in re.findall(r"0x[0-9a-fA-F]+", result.stdout)}
+
+
+def appends(pid: int, descriptor: int) -> bool:
+    """Whether a process's descriptor is a regular file opened for appending.
+
+    Only then is cutting the file safe: the writer's next line lands at the new
+    end. Any other descriptor would keep writing at its old offset.
+    """
+    try:
+        if not stat.S_ISREG(os.stat("/proc/{}/fd/{}".format(pid, descriptor)).st_mode):
+            return False
+        with open("/proc/{}/fdinfo/{}".format(pid, descriptor), encoding="ascii") as stream:
+            for line in stream:
+                if line.startswith("flags:"):
+                    return bool(int(line.split()[1], 8) & os.O_APPEND)
+    except (OSError, ValueError, IndexError):
+        pass
+    return False
+
+
+def trim_log(path: str, limit: int = LOG_LIMIT, keep: int = LOG_KEEP) -> bool:
+    """Cut an append-mode log over `limit` back to its first lines and newest `keep` bytes.
+
+    The first lines stay where they are; the newest part is moved up behind
+    them and the file is shortened to end there, so the order of lines never
+    changes. Lines an app writes during the move (milliseconds) are lost; the
+    app itself is never blocked and never sees an error.
+    """
+    try:
+        with open(path, "r+b") as stream:
+            size = os.fstat(stream.fileno()).st_size
+            if size <= limit:
+                return False
+            head = stream.read(min(LOG_HEAD, limit))
+            head = head[:head.rfind(b"\n") + 1]
+            stream.seek(max(size - keep, len(head)))
+            tail = stream.read()
+            tail = tail[tail.find(b"\n") + 1:]
+            note = "[{}: log cut from {} bytes; its first lines and newest {} bytes kept]\n" \
+                .format(time.strftime("%Y-%m-%d %H:%M:%S"), size, len(tail)).encode("ascii")
+            stream.seek(len(head))
+            stream.write(note + tail)
+            stream.flush()
+            stream.truncate()
+    except OSError:
+        return False
+    return True
+
+
+def keep_log(pid: int, check: float = LOG_CHECK, limit: int = LOG_LIMIT,
+             keep: int = LOG_KEEP, pause: float = 2.0) -> int:
+    """Wait for the app and keep the files its output goes to within `limit`.
+
+    This process only looks at the files from outside; if it dies the app
+    carries on unchanged. Returns the app's exit status.
+    """
+    last = 0.0
+    while True:
+        try:
+            done, status = os.waitpid(pid, os.WNOHANG)
+            if done:
+                return os.WEXITSTATUS(status) if os.WIFEXITED(status) \
+                    else 128 + os.WTERMSIG(status)
+        except ChildProcessError:  # Started by hand for a process that is not our child.
+            if not os.path.exists("/proc/{}".format(pid)):
+                return 0
+        if time.monotonic() - last >= check:
+            last = time.monotonic()
+            for descriptor in (1, 2):
+                if appends(pid, descriptor):
+                    trim_log("/proc/{}/fd/{}".format(pid, descriptor), limit, keep)
+        time.sleep(min(pause, check))
 
 
 STAGES = ("build", "check", "backup", "write", "start")
@@ -867,8 +976,9 @@ def make_window(settings: Settings, session: Optional[Session] = None) -> object
             self.spin.timeout.connect(self.animate)
             # Closing the only window ends the event loop; run_ui then starts the app.
             self.handover = QTimer(self)
-            self.handover.setSingleShot(True)
-            self.handover.timeout.connect(self.close)
+            self.handover.setInterval(HANDOVER_POLL_MS)
+            self.handover.timeout.connect(self.watch_app)
+            self.child: Optional[object] = None
 
             bar = QFrame()
             bar.setObjectName("bar")
@@ -1089,7 +1199,47 @@ def make_window(settings: Settings, session: Optional[Session] = None) -> object
             if outcome == "recovering":
                 self.message.setText("{} finishes its own firmware update when it starts."
                                      .format(settings.labels[self.version]))
-            self.handover.start(600)
+            self.hand_over()
+
+        def hand_over(self) -> None:
+            """Start the app and stay in front until its own window is up."""
+            command, directory = self.result
+            print("Starting {}: {}".format(self.version, " ".join(command)), flush=True)
+            self.before, self.was_active = client_windows(), self.isActiveWindow()
+            self.spawned, self.seen = time.monotonic(), 0.0
+            try:
+                self.child = self.session.spawn(command, directory)
+            except OSError as error:
+                self.result = None
+                self.failed("{} could not be started ({}).".format(
+                    settings.labels[self.version], error.strerror or error))
+                return
+            self.handover.start()
+
+        def watch_app(self) -> None:
+            now, code = time.monotonic(), self.child.poll()
+            if code:
+                self.handover.stop()
+                self.result = None
+                self.failed("{} closed as soon as it started (exit code {}). Its messages "
+                            "are in the logs folder. Log: {}".format(
+                                settings.labels[self.version], code, settings.state / "logs"))
+                return
+            current = client_windows() if self.before is not None else None
+            shown = bool(current is not None and current - self.before) or (
+                self.was_active and not self.isActiveWindow())
+            if shown and not self.seen:
+                self.seen = now
+            if code == 0 or (self.seen and now - self.seen >= HANDOVER_GRACE) or \
+                    now - self.spawned >= HANDOVER_TIMEOUT:
+                self.handover.stop()
+                self.close()
+
+        def mousePressEvent(self, event: object) -> None:
+            # Should the app have opened behind this window, a touch uncovers it.
+            if self.handover.isActive():
+                self.handover.stop()
+                self.close()
 
         def failed(self, error: str) -> None:
             self.spin.stop()
@@ -1097,7 +1247,7 @@ def make_window(settings: Settings, session: Optional[Session] = None) -> object
             body, log = split_log(error)
             self.problem.setText(body)
             # Zero-width spaces let a long path wrap at its slashes.
-            self.log.setText(log.replace("/", "/​"))
+            self.log.setText(log.replace("/", "/\u200b"))
             self.log.setVisible(bool(log))
             self.log_title.setVisible(bool(log))
             self.show_page(self.error_page, "Cannot start {}".format(
@@ -1125,15 +1275,21 @@ def run_ui(settings: Settings) -> int:
     window = make_window(settings)
     window.showFullScreen()
     application.exec_()
-    if window.result is None:
+    if window.result is None or window.child is None:
         return 1
-    print("Starting {}: {}".format(window.version, " ".join(window.result[0])))
+    return stay_for_log(window.child.pid)
+
+
+def stay_for_log(pid: int) -> int:
+    """Become a small process that waits for the app and keeps its log bounded."""
+    sys.stdout.flush()
     try:
-        launch(*window.result)
+        # A fresh interpreter drops Qt and the display connection; the app stays its child.
+        os.execv(sys.executable, [sys.executable, "-u", os.path.abspath(__file__),
+                                  "keep-log", str(pid)])
     except OSError as error:
-        print("ERROR: could not start {}: {}".format(window.version, error), file=sys.stderr)
-        return 1
-    return 0
+        print("Could not restart as the log keeper: {}".format(error), file=sys.stderr)
+    return keep_log(pid)
 
 
 def status(settings: Settings) -> int:
@@ -1189,7 +1345,12 @@ def main(argv: Optional[List[str]] = None) -> int:
     add = commands.add_parser("build", help="build one version's firmware without flashing")
     add.add_argument("version", choices=VERSIONS)
     commands.add_parser("status", help="check the setup without touching the Mega")
+    add = commands.add_parser("keep-log", help="wait for a started app and bound its log "
+                                               "(the chooser does this by itself)")
+    add.add_argument("pid", type=int)
     args = parser.parse_args(argv)
+    if args.command == "keep-log":
+        return keep_log(args.pid)
     try:
         app_dir = default_app_dir()
         settings = Settings(state_dir(app_dir), app_dir)
