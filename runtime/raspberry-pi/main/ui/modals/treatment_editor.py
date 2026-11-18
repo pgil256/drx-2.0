@@ -92,7 +92,7 @@ class TreatmentEditorDialog(QDialog):
 
         actions = QHBoxLayout()
         actions.setSpacing(12)
-        self.stop_button = DSButton("Stop", variant="danger", size="lg", full_width=True)
+        self.stop_button = DSButton("STOP", variant="danger", size="lg", full_width=True)
         self.stop_button.setAutoDefault(False)
         self.stop_button.clicked.connect(self._stop)
         self.stop_button.hide()

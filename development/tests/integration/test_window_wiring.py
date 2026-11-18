@@ -605,7 +605,7 @@ def test_stop_completion_race_and_recovery(window_run: SimpleNamespace,
     assert run.view._settings["duration"].isEnabled()
 
 
-@pytest.mark.parametrize("answer", ["not now", "re-home", "setup reset"])
+@pytest.mark.parametrize("answer", ["not now", "re-home", "setup reset", "treatment reset"])
 def test_stop_waits_for_the_operator_to_rehome(window_run: SimpleNamespace,
                                                monkeypatch: pytest.MonkeyPatch,
                                                answer: str) -> None:
@@ -624,7 +624,7 @@ def test_stop_waits_for_the_operator_to_rehome(window_run: SimpleNamespace,
     assert prompt.isVisible()
     assert w.protocol_state == "fault" and not w.initial_setup_complete
     assert not w.reset_in_progress and not run.view._start_btn.isEnabled()
-    assert w.shell.setup._reset_btn.isEnabled()
+    assert w.shell.setup._reset_btn.isEnabled() and run.view._reset_btn.isEnabled()
     assert not any(button.isEnabled() for row in w.shell.setup._rows.values()
                    for button in row.motion_buttons)
     w.protocol.stops._stop_phase3()  # a repeat does not stack a second prompt
@@ -636,6 +636,8 @@ def test_stop_waits_for_the_operator_to_rehome(window_run: SimpleNamespace,
         return
     if answer == "re-home":
         prompt.rehome_button.click()
+    elif answer == "treatment reset":
+        run.view._reset_btn.click()
     else:
         w.shell.setup._reset_btn.click()
     assert w.reset_in_progress and not prompt.isVisible()
@@ -742,6 +744,13 @@ def test_treatment_owns_setup_motion_until_it_ends(window_run: SimpleNamespace,
     assert w.protocol_state == "running"
     assert not any(button.isEnabled() for button in motion)
     assert all(button.isEnabled() for button in stops + [setup._estop_btn, reset])
+    # Treatment's RESET follows Setup's, and is refused the same way mid-treatment.
+    assert run.view._reset_btn.isEnabled()
+    # The fake worker needs the two fields the real one's reset guard reads.
+    worker.completed, worker.is_running = threading.Event(), True
+    run.view._reset_btn.click()
+    assert not w.reset_in_progress and w.protocol_state == "running"
+    w._show_timed_error.assert_called_with("Stop treatment before resetting Arduino.")
     run.arduino.send.reset_mock()
     setup.go_requested.emit("pressure")
     setup.go_requested.emit("lateral")

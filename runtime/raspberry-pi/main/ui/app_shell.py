@@ -65,6 +65,9 @@ class AppShell(QWidget):
         self.home = HomeScreen()
         self.setup = SetupScreen()
         self.treatment = TreatmentScreen()
+        # One rule for when a reset is allowed: Treatment's RESET follows Setup's.
+        self.setup.reset_enabled_changed.connect(self.treatment.set_reset_enabled)
+        self.treatment.set_reset_enabled(self.setup.reset_enabled())
         self.support = SupportScreen()
         self.device = DeviceScreen()
         self.profile = ProfileScreen()

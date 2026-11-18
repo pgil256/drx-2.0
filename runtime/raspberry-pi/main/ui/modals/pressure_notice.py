@@ -28,7 +28,7 @@ class PressureNotice(QDialog):
         text = QLabel(
             "The axial actuator moved, but pressure increased very little. "
             "Check the patient positioning and device. Dismiss closes this notice; "
-            "Stop ends movement without automatic homing.", self
+            "STOP ends movement without automatic homing.", self
         )
         text.setWordWrap(True)
         root.addWidget(text)
@@ -44,7 +44,7 @@ class PressureNotice(QDialog):
         root.addWidget(self.details)
         buttons = QHBoxLayout()
         self.dismiss_button = DSButton("Dismiss", variant="secondary")
-        self.stop_button = DSButton("Stop", variant="danger")
+        self.stop_button = DSButton("STOP", variant="danger")
         self.dismiss_button.clicked.connect(self.close)
         self.stop_button.clicked.connect(self._stop)
         buttons.addWidget(self.dismiss_button)
