@@ -32,12 +32,11 @@ sys.modules['vlc'] = MagicMock()
 os.environ['QT_QPA_PLATFORM'] = 'offscreen'
 
 
-def pytest_configure(config: pytest.Config) -> None:
+def _isolate_app_logs() -> ExitStack:
     """Isolate import-time application logs without patching filesystem APIs."""
     from config import constants
 
     stack = ExitStack()
-    config.add_cleanup(stack.close)
     log_base = stack.enter_context(TemporaryDirectory(prefix="kneespa-test-logs-"))
     app_logger = logging.getLogger(constants.APP_NAME)
     serial_logger = logging.getLogger(f"{constants.APP_NAME}.serial")
@@ -67,6 +66,19 @@ def pytest_configure(config: pytest.Config) -> None:
     # logging imports LOG_DIR by value; leave only its local copy isolated
     # for the session, including tests that reconstruct the logger singleton.
     stack.callback(setattr, app_logging, "LOG_DIR", constants.LOG_DIR)
+    return stack
+
+
+# Isolate while pytest imports this file, not in pytest_configure: a run
+# scoped to a subdirectory (e.g. one unit test file) imports that directory's
+# conftest, which may import app modules, before configure hooks run. pytest
+# imports conftests from the rootdir down, so this file always runs first.
+_APP_LOG_ISOLATION = _isolate_app_logs()
+
+
+def pytest_configure(config: pytest.Config) -> None:
+    """Close the isolated log files and remove their directory after the session."""
+    config.add_cleanup(_APP_LOG_ISOLATION.close)
 
 
 # --- Integration fixtures ---
