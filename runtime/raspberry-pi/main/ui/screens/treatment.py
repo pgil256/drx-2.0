@@ -15,6 +15,7 @@ Signals:
     protocol_selected(int)
     patient_change_requested / patient_edit_requested / cloud_error_requested
     start_requested / resume_requested / pause_requested / estop_requested
+    reset_requested — the same reset and homing as Setup's RESET
     setting_changed(str, float) — treatment settings and shared motor_speed
     leg_length_step_requested(str) — one slow leg-length step, "rev" or "fwd"
 """
@@ -40,7 +41,7 @@ from config.constants import (
 from helpers.motor_speed import treatment_motor_speed
 from ui.measurements import signed_text
 from ui.modals.treatment_editor import TreatmentEditorDialog
-from ui.theme import chevron_icon, pause_icon, play_icon
+from ui.theme import chevron_icon, pause_icon, play_icon, rotate_icon
 from ui.widgets.common import eyebrow
 from ui.widgets.ds import (
     DSBadge,
@@ -89,6 +90,7 @@ class TreatmentScreen(QWidget):
     resume_requested = pyqtSignal()
     pause_requested = pyqtSignal()
     estop_requested = pyqtSignal()
+    reset_requested = pyqtSignal()
     setting_changed = pyqtSignal(str, float)
     leg_length_step_requested = pyqtSignal(str)  # "rev" or "fwd": one slow step
 
@@ -495,9 +497,15 @@ class TreatmentScreen(QWidget):
         self._pause_btn = DSButton("PAUSE", variant="secondary", size="lg", full_width=True,
                                    icon=pause_icon(resolve("--ink-800"), 20))
         self._pause_btn.clicked.connect(self.pause_requested)
-        self._estop_btn = DSButton("Stop", variant="danger", size="lg", full_width=True)
+        # Enabled exactly when Setup's RESET is (AppShell mirrors it), so the
+        # two cannot disagree about when a reset is allowed.
+        self._reset_btn = DSButton("RESET", variant="secondary", size="lg", full_width=True,
+                                   icon=rotate_icon(resolve("--ink-800"), 20))
+        self._reset_btn.setAccessibleName("Reset and home device")
+        self._reset_btn.clicked.connect(self.reset_requested)
+        self._estop_btn = DSButton("STOP", variant="danger", size="lg", full_width=True)
         self._estop_btn.clicked.connect(self.estop_requested)
-        for b in (self._start_btn, self._pause_btn, self._estop_btn):
+        for b in (self._start_btn, self._pause_btn, self._reset_btn, self._estop_btn):
             row.addWidget(b, 1)
         return row
 
@@ -621,6 +629,9 @@ class TreatmentScreen(QWidget):
         """Lock START/PAUSE while the device is mid-reset / reconnecting."""
         self._busy = busy
         self.set_run_state(self._running, self._paused)
+
+    def set_reset_enabled(self, enabled: bool) -> None:
+        self._reset_btn.setEnabled(enabled)
 
     def set_phase(self, phase):
         label, tone = PHASES.get(phase, PHASES["idle"])
