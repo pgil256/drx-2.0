@@ -48,15 +48,22 @@ class GuiVerification:
     def save(self, name: str) -> None:
         self.window.grab().save(str(self.directory / (name + ".png")))
 
-    def rehome_prompt(self) -> object:
-        """The visible post-Stop re-home prompt, or None."""
-        box = getattr(self.window, "_rehome_prompt", None)
-        return box if box is not None and box.isVisible() else None
+    def rehome_button(self) -> object:
+        """The on-screen control that answers the post-Stop re-home ask, or None.
+
+        Both screens point at their RESET; the Protocols one is the re-home.
+        """
+        shell = self.window.shell
+        if not shell.setup._rehome_notice.isVisible():
+            return None
+        if shell.treatment.isVisible():
+            return shell.treatment._reset_btn
+        return shell.setup._reset_btn
 
     def released_awaiting_rehome(self) -> bool:
         """A Stop finished its release and nothing homes until the operator asks."""
         w = self.window
-        return (self.rehome_prompt() is not None and w.protocol_state == "fault"
+        return (self.rehome_button() is not None and w.protocol_state == "fault"
                 and not w.reset_in_progress and not w.initial_setup_complete)
 
     def _advance(self) -> None:
@@ -279,7 +286,7 @@ class GuiVerification:
                         or w.reset_in_progress)
         yield self.wait("GUI Stop releases and asks to re-home", self.released_awaiting_rehome, 60)
         self.save("rehome-prompt")
-        self.click(self.rehome_prompt().rehome_button)
+        self.click(self.rehome_button())
         yield self.wait("operator re-home homes and rezeros", lambda:
                         w.protocol_state == "idle" and w.initial_setup_complete
                         and w.arduino.baseline_valid and not w.reset_in_progress

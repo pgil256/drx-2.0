@@ -15,7 +15,7 @@ from uuid import uuid4
 
 import pytest
 from PyQt5.QtCore import QEvent, QEventLoop, QTimer
-from PyQt5.QtWidgets import QApplication, QMessageBox
+from PyQt5.QtWidgets import QApplication, QDialog, QMessageBox
 from pytestqt.qtbot import QtBot
 
 import kneespa
@@ -605,13 +605,18 @@ def test_stop_completion_race_and_recovery(window_run: SimpleNamespace,
     assert run.view._settings["duration"].isEnabled()
 
 
-@pytest.mark.parametrize("answer", ["not now", "re-home", "setup reset", "treatment reset"])
+@pytest.mark.parametrize("answer", ["treatment reset", "setup reset"])
 def test_stop_waits_for_the_operator_to_rehome(window_run: SimpleNamespace,
                                                monkeypatch: pytest.MonkeyPatch,
                                                answer: str) -> None:
-    """S2: after the release, nothing homes until the operator asks."""
+    """S2: after the release, nothing homes until the operator asks.
+
+    The ask is on the screens themselves; no dialog opens. The Protocols
+    page's RESET is the re-home; Setup's RESET answers it too.
+    """
     run = window_run
     w = run.window
+    setup = w.shell.setup
     worker = start(run)
     run.view.estop_requested.emit()
     worker.signals.finished.emit(False)
@@ -619,43 +624,86 @@ def test_stop_waits_for_the_operator_to_rehome(window_run: SimpleNamespace,
     monkeypatch.setattr(connection_manager, "ResetWorker", lambda *args: reset)
     run.pool.start.side_effect = None
     w.last_measured_pressure = 0.0
+    assert "has not re-homed" not in run.view._readiness.text()
+    assert setup._rehome_notice.isHidden()
     w.protocol.stops._stop_phase3()
-    prompt = w._rehome_prompt
-    assert prompt.isVisible()
+    assert "has not re-homed" in run.view._readiness.text()
+    assert "tap RESET" in run.view._readiness.text()
+    assert not setup._rehome_notice.isHidden()
+    assert not [box for box in w.findChildren(QDialog) if box.isVisible()]
     assert w.protocol_state == "fault" and not w.initial_setup_complete
     assert not w.reset_in_progress and not run.view._start_btn.isEnabled()
-    assert w.shell.setup._reset_btn.isEnabled() and run.view._reset_btn.isEnabled()
-    assert not any(button.isEnabled() for row in w.shell.setup._rows.values()
+    assert setup._reset_btn.isEnabled() and run.view._reset_btn.isEnabled()
+    assert not any(button.isEnabled() for row in setup._rows.values()
                    for button in row.motion_buttons)
-    w.protocol.stops._stop_phase3()  # a repeat does not stack a second prompt
-    assert w._rehome_prompt is prompt
-    if answer == "not now":
-        prompt.later_button.click()
-        assert not prompt.isVisible() and not w.reset_in_progress
-        assert w.protocol_state == "fault" and w.shell.setup._reset_btn.isEnabled()
-        return
-    if answer == "re-home":
-        prompt.rehome_button.click()
-    elif answer == "treatment reset":
+    w.protocol.stops._stop_phase3()  # a repeat changes nothing
+    assert "has not re-homed" in run.view._readiness.text() and not w.reset_in_progress
+    if answer == "treatment reset":
         run.view._reset_btn.click()
     else:
-        w.shell.setup._reset_btn.click()
-    assert w.reset_in_progress and not prompt.isVisible()
+        setup._reset_btn.click()
+    assert w.reset_in_progress
+    assert "has not re-homed" not in run.view._readiness.text()
+    assert setup._rehome_notice.isHidden()
     reset.signals.finished.emit(True)
     assert w.protocol_state == "idle" and run.view._start_btn.isEnabled()
+    assert "has not re-homed" not in run.view._readiness.text()
+    assert setup._rehome_notice.isHidden()
 
 
-def test_rehome_prompt_defers_to_a_later_safety_stop(window_run: SimpleNamespace) -> None:
+def test_protocols_reset_rehomes_without_setup_sign_in(window_run: SimpleNamespace,
+                                                       monkeypatch: pytest.MonkeyPatch) -> None:
+    """The re-home replaces automatic recovery, so it skips the Setup sign-in.
+
+    Without a pending re-home, the Protocols RESET is Setup's RESET and keeps
+    the sign-in check.
+    """
+    run = window_run
+    w = run.window
+    reset = MagicMock(signals=ResetWorkerSignals())
+    monkeypatch.setattr(connection_manager, "ResetWorker", lambda *args: reset)
+    run.pool.start.side_effect = None
+    w.current_user = {"username": "Phone user", "status": "clinician", "machine_sign_in": True}
+    w.machine_sign_in = MagicMock()
+    w.machine_sign_in.authorize.return_value = False  # a recheck that has not passed
+    w._on_treatment_reset()
+    w.machine_sign_in.authorize.assert_called_once()
+    assert not w.reset_in_progress
+    w.machine_sign_in.authorize.reset_mock()
+    w.protocol.stop_from_view()  # Setup-screen Stop with nothing running
+    w.last_measured_pressure = 0.0
+    w.protocol.stops._stop_phase3()
+    assert w._awaiting_rehome
+    run.view._reset_btn.click()
+    w.machine_sign_in.authorize.assert_not_called()
+    assert w.reset_in_progress
+
+
+def test_rehome_notice_calls_out_remaining_load(window_run: SimpleNamespace) -> None:
+    run = window_run
+    w = run.window
+    w.protocol.stop_from_view()  # Setup-screen Stop with nothing running
+    w.last_measured_pressure = 30.0
+    w.protocol.stops._require_operator_rehome(False)
+    for text in (run.view._readiness.text(), w.shell.setup._rehome_notice.text()):
+        assert "did not drop fully" in text and "traction was released" not in text
+
+
+def test_rehome_notice_defers_to_a_later_safety_stop(window_run: SimpleNamespace) -> None:
     run = window_run
     w = run.window
     w.protocol.stop_from_view()  # Setup-screen Stop with nothing running
     w.last_measured_pressure = 0.0
     w.protocol.stops._stop_phase3()
-    prompt = w._rehome_prompt
-    w._no_automatic_recovery = True  # e.g. a firmware fault after the prompt opened
+    assert "has not re-homed" in run.view._readiness.text()
+    w._no_automatic_recovery = True  # e.g. a firmware fault after the notice appeared
+    w._refresh_device_presentation()  # the 250 ms display refresh
+    assert "has not re-homed" not in run.view._readiness.text()
+    assert w.shell.setup._rehome_notice.isHidden()
+    assert "Review the fault" in run.view._readiness.text()
     errors = []
     w._show_timed_error = errors.append
-    prompt.rehome_button.click()
+    w._on_rehome_requested()  # a tap already on its way is still refused
     assert not w.reset_in_progress
     assert errors and "Reset in Setup" in errors[0]
 

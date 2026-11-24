@@ -15,6 +15,8 @@ from ui.widgets.common import hline
 from ui.widgets.ds import DSButton, DSCard, DSSlider
 from ui.widgets.ds._common import mono_font, resolve, sans_font
 
+from .content import rehome_notice
+
 
 ROWS = [
     {"key": "axial", "name": "Axial", "unit": " in", "step": 0.5, "value": 2,
@@ -252,6 +254,14 @@ class SetupScreen(QWidget):
                 body.addWidget(hline())
         layout.addWidget(card, 1)
 
+        # Shown while a stopped device waits for its re-home; the Reset
+        # button below is what answers it.
+        self._rehome_notice = QLabel()
+        self._rehome_notice.setWordWrap(True)
+        self._rehome_notice.setFont(sans_font(size=16, weight=600))
+        self._rehome_notice.hide()
+        layout.addWidget(self._rehome_notice)
+
         actions = QHBoxLayout()
         actions.setSpacing(16)
         self._mark_btn = DSButton(
@@ -311,6 +321,16 @@ class SetupScreen(QWidget):
         if obj is self._reset_btn and event.type() == QEvent.EnabledChange:
             self.reset_enabled_changed.emit(self.reset_enabled())
         return super().eventFilter(obj, event)
+
+    def set_rehome_notice(self, visible: bool, load_cleared: bool = True) -> None:
+        """Say that a stopped device waits for Reset. Nothing moves until the tap."""
+        text = rehome_notice(load_cleared, self._reset_btn.text()) if visible else ""
+        if text == self._rehome_notice.text():
+            return
+        tone = "--ink-900" if load_cleared else "--red-500"
+        self._rehome_notice.setStyleSheet(f"color: {resolve(tone)}; background: transparent;")
+        self._rehome_notice.setText(text)
+        self._rehome_notice.setVisible(visible)
 
     def control_buttons(self) -> List[QWidget]:
         """Motion locks exclude Stop; target editing does not send movement."""
